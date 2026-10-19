@@ -155,6 +155,41 @@ def newest_other(base: Path, manifest: str) -> tuple[float, str]:
     return max(found)
 
 
+def sealed_set(base: Path) -> tuple[list[str], str]:
+    """The NAMES of every file in the pack, sorted, and a digest over them.
+
+    ROUND 48, THE CHALLENGER'S STRUCTURAL POINT, which the coordinator cleared
+    to ride this commit. For three consecutive rounds the sealed row count was
+    true when written and stale by the time a reviewer read it, because the
+    seal cannot be the last step while two other writers are still producing
+    the files it counts. Correcting the number each round was not working: a
+    count that must be re-stated every round is a count nobody can rely on.
+
+    A count also cannot say WHICH file arrived. So the seal now records the
+    SET: the sorted names, and a sha256 over them newline-joined. A document
+    that lands after the seal changes this digest and is NAMED by the
+    comparison below, instead of silently contradicting a number. The count
+    stays, because it is what the digest tool's own summary is checked
+    against -- but the set is what the record now claims.
+    """
+    names = sorted(p.name for p in base.iterdir() if p.is_file())
+    joined = "\n".join(names)
+    return names, hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def arrivals(base: Path, sealed_names: list[str]) -> tuple[list[str], list[str]]:
+    """What the pack holds now that the sealed set did not name, and vice versa.
+
+    Named both ways on purpose: an ADDED file is the hazard this exists for,
+    and a REMOVED one means the record names a document that is gone, which a
+    reader must not discover by reading a digest of nothing.
+    """
+    now_names = sorted(p.name for p in base.iterdir() if p.is_file())
+    added = [n for n in now_names if n not in set(sealed_names)]
+    gone = [n for n in sealed_names if n not in set(now_names)]
+    return added, gone
+
+
 def run_checks(tools: Path, pack: Path, tests: Path) -> dict[str, str]:
     """Run the three checks HERE and return the last line each printed.
 
@@ -284,6 +319,8 @@ def block(
     markers: int,
     selfrow: int,
     rerun_utc: str | None,
+    sealed_names: list[str],
+    sealed_digest: str,
 ) -> str:
     total = digests + markers + selfrow
     rows = [
@@ -301,6 +338,13 @@ def block(
         f"| **the table's own tally** | **{total} rows** = {digests} digests + {markers} "
         f"reviewer-owned markers + {selfrow} `this file`, counted from the table in this file and "
         f"CHECKED equal to the `{total} files, {total} rows` the digest tool printed |",
+        f"| **the sealed SET** | **{len(sealed_names)} names**, sha256 "
+        f"`{sealed_digest}` over the sorted names newline-joined. A count cannot say WHICH "
+        f"document arrived, and for three rounds this record's count was true when written and "
+        f"stale when read, because the seal cannot be the last step while other writers are "
+        f"still producing the files it counts. A document landing after this seal changes this "
+        f"digest and is NAMED by the comparison a reader runs, instead of contradicting a "
+        f"number. The names themselves are listed below the table. |",
     ]
     if rerun_utc:
         rows.append(
@@ -335,7 +379,17 @@ def block(
         + "Any reader settles the whole thing in one command: the three tools, run on these "
         "bytes, must print exactly the strings above."
     )
-    return "\n".join([BEGIN, ""] + rows + ["", note, "", END])
+    listing = "\n".join(
+        [
+            "**The sealed set, by name.** Re-derive it with `ls -1` over the pack, sort it, and "
+            "take the sha256 of the newline-joined names: it must equal the digest in the table "
+            "above. A name here that is no longer in the pack, or a name in the pack that is not "
+            "here, is what this listing exists to make visible.",
+            "",
+        ]
+        + [f"- `{n}`" for n in sealed_names]
+    )
+    return "\n".join([BEGIN, ""] + rows + ["", note, "", listing, "", END])
 
 
 def main() -> int:
@@ -367,6 +421,8 @@ def main() -> int:
     mtime, mfile = newest_other(pack, name)
     digests, markers, selfrow = tally(manifest)
     agree(out["manifest-digests.py"], digests, markers, selfrow)
+    # ROUND 48: the SET, taken after the checks ran, exactly as the mtime is.
+    sealed_names, sealed_digest = sealed_set(pack)
 
     rerun_utc = None
     if a.verify_after_write:
@@ -395,6 +451,21 @@ def main() -> int:
                 "--verify-after-write"
             )
         rerun_utc, run_utc = run_utc, sealed.group(1)
+        # ROUND 48: and the SET the first pass sealed is compared with what the
+        # pack holds now, by name. This is the hazard the set exists for: a
+        # reviewer filing a report between the two passes is the normal case
+        # here, not an attack, and it must be NAMED rather than left to
+        # contradict a count a reader meets three rounds later.
+        prior = re.findall(r"^- `([^`]+)`$", sealed_block, re.MULTILINE)
+        if prior:
+            added, gone = arrivals(pack, prior)
+            if added or gone:
+                raise SystemExit(
+                    "the pack is not the set the first pass sealed, so the record would name a "
+                    "set that no longer exists; re-seal.\n"
+                    f"  arrived since the seal: {', '.join(added) or 'none'}\n"
+                    f"  named in the seal but gone: {', '.join(gone) or 'none'}"
+                )
 
     # B-8(a), the half that blocked: the ordering was tested against the FRESH
     # clock while the row was written from the OLD sealed time. Editing one
@@ -445,12 +516,24 @@ def main() -> int:
     tail = text[text.index(END) + len(END) :]
     io.open(manifest, "w", encoding="utf-8").write(
         head
-        + block(out, run_utc, iso(mtime), mfile, digests, markers, selfrow, rerun_utc)
+        + block(
+            out,
+            run_utc,
+            iso(mtime),
+            mfile,
+            digests,
+            markers,
+            selfrow,
+            rerun_utc,
+            sealed_names,
+            sealed_digest,
+        )
         + tail
     )
     total = digests + markers + selfrow
     print(
-        f"sealed: {total} rows = {digests} + {markers} + {selfrow}; run {run_utc}; "
+        f"sealed: {total} rows = {digests} + {markers} + {selfrow}; "
+        f"set {len(sealed_names)} names {sealed_digest[:12]}; run {run_utc}; "
         f"newest other document {iso(mtime)} ({mfile})"
         + ("; re-run verified identical" if rerun_utc else "")
     )

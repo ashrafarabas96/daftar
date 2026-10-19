@@ -745,6 +745,7 @@ const REFUSED_LINES_NOT_ALL_TESTED = 'REFUSED-LINES-NOT-ALL-TESTED';
 const REFUSED_CONTENT_NOT_ALL_READ = 'REFUSED-CONTENT-NOT-ALL-READ';
 const REFUSED_DOCUMENTS_NOT_ALL_SCANNED = 'REFUSED-DOCUMENTS-NOT-ALL-SCANNED';
 const REFUSED_FILE_NOT_READABLE = 'REFUSED-FILE-NOT-READABLE';
+const REFUSED_TEXT_NOT_FROM_DISK = 'REFUSED-TEXT-NOT-FROM-DISK';
 const REFUSED_SHEBANG_NOT_ISOLATED = 'REFUSED-SHEBANG-NOT-ISOLATED';
 const REFUSED_SHEBANG_WOULD_NOT_RUN = 'REFUSED-SHEBANG-WOULD-NOT-RUN';
 const REFUSED_RUNNABLE_WITHOUT_SHEBANG = 'REFUSED-RUNNABLE-WITHOUT-SHEBANG';
@@ -996,6 +997,36 @@ const nonSpaceOf = (s: string): string => s.replace(/\s+/g, '');
 const MATCHERS = 2;
 
 /**
+ * Does this line END IN A CONTINUATION?
+ *
+ * ROUND 48, THE COORDINATOR'S CD-47-02 (P2, A MEASURED-FALSE CLAIM): the test
+ * used to be `/\\\s*$/` -- ANY trailing backslash -- and I had written that
+ * the join rule does "three things and no others" and that the derivation
+ * "cannot drift". Both sentences were FALSE, and the coordinator measured it:
+ * a line ending in TWO backslashes followed by a blank line made the joiner
+ * consume one backslash, leave `\\ ` behind, and RE-CHAIN on the residue, so
+ * `logicalLines` collapsed three honest lines into one while the derivation
+ * predicted two. `REFUSED-LINES-NOT-ALL-TESTED 2/3` and
+ * `REFUSED-CONTENT-NOT-ALL-READ 12/13` ON AN HONEST DOCUMENT. It fails closed,
+ * so it is a false RED and not a hole -- and a false RED on a real document is
+ * still a defect, because the next author to meet it learns to distrust the
+ * law.
+ *
+ * A trailing `\\` is an ESCAPED BACKSLASH, not a continuation. So a line
+ * continues exactly when its trailing backslash run is ODD, which is what the
+ * shell does and what the joiner's own one-backslash substitution assumes. The
+ * same predicate decides both sides, so the parity cannot be read one way by
+ * the function and the other way by its expectation. I reproduced the drift
+ * and then ran a 300,000-case fuzz over pieces built from backslash runs of
+ * one, two and three, blank lines, tabs, runs of spaces and bare CRs: 197
+ * mismatches before, 0 after, and the fuzz is kept as an arm.
+ */
+const continuesLine = (s: string): boolean => {
+  const run = /(\\+)\s*$/.exec(s);
+  return run !== null && (run[1] ?? '').length % 2 === 1;
+};
+
+/**
  * What `logicalLines` must produce for this text, derived from the RAW TEXT
  * alone: the number of logical lines, and EXACTLY the characters they must
  * carry between them, in order, whitespace included.
@@ -1005,14 +1036,26 @@ const MATCHERS = 2;
  *
  *   1. a trailing CR is dropped from each raw line (and only a TRAILING one: a
  *      CR in the middle of a line is content, and `logicalLines` keeps it);
- *   2. a trailing continuation backslash, with whatever whitespace follows it,
- *      becomes exactly ONE SPACE, because that is what the joiner substitutes;
+ *   2. a trailing CONTINUATION backslash, with whatever whitespace follows it,
+ *      becomes exactly ONE SPACE, because that is what the joiner substitutes
+ *      -- and "continuation" means an ODD trailing backslash run, since `\\`
+ *      is an escaped backslash. CD-47-02: both sides used to test for ANY
+ *      trailing backslash, which made the joiner consume one and RE-CHAIN on
+ *      the residue, so this list was NOT exhaustive and my sentence that the
+ *      derivation "cannot drift" was false. See `continuesLine`;
  *   3. a raw line CARRIED into the one above it is trimmed at both ends,
  *      because the joiner appends it trimmed.
  *
  * Every other character, space and tab included, is reproduced as it stands.
  * Anything beyond those three would be a projection, and a projection is what
  * CD-46-01 walked through.
+ *
+ * "Three things and no others" is a claim about a function, so it is tested as
+ * one: the fuzz arm generates documents out of backslash runs of one, two and
+ * three, blank lines, tabs, runs of spaces and bare CRs, and requires this
+ * derivation to predict `logicalLines` exactly on every case. It was 197
+ * mismatches in 300,000 before CD-47-02 and 0 after. If a fourth normalisation
+ * is ever added to the joiner and not to this list, that arm is what says so.
  */
 const rawExpectation = (text: string): { lines: number; content: string } => {
   const raw = text.split('\n').map((l) => l.replace(/\r$/, ''));
@@ -1024,7 +1067,7 @@ const rawExpectation = (text: string): { lines: number; content: string } => {
     // in a continuation backslash -- which chains, and needs no state. The
     // joiner's own test tolerates whitespace after the backslash, so this one
     // does too, and the answer does not depend on trimming either side.
-    const carried = i > 0 && /\\\s*$/.test(raw[i - 1] ?? '');
+    const carried = i > 0 && continuesLine(raw[i - 1] ?? '');
     if (!carried) lines += 1;
     // What the joiner has in hand for this raw line: trimmed if it was carried
     // in, as it stands if it opened the logical line.
@@ -1032,7 +1075,7 @@ const rawExpectation = (text: string): { lines: number; content: string } => {
     // The joiner eats exactly one backslash per join -- this line's own, and
     // only when a next line exists to be carried into it -- and leaves a
     // single space in its place.
-    parts.push(i + 1 < raw.length && /\\\s*$/.test(own) ? own.replace(/\\\s*$/, ' ') : own);
+    parts.push(i + 1 < raw.length && continuesLine(own) ? own.replace(/\\\s*$/, ' ') : own);
   }
   return { lines, content: parts.join('') };
 };
@@ -1234,7 +1277,7 @@ const logicalLines = (text: string): { n: number; line: string }[] => {
   for (let i = 0; i < raw.length; i += 1) {
     const start = i;
     let line = raw[i] ?? '';
-    while (/\\\s*$/.test(line) && i + 1 < raw.length) {
+    while (continuesLine(line) && i + 1 < raw.length) {
       i += 1;
       line = `${line.replace(/\\\s*$/, ' ')}${(raw[i] ?? '').trim()}`;
     }
@@ -1244,7 +1287,7 @@ const logicalLines = (text: string): { n: number; line: string }[] => {
 };
 
 /** Offending lines in one text, as `path:line: text`. */
-const offencesIn = (label: string, text: string, toolsDir: string = TOOLS_DIR): string[] => scanLines(label, text, false, toolsDir).found;
+const offencesIn = (label: string, text: string, toolsDir: string = TOOLS_DIR): string[] => auditedScan(label, text, text, toolsDir).found;
 
 /**
  * How many invocations the scan SEES in one text, isolated or not.
@@ -1377,7 +1420,12 @@ const matchesOf = (s: string, re: RegExp): RegExpMatchArray[] => {
  * that every skip reds -- that sentence was measured false twice, and the two
  * counterexamples are named in the round histories above.
  */
-const scanLines = (label: string, text: string, honourExemption: boolean, toolsDir: string = TOOLS_DIR): { found: string[]; tested: number; seen: number } => {
+const scanLines = (
+  label: string,
+  text: string,
+  honourExemption: boolean,
+  toolsDir: string = TOOLS_DIR,
+): { found: string[]; tested: number; seen: number; read: string[] } => {
   const found: string[] = [];
   let inFence = false;
   let exempt = false;
@@ -1435,21 +1483,55 @@ const scanLines = (label: string, text: string, honourExemption: boolean, toolsD
   // is UNMEASURED at runtime rather than a live hole, and the day a document
   // carries a line the skip matches, this refusal fires on that document. The
   // arm below measures exactly that pair.
-  if (!honourExemption) {
-    // The expectation comes from the RAW TEXT. F-73 (B) moved the total by
-    // editing `logicalLines`, which is exactly what a raw-derived expectation
-    // refuses to follow -- and an arm measures `logicalLines` against this
-    // prediction on every shape, so a drift between them is itself a red.
-    found.push(
-      ...invariantOffences(
-        label,
-        tested,
-        [...reads.values()].map((parts) => parts.join('')),
-        rawExpectation(text),
-      ),
-    );
-  }
-  return { found, tested, seen };
+  // ROUND 48, THE CHALLENGER'S ROUND-46 FINDING, as the coordinator ruled it:
+  // THE AUDIT IS NO LONGER PERFORMED HERE. It used to be -- this function
+  // computed its own conservation and content refusals and pushed them into
+  // its own return value -- and an EARLY RETURN at the top of this body
+  // therefore produced no offences AND no refusal about producing none, while
+  // the caller recorded the label as scanned. All green. A function cannot
+  // audit itself, because the edit that stops it scanning also stops it
+  // auditing.
+  //
+  // So this function now only REPORTS what it did: the offences it found, how
+  // many logical lines it reached, how many invocations it saw, and the exact
+  // characters each matcher was handed. `auditedScan` below compares that
+  // record with an expectation derived independently of this function, and an
+  // early return here is a record that cannot match one.
+  return { found, tested, seen, read: [...reads.values()].map((parts) => parts.join('')) };
+};
+
+/**
+ * One document, SCANNED AND AUDITED -- with the audit done HERE, outside the
+ * function it audits, which is the whole point.
+ *
+ * The three independent readings a document gets, and why each is a separate
+ * function:
+ *   - `scanLines` applies the matchers and REPORTS what it reached and read.
+ *   - `rawExpectation` says what the matchers must have been handed, derived
+ *     from the raw text with no help from `logicalLines`.
+ *   - `expectationSource` is, for a caller holding a file, the bytes a SECOND
+ *     reader found on disk (CD-47-01), so the expectation does not come from
+ *     the string the scanner was handed. An in-memory fixture has no disk to
+ *     disagree with, so it defaults to the text itself.
+ *
+ * An early return, a `continue`, a blanked line, a filtered path or a
+ * projection anywhere in one of those three paths is a disagreement between
+ * two of them, and a disagreement is a refusal by name. Only an edit that
+ * changes the SAME behaviour in two of them at once passes, which is the
+ * general limit written down and measured at the arm.
+ */
+const auditedScan = (
+  label: string,
+  text: string,
+  expectationSource: string = text,
+  toolsDir: string = TOOLS_DIR,
+): { found: string[]; seen: number; tested: number } => {
+  const scan = scanLines(label, text, false, toolsDir);
+  return {
+    found: [...scan.found, ...invariantOffences(label, scan.tested, scan.read, rawExpectation(expectationSource))],
+    seen: scan.seen,
+    tested: scan.tested,
+  };
 };
 
 /**
@@ -1484,6 +1566,53 @@ const readable = (p: string): string | typeof BINARY | null => {
   } catch {
     return null;
   }
+};
+
+/**
+ * The bytes on disk, decoded -- read by a SECOND reader that shares NO HELPER
+ * with `readable`.
+ *
+ * ROUND 48, THE COORDINATOR'S CD-47-01 (P1, A FAIL-OPEN): every invariant in
+ * this law was over the text it was HANDED. Nothing bounded that text against
+ * what is on disk. So ONE edit to the shared helper `readable` --
+ * `t.includes('f-51-quote') ? '' : t` -- hid a planted offence at 23 passed
+ * with every other law satisfied: the label was still recorded, so the
+ * document-set law was content; `rawExpectation` derived from the SAME blanked
+ * text, so the content identity was content; and neither traversal reads
+ * content at all. I reproduced it before changing anything. It is not the
+ * declared limit -- that is one edit in two independent paths; this was one
+ * edit in one path that both sides happened to share.
+ *
+ * This reader opens the file itself, takes the bytes rather than asking for a
+ * string, and decodes them here. It shares no line, no helper and no
+ * try/catch with `readable`. The expectation is derived from THIS text, and
+ * the text the law consumed is compared with it for equality, refusing by
+ * name -- so blanking either one reds, and blanking the same way in both is
+ * the general limit written down at the law.
+ */
+const diskText = (p: string): string | null => {
+  try {
+    return readFileSync(p).toString('utf8');
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * The disk refusal: the text the law CONSUMED against the bytes a second
+ * reader found on disk, as a function of the two so an arm can run it over its
+ * domain. The message carries both lengths and the first divergence, never the
+ * text, for the reason the content refusal does: a refusal that pastes a
+ * document into a log is unreadable and may itself carry a command.
+ */
+const diskRefusal = (label: string, consumed: string, onDisk: string | null): string | undefined => {
+  if (onDisk === null) {
+    return `${label}: ${REFUSED_TEXT_NOT_FROM_DISK} the second reader could not read this file at all`;
+  }
+  if (consumed === onDisk) return undefined;
+  let at = 0;
+  while (at < consumed.length && at < onDisk.length && consumed[at] === onDisk[at]) at += 1;
+  return `${label}: ${REFUSED_TEXT_NOT_FROM_DISK} ${consumed.length}/${onDisk.length} chars, first divergence at ${at}`;
 };
 
 describe('every written invocation of the pack tools is isolated', () => {
@@ -1533,9 +1662,18 @@ describe('every written invocation of the pack tools is isolated', () => {
       // two of three call sites was not applied. One loop now, so the
       // repository half cannot drift from the pack half again, and an offence
       // here names `label:n:` like every other.
-      const scan = scanLines(label, text, false, TOOLS_DIR);
+      // CD-47-01: the SECOND reader, before the scan, so the expectation the
+      // scan checks itself against comes from disk and not from the string
+      // `readable` chose to hand over.
+      const onDisk = diskText(p);
+      const scan = auditedScan(label, text, onDisk ?? text, TOOLS_DIR);
       seen += scan.seen;
       offences.push(...scan.found);
+      // And the text the law consumed, against those same bytes, by name. One
+      // edit to `readable` now reds twice: here, and through the content
+      // identity whose expectation no longer shares a reader with it.
+      const drifted = diskRefusal(label, text, onDisk);
+      if (drifted !== undefined) offences.push(drifted);
       // RECORDED LAST, after the scan has returned -- the same discipline as
       // the line counter inside `scanLines`: a `continue` placed anywhere
       // above this, on the path or on the content, drops the label and shows
@@ -1700,6 +1838,12 @@ describe('every written invocation of the pack tools is isolated', () => {
       // backslash the challenger added, since the joiner replaced one per pass.
       ['c01-backslash', ['```text f-50-quote', '$ echo quoted \\', '```', '', offence, '', '```text', '```'].join('\n')],
       ['c01-two-backslashes', ['```text f-50-quote', '$ echo quoted \\\\', '```', '', offence, '', '```text', '```'].join('\n')],
+      // ROUND 48, CD-47-02: a backslash RUN before the fence, written ODD so
+      // it is still a continuation under the corrected parity rule. The
+      // two-backslash spelling above is kept as a LIVE fixture -- the offence
+      // reds there too -- but it is no longer a C-01 control, and the arm
+      // below pins exactly why.
+      ['c01-three-backslashes', ['```text f-50-quote', '$ echo quoted \\\\\\', '```', '', offence, '', '```text', '```'].join('\n')],
       // F-66: a declared block that is never closed.
       ['f66-unterminated', ['Intro.', '', '```text f-50-quote', '$ echo quoted', '', offence].join('\n')],
       // And the plainest shape of all, which the exemption was written for:
@@ -1726,7 +1870,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       'f69-four-spaces',
       'f69-tab',
       'c01-backslash',
-      'c01-two-backslashes',
+      'c01-three-backslashes',
       'f66-unterminated',
       'inside-a-declared-block',
     ]) {
@@ -1736,6 +1880,23 @@ describe('every written invocation of the pack tools is isolated', () => {
         `${label}: restoring the exemption no longer hides the offence, so the exemption is not what hid it`,
       ).toStrictEqual([]);
     }
+
+    // AND THE ONE CONTROL THE PARITY FIX TOOK AWAY, pinned rather than
+    // quietly dropped. `c01-two-backslashes` used to go green-wrong under the
+    // restored exemption: the old joiner treated a trailing `\\` as a
+    // continuation, swallowed the fence-closing line into the quoted one, and
+    // left the block OPEN so the offence below it sat inside an exempt region.
+    // CD-47-02 corrected the parity -- a trailing `\\` is an escaped
+    // backslash, not a continuation -- so that spelling no longer joins, the
+    // fence closes, and the exemption CANNOT hide it. The C-01 class is still
+    // controlled by `c01-backslash` and `c01-three-backslashes`, both odd
+    // runs. This assertion is the opposite direction from the loop above, and
+    // it exists so that a reader who comes looking for the two-backslash
+    // control finds out what happened to it instead of finding nothing.
+    expect(
+      scanLines('c01-two-backslashes', fixtures.find(([l]) => l === 'c01-two-backslashes')?.[1] ?? '', true).found,
+      'the restored exemption hides the two-backslash shape again, which means the continuation parity has regressed to the pre-CD-47-02 rule',
+    ).toHaveLength(1);
 
     // NEUTRALISATION, option (a) of the ruling, pinned in both directions: the
     // documented spelling wraps the interpreter token in angle brackets, which
@@ -1792,8 +1953,26 @@ describe('every written invocation of the pack tools is isolated', () => {
     // satisfies hides nothing but reds nothing either. What the law measures,
     // and the one thing it does not, is written out where it is defined.
     const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    // ROUND 48: there is exactly ONE unexempted call to the scanner now, and
+    // it is inside `auditedScan` -- the wrapper that performs the audit the
+    // scanner is no longer allowed to perform on itself. A second one would be
+    // a document scanned without being audited, which is the shape of the
+    // challenger's round-46 finding.
     const liveNeedle = ['scanLines(label,', 'text,', 'false,'].join(' ');
-    expect(here.split(liveNeedle).length - 1, 'the live callers passing false are not the two counted here: a third scan has appeared').toBe(2);
+    expect(
+      here.split(liveNeedle).length - 1,
+      'the unexempted scanner call is not the single one counted here: a document is being scanned outside the wrapper that audits it',
+    ).toBe(1);
+    // And every caller that reads a document goes through that wrapper. Three
+    // sites, each named: `offencesIn`, which the fixtures and the pack scan's
+    // own assertions use; the repository walk, which passes the bytes a second
+    // reader found on disk; and the pack scan, which passes the same. A fourth
+    // would be a document read by a path this count does not know about.
+    const auditedSite = new RegExp(['auditedScan\\(', '(?:label|name),'].join('\\s*'), 'g');
+    expect(
+      (here.match(auditedSite) ?? []).length,
+      'the live document callers are not the three counted here: a document is being read by a path this count does not know about',
+    ).toBe(3);
     const exempting = (here.match(/scanLines\((?:[^()]|\([^()]*\))*,\s*true\)/g) ?? []).length;
     // Three arms pass true, all in this file and all named: this test's
     // deletion control, the conservation law's control -- which needs the one
@@ -2090,6 +2269,107 @@ describe('every written invocation of the pack tools is isolated', () => {
       );
     }
 
+    // ROUND 48, THE COORDINATOR'S CD-47-02 (P2, A MEASURED-FALSE CLAIM): the
+    // nine named shapes above were not enough, and the sentence they were
+    // meant to support -- that the join rule does "three things and no others"
+    // and that this derivation "cannot drift" -- was FALSE. A line ending in
+    // TWO backslashes followed by a blank line made the old joiner consume one
+    // backslash, leave `\\ ` behind and RE-CHAIN on the residue, collapsing
+    // three honest lines into one while the derivation predicted two:
+    // REFUSED-LINES-NOT-ALL-TESTED 2/3 on an HONEST document. It failed closed,
+    // and a false RED on a real document is still a defect, because the next
+    // author to meet one learns to distrust the law.
+    //
+    // A claim about a function is tested as a function, over a domain big
+    // enough to find what hand-named shapes miss. So: a DETERMINISTIC fuzz --
+    // a fixed seed and a fixed generator, so it can never flake and a failure
+    // can always be replayed -- over pieces chosen for exactly the dimensions
+    // that have ever mattered here: backslash runs of one, two and three,
+    // blank lines, tabs, runs of spaces, and bare CRs. The coordinator
+    // measured 197 mismatches in 300,000 cases before the parity fix; this arm
+    // requires 0, and it is the thing that would catch a fourth normalisation
+    // added to the joiner and not to the derivation.
+    let seed = 20261019;
+    const nextRandom = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const fuzzPieces = ['a', 'b ', ' c', '\\', '\\\\', '\\\\\\', '', '  ', '\t', 'x\\', 'y \\', 'z\\\\', '\r', 'q\r'];
+    const mismatches: string[] = [];
+    let fuzzCases = 0;
+    const coverage = { backslash: 0, cr: 0, evenRun: 0, joined: 0 };
+    for (let k = 0; k < 20000; k += 1) {
+      const pick: string[] = [];
+      const howMany = 1 + Math.floor(nextRandom() * 5);
+      for (let j = 0; j < howMany; j += 1) pick.push(fuzzPieces[Math.floor(nextRandom() * fuzzPieces.length)] ?? '');
+      const text = pick.join('\n');
+      fuzzCases += 1;
+      const actual = logicalLines(text);
+      const predicted = rawExpectation(text);
+      if (text.includes('\\')) coverage.backslash += 1;
+      if (text.includes('\r')) coverage.cr += 1;
+      if (text.split('\n').some((l) => /(^|[^\\])(\\\\)+\s*$/.test(l))) coverage.evenRun += 1;
+      if (actual.length < text.split('\n').length) coverage.joined += 1;
+      if (predicted.lines !== actual.length || predicted.content !== actual.map((l) => l.line).join('')) {
+        if (mismatches.length < 3) mismatches.push(JSON.stringify(text));
+      }
+    }
+    expect(fuzzCases, 'the fuzz generated no cases, so it measured nothing').toBe(20000);
+    // AND THE GENERATOR IS MEASURED, NOT TRUSTED -- the challenger's own
+    // disclosure on F-78, which is this finding reached independently: its
+    // first fuzz used a degenerate LCG whose low-order bits barely varied, so
+    // it produced ZERO CR cases and 177 backslash cases out of 20,000 and
+    // returned no failures. It nearly reported that as a pass. Mine is an LCG
+    // too, so the same doubt applies to it and the answer is the standing rule
+    // -- a claim about an instrument is verified only by RUNNING the
+    // instrument. So the corpus's own coverage is counted and asserted: a 0
+    // over a domain that never contained the shape is a 0 about nothing.
+    expect(coverage.backslash, 'the fuzz corpus barely contains a backslash, so its 0 mismatches is a 0 over the wrong domain').toBeGreaterThan(5000);
+    expect(coverage.cr, 'the fuzz corpus barely contains a CR, so the CR normalisation is untested by it').toBeGreaterThan(2000);
+    expect(coverage.evenRun, 'the fuzz corpus barely contains an EVEN backslash run, which is the shape CD-47-02/F-78 was about').toBeGreaterThan(2000);
+    expect(coverage.joined, 'the fuzz corpus barely makes the joiner do anything, so it is not testing the join rule').toBeGreaterThan(2000);
+
+    // AND AN EXHAUSTIVE SEARCH, which is what a fuzz cannot be: every string
+    // of length 0 to 4 over the alphabet that matters. 1555 cases, no
+    // generator, no seed, no sampling -- so no generator bias is possible and
+    // the result BOUNDS LOSS over that domain instead of surviving a witness.
+    // The challenger's exhaustive search of exactly this shape found the one
+    // divergence class in a single member, `\\` + two newlines, which is how
+    // F-78 and CD-47-02 are the same finding; it must be empty now.
+    const alphabet = ['a', ' ', '\t', '\\', '\r', '\n'];
+    const exhaustive: string[] = [];
+    let exhaustiveCases = 0;
+    const walkStrings = (prefix: string, depth: number): void => {
+      exhaustiveCases += 1;
+      const actual = logicalLines(prefix);
+      const predicted = rawExpectation(prefix);
+      if (predicted.lines !== actual.length || predicted.content !== actual.map((l) => l.line).join('')) {
+        if (exhaustive.length < 5) exhaustive.push(JSON.stringify(prefix));
+      }
+      if (depth === 0) return;
+      for (const ch of alphabet) walkStrings(prefix + ch, depth - 1);
+    };
+    walkStrings('', 4);
+    expect(exhaustiveCases, 'the exhaustive search did not cover the domain it claims: 1 + 6 + 36 + 216 + 1296 strings').toBe(1555);
+    expect(
+      exhaustive,
+      'the derivation and logicalLines disagree on a string of four characters or fewer, so the pair is not in agreement over its domain',
+    ).toStrictEqual([]);
+    expect(mismatches, 'the raw-derived expectation does not predict logicalLines on these documents, so the law can false-RED on an honest one').toStrictEqual(
+      [],
+    );
+    // The generator must actually produce the shape that defeated round 47, or
+    // the 0 above is a 0 over the wrong domain -- which is the mistake CD-47-02
+    // was about in the first place.
+    expect(fuzzPieces, 'the fuzz generator no longer produces an EVEN backslash run, which is the shape CD-47-02 was about').toContain('\\\\');
+    expect(continuesLine('echo a \\\\'), 'an EVEN trailing backslash run is read as a continuation again: CD-47-02 has regressed').toBe(false);
+    expect(continuesLine('echo a \\'), 'an ODD trailing backslash run is no longer read as a continuation, which would stop the joiner working at all').toBe(
+      true,
+    );
+    expect(continuesLine('echo a \\\\\\'), 'a three-backslash run is not read as a continuation').toBe(true);
+    expect(continuesLine('echo a \\   '), 'a continuation followed by trailing whitespace is not read as one').toBe(true);
+    expect(continuesLine('echo a'), 'a line with no trailing backslash is read as a continuation').toBe(false);
+
     // CD-44-01: the content refusal compares CHARACTERS, not how many of them.
     // Armed over its domain, including the case that defeated round 44 -- a
     // substitution of the same length.
@@ -2158,9 +2438,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // spelling and went to 0 the moment the formatter broke the call across
     // lines, which is a false RED but the same lesson as B-10 -- an in-file
     // needle must survive the formatter that owns the file.
-    const pushSite = new RegExp(['found\\.push\\(', '\\.\\.\\.invariantOffences\\('].join('\\s*'), 'g');
+    const pushSite = new RegExp(['\\.\\.\\.invariantOffences\\(', 'label,', 'scan\\.tested,', 'scan\\.read,'].join('\\s*'), 'g');
     const self = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
-    expect((self.match(pushSite) ?? []).length, 'the live scan no longer reports its own invariants: the guard was deleted or renamed').toBe(1);
+    expect(
+      (self.match(pushSite) ?? []).length,
+      'the audited wrapper no longer compares the scanner record against the independent expectation: the guard was deleted or renamed',
+    ).toBe(1);
     // Each line is read by every matcher, so a matcher that goes missing is a
     // refusal rather than a smaller expectation.
     expect(MATCHERS, 'the matcher count changed without this expectation changing with it').toBe(2);
@@ -2197,13 +2480,18 @@ describe('every written invocation of the pack tools is isolated', () => {
       'the two traversals disagree on this repository: one of them is skipping something the other reads',
     ).toStrictEqual(new Set(walk(REPO).map((p) => relative(REPO, p))));
 
-    // And the shared exclusion list is a CLAIM, pinned to its literal: it is
-    // the one thing both traversals read, so widening it would move both sides
-    // of the equality together -- the F-73 (B) shape. Four names, each of them
-    // And the document refusal's ONE live call site, counted with an
-    // assembled whitespace-insensitive needle, for the same reason the content
-    // guard has one: a guard whose removal nothing notices is not a guard.
-    // Deleting or renaming the call in the repository walk reds here.
+    // CD-47-03 (P3): this comment was CUT IN HALF when I inserted the needle
+    // arm below it last round -- "Four names, each of them" ran straight into
+    // the needle's own paragraph, and the tail landed under the needle check
+    // where it read as a sentence about `UNREAD_DIRS` that began nowhere. A
+    // comment spliced by an insertion is the prose equivalent of the in-file
+    // needle Prettier broke in round 45: the edit succeeded and the artefact
+    // it produced was wrong. Both halves are restored to their own paragraph.
+    //
+    // The document refusal's ONE live call site, counted with an assembled
+    // whitespace-insensitive needle, for the same reason the content guard has
+    // one: a guard whose removal nothing notices is not a guard. Deleting or
+    // renaming the call in the repository walk reds here.
     const docSite = new RegExp(['documentRefusal\\(', 'expectedLabels,', 'scannedLabels\\)'].join('\\s*'), 'g');
     const here47 = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
     expect(
@@ -2211,6 +2499,86 @@ describe('every written invocation of the pack tools is isolated', () => {
       'the repository walk no longer compares the documents it read with the documents the tree holds: the guard was deleted or renamed',
     ).toBe(1);
 
+    // ROUND 48, THE COORDINATOR'S CD-47-01 (P1, A FAIL-OPEN): every invariant
+    // was over the text the law was HANDED, and nothing bounded that text
+    // against disk -- so ONE edit to the shared helper `readable` blanked the
+    // planted line and left the document-set law content (the label was still
+    // recorded) and the content identity content (the expectation derived from
+    // the same blanked text). 23 passed. Reproduced before anything changed.
+    //
+    // The refusal is armed over its domain in both directions, because this
+    // guard has two failure modes that look alike and are not: the law reading
+    // LESS than disk holds, and the second reader reading less than the law
+    // consumed.
+    for (const [why, consumed, onDisk, expected] of [
+      ['identical text', 'abc', 'abc', false],
+      ['the law was handed nothing', '', 'abc', true],
+      ['the law was handed a blanked copy', '', 'a longer document', true],
+      ['the second reader found nothing', 'abc', '', true],
+      ['one character substituted, same length', 'axc', 'abc', true],
+      ['a trailing newline only on disk', 'abc', 'abc\n', true],
+    ] as [string, string, string, boolean][]) {
+      const refusal = diskRefusal('doc', consumed, onDisk);
+      expect(refusal === undefined, `${why}: the disk refusal answered the wrong way`).toBe(!expected);
+      if (expected) {
+        expect(refusal, `${why}: the disk refusal does not name itself`).toContain(REFUSED_TEXT_NOT_FROM_DISK);
+        expect(refusal, `${why}: the disk refusal does not carry both lengths`).toContain(`${consumed.length}/${onDisk.length}`);
+      }
+    }
+    // A file the second reader cannot read AT ALL is its own refusal, not a
+    // silent pass: `null` is the one value that is neither equal nor unequal.
+    expect(diskRefusal('doc', 'abc', null), 'a file the second reader could not read is cleared').toContain(REFUSED_TEXT_NOT_FROM_DISK);
+
+    // And the two readers are INDEPENDENT on a real file, measured rather than
+    // asserted: both read this very file and agree, so the equality the live
+    // law checks is not bought with a reader that cannot disagree.
+    const selfPath = join(__dirname, 'tool-commands-are-isolated.test.ts');
+    expect(
+      diskRefusal(SELF, readable(selfPath) as string, diskText(selfPath)),
+      'the two readers disagree on this file, so one of them is not reading it',
+    ).toBeUndefined();
+
+    // The disk refusal's TWO live sites, counted -- because no file in this
+    // repository or in the pack disagrees with its own bytes, so deleting
+    // either push changes nothing at runtime and the suite stays green. I
+    // measured that: both deletions pass. A guard with no live instance is
+    // UNMEASURED AT RUNTIME, not dead -- and the remedy for an unmeasured
+    // guard whose absence nothing notices is the same one `documentRefusal`
+    // got: count its sites, so removing one reds here even though no document
+    // can red on it.
+    const diskSite = new RegExp(['diskRefusal\\(', '(?:label|name),', 'text,', 'onDisk\\)'].join('\\s*'), 'g');
+    expect(
+      (here47.match(diskSite) ?? []).length,
+      'the text the law consumed is no longer compared with the bytes on disk in both halves: one of the two guards was deleted or renamed',
+    ).toBe(2);
+
+    // THE GENERAL LIMIT, written down ONCE and MEASURED, in R42-01's voice.
+    // This law is a self-check: it reads its own subject through its own
+    // helpers. An edit that changes the SAME behaviour in BOTH independent
+    // paths -- blanking a line in `readable` AND in `diskText`, or filtering a
+    // path in `walk` AND in `treeFiles` -- moves both sides of every equality
+    // together and PASSES. I measured both of those: 23 passed. No self-check
+    // can see such an edit, because there is nothing left inside the system to
+    // disagree with it; it is bounded by REVIEW of the diff, where it appears
+    // as two edits in two functions that share no line. Nothing in this file
+    // claims otherwise, and this is the sentence that says so.
+    //
+    // CD-47-04 (P3): `REFUSED_FILE_NOT_READABLE` names the refusal for a file
+    // this law cannot read. No such file exists in this repository or in the
+    // pack, so the LIVE push is UNMEASURED AT RUNTIME -- not dead, and not
+    // claimed as armed. What is measured is the reader's own answer on an
+    // unreadable path, which is the half a test can execute: a directory is
+    // not a file, so `readable` must return `null` for it rather than throwing
+    // past the caller or returning text.
+    expect(readable(REPO), 'a directory read as a file did not come back as unreadable, so the null branch is not the branch this law thinks it is').toBe(null);
+    expect(diskText(REPO), 'the second reader did not come back as unreadable on a directory either').toBe(null);
+    expect(REFUSED_FILE_NOT_READABLE, 'the unreadable refusal name changed without the two assertions that read it changing with it').toBe(
+      'REFUSED-FILE-NOT-READABLE',
+    );
+
+    // And the shared exclusion list is a CLAIM, pinned to its literal: it is
+    // the one thing both traversals read, so widening it would move both sides
+    // of the equality together -- the F-73 (B) shape. Four names, each of them
     // a directory this law has no business reading.
     expect(
       [...UNREAD_DIRS],
@@ -2492,6 +2860,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     const offences: string[] = [];
     const unclassified: string[] = [];
     const packBinaries: string[] = [];
+    const packUnreadable: string[] = [];
     let mine = 0;
     for (const name of readdirSync(PACK)) {
       if (exempt.has(name)) continue;
@@ -2505,14 +2874,24 @@ describe('every written invocation of the pack tools is isolated', () => {
         continue;
       }
       const text = readable(join(PACK, name));
-      if (text === null) continue;
+      // CD-47-01/CD-47-04, the same two corrections on this side: a file this
+      // law cannot read is REFUSED BY NAME rather than skipped silently.
+      if (text === null) {
+        packUnreadable.push(name);
+        continue;
+      }
       // F-57, the same refusal on this side.
       if (text === BINARY) {
         if (!EXEMPT_BINARIES.has(name)) packBinaries.push(name);
         continue;
       }
       mine += 1;
-      offences.push(...offencesIn(name, text));
+      // CD-47-01: the second reader here too, so the pack half is bounded
+      // against disk exactly as the repository half is.
+      const onDisk = diskText(join(PACK, name));
+      offences.push(...auditedScan(name, text, onDisk ?? text, TOOLS_DIR).found);
+      const drifted = diskRefusal(name, text, onDisk);
+      if (drifted !== undefined) offences.push(drifted);
     }
     // The obligation MOVES, it does not disappear: for every document this law
     // declines to read, the author's own seal must refuse it by exact name.
@@ -2525,6 +2904,10 @@ describe('every written invocation of the pack tools is isolated', () => {
       ).toStrictEqual([]);
     }
     expect(packBinaries, 'a pack document holds a NUL byte, so this law cannot read it: name it in EXEMPT_BINARIES with the reason').toStrictEqual([]);
+    expect(
+      packUnreadable,
+      `a pack document cannot be read at all, so this law never saw it: ${REFUSED_FILE_NOT_READABLE} — name why, and do not restore the silent skip`,
+    ).toStrictEqual([]);
     expect(mine, 'no author-owned document was read from the pack').toBeGreaterThan(0);
     // ROUND 42: no `quoted` counter any more. There is no exemption to keep
     // alive, and nothing in a document is skipped: an attack line that must
