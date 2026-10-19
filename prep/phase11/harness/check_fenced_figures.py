@@ -311,6 +311,7 @@ MATCHER_GUARDS = (
 # phase stops.
 HAYSTACK_GUARDS = (
     "haystack from the commit",
+    "no repository redirects the subject",
     "markdown is not evidence",
     "the checker is not its own evidence",
 )
@@ -444,10 +445,19 @@ def figures_on(line, skip=()):
     TRANSFORMATION was behind a named guard, and round 16 pointed out that it
     said nothing about the function that decides what to do with the result. A
     rebinding of `line` here, or one early `return out` under a test nobody
-    named, defeats every guard below it while `_strip` stays pristine. So this
-    function, `tokens_in` and `_exempted` are parsed too: no statement may
-    rebind a parameter or a loop target, and every test must be a named guard
-    or a call to a module function. `--selftest` plants both shapes.
+    named, defeats every guard below it while `_strip` stays pristine.
+
+    So this function, `tokens_in`, `_exempted` and `_is_figure` are parsed too
+    -- and round 17 rejected the TWO-RULE parse that first answered that,
+    because `ast.If`/`ast.IfExp`/`ast.Assign` are not the only ways to decide.
+    What holds here now is a CLOSED SUB-LANGUAGE, stated in full above
+    `FRAME_NODES` as four rules: every node type is in the admitted set or
+    refused by name at its line; every decision is a named guard, a call the
+    frame admits, or one of the exact sources listed as the shape a review arm
+    is about; every call is classified, and a function this file defines is
+    DESCENDED INTO under the same rules; and no name is bound twice, nor any
+    parameter or `for` target bound at all. `--selftest` plants every shape
+    round 16 and round 17 used, and the unplanted frame must still be accepted.
     """
     out = []
     for part in _segments(line, skip):
@@ -653,8 +663,10 @@ def _differs_from_commit(root):
     commit does not carry is now out of the haystack AND named in the output.
     """
     try:
-        top = _toplevel(root)
-        rel = os.path.relpath(os.path.abspath(root), top)
+        # The SAME anchored toplevel the verdict used. Reading this from an
+        # upward resolution is how the redirect silenced its own report.
+        top = _subject_top(root)
+        rel = os.path.relpath(os.path.realpath(root), top)
         changed = _git(top, ["diff", "--no-ext-diff", "--name-only", "HEAD", "--", rel])
         extra = _git(
             top, ["ls-files", "-z", "--others", "--exclude-standard", "--", rel]
@@ -674,6 +686,87 @@ def _differs_from_commit(root):
 _HAYSTACK = {}
 
 
+def _subject_top(root, checked=True):
+    """The repository the subject belongs to, resolved so a PLANTED repository
+    cannot become it.
+
+    `R17`, ranked a fail-open by the coordinator over the challenger's own
+    milder ranking: `_toplevel` resolved UPWARD from the harness directory, so
+    a `git init` INSIDE it became the toplevel. The challenger built it: the
+    nested repository carried every harness file plus the fabricated token, the
+    scan read ITS commit, the figure passed -- and the self-announcing
+    "differs from that commit" list came from the same redirected repository,
+    so the mechanism that was supposed to name the surprise was defeated by the
+    same move. Nothing compared the haystack's commit with the repository's
+    own HEAD, because `_commit_of` was called once and its answer went only
+    into a label.
+
+    Three assertions now, each a NAMED refusal:
+
+      1. The toplevel is resolved from the directory the run was INVOKED in
+         when the subject lies inside it -- the repository a reader thinks they
+         are measuring -- and only otherwise from the subject itself, which is
+         what the hermetic arms need.
+      2. The subject must be a STRICT subdirectory of that toplevel. A subject
+         that is its own repository is the challenger's plant exactly.
+      3. No `.git` may sit anywhere between the toplevel and the subject, or
+         anywhere inside the subject, and `HEAD` resolved FROM THE SUBJECT must
+         be the same commit as `HEAD` resolved from the toplevel. The first is
+         by name, the second is by value, and a redirect has to beat both.
+    """
+    subject = os.path.realpath(root)
+    if not checked:
+        # THE PRE-`R17` RESOLUTION, and it is here for exactly two callers: the
+        # hermetic arms, whose synthetic world IS its own repository, and the
+        # guard matrix's deletion of this guard. Resolving upward from the
+        # subject is the fail-open `R17-F2` reported, so deleting the guard
+        # restores that behaviour by value and not by approximation -- which is
+        # what makes the published probe's third direction mean anything.
+        return os.path.realpath(_toplevel(subject))
+    cwd = os.path.realpath(os.getcwd())
+    anchor = cwd if (subject + os.sep).startswith(cwd + os.sep) else subject
+    top = os.path.realpath(_toplevel(anchor))
+    if not (subject + os.sep).startswith(top + os.sep):
+        raise Refusal(
+            "GIT-SUBJECT-IS-A-REPO: the subject %s is the repository root itself (or "
+            "lies outside it), so a repository planted at or inside the subject would "
+            "BE the toplevel. The haystack must be a strict subdirectory of the "
+            "repository it is read from." % subject
+        )
+    # 3a, by name: every directory from the toplevel down to the subject, and
+    # everything under the subject.
+    walk_down = []
+    rel = os.path.relpath(subject, top).split(os.sep)
+    at = top
+    for part in rel:
+        at = os.path.join(at, part)
+        walk_down.append(at)
+    for d in walk_down:
+        dotgit = os.path.join(d, ".git")
+        if os.path.exists(dotgit):
+            raise Refusal(
+                "GIT-NESTED-REPO: %s exists below the repository root %s, so git would "
+                "resolve the subject against IT and not against the repository this run "
+                "was invoked on." % (dotgit, top)
+            )
+    for d, subdirs, _files in os.walk(subject):
+        if ".git" in subdirs or ".git" in _files:
+            raise Refusal(
+                "GIT-NESTED-REPO: %s exists inside the haystack, so a commit of that "
+                "repository could stand in for the subject's."
+                % os.path.join(d, ".git")
+            )
+    # 3b, by value: the subject's own HEAD must be the toplevel's HEAD.
+    here, there = _commit_of(subject), _commit_of(top)
+    if here != there:
+        raise Refusal(
+            "GIT-HEAD-DISAGREES: HEAD resolved from the subject %s is %s, and HEAD "
+            "resolved from the repository root %s is %s. One of them is not the "
+            "repository this run was invoked on." % (subject, here[:12], top, there[:12])
+        )
+    return top
+
+
 def haystack(root, skip=()):
     """(label, paths, text): what this tree emits, and where that was read from.
 
@@ -683,9 +776,10 @@ def haystack(root, skip=()):
     """
     stem = os.path.splitext(os.path.basename(__file__))[0]
     from_commit = "haystack from the commit" not in skip
+    anchored = "no repository redirects the subject" not in skip
     drop_md = "markdown is not evidence" not in skip
     drop_self = "the checker is not its own evidence" not in skip
-    key = (os.path.abspath(root), from_commit, drop_md, drop_self)
+    key = (os.path.abspath(root), from_commit, anchored, drop_md, drop_self)
     if key in _HAYSTACK:
         return _HAYSTACK[key]
 
@@ -701,8 +795,8 @@ def haystack(root, skip=()):
         return True
 
     if from_commit:
-        top = _toplevel(root)
-        sha = _commit_of(root)
+        top = _subject_top(root, anchored)
+        sha = _commit_of(top if anchored else root)
         rel = os.path.relpath(os.path.abspath(root), top)
         paths = [n for n in _tracked_paths(top, sha, rel) if keep(n)]
         text = "\n".join(_blobs(top, sha, paths))
@@ -1082,6 +1176,11 @@ WORLDS = {
         {"fake_proofs.py": FAKE_PROOFS, ".gitignore": "__pycache__/\n"},
         {"__pycache__/check_fenced_figures.cpython-313.pyc": PROBE + "\n"},
     ),
+    # R17: the challenger's own plant, ranked a fail-open by the coordinator.
+    # A repository is created INSIDE the haystack, carrying the token, after
+    # the outer commit -- so an upward resolution finds IT and the figure
+    # passes. Built by `_world_harness`, which cannot express it as a file map.
+    "nested": ({"fake_proofs.py": FAKE_PROOFS}, {}),
     # R16-F1: a directory that is no repository. Not committed on purpose: the
     # arm below requires the check to REFUSE here rather than fall back to the
     # walk, which is the whole difference between a guard and a preference.
@@ -1142,6 +1241,26 @@ def _world_harness(kind):
     )
     for name, body in sorted(untracked.items()):
         _write(harness, name, body)
+    if kind == "nested":
+        # A repository INSIDE the haystack, carrying the plant, committed in
+        # itself and in nothing else.
+        _write(harness, "PROBE-NESTED.txt", PROBE + "\n")
+        _git(harness, ["init", "-q"])
+        _git(harness, ["add", "-A", "--", "."])
+        _git(
+            harness,
+            [
+                "-c",
+                "user.name=phase11",
+                "-c",
+                "user.email=phase11@example.invalid",
+                "commit",
+                "-q",
+                "--no-gpg-sign",
+                "-m",
+                "nested: the plant, committed in the planted repository",
+            ],
+        )
     _WORLDS[kind] = harness
     return harness
 
@@ -1191,6 +1310,16 @@ def _arms_with(skip=()):
             "R16-F1 a directory that is no repository is refused",
             5,
             (lambda: _arm(PROBE, skip, "a.md", "norepo")),
+        )
+    )
+    # R17: a repository planted inside the haystack must not become the
+    # subject's repository. Deleting the anchor makes this arm PASS the plant,
+    # which is the fail-open the coordinator ranked.
+    arms.append(
+        (
+            "R17 a repository planted inside the haystack is refused",
+            5,
+            (lambda: _arm(PROBE, skip, "a.md", "nested")),
         )
     )
     return arms
@@ -1414,10 +1543,15 @@ def _plant_refused(stmt):
     return bool(bad)
 
 
+# The transformers, as ONE tuple: `decision_test` claims these two are parsed
+# here instead of by the frame's rules, and checks the claim against this.
+TRANSFORMERS = (_strip, _segments)
+
+
 def structure_test():
     """The real transformers must pass; all ten planted transformations must not."""
     ok = True
-    for func in (_strip, _segments):
+    for func in TRANSFORMERS:
         good, msgs, keys = guarded_transformations(func)
         for m in msgs:
             print("  structure **FAILED**: %s" % m)
@@ -1440,33 +1574,116 @@ def structure_test():
     return ok
 
 
-# ── the decision frame: the function that DECIDES, parsed too ──────────────
-# `R16-S1`. The structural check above proves that every TRANSFORMATION is
-# behind a named guard. Round 16 pointed out what it says nothing about: the
-# function that decides what to do with the result. `figures_on` can rebind
-# `line`, or return early under a test nobody named, and every guard in
-# `_strip` stays pristine while the gate decides nothing. The plant the round
-# used was `line = line.replace(";", "")` in `figures_on` -- the same
-# statement the structural check refuses inside `_strip` and had no opinion
-# about one frame up -- and a narrowing early return beside it.
+# ── the decision frame: a CLOSED SUB-LANGUAGE, not an audit ────────────────
+# `R16-S1` asked for the deciding function to be parsed, and the parse that
+# answered it read decisions out of `ast.If`/`ast.IfExp` and rebindings out of
+# `ast.Assign`. Round 17 then wrote the sentence that claim deserved: "this
+# proves the frame takes no decision outside a named guard or a named
+# function" was FALSE of the instrument, and false in the direction that
+# matters -- a reader sent to it audits the named guards and the named calls
+# and does not look at the comprehension filters. Five decision shapes walked
+# straight through, each one planted in the real `figures_on` with a
+# fabricated figure committed in the owner's Arabic report, and each one took
+# the scan from refusing (rc 1) to passing (rc 0):
 #
-# So the decision is parsed on the same principle, with two rules:
+#   * a comprehension filter, which lives in `ast.comprehension.ifs` and is no
+#     `ast.If` at all;
+#   * a call to a helper beside the frame, which the rule's own remedy --
+#     "move the predicate into a function" -- MAKES permitted, and which
+#     nothing then parses (`R17-S1`);
+#   * `try/except/else`, whose branches have no test to read;
+#   * `match/case`, which contains no `ast.If` either;
+#   * a boolean index, `s = ["", s][not s.startswith("zz_")]`, which decides
+#     with a subscript and no test;
+#   * and, as a hole in rule 1 rather than an escape, `(line := ...)`, because
+#     `ast.NamedExpr` is not an `ast.Assign`.
 #
-#   1. No statement rebinds a PARAMETER or a `for` TARGET. The input a
-#      decision reads must be the input it was given.
-#   2. Every `if` -- statement or expression -- tests a NAMED GUARD or calls a
-#      module function. A predicate written inline is somewhere a narrowing
-#      hides; moved into a function of its own it is readable by this parse and
-#      by the guard matrix. `_exempted` above exists for exactly that reason.
+# PATCHING SIX SHAPES WOULD LEAVE A SEVENTH. That is this file's own lesson,
+# learned on fences, line anchors, value spellings, probe lines and artefact
+# names, so the answer is not a longer list of node types to inspect: the
+# frame is written in a CLOSED SUB-LANGUAGE and every node type outside it is
+# REFUSED BY TYPE, with its own name, whether or not anyone thought of it as a
+# way to decide. A comprehension, a `match`, a `try`, a `while`, an `assert`, a
+# walrus, a subscript, a lambda, a dict and a statement-position `and` are all
+# absent from `FRAME_NODES`, so none of them needs to be anticipated as a
+# decision: they cannot appear.
 #
-# ITS OWN BOUND: this proves the frame takes no decision outside a named guard
-# or a named function. It does not prove the named function is honest -- that
-# is what the arms are for -- and `_is_figure` is the shape the review arm is
-# about, so the three tests that ARE the shape are listed by their exact
-# source. An exception is itself a claim: if the source stops containing it,
-# the entry reds instead of quietly covering nothing.
+# The four rules, and they are what the sentences in the manifest now say:
+#
+#   1. EVERY NODE TYPE in the frame is in `FRAME_NODES`. Anything else is
+#      refused by name, at its line.
+#   2. EVERY DECISION -- an `if` statement or an `if` expression, which are the
+#      only decision forms the node set admits -- is a named guard
+#      (`"<name>" in skip` / `not in skip`), a call the frame admits, or one of
+#      the exact sources listed in `DECISION_EXCEPTIONS` as being the SHAPE the
+#      review arm is about. A listed exception is itself a claim: it reds when
+#      the source stops containing it.
+#   3. EVERY CALL is classified, and a call nothing parses is refused: a module
+#      function of this file is DESCENDED INTO under these same rules
+#      (`R17-S1`), a transformer named in `PARSED_AS_TRANSFORMERS` is parsed by
+#      `guarded_transformations` instead and that claim is checked against the
+#      set that function actually reads, an attribute call is either on a
+#      module in `FRAME_MODULES` or a method named in `FRAME_METHODS`, and a
+#      bare name is in `FRAME_BUILTINS`. Everything else is a refusal.
+#   4. NO NAME IS BOUND TWICE and no binding touches a parameter or a `for`
+#      target. One binding per name is what makes "the frame reads the input it
+#      was given" a statement about the code rather than about the author.
+#
+# WHAT IS STILL OUTSIDE IT, named because a net is read as covering the
+# variants of what it names: this says nothing about the two transformers,
+# which `guarded_transformations` covers; nothing about the honesty of a
+# guard's NAME, which is what the arms are for; and nothing about any function
+# the frame does not call. `--check-blocks`, `scan`, the emitters and the
+# selftest machinery are not in the frame and are not parsed -- they decide
+# nothing about whether a document's figure is emitted.
 
-DECISION_MODULES = ("re", "os", "unicodedata", "ast", "inspect")
+FRAME_NODES = frozenset(
+    (
+        "FunctionDef",
+        "arguments",
+        "arg",
+        "Expr",
+        "Constant",
+        "Name",
+        "Load",
+        "Store",
+        "Assign",
+        "Tuple",
+        "List",
+        "For",
+        "Call",
+        "Attribute",
+        "keyword",
+        "Return",
+        "Continue",
+        "If",
+        "IfExp",
+        "Compare",
+        "In",
+        "NotIn",
+        "Not",
+        "UnaryOp",
+        "BinOp",
+        "Add",
+        "Pass",
+    )
+)
+# The only names the frame may call without this file defining them.
+FRAME_BUILTINS = ("open", "enumerate", "bool")
+# The only methods it may call on anything. A WHITELIST, so an unknown method
+# -- `.replace`, `.casefold`, `.removeprefix`, `.translate` -- is refused
+# without being anticipated.
+# `.lower` is here because `_is_figure` folds the case of a VALUE inside the
+# `boolean case folding` guard, which the matrix measures. A method call cannot
+# smuggle a transformation past rule 4 even so: binding it over the name it
+# came from is a second binding, and deciding on its result is a test the node
+# set does not admit. Every entry is checked to be in use below, so a
+# permissive entry cannot sit here dead.
+FRAME_METHODS = ("append", "rstrip", "strip", "partition", "lower")
+FRAME_MODULES = ("re", "os", "unicodedata")
+# Parsed by `guarded_transformations` rather than by these rules. The claim is
+# checked below against the tuple that function is actually run over.
+PARSED_AS_TRANSFORMERS = ("_strip", "_segments")
 
 DECISION_EXCEPTIONS = {
     "_is_figure": (
@@ -1491,42 +1708,99 @@ def _guard_test(test):
     return test.left.value
 
 
-def _module_call(node):
-    """A call to a module-level function, or to one of this file's imports."""
-    if not isinstance(node, ast.Call):
-        return False
-    func = node.func
-    if isinstance(func, ast.Name):
-        return True
-    if (
-        isinstance(func, ast.Attribute)
-        and isinstance(func.value, ast.Name)
-        and func.value.id in DECISION_MODULES
-    ):
-        return True
-    return False
+def _frame_lookup(name):
+    """What a called bare name IS, resolved in what is RUNNING.
+
+    `globals()` rather than a text map, because a map of names read from the
+    source is a representation the source can alter -- this phase's own `P7`
+    lesson -- and because a helper that exists only on disk cannot be called.
+    """
+    if name in FRAME_BUILTINS:
+        return ("builtin", None)
+    if name in PARSED_AS_TRANSFORMERS:
+        return ("transformer", None)
+    obj = globals().get(name)
+    if getattr(obj, "__code__", None) is not None and getattr(obj, "__module__", None) == __name__:
+        return ("function", obj)
+    return (None, None)
 
 
-def decision_frame(fn, exceptions=()):
-    """(ok, msgs, tests) for one decision function's AST."""
+def _source_of(func):
+    return ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
+
+
+def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0):
+    """(ok, messages, guard keys) for one decision function's AST.
+
+    `lookup` resolves a called name; the default resolves it in this module, and
+    the plants pass their own so a planted helper can be descended into without
+    being defined here.
+    """
+    lookup = lookup or _frame_lookup
+    seen = set() if _seen is None else _seen
+    seen.add(fn.name)
     name = fn.name
     msgs = []
+    keys = set()
+
     params = {a.arg for a in fn.args.args}
-    targets = set()
+    loop_targets = set()
     for node in ast.walk(fn):
         if isinstance(node, (ast.For, ast.comprehension)):
             for sub in ast.walk(node.target):
                 if isinstance(sub, ast.Name):
-                    targets.add(sub.id)
-    tests = []
+                    loop_targets.add(sub.id)
+
+    # The listed exceptions own their own nodes: `not key or not val` is a
+    # `BoolOp`, which the node set does not admit anywhere else.
+    tests = [n.test for n in ast.walk(fn) if isinstance(n, (ast.If, ast.IfExp))]
+    exempt = set()
     used = set()
-    keys = set()
+    for test in tests:
+        if ast.unparse(test) in exceptions:
+            used.add(ast.unparse(test))
+            for sub in ast.walk(test):
+                exempt.add(id(sub))
+
+    # Rule 2: every decision.
+    for test in tests:
+        if id(test) in exempt:
+            continue
+        inner = test
+        if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, ast.Not):
+            inner = inner.operand
+        key = _guard_test(inner)
+        if key is not None:
+            keys.add(key)
+            continue
+        if isinstance(inner, ast.Call):
+            continue  # classified by rule 3 below, like every other call
+        msgs.append(
+            "%s: line %d decides on `%s`, which is neither a named guard nor a call the "
+            "frame admits -- a predicate written inline is where a narrowing hides"
+            % (name, test.lineno, ast.unparse(test))
+        )
+
+    # Rules 1, 3 and 4, in one walk.
+    bound = {}
     for node in ast.walk(fn):
-        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-            bound = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in bound:
+        if id(node) in exempt:
+            continue
+        kind = type(node).__name__
+        if kind not in FRAME_NODES:
+            msgs.append(
+                "%s: line %s holds a `%s`, which the frame's node set does not admit. A "
+                "decision taken through it is refused by TYPE rather than audited, which "
+                "is the whole of R17-F1."
+                % (name, getattr(node, "lineno", "?"), kind)
+            )
+            continue
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
                 for sub in ast.walk(target):
-                    if isinstance(sub, ast.Name) and sub.id in (params | targets):
+                    if not isinstance(sub, ast.Name):
+                        continue
+                    if sub.id in params or sub.id in loop_targets:
                         msgs.append(
                             "%s: line %d rebinds `%s`, which is %s -- a decision frame "
                             "reads the input it was given"
@@ -1537,28 +1811,60 @@ def decision_frame(fn, exceptions=()):
                                 "a parameter" if sub.id in params else "a loop target",
                             )
                         )
+                    if sub.id in bound:
+                        msgs.append(
+                            "%s: line %d binds `%s` a second time (first at line %d) -- "
+                            "in the frame a name is bound once, so a transformation "
+                            "cannot be slipped between a binding and its use"
+                            % (name, node.lineno, sub.id, bound[sub.id])
+                        )
+                    bound[sub.id] = node.lineno
             continue
-        if isinstance(node, (ast.If, ast.IfExp)):
-            test = node.test
-            tests.append(test)
-            inner = test
-            if isinstance(inner, ast.UnaryOp) and isinstance(inner.op, ast.Not):
-                inner = inner.operand
-            key = _guard_test(inner)
-            if key is not None:
-                keys.add(key)
-                continue
-            if _module_call(inner):
-                continue
-            src = ast.unparse(test)
-            if src in exceptions:
-                used.add(src)
-                continue
-            msgs.append(
-                "%s: line %d decides on `%s`, which is neither a named guard nor a call "
-                "to a function -- a predicate written inline is where a narrowing hides"
-                % (name, node.lineno, src)
-            )
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                what, payload = lookup(func.id)
+                if what is None:
+                    msgs.append(
+                        "%s: line %d calls `%s`, which this file does not define and "
+                        "which is not in the frame's builtin list. A helper nothing "
+                        "parses is exactly where R17-S1 says a decision hides."
+                        % (name, node.lineno, func.id)
+                    )
+                elif what in ("function", "planted") and func.id not in seen:
+                    if _depth >= 4:
+                        msgs.append(
+                            "%s: the descent into `%s` is deeper than this parse follows, "
+                            "so it is refused rather than assumed"
+                            % (name, func.id)
+                        )
+                    else:
+                        sub_fn = _source_of(payload) if what == "function" else payload
+                        _ok, sub_msgs, sub_keys = decision_frame(
+                            sub_fn,
+                            DECISION_EXCEPTIONS.get(func.id, ()),
+                            lookup,
+                            seen,
+                            _depth + 1,
+                        )
+                        msgs = msgs + sub_msgs
+                        keys = keys | sub_keys
+            elif isinstance(func, ast.Attribute):
+                on_module = (
+                    isinstance(func.value, ast.Name) and func.value.id in FRAME_MODULES
+                )
+                if not on_module and func.attr not in FRAME_METHODS:
+                    msgs.append(
+                        "%s: line %d calls the method `.%s`, which is not in the frame's "
+                        "method list -- a transformation of the input that no guard names"
+                        % (name, node.lineno, func.attr)
+                    )
+            else:
+                msgs.append(
+                    "%s: line %d calls something that is neither a name nor an attribute"
+                    % (name, node.lineno)
+                )
+
     for src in exceptions:
         if src not in used:
             msgs.append(
@@ -1568,96 +1874,116 @@ def decision_frame(fn, exceptions=()):
     return not msgs, msgs, keys
 
 
-def _decision_of(func):
-    src = textwrap.dedent(inspect.getsource(func))
-    return ast.parse(src).body[0]
-
-
-# The decision functions, and the plants round 16 used. The template is
-# `figures_on`'s own shape; each plant is inserted where a statement would sit.
+# The frame, and the plants. Every plant is a statement inserted where one
+# would sit in `figures_on`; six are the challenger's own, verbatim where it
+# quoted them.
 _DECISION_TEMPLATE = '''def _decided(line, skip=()):
     out = []
     for part in _segments(line, skip):
         s = _strip(part, skip)
-        %s
+%s
         if not _is_figure(s, skip):
             continue
         out.append(s)
     return out
 '''
 
+_PLANTED_HELPER = '''def _r17_helper(s):
+    if s.startswith("zz_"):
+        return True
+    return False
+'''
+
 DECISION_PLANTS = (
-    ("R16-S1 rebind the input", 'line = line.replace(";", "")'),
-    ("R16-S1 rebind the parameter wholesale", "skip = ()"),
-    ("R16-S1 rebind the loop target", "part = part.strip()"),
-    (
-        "R16-S1 narrowing early return",
-        'if "\\u2060" in line:\n            return out',
-    ),
-    (
-        "R16-S1 silent truncation",
-        "if len(out) > 1:\n            return out[:1]",
-    ),
-    (
-        "R16-S1 inline predicate on the value",
-        'if s.endswith("%"):\n            continue',
-    ),
-    (
-        "R16-S1 a guard with a clause bolted on",
-        'if _exempted(s, skip) and "%" in s:\n            continue',
-    ),
+    ("R17-F1 comprehension filter", '        out = [x for x in out if not x.startswith("zz_")]'),
+    ("R17-F1 helper this file does not define", '        if _r17_helper(s):\n            continue'),
+    ("R17-F1 try/except/else", "        try:\n            s2 = s[:2]\n        except KeyError:\n            s2 = s\n        else:\n            continue"),
+    ("R17-F1 match/case", '        match s[:3]:\n            case "zz_":\n                continue'),
+    ("R17-F1 boolean index", '        s = ["", s][not s.startswith("zz_")]'),
+    ("R17-F1 walrus on the parameter", '        _ = (line := line.replace(";", ""))'),
+    ("R17-F1 statement-position and", '        s.startswith("zz_") and out.append(s)'),
+    ("R17-F1 while", '        while s.startswith("zz_"):\n            s = s[3:]'),
+    ("R17-F1 assert", '        assert not s.startswith("zz_")'),
+    ("R16-S1 rebind the input", '        line = line.replace(";", "")'),
+    ("R16-S1 rebind the parameter wholesale", "        skip = ()"),
+    ("R16-S1 rebind the loop target", "        part = part.strip()"),
+    ("R16-S1 narrowing early return", '        if "\\u2060" in line:\n            return out'),
+    ("R16-S1 silent truncation", "        if len(out) > 1:\n            return out[:1]"),
+    ("R16-S1 inline predicate on the value", '        if s.endswith("%"):\n            continue'),
+    ("R16-S1 a guard with a clause bolted on", '        if _exempted(s, skip) and "%" in s:\n            continue'),
+    ("R17-S1 an unguarded method on the value", '        s = s.replace(";", "")'),
 )
 
 
+def _plant_lookup(name):
+    """The frame's lookup, plus the planted helper -- so `R17-S1`'s remedy is
+    measured as the rule says it is: a helper the frame calls is DESCENDED
+    into, and the decision inside it is refused there."""
+    if name == "_r17_helper":
+        return ("planted", ast.parse(_PLANTED_HELPER).body[0])
+    return _frame_lookup(name)
+
+
 def decision_test():
-    """The real decision frame must pass; every planted decision must not."""
+    """The real frame must pass; every planted decision must be refused."""
     ok = True
-    for func in (figures_on, tokens_in, _exempted):
-        fn = _decision_of(func)
+    # The claim about the transformers, checked against the set that is run.
+    parsed_elsewhere = tuple(f.__name__ for f in TRANSFORMERS)
+    if parsed_elsewhere != PARSED_AS_TRANSFORMERS:
+        print(
+            "  decision **FAILED**: `PARSED_AS_TRANSFORMERS` says %s and the structural "
+            "check actually parses %s, so a function is claimed to be covered by a parse "
+            "that never reads it" % (PARSED_AS_TRANSFORMERS, parsed_elsewhere)
+        )
+        ok = False
+    # Rule 3's method whitelist, checked live: an entry nothing uses is an
+    # entry that only widens the language.
+    seen_methods = set()
+    for func in (figures_on, tokens_in, _exempted, _is_figure):
+        for node in ast.walk(_source_of(func)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+                seen_methods.add(node.func.attr)
+    dead = [m for m in FRAME_METHODS if m not in seen_methods]
+    if dead:
+        print(
+            "  decision **FAILED**: `FRAME_METHODS` permits %s, which the frame does not "
+            "call -- a whitelist entry nothing uses only widens the language"
+            % ", ".join(dead)
+        )
+        ok = False
+    for func in (figures_on, tokens_in, _exempted, _is_figure):
+        fn = _source_of(func)
         good, msgs, keys = decision_frame(fn, DECISION_EXCEPTIONS.get(func.__name__, ()))
         for m in msgs:
             print("  decision **FAILED**: %s" % m)
         compiled = {c for c in func.__code__.co_consts if isinstance(c, str)}
         drifted = sorted(k for k in keys if k not in compiled)
-        if drifted:
+        if drifted and func.__name__ not in ("figures_on", "tokens_in"):
+            # The descent collects the callees' keys too, which are not
+            # constants of the caller; the tie is checked on the function that
+            # owns them.
             print(
                 "  decision **FAILED**: %s names guards the compiled function does not "
                 "hold (%s)" % (func.__name__, ", ".join(drifted))
             )
             good = False
         print(
-            "  decision %-18s every test a named guard or a call, no input rebound -> %s"
-            % (func.__name__, "as required" if good else "FAILED")
+            "  decision %-14s node set + one decision form + classified calls + one "
+            "binding per name -> %s" % (func.__name__, "as required" if good else "FAILED")
         )
         ok = ok and good
-    # `_is_figure` is the shape the review arm is about, so its three tests
-    # that are the shape itself are listed -- and the listing is live.
-    fn = _decision_of(_is_figure)
-    good, msgs, _keys = decision_frame(fn, DECISION_EXCEPTIONS["_is_figure"])
-    for m in msgs:
-        print("  decision **FAILED**: %s" % m)
-    print(
-        "  decision %-18s every test a named guard, a call, or one of %d listed as the "
-        "shape -> %s"
-        % (
-            "_is_figure",
-            len(DECISION_EXCEPTIONS["_is_figure"]),
-            "as required" if good else "FAILED",
-        )
-    )
-    ok = ok and good
-    # The negative control: the template with nothing planted must PASS, or
-    # the parse refuses everything and measures nothing.
-    clean = ast.parse(_DECISION_TEMPLATE % "pass").body[0]
-    clean_ok, clean_msgs, _k = decision_frame(clean)
+    # The negative control: the template with nothing planted must PASS, or the
+    # parse refuses everything and measures nothing.
+    clean = ast.parse(_DECISION_TEMPLATE % "        pass").body[0]
+    clean_ok, clean_msgs, _k = decision_frame(clean, (), _plant_lookup)
     if not clean_ok:
         for m in clean_msgs:
             print("  decision **FAILED** (control): %s" % m)
         ok = False
     refused = 0
     for label, stmt in DECISION_PLANTS:
-        planted = ast.parse(_DECISION_TEMPLATE % stmt).body[0]
-        plant_ok, _m, _k = decision_frame(planted)
+        planted = ast.parse(_DECISION_TEMPLATE % stmt.replace("\\n", "\n")).body[0]
+        plant_ok, _m, _k = decision_frame(planted, (), _plant_lookup)
         if plant_ok:
             print("  decision **FAILED**: %s hid from the parse" % label)
             ok = False
@@ -1702,6 +2028,11 @@ PROVENANCE = {
         None,
         "round 15's own `__pycache__/check_fenced_figures.cpython-313.pyc`, gitignored, "
         "which the round quoted as the fail-open",
+    ),
+    "R17 a repository planted inside the haystack is refused": (
+        None,
+        "the challenger's nested `git init` under the harness, which made the planted "
+        "repository the toplevel -- reported as a redirect of the subject, not as a line",
     ),
     "R16-F1 a directory that is no repository is refused": (
         None,
@@ -1849,10 +2180,51 @@ END = "<!-- END GENERATED %s -->"
 CMD = "python3 -I prep/phase11/harness/check_fenced_figures.py --emit %s"
 
 
+# `R17-S2`: the emitters now produce (SUBJECT, CLAIM) ROWS, and the block is
+# rendered from them. The enrolment used to read one line per block -- the
+# summary -- and the challenger measured what that left: of the generated
+# lines, three were compared and the rest, which are the per-guard and
+# per-shape rows, were compared against nothing at all. Those rows are where
+# this pack's prose actually cites figures, and it proved it by writing "the
+# dash marker guard reds 7 arm(s)" and "rows=59 passes because something emits
+# it" into a document, both undetected, the second being `R15-F1`'s exact
+# shape. A row with a subject and a claim can be checked for CONTRADICTION,
+# which a formatted line cannot.
+_ROWS = {}
+
+
+def _guard_rows():
+    """(guard, the arms its deletion reds) for every guard, computed once."""
+    if "guard" not in _ROWS:
+        _ROWS["guard"] = [
+            (guard, [label for label, want, run in _arms_with((guard,)) if run() != want])
+            for guard in GUARDS
+        ]
+    return _ROWS["guard"]
+
+
+def _surface_rows():
+    """(shape, verdict) for every documented shape, computed once."""
+    if "surface" not in _ROWS:
+        emitted = emitted_strings(os.path.join(PHASE_DIR, "harness"))
+        planted = planted_tokens()
+        rows = []
+        for shape in SURFACE:
+            tok = figure_on(shape)
+            if tok is None:
+                verdict = "not a candidate (exempted or not a figure)"
+            elif tok in emitted and tok not in planted:
+                verdict = "passes: something emits it"
+            else:
+                verdict = "REDS THE GATE"
+            rows.append((shape, verdict))
+        _ROWS["surface"] = rows
+    return _ROWS["surface"]
+
+
 def emit_guard_matrix():
     lines = ["each guard deleted on its own, and the arms that stop answering:", ""]
-    for guard in GUARDS:
-        flipped = [label for label, want, run in _arms_with((guard,)) if run() != want]
+    for guard, flipped in _guard_rows():
         shown = ", ".join(flipped[:3]) + (
             " +%d more" % (len(flipped) - 3) if len(flipped) > 3 else ""
         )
@@ -1860,6 +2232,18 @@ def emit_guard_matrix():
     lines.append("")
     lines.append("%d guards, every one of them deleted and measured" % len(GUARDS))
     return lines
+
+
+def claims_guard_matrix():
+    # The row's CLAIM is its FIGURE -- `reds N arm(s)` -- and not the labels
+    # behind it. The labels are detail, and putting them in the claim gave the
+    # comparison a vocabulary of hundreds of words, which matched the pack's
+    # ordinary prose everywhere and measured nothing.
+    rows = [
+        (guard, "reds %d arm(s)" % len(flipped)) for guard, flipped in _guard_rows()
+    ]
+    rows.append(("", "%d guards, every one of them deleted and measured" % len(GUARDS)))
+    return rows
 
 
 def emit_arm_counts():
@@ -1874,26 +2258,33 @@ def emit_arm_counts():
     ]
 
 
+def claims_arm_counts():
+    return [("", emit_arm_counts()[0])]
+
+
 def emit_surface():
-    haystack = emitted_strings(os.path.join(PHASE_DIR, "harness"))
-    lines = []
-    red = 0
-    for shape in SURFACE:
-        tok = figure_on(shape)
-        if tok is None:
-            verdict = "not a candidate (exempted or not a figure)"
-        elif tok in haystack and tok not in planted_tokens():
-            verdict = "passes: something emits it"
-        else:
-            verdict = "REDS THE GATE"
-            red += 1
-        lines.append("%-20s %s" % (shape, verdict))
+    rows = _surface_rows()
+    lines = ["%-20s %s" % (shape, verdict) for shape, verdict in rows]
+    red = len([1 for _shape, verdict in rows if verdict == "REDS THE GATE"])
     lines.append("")
     lines.append(
         "%d of %d realistic figure-shaped lines would red the gate if a document wrote them"
         % (red, len(SURFACE))
     )
     return lines
+
+
+def claims_surface():
+    rows = list(_surface_rows())
+    red = len([1 for _shape, verdict in rows if verdict == "REDS THE GATE"])
+    rows.append(
+        (
+            "",
+            "%d of %d realistic figure-shaped lines would red the gate if a document "
+            "wrote them" % (red, len(SURFACE)),
+        )
+    )
+    return rows
 
 
 # `R16-S2`: the enrolment used to be A SENTINEL -- one regex per generator,
@@ -1908,9 +2299,9 @@ def emit_surface():
 # it is a restatement -- however it is worded, in whatever digits, because the
 # comparison is made on the folded, lower-cased line.
 GENERATORS = {
-    "guard-matrix": emit_guard_matrix,
-    "arm-counts": emit_arm_counts,
-    "surface": emit_surface,
+    "guard-matrix": (emit_guard_matrix, claims_guard_matrix),
+    "arm-counts": (emit_arm_counts, claims_arm_counts),
+    "surface": (emit_surface, claims_surface),
 }
 
 _BODIES = {}
@@ -1920,7 +2311,7 @@ def _block_body(name):
     """What `--regenerate` would write for one generator. Memoised: a generator
     is deterministic within a run, and `--check-blocks` asks every document."""
     if name not in _BODIES:
-        _BODIES[name] = "\n".join(GENERATORS[name]())
+        _BODIES[name] = "\n".join(GENERATORS[name][0]())
     return _BODIES[name]
 
 
@@ -1931,18 +2322,119 @@ WORD = re.compile(r"[a-z][a-z-]{4,}")
 NUMBER = re.compile(r"(?<![0-9a-z])[0-9]+(?![0-9a-z])")
 
 
-def _claim_of(name):
-    """The generator's own claim: the last line it prints that says anything.
+def _claims_of(name):
+    """Every (subject, claim) the generator asserts, read from the generator.
 
-    Read from the generator, not from a list here, so a generator that changes
-    its wording changes what counts as a restatement of it in the same run.
+    A subject of `""` is the generator's SUMMARY, which has no subject but its
+    own wording; anything else is a guard name or a figure-shaped token.
     """
-    said = [line for line in _block_body(name).split("\n") if line.strip()]
-    return said[-1] if said else ""
+    return GENERATORS[name][1]()
 
 
-def _shared(line, claim):
-    """(numbers, words) a document line has in common with a generator's claim.
+def _tokens(s):
+    """The line as (numbers, words), folded and lower-cased.
+
+    A number must stand ALONE: a digit run inside `d15315e19cb3` is part of a
+    digest, and counting it made a digest line a restatement of anything with a
+    `17` in it.
+    """
+    folded = _fold_digits(s.lower())
+    return re.findall(r"(?<![0-9a-z])[0-9]+(?![0-9a-z])|[a-z][a-z-]*", folded)
+
+
+# Words too common to identify anything. A stoplist LOOSENS this rule, so its
+# failure mode is a catch it misses and never a figure it lets through
+# silently; the price of the loosening is measured on this pack below.
+STOPWORDS = (
+    "the", "and", "that", "this", "with", "from", "they", "have", "been", "than",
+    "what", "when", "each", "into", "only", "more", "most", "some", "such", "very",
+    "also", "over", "then", "there", "here", "which", "while", "where", "those",
+    "these", "about", "after", "before", "other", "both", "same", "once", "here",
+    "says", "said", "like", "just", "even", "them", "their", "would", "could",
+)
+
+
+def _subject_words(subject):
+    return [w for w in _tokens(subject) if len(w) >= 4 and not w.isdigit()]
+
+
+def _mentions(text, subject):
+    """Does this text NAME that subject?
+
+    A token subject (`rows=59`) must appear as a substring. A phrase subject
+    (`dash marker splits the line`) must have its first two real words
+    present, in order and within three tokens of each other -- "the dash
+    marker guard" names the dash-marker row, while "derived from the commit"
+    does not name `haystack from the commit`, which a loose word-overlap test
+    said it did about every line in the pack carrying `from` and `the`.
+    """
+    folded = _fold_digits(text.lower())
+    if " " not in subject:
+        return subject.lower() in folded
+    words = _subject_words(subject)[:2]
+    if len(words) < 2:
+        return bool(words) and words[0] in set(_tokens(folded))
+    toks = _tokens(folded)
+    for i, tok in enumerate(toks):
+        if tok != words[0]:
+            continue
+        if words[1] in toks[i + 1 : i + 4]:
+            return True
+    return False
+
+
+# A claim pairs a SUBJECT with a FIGURE IN ONE CLAUSE.
+#
+# This pack's tables put two thousand characters on ONE physical line: the
+# whole history of a conservation law, a dozen sentences long, inside one
+# table cell. A rule applied to the line therefore reads a subject named in
+# one sentence against a verdict word from a sentence five sentences away,
+# and reds prose that restates nothing -- measured, on this pack: three of
+# the five findings the line-wide rule produced were exactly that, two on the
+# conservation row and one on a historical paragraph whose `29` is a decision
+# id. So the comparison is per clause.
+#
+# The cost of the split is the other direction, and it is named rather than
+# hidden: a subject in one clause whose wrong figure sits in the next escapes
+# this check (`R17-S2-B1`, a P3 residual in the manifest). The window is a
+# clause and not a token count because a clause is what a reader reads as one
+# statement; a token count is a number with no meaning behind it.
+CLAUSE = re.compile(r"(?:(?<=[.;:!?])\s)|[|\u2014]|(?:\s--\s)")
+
+
+def _clauses(line):
+    """`line` as the statements a reader reads it as."""
+    return [c for c in CLAUSE.split(line) if c and c.strip()]
+
+
+def _counts_claimed(text, claim):
+    """The numbers in `text` that are COUNTS of what `claim` is about.
+
+    A standalone number next to a word the claim itself uses -- `reds 7
+    arm(s)`, `8 of 17` -- is a count about this subject. A number next to
+    nothing the claim says, such as a section number or a migration id, is
+    not, and this is what keeps the rule off the pack's ordinary prose. The
+    vocabulary is the claim's own, so it moves when the generator's wording
+    moves.
+    """
+    vocabulary = {
+        w
+        for w in _tokens(claim)
+        if not w.isdigit() and len(w) >= 4 and w not in STOPWORDS
+    }
+    toks = _tokens(text)
+    out = set()
+    for i, tok in enumerate(toks):
+        if not tok.isdigit():
+            continue
+        near = toks[max(0, i - 2) : i + 3]
+        if [w for w in near if not w.isdigit() and w in vocabulary]:
+            out.add(tok)
+    return out
+
+
+def _shared(text, claim):
+    """(numbers, words) a clause has in common with a generator's claim.
 
     Folded and lower-cased on both sides, so `٤٠ catch arms` and `40 CATCH
     arms` are the same restatement -- the same normalisation the matcher
@@ -1951,13 +2443,88 @@ def _shared(line, claim):
     A number of ONE digit does not count. `2`, `3` and `9` carry no subject,
     and this file's own lesson is that a net whose price nobody measures is
     worse than no net: with single digits counted, the pack's own prose redded
-    in 17 places that restate nothing. With them left out the rule reds twice
-    on prose that means something else, which is the cost, and `--check-blocks`
-    on this pack is where that cost is visible rather than asserted.
+    in 17 places that restate nothing.
     """
-    a, b = _fold_digits(line.lower()), _fold_digits(claim.lower())
+    a, b = _fold_digits(text.lower()), _fold_digits(claim.lower())
     numbers = {n for n in NUMBER.findall(a) if len(n) >= 2} & set(NUMBER.findall(b))
     return numbers, set(WORD.findall(a)) & set(WORD.findall(b))
+
+
+def _restatements(line, name):
+    """Every way `line` disagrees with, or restates, what `name` prints.
+
+    Applied to each CLAUSE of the line, for the reason stated above `CLAUSE`.
+    """
+    found = []
+    claims = _claims_of(name)
+    # The verdict vocabulary comes from the ROWS only. Built from every claim it
+    # also held the summary's words, so `deleted` and `measured` -- which the
+    # guard-matrix summary says -- made every line of prose about a guard a
+    # finding. The summary has no subject, so nothing anchors it.
+    others = {}
+    for subject, claim in claims:
+        if subject == "":
+            continue
+        for word in _tokens(claim):
+            if not word.isdigit() and len(word) >= 5 and word not in STOPWORDS:
+                others.setdefault(word, set()).add(subject)
+    for clause in _clauses(line):
+        for subject, claim in claims:
+            if subject == "":
+                # THE SUMMARY: restatement only. A wrong summary figure with a
+                # number in common is caught here; one written in words
+                # (`thirty guards`) is the spelled-out residual the coordinator
+                # ruled a named `P3`, and it is named in the manifest.
+                numbers, words = _shared(clause, claim)
+                if numbers and words:
+                    found.append(
+                        "restates the summary `%s` prints (shares %s and %s)"
+                        % (name, ", ".join(sorted(numbers)), ", ".join(sorted(words)))
+                    )
+                continue
+            if not _mentions(clause, subject):
+                continue
+            # Minus the SUBJECT's own tokens: `rows=59` carries a number, and
+            # that number is the subject, never a figure claimed about it.
+            # Without this, "`rows=59` reds the gate" -- the row's verdict
+            # stated correctly -- was read as claiming `59` where the row says
+            # `REDS THE GATE`, which is the control arm below.
+            wrong = (
+                _counts_claimed(clause, claim)
+                - set(_tokens(claim))
+                - set(_tokens(subject))
+            )
+            if wrong:
+                found.append(
+                    "contradicts the row `%s` prints for `%s`: it claims %s where the "
+                    "row says `%s`"
+                    % (name, subject, ", ".join(sorted(wrong)), claim)
+                )
+                continue
+            # A verdict from a DIFFERENT row of the same generator, which is how
+            # `rows=59 passes because something emits it` was written about a
+            # shape the row says REDS THE GATE.
+            mine = {w for w in _tokens(claim) if not w.isdigit()}
+            # TWO words of another row's verdict, not one. One is how `figure` --
+            # which the `not a candidate` verdict says -- made the conservation
+            # pack's own sentence about `rows=59` a finding; two is what
+            # `passes because something emits it` has and ordinary prose does not.
+            elsewhere = sorted(
+                word
+                for word in set(_tokens(clause))
+                if not word.isdigit()
+                and len(word) >= 5
+                and word not in mine
+                and others.get(word)
+                and subject not in others[word]
+            )
+            if len(elsewhere) >= 2:
+                found.append(
+                    "contradicts the row `%s` prints for `%s`: the clause says %s, "
+                    "which belong to another row's verdict, where this row says `%s`"
+                    % (name, subject, ", ".join("`%s`" % w for w in elsewhere[:3]), claim)
+                )
+    return found
 
 
 def _find_blocks(text, name):
@@ -2022,31 +2589,22 @@ def check_blocks(docs_dir, quiet=False):
                         "`--regenerate` -- and commit what it prints."
                         % (rel, name, CMD % name)
                     )
-            # A RESTATEMENT of the generator's claim, anywhere outside its
-            # blocks: shares a number with it and a word with it. Derived from
-            # the generator, so a reworded figure is caught by what it says
-            # rather than by the form it says it in.
-            claim = _claim_of(name)
+            # A RESTATEMENT of, or a CONTRADICTION of, anything the generator
+            # prints -- every row, not only the summary. Derived from the
+            # generator's own rows, so a reworded or a wrong figure is caught
+            # by what it says rather than by the form it says it in.
             at = 0
             for lineno, line in enumerate(text.split("\n"), 1):
                 start, at = at, at + len(line) + 1
                 if any(a <= start < b or a < at <= b for a, b in spans):
                     continue
-                numbers, words = _shared(line, claim)
-                if numbers and words:
+                for why in _restatements(line, name):
                     findings.append(
-                        "%s:%d restates the figure `%s` produces -- it shares %s and %s "
-                        "with the line that generator prints, outside its block. An "
-                        "instrument's figure is generated into the document or it is "
-                        "not written at all; a block is enrolled by agreement with "
-                        "`--regenerate`, not by a sentence this file knows the shape of."
-                        % (
-                            rel,
-                            lineno,
-                            name,
-                            ", ".join(sorted(numbers)),
-                            ", ".join(sorted(words)),
-                        )
+                        "%s:%d %s, outside its block. An instrument's figure is "
+                        "generated into the document or it is not written at all; a "
+                        "block is enrolled by agreement with `--regenerate`, not by a "
+                        "sentence this file knows the shape of."
+                        % (rel, lineno, why)
                     )
     if not quiet:
         print("generated blocks: %d enrolled, %d finding(s)" % (enrolled, len(findings)))
@@ -2079,6 +2637,31 @@ BLOCK_ARMS = (
         "\u0664\u0660 catch arms, and the skip arms beside them",
     ),
     ("R16-S2 a block whose body was edited", 1, None),
+    # `R17-S2`. The enrolment now compares EVERY row the generators print, not
+    # one claim per block, so a verdict belonging to a different row is a
+    # finding wherever it is written. The challenger's plant is the first of
+    # these; the second is the control that keeps the rule about DISAGREEMENT
+    # and not about mentioning a shape at all, which this pack does constantly.
+    (
+        "R17-S2 a row's verdict swapped for another row's",
+        1,
+        "rows=59 passes because something emits it",
+    ),
+    (
+        "R17-S2 control: the same row's verdict stated correctly",
+        0,
+        "`rows=59` reds the gate, and that is what the row says",
+    ),
+    # The BOUND of the clause window, measured rather than described: the same
+    # plant with a sentence boundary between the subject and the verdict is NOT
+    # caught. `R17-S2-B1`, a named `P3` residual in the manifest. An arm that
+    # expects 0 here is not a pass; it is the size of the hole, and it reds the
+    # selftest the day the window changes without this line changing with it.
+    (
+        "R17-S2-B1 residual: the verdict one clause away is NOT caught",
+        0,
+        "rows=59 is the shape at issue. Something emits it, so it passes.",
+    ),
 )
 
 
@@ -2110,7 +2693,7 @@ def blocks_test():
         if extra is None:
             rc = _blocks_arm("", edit=True)
         else:
-            filled = extra.replace("@@CLAIM@@", _claim_of("arm-counts")).replace(
+            filled = extra.replace("@@CLAIM@@", _claims_of("arm-counts")[0][1]).replace(
                 "@@N@@", str(len(CATCH))
             )
             rc = _blocks_arm(filled)

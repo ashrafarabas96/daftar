@@ -36,10 +36,10 @@ Each document exists in **two places**: the shared project-files location (the c
 |---|---|---|---|
 | `P11-S0-VERTICAL-PACK-ARCHITECTURE.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `8be8503e62d4e280eb3918fb0d01ca20482135b0d7193eb0fd0ce46080230759` |
 | `P11-MIGRATION-PATCH-REQUEST.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `b38f81c3d6ece206bd819b8f89bb2617c763fb7d66c307810edad88939976b36` |
-| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `15b35fb236e5990672cc09dbcda43f0c595df92ad1c1304440072cca702bf8ef` |
+| `P11-CONSERVATION-LAWS-AND-RED-PROOFS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `60cecbf3ed51f586dddd0d18c20536c7e4c3fcfb8111884f2bdc7ae636f820eb` |
 | `P11-TASK-DAG.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `6923f0add88d2a0bc31b89fa1b91be8ce20a7540fa6f95e20bf42ae2dd791979` |
 | `P11-OPEN-DECISIONS.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `983e026a9bc6c7fe3b65cfc22fb7672ee33d30cd042e6f31ee176a1bb23055f1` |
-| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `a84d923e6a29412fd9e4a06e91324a112250271dee57db97ad295b60f9f3f1b3` |
+| `P11-S0-REPORT-AR.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `3704de229eea8cd3d94883d072c77e6b023d9f5e257ef72a82b8c79d8053c3a3` |
 | `P11-LIVE-DDL-PROOF.md` | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | `180830b48401dc12323ce070b1c2256925f104d9f7028554914e70c21196bbf4`|
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
@@ -995,11 +995,12 @@ key class                  reds  1 arm(s): named: UPPERCASE key
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-haystack from the commit   reds  3 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused
+haystack from the commit   reds  4 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +1 more
+no repository redirects the subject reds  1 arm(s): R17 a repository planted inside the haystack is refused
 markdown is not evidence   reds  1 arm(s): R12 E4b a doc is not its own evidence
 the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence
 
-28 guards, every one of them deleted and measured
+29 guards, every one of them deleted and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1170,7 +1171,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts -->
 
 ```text
-40 catch arms, 15 skip arms, 2 pass arms, 7 others
+40 catch arms, 15 skip arms, 2 pass arms, 8 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -1280,8 +1281,10 @@ figure, which produced a green run with two fabricated figures in the owner's
 document at `3838711` — are each named and refused here.
 
 **A SIXTEENTH round was asked for** on `3838711..28659e7` and has been
-answered; §7.16 below is that answer, and a SEVENTEENTH is owed on
-`28659e7..HEAD` with the coordinator diff review after it. **`24f6ebe` is still the last fully signed head**, and
+answered; §7.16 below is that answer. **A SEVENTEENTH round was asked for** on
+`28659e7..7bd9c09`, returned `REJECT`, and has been answered: §7.17 is that
+answer, and an EIGHTEENTH is owed on `7bd9c09..HEAD` with the coordinator diff
+review after it. **`24f6ebe` is still the last fully signed head**, and
 nothing in this phase is self-signed.
 
 ## 7.16 The SIXTEENTH round — `REJECT` at `28659e7`: the haystack was read from the FILESYSTEM, the frame that DECIDES was unparsed, and the enrolment was a SENTINEL
@@ -1339,13 +1342,22 @@ names itself in the output. At this head that list names the gitignored
 `.pyc` of `R15-F1` by path, in the ordinary output of the ordinary run, which
 is exactly what no run said before.
 
+**And round 17 found what this paragraph did not cover, so the sentence above
+is bounded here rather than left standing:** "it fails closed" was measured
+over an absent git, a non-repository and an unresolved commit, and **not** over
+a repository PLANTED inside the subject, which resolved to a commit nobody was
+reviewing and emptied the differs-from-that-commit report at the same time.
+That is `R17-F2` in §7.17, and the four assertions that close it are stated
+there.
+
 **`R16-S1` (`P2`) — the structural parse covered every transformation and
 nothing that DECIDES.** `figures_on` could rebind `line`, or return early
 under a test nobody named, and every guard in `_strip` would stay pristine
 while the gate decided nothing; the round planted
 `line = line.replace(";", "")` one frame up from where the same statement is
-refused. **So the decision frame is parsed too**, on two rules: no statement
-rebinds a parameter or a `for` target, and every test — statement or
+refused. **So the decision frame is parsed too** — at that head on TWO rules,
+which round 17 then measured insufficient and replaced, as §7.17 states: no
+statement rebinds a parameter or a `for` target, and every test — statement or
 expression — is a named guard or a call to a function. An inline predicate is
 somewhere a narrowing hides; moved into a function of its own it is readable by
 the parse and by the guard matrix, which is why the exemption check is now a
@@ -1357,9 +1369,18 @@ is accepted**, so the parse is not refusing everything and measuring nothing.
 shape are listed by their exact source; **a listed exception is itself a claim
 and goes red when the source stops containing it.**
 
-**Its own bound:** this proves the frame takes no decision outside a named
-guard or a named function. It does not prove the named function is honest —
-that is what the arms are for.
+**Its own bound, and round 17 rewrote it.** This paragraph read: *“this proves
+the frame takes no decision outside a named guard or a named function”*. That
+sentence was **false of the instrument it described**, and false in the
+direction that matters: the parse behind it read decisions out of `ast.If` and
+`ast.IfExp` and rebindings out of `ast.Assign`, so a reader sent here audited
+the named guards and the named calls — and a comprehension filter, a
+`try/except/else`, a `match/case`, a boolean index, a walrus and a call to a
+helper nothing parses each decided without being read, five of them measured
+as taking the real scan from `rc 1` to `rc 0`. **What the parse covers now is
+stated in §7.17, as the four rules it is actually written as, together with
+what is still outside it.** It still does not prove a named guard's name is
+honest — that is what the arms are for.
 
 **`R16-S2` (`P2`) — the enrolment was a sentinel, and round 15's own figure
 walked past it reworded by six words.** One regex per generator is a list of
@@ -1367,7 +1388,8 @@ spellings, which is the mistake this file has now made four times in four
 designs. **The sentinels are deleted.** A figure is recognised BY AGREEMENT
 WITH WHAT `--regenerate` WOULD WRITE: the generator is run, its claim line is
 read from its output, and a line outside the blocks that shares both a number
-and a word with that line is a restatement — in whatever wording, and in
+and a word with that line is a restatement — ONE claim per generator at that
+head, which is `R17-S2` below, and every row per clause now — — in whatever wording, and in
 whatever digit family, because both sides are folded and lower-cased the way
 the matcher folds a figure.
 
@@ -1380,10 +1402,11 @@ word with a claim — so **two words of prose were changed and nothing else**:
 conservation-laws pack, and `applies every file` became `applies each file` in
 the live-DDL proof. Neither touches a figure or a finding. **The bound:** a
 restatement sharing neither a multi-digit number nor a long word with the
-generator's line still passes. Five arms measure the rule: a correct block
+generator's line still passes. The arms that measured the rule at that head: a correct block
 beside other instruments' figures must pass; the claim typed verbatim, the
 claim reworded as the round reworded it, the claim reworded in Arabic-Indic
-digits, and a block edited by hand must each red.
+digits, and a block edited by hand must each red. **Round 17 added three more
+to that list**, and the count of them all is in the generated block, not here.
 
 **`R16-A1`, found by the author while answering, and recorded because the
 challenger would have found it: a figure typed in this instrument's own
@@ -1407,7 +1430,7 @@ named above. **No signature is claimed here.** This is the author answering;
 the round-17 challenge on `28659e7..HEAD` and the coordinator diff review
 after it are owed, and `24f6ebe` is still the last fully signed head.
 
-**EVIDENCE AT THIS HEAD.** The run is
+**EVIDENCE AT THE ROUND-16 HEAD (`7bd9c09`).** The run is
 `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND16.txt`, run
 `p11-20261019T103931Z-5324`: Pack A 121 cases twice and Pack B 53 cases twice
 with 0 failed, the Pack A races and the Pack B races with 0 findings, 80 frozen
@@ -1423,6 +1446,130 @@ a directory that is no repository, and the reworded figure. **The one output to
 read first** is the scan's own inventory line, which now names the commit it
 read and lists every file under the harness that differs from it — the
 gitignored `.pyc` of `R15-F1` among them, by path, in an ordinary run.
+
+## 7.17 The SEVENTEENTH round — `REJECT` at `7bd9c09`: a stated bound measured FALSE, and a repository planted inside the subject
+
+Round 16 answered three findings by deleting three wrong ideas. Round 17 did
+not attack any of the three designs: it attacked **a sentence written about
+one of them**, measured the sentence false, and then walked six decision
+shapes through the gap the sentence had papered over. It also found a live
+fail-open in the derivation the same head had just introduced. The round
+reproduced everything else at this head: the commit-derived haystack in both
+directions, the guard-deletion control that restores the fail-open, the
+computed guard matrix guard by guard, the digests with `ls` sorting, and the
+published checker byte-identical to the committed one.
+
+**`R17-F1` (BLOCKER) — the decision parse's stated bound was false of the
+instrument, and false in the direction that misleads.** §7.15 said the parse
+*“proves the frame takes no decision outside a named guard or a named
+function”*. What the parse actually read was `ast.If`, `ast.IfExp` and
+`ast.Assign`. A reader sent to that sentence audits the named guards and the
+named calls and never looks anywhere else — so the round planted, in the real
+`figures_on`, with a fabricated figure committed in the owner's Arabic report,
+a comprehension filter (`ast.comprehension.ifs`, no `ast.If` at all), a
+`try/except/else` whose branches carry no test, a `match/case`, a boolean index
+(`s = ["", s][not s.startswith("zz_")]`) and a call to a helper beside the
+frame. **Five of the six took the real scan from refusing to passing.** The
+sixth, a walrus, is a hole in the rebinding rule rather than an escape, because
+`ast.NamedExpr` is not an `ast.Assign`.
+
+**The answer is not six more node types to inspect.** This file has now learned
+the same lesson on fences, on line anchors, on value spellings, on probe lines,
+on artefact name lists and on a decision-shape audit: **patching N escapes of
+a wrong idea leaves escape N+1.** So the frame is written in a **CLOSED
+SUB-LANGUAGE** and every node type outside it is **refused by type, with its
+own name, whether or not anyone thought of it as a way to decide.** A
+comprehension, a `match`, a `try`, a `while`, an `assert`, a walrus, a
+subscript, a lambda, a dict and a statement-position `and` are all absent from
+`FRAME_NODES`, so none of them has to be anticipated: they cannot appear. The
+four rules are stated in the checker's own header, which is the authority, and
+they are: every node type is in the admitted set, or refused by name at its
+line; every decision — the `if` statement and the `if` expression being the
+only decision forms the node set admits — is a named guard, a call the frame
+admits, or one of the exact sources listed as being the SHAPE a review arm is
+about; every call is classified and a call nothing parses is refused; and no
+name is bound twice, nor any parameter or `for` target bound at all.
+**Seventeen planted decisions are refused and the unplanted frame is
+accepted**, so the rules are not refusing everything and measuring nothing.
+
+**`R17-F2` — a repository planted inside the subject redirected the whole
+derivation.** The challenger raised this *below* blocker, with its reasoning
+on the record so it could be overruled, and **the coordinator overruled it: it
+is ranked a blocker here.** `_toplevel` resolved **upward**, so a `git init`
+inside the harness directory became the toplevel; the haystack commit, and the
+“differs from that commit” report the design leans on to announce itself, then
+both came from the redirected repository, and a fabricated figure passed. The
+discharge is four assertions, each with its own refusal name: the toplevel is
+resolved once from the repository the run was **invoked against**, the subject
+must be a strict subdirectory of it, any `.git` between the toplevel and the
+subject or inside the subject is refused, and `HEAD` read from the subject must
+equal `HEAD` read from the toplevel. The arm is the challenger's own nested
+repository, and its **guard-deletion control is measured by value**: with the
+guard deleted the planted repository is accepted and the arm passes, which is
+the fail-open restored.
+
+**`R17-S1` (`P2`) — rule 2's own remedy was where to hide.** “Move the
+predicate into a function” makes a call permitted, and nothing parsed the
+called function. So a call to a function **this file defines** is now descended
+into recursively under the same four rules, and a call nothing parses is
+refused.
+
+**`R17-S2` (`P2`) — the enrolment compared one line per block, of forty-nine.**
+Agreement replaced the sentinel in round 16, but only the first claim of each
+generator was compared, so forty-eight rows were enrolled in name only. **Every
+row is now compared**, as a structured (subject, claim) pair rather than as a
+line of text: a row's figure contradicted by a document is a finding, and a
+row's verdict written about a different row's subject is a finding — which is
+exactly the plant the round asked for, a shape the row says reds the gate
+described as passing because something emits it.
+
+**Its price was measured on this pack, not estimated, and measuring it changed
+the rule three times.** Comparing every row naively produced ninety-eight
+findings on a pack that restates nothing; reducing a row's claim to what it
+actually asserts, and requiring a subject to be NAMED rather than
+word-overlapped, left thirty-seven; requiring two words of another row's
+verdict rather than one left five. Three of those five were this pack's own
+tables: **a table row here is two thousand characters long**, a dozen
+sentences inside one cell, so a rule applied to the LINE read a subject named
+in one sentence against a verdict word five sentences away. **The comparison is
+therefore per clause**, and with that the rule reds nowhere on this pack
+outside the two blocks this head regenerates. **No document sentence was
+reworded to achieve that.** The bound is named and measured by an arm of its
+own: a subject in one clause whose wrong figure sits in the next escapes this
+check (`R17-S2-B1`, a `P3` residual), and the arm that records it expects
+nothing caught — it is the size of the hole, and it reds the selftest the day
+the window changes without this line changing with it.
+
+**Named `P3` residuals, carried rather than closed.** A figure **spelled out in
+words** — *thirty guards* — restates a count and is matched by neither the
+scan nor the enrolment, both of which read digits. `R17-S3`: a figure typed in
+a **non-markdown** file is checked by no instrument of this phase, which is
+§7.16's disclosed bound now sized by the round. Both stay open and named; the
+coordinator ruled both as residuals rather than blockers.
+
+**Still disclosed, not closed:** everything §7.15 and §7.16 list, plus the
+three residuals named above. **No signature is claimed here.** This is the
+author answering; the round-18 challenge on `7bd9c09..HEAD` and the coordinator
+diff review after it are owed, and **`24f6ebe` is still the last fully signed
+head**. `READY_TO_PROMOTE = NO`.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND17.txt`, run
+`p11-20261019T120040Z-18946`: Pack A 121 cases twice and Pack B 53 cases twice
+with 0 failed, the Pack A races and the Pack B races with 0 findings, 80 frozen
+entries and 0 digest mismatches, and **every `EXIT_*` 0** — including
+`EXIT_GENERATED_BLOCKS` and `EXIT_FENCED_FIGURES` at step `0c`, which is where
+this round's work is exercised — on PostgreSQL 16.15 at `en_US.utf8` with both
+roles `NOSUPERUSER NOBYPASSRLS`. The harness digest moves to `5c67d5f9…`; the
+pack digests do not move, and neither does the migrations tree. That run's tree
+was dirty, because the evidence of a commit cannot be committed before it, and
+the clean-tree re-run at the pushed SHA is published beside it together with
+this round's two gate probes: **the challenger's own planted repository**, in
+three directions — the fabricated figure alone must red, the planted
+repository must REFUSE by name, and with the one guard deleted the planted
+repository is accepted and the figure passes — and **the six decision shapes
+driven through the real `figures_on`**, one at a time, in a clean clone, each
+refused by name, with the unplanted file accepted as the control.
 
 ---
 

@@ -91,7 +91,9 @@ RC_FIGURES=$?
 if [ $RC_FIGURES -ne 0 ]; then
   echo "A document of this phase shows a figure nothing emits (exit 1), the check "
   echo "matched nothing at all (exit 2), or it REFUSED because the haystack could not "
-  echo "be derived from a commit -- git absent, or this tree in no repository (exit 5). "
+  echo "be derived from a commit -- git absent, this tree in no repository, or a "
+  echo "repository PLANTED between the toplevel and the harness, which would have "
+  echo "redirected the whole derivation (exit 5). "
   echo "In every case this run would publish a number with no instrument behind it, or "
   echo "would have checked it against the working directory rather than against the "
   echo "commit. Refusing to run."
@@ -105,8 +107,9 @@ python3 -I $H/check_fenced_figures.py --check-blocks
 RC_BLOCKS=$?
 if [ $RC_BLOCKS -ne 0 ]; then
   echo "A generated figure block in a document of this phase disagrees with a fresh "
-  echo "run of its generator -- which includes a line outside a block that RESTATES "
-  echo "what a generator prints, in any wording (exit 1) -- or nothing is enrolled at "
+  echo "run of its generator -- which includes a clause outside a block that RESTATES "
+  echo "what a generator prints, or CONTRADICTS any one of its rows, in any wording "
+  echo "(exit 1) -- or nothing is enrolled at "
   echo "all (exit 2), or the haystack could not be derived from a commit (exit 5). Run "
   echo "\`python3 -I $H/check_fenced_figures.py --regenerate\` and commit what it "
   echo "prints. Refusing to run."
