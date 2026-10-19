@@ -4,7 +4,7 @@ import { imageSize } from 'image-size';
 import sharp from 'sharp';
 import { Database } from '../../infra/database';
 import { AuditService, OutboxService, newId } from '../audit/audit.service';
-import { mediaStorageKey, type MalwareScanner, type ObjectStorage } from '../../infra/storage';
+import { mediaStorageKey, type MalwareScanner, type MalwareVerdict, type ObjectStorage } from '../../infra/storage';
 import type { AppConfig } from '../../config';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 
@@ -17,10 +17,25 @@ const VARIANT_SIZES = [256, 1024, 2048] as const;
 const MAX_DIMENSION = 6000;
 
 /**
+ * Every fragment of a scan verdict — a signature name, a scanner kind, a
+ * refusal reason — originates OUTSIDE this process: clamd's reply carries it,
+ * and whatever is listening on that address chooses its bytes. Interpolated
+ * raw, a CR, LF or ESC in one of them forges log records or injects terminal
+ * escapes. `JSON.stringify` renders them as one quoted, escaped line, and the
+ * bound keeps a long one from pushing the rest of the record out.
+ */
+function forLog(text: string): string {
+  return JSON.stringify(String(text)).slice(0, 200);
+}
+
+/**
  * Media pipeline (§63–64): extension/MIME agreement, magic-byte validation via
  * image-size, size + dimension limits, sharp RE-ENCODE (metadata stripped,
  * payloads neutralized), server-generated tenant+business-scoped keys.
- * The malware scanner seam exists; the dev adapter is disabled and honest (§106).
+ * FAIL-CLOSED malware policy (owner ruling 2026-10-12): an upload that
+ * requires a security scan is REFUSED whenever the scanner is disabled,
+ * unavailable, failing, or cannot produce a trustworthy result. Re-encoding is
+ * a constraint, not a scan, and is never reported as one.
  */
 @Injectable()
 export class MediaService {
@@ -60,6 +75,14 @@ export class MediaService {
       throw new AppError('MEDIA_INVALID', 'Image dimensions exceed limits', 400);
     }
 
+    // ── FAIL-CLOSED malware gate (owner ruling 2026-10-12) ──────────────────
+    // Runs BEFORE the re-encode, before any object-storage write and before the
+    // DB transaction: nothing is stored until a real scanner has returned
+    // `clean` for these exact bytes. Because an unscanned file never reaches
+    // storage or the media table, a restart cannot promote one to "accepted"
+    // either — there is nothing to promote.
+    const verdict = await this.assertScannedClean(file);
+
     const mediaId = newId();
     // Re-encode (strips EXIF/metadata and any embedded payloads), then variant set.
     const uploadedKeys: string[] = [];
@@ -80,8 +103,12 @@ export class MediaService {
         variants.push({ size, storage_key: key, width: meta.width ?? size, height: meta.height ?? size });
       }
 
-      // Malware seam: dev scanner is disabled — we record that honestly, never "scanned: true".
-      const scanNote = this.scanner.enabled ? 'scanner_enabled' : 'scanner_disabled_development_only';
+      // Only reachable once assertScannedClean() passed, so the audit trail
+      // records a real clean verdict and names the scanner that GAVE it (the
+      // verdict's own attribution, not the injected adapter's label). An
+      // unscanned upload has no row and no audit entry at all — there is no
+      // label here that could read as "accepted without a scan".
+      const scanNote = `clean:${verdict.scanner}`;
 
       await this.db.withTransaction({ tenantId: m.tenantId, businessId: m.businessId }, async (c) => {
         await c.query(
@@ -136,6 +163,53 @@ export class MediaService {
     const expiresInSeconds = 300;
     const url = await this.storage.signedUrl(key, expiresInSeconds);
     return { url, expiresInSeconds };
+  }
+
+  /**
+   * Refuses the upload unless a REAL scanner really answered `clean` for these
+   * bytes. Every other path is a refusal:
+   *  - the composed scanner is not an enabled, real scanner;
+   *  - it answered `infected`;
+   *  - it threw, was unreachable, or returned a verdict we cannot read;
+   *  - it did not answer within MALWARE_SCAN_TIMEOUT_MS ("no result" is not a pass).
+   * A `clean` claim from an adapter that reports `enabled === false` is a fake
+   * result by definition and is refused too. Returns the clean verdict so the
+   * caller records the scanner that actually cleared the file.
+   */
+  private async assertScannedClean(file: { buffer: Buffer; originalname: string }): Promise<{ scanner: string }> {
+    const unavailable = (reason: string): AppError => {
+      this.logger.error(`media upload REFUSED (fail-closed): malware scan unavailable — ${forLog(reason)}`);
+      return new AppError('MEDIA_SCAN_UNAVAILABLE', 'Upload refused: the file could not be security-scanned', 503);
+    };
+    if (!this.scanner.enabled) throw unavailable(`scanner_not_enabled:${forLog(this.scanner.kind)}`);
+
+    let verdict: MalwareVerdict;
+    try {
+      verdict = await this.withScanTimeout(this.scanner.scan({ bytes: file.buffer, filename: file.originalname }));
+    } catch (e) {
+      throw unavailable((e as Error).message.slice(0, 160));
+    }
+    if (verdict?.outcome === 'clean') return { scanner: verdict.scanner };
+    if (verdict?.outcome === 'infected') {
+      this.logger.error(`media upload REFUSED: malware scan reported ${forLog(verdict.signature)} (scanner ${forLog(verdict.scanner)})`);
+      throw new AppError('MEDIA_INFECTED', 'Upload refused: the file failed the security scan', 422);
+    }
+    // Includes `unavailable` AND any verdict shape this version does not know:
+    // an unrecognised answer is never read as a pass.
+    throw unavailable(verdict?.outcome === 'unavailable' ? `verdict_unavailable:${forLog(verdict.reason)}` : 'verdict_unreadable');
+  }
+
+  /** A scan that does not answer inside the budget is a refusal, not a pass. */
+  private withScanTimeout(scan: Promise<MalwareVerdict>): Promise<MalwareVerdict> {
+    const budget = this.config.MALWARE_SCAN_TIMEOUT_MS;
+    let timer: NodeJS.Timeout | undefined;
+    const deadline = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`scan_timeout_after_${budget}ms`)), budget);
+      timer.unref?.();
+    });
+    return Promise.race([scan, deadline]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
   }
 
   /** §24: best-effort object cleanup + reconciliation record for leftovers. */

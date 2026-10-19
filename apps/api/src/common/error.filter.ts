@@ -28,6 +28,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     };
 
     if (exception instanceof AppError) {
+      // Fail-closed upload scanning: the upload was refused because the file
+      // could not be scanned, which is retryable once the scanner answers
+      // again. The hint says "later", never why the scanner was unavailable.
+      if (exception.code === 'MEDIA_SCAN_UNAVAILABLE') res.setHeader('Retry-After', '30');
       body(exception.code, exception.message, exception.httpStatus, exception.details);
       return;
     }

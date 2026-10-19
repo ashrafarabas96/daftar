@@ -92,6 +92,18 @@ const EnvSchema = z
       .int()
       .min(1024)
       .default(5 * 1024 * 1024),
+    // §64 + owner ruling 2026-10-12 — FAIL-CLOSED uploads. The malware
+    // scanner is a REQUIRED external service for the media upload path, in the
+    // same class as s3 storage and smtp delivery: `disabled` is the dev/test
+    // default and REFUSES every upload that needs a scan, and production
+    // refuses `disabled` outright. There is no value here that means "accept
+    // unscanned files".
+    MALWARE_SCANNER: z.enum(['disabled', 'clamav']).default('disabled'),
+    /** clamd address, e.g. clamav://clamd.internal:3310 — required for MALWARE_SCANNER=clamav. */
+    MALWARE_SCANNER_URL: z.string().optional(),
+    // A scan that does not answer within the budget is NOT a pass: the upload
+    // is refused with 503 and nothing is stored.
+    MALWARE_SCAN_TIMEOUT_MS: z.coerce.number().int().min(100).max(120_000).default(10_000),
     S3_ENDPOINT: z.string().optional(),
     S3_REGION: z.string().optional(),
     S3_PUBLIC_BASE_URL: z.string().optional(),
@@ -362,6 +374,17 @@ const EnvSchema = z
       }
       if (c.MEDIA_STORAGE === 's3' && (!c.S3_ENDPOINT || !c.S3_BUCKET || !c.S3_ACCESS_KEY_ID || !c.S3_SECRET_ACCESS_KEY)) {
         fail('S3_BUCKET', 'S3_ENDPOINT/S3_BUCKET/S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY are all required for s3 storage');
+      }
+      // Owner ruling 2026-10-12: an upload that requires a security scan is
+      // refused whenever the scanner is disabled, unavailable, failing or
+      // cannot produce a trustworthy result. A production merchant surface
+      // therefore does not start with the placeholder adapter at all — the
+      // alternative would be an API that accepts uploads it cannot scan.
+      if (c.MALWARE_SCANNER !== 'clamav') {
+        fail('MALWARE_SCANNER', 'production requires a real malware scanner (fail-closed uploads): MALWARE_SCANNER=disabled refuses every upload');
+      }
+      if (c.MALWARE_SCANNER === 'clamav' && !c.MALWARE_SCANNER_URL) {
+        fail('MALWARE_SCANNER_URL', 'MALWARE_SCANNER_URL (clamav://host:port) is required when MALWARE_SCANNER=clamav');
       }
     }
     if (mode === 'all' || mode === 'worker') {

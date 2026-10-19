@@ -2,6 +2,7 @@ import { Pool } from 'pg';
 import supertest from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { StubCleanMalwareScanner } from './malware-scanner';
 import { AppModule } from '../../apps/api/src/app/app.module';
 import { loadConfig, type AppConfig } from '../../apps/api/src/config';
 import { runMigrations } from '../../apps/api/src/infra/migrate';
@@ -242,6 +243,14 @@ export interface TestAppOptions {
   /** Blocker 4 seam: the merchant-side credential encryptor (KMS bridge stand-in). */
   encryptor?: CredentialPayloadEncryptor;
   storage?: import('../../apps/api/src/infra/storage').ObjectStorage;
+  /**
+   * Fail-closed malware gate seam (§64). Left unset, the test app composes the
+   * stub CLEAN scanner so the suites that only care about the media pipeline
+   * keep working. A test that wants the refusal path passes the real
+   * `DisabledDevelopmentMalwareScanner` — exactly what dev/test composes — or
+   * one of the other doubles in tests/helpers/malware-scanner.ts.
+   */
+  scanner?: import('../../apps/api/src/infra/storage').MalwareScanner;
   /** P2-S8 §28 seam: a metrics recorder the test can read back. */
   metrics?: import('../../apps/api/src/infra/metrics').Metrics;
   /** P2-S8 §25 seam: a controllable clock for the daily reconciliation schedule. */
@@ -295,6 +304,13 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
         ...(options.outboxSink ? { outboxSink: options.outboxSink } : {}),
         ...(options.encryptor ? { encryptor: options.encryptor } : {}),
         ...(options.storage ? { storage: options.storage } : {}),
+        // Every integration app gets a CLEAN stub unless a case supplies its
+        // own, so the hundreds of unrelated upload-touching cases do not each
+        // need a scanner. The consequence is deliberate and worth naming: the
+        // fail-closed gate's behaviour is guarded ONLY by the dedicated suites
+        // (tests/security/media-scan-fail-closed.test.ts and
+        // tests/security/clamav-scanner.test.ts), never incidentally here.
+        scanner: options.scanner ?? new StubCleanMalwareScanner(),
         ...(options.metrics ? { metrics: options.metrics } : {}),
         ...(options.reconciliationClock ? { reconciliationClock: options.reconciliationClock } : {}),
       }),
