@@ -92,6 +92,25 @@ MARKER_ERE = '^' + MARKER.replace('.', '[.]') + '[[:space:]]*$'
 _PINNED_PATH = '/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
 _GIT_BIN = shutil.which('git', path=_PINNED_PATH)
 
+# CHALLENGE R23-P2-01, the reviewer's own finding about the remedy it had just
+# recommended, and the coordinator measured it a P3 rather than a P2: the
+# resolution above happens ONCE AT IMPORT and the file is used later, so if the
+# resolved executable stops being runnable between those two moments -- removed,
+# chmod'd, or never runnable in the first place because its interpreter is
+# missing -- `subprocess.run` raises FileNotFoundError or PermissionError and
+# this tool dies with an UNNAMED TRACEBACK at rc 1, which is this gate's STALE
+# code. That is the exact failure shape R22-P2-01 closed one round earlier, and
+# a bare name would have fallen through to the next candidate on the path
+# instead. It fails CLOSED and never produces a green verdict, which is why it
+# is a P3; it is still the wrong exit code with the wrong sentence, so the call
+# is wrapped and the refusal is the configuration one, by name.
+def _refuse_unrunnable_git(exc):
+    print('CONFIGURATION ERROR: the `git` executable resolved on the pinned PATH'
+          ' (%s) at start-up could not be run (%s: %s), so no history could be'
+          ' read and nothing here is a verdict about this manifest.'
+          % (_GIT_BIN, type(exc).__name__, exc), file=sys.stderr)
+    raise SystemExit(2)
+
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -280,9 +299,12 @@ def main():
         # starts will inherit.
         _env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
                     PATH=_PINNED_PATH)
-        return subprocess.run([_GIT_BIN,'-C',_md,'--no-replace-objects',
-                               '-c','core.quotePath=false'] + list(argv),
-                              capture_output=True, text=True, env=_env)
+        try:
+            return subprocess.run([_GIT_BIN,'-C',_md,'--no-replace-objects',
+                                   '-c','core.quotePath=false'] + list(argv),
+                                  capture_output=True, text=True, env=_env)
+        except (FileNotFoundError, PermissionError, OSError) as exc:
+            _refuse_unrunnable_git(exc)
     def _quoted(path):
         '''True when git handed back a path this tool cannot use verbatim.'''
         return path.startswith('"') or '\\' in path

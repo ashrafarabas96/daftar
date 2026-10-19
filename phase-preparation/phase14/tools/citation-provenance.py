@@ -80,12 +80,27 @@ GIT_ENV = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
 # lookup inside a child can reach a shim earlier on some path.
 _PINNED_PATH = '/usr/bin:/bin:/usr/local/bin:/usr/sbin:/sbin:/usr/local/sbin'
 _GIT_BIN = shutil.which('git', path=_PINNED_PATH)
+
+# CHALLENGE R23-P2-01, the sibling half: the resolution above runs ONCE at
+# import and the file is used later, so an executable that stops being runnable
+# in between -- or was never runnable, its interpreter missing -- made this tool
+# die with an unnamed traceback at rc 1, which is this tool's STALE code. The
+# refusal is the configuration one, by name.
+def _refuse_unrunnable_git(exc):
+    print('CONFIGURATION ERROR: the `git` executable resolved on the pinned PATH'
+          ' (%s) at start-up could not be run (%s: %s), so no provenance could be'
+          ' read and nothing here is a verdict about this block.'
+          % (_GIT_BIN, type(exc).__name__, exc), file=sys.stderr)
+    raise SystemExit(2)
 GIT_ENV.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull,
                PATH=_PINNED_PATH)
 
 def git(repo, *args):
-    return subprocess.run([_GIT_BIN,'-C',repo,'--no-replace-objects',*args],
-                          capture_output=True, text=True, env=GIT_ENV)
+    try:
+        return subprocess.run([_GIT_BIN,'-C',repo,'--no-replace-objects',*args],
+                              capture_output=True, text=True, env=GIT_ENV)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        _refuse_unrunnable_git(exc)
 
 def tracked(repo, rev):
     r = git(repo,'ls-tree','-r','--name-only',rev)
@@ -113,9 +128,12 @@ def main():
               ' PATH (%s), so no provenance could be read and nothing here is a'
               ' verdict about this block.' % _PINNED_PATH, file=sys.stderr)
         return 2
-    _top = subprocess.run([_GIT_BIN,'-C',ap.get_default('pack'),
-                           '--no-replace-objects','rev-parse','--show-toplevel'],
-                          capture_output=True, text=True, env=GIT_ENV)
+    try:
+        _top = subprocess.run([_GIT_BIN,'-C',ap.get_default('pack'),
+                               '--no-replace-objects','rev-parse','--show-toplevel'],
+                              capture_output=True, text=True, env=GIT_ENV)
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        _refuse_unrunnable_git(exc)
     ap.add_argument('--repo', default=(_top.stdout.strip() or '.'))
     ap.add_argument('--base', default='93084f8')
     ap.add_argument('--other', default='6fc505d')

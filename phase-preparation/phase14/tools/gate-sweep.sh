@@ -1375,6 +1375,51 @@ else
          pinned-path-order "$frc"
   fail=$((fail+1))
 fi
+
+# ---- ROUND 23. Two named refusals that had NO ARM, both found by reviewers
+# rather than by this sweep, and both measured here instead of reasoned about.
+#   R23-P2-01 (the challenger's, the coordinator measured it P3): `_GIT_BIN` is
+#   resolved ONCE AT IMPORT and used later, so an executable that cannot be run
+#   at the moment of the call -- removed, chmod'd, or never runnable because its
+#   interpreter is missing -- used to raise FileNotFoundError at rc 1, this
+#   gate's STALE code. The arm needs no timing window and no system write: the
+#   `git` on the pinned path is an executable script whose SHEBANG names an
+#   interpreter that does not exist, so `shutil.which` selects it (it is a
+#   regular executable file) and `exec` of it fails.
+#   R-COORD-1 (the coordinator's, P3): deleting citation-provenance's own
+#   CONFIGURATION ERROR block for an absent git RED NOTHING, so that named
+#   refusal had no arm either. One arm per tool, and the sibling's is run with
+#   its own refusal text, not the other tool's.
+P23=$(mktemp -d); SCRATCH="${SCRATCH:-} $P23"
+mkdir -p "$P23/bad" "$P23/unrun/tools" "$P23/sib/tools" "$P23/empty"
+printf '#!/nonexistent-interpreter-for-p14\n' > "$P23/bad/git"
+chmod +x "$P23/bad/git"
+cp "$HERE/manifest-digests.py" "$P23/unrun/tools/"
+sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/bad'|" "$P23/unrun/tools/manifest-digests.py"
+sel=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P23/bad")
+"$P23/bad/git" --version >/dev/null 2>&1; badrc=$?
+if [ "$sel" = "$P23/bad/git" ] && [ "$badrc" != 0 ]; then
+  named git-binary-unrunnable-refused 2 "CONFIGURATION ERROR: the \`git\` executable resolved on the pinned PATH" \
+    "python3 -I $P23/unrun/tools/manifest-digests.py $A20"
+else
+  printf 'FAIL  %-26s premise not built (which() selected %s, running it gave rc %s want non-zero) — nothing was proved\n' \
+         git-binary-unrunnable "$sel" "$badrc"
+  fail=$((fail+1))
+fi
+# R-COORD-1: the SIBLING's own named refusal, with its own sentence.
+cp "$HERE/citation-provenance.py" "$P23/sib/tools/"
+sed -i "s|^_PINNED_PATH = .*|_PINNED_PATH = '$P23/empty'|" "$P23/sib/tools/citation-provenance.py"
+sibpin=$(grep -c "^_PINNED_PATH = '$PIN_SHIPPED'$" "$HERE/citation-provenance.py")
+sibng=$(python3 -I -c "import shutil,sys; print(shutil.which('git', path=sys.argv[1]) or 'NONE')" "$P23/empty")
+if [ "$sibng" = NONE ] && [ "$sibpin" = 1 ]; then
+  named sibling-no-git-refused 2 "CONFIGURATION ERROR: no \`git\` executable was found on the pinned PATH" \
+    "python3 -I $P23/sib/tools/citation-provenance.py --repo $REPO"
+else
+  printf 'FAIL  %-26s premise not built (git on the empty path %s want NONE, shipped pin in the sibling %s want 1) — nothing was proved\n' \
+         sibling-no-git "$sibng" "$sibpin"
+  fail=$((fail+1))
+fi
+rm -rf "$P23"
 rm -rf "$P22"
 rm -rf "$E20"
 rm -rf "$FW" "$DW" "$CW" "$SW" "$SW2" "$EMPTYW" "$EMPTYW2"

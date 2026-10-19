@@ -110,9 +110,17 @@ of the branch, baseline included, `--no-db`:
 | the pin reordered back to round 21's order | `pinned-path-no-git` — **premise not built**, the shipped pin no longer appears in the tool |
 | `_GIT_BIN` reverted to `'git'` inside the call | **NONE** |
 
-That last row is the honest one: the absolute resolution has **no shipped arm**, because its only
-attack is the in-pinned-set binary that cannot be proved without writing into a system directory.
-What the shipped arms hold is the pin's presence, its exact order, and the named refusal. The
+~~That last row is the honest one: the absolute resolution has **no shipped arm**, because its only
+attack is the in-pinned-set binary that cannot be proved without writing into a system directory.~~
+
+**REWORDED IN ROUND 23, and in my favour: it is not a guard with a missing arm, it is not a
+guard.** The reviewer measured why nothing reds, instead of accepting my framing: `_GIT_BIN` and
+`'git'` resolve over **the same pinned string**, so in any world where both see that pin they
+select the same file. There is no security property there to prove, and a change that is not a
+guard owes no red proof — the row is explained, not owed. What the absolute form does buy is
+stated in `P14-AMENDMENT-29-CHALLENGE-ROUND-23.md`: the provenance line reports the object that
+ran, and an absent git is caught early by name. What the shipped arms hold is the pin's presence,
+its exact order, and the named refusal. The
 baseline's own `manifest-shared` FAIL in those runs is this round's manifest being stale while the
 round is being written, and it is green at the committed head (§5).
 
