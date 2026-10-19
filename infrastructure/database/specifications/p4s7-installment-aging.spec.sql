@@ -860,7 +860,7 @@ BEGIN
   -- «no obligation of this slice», and both claimed more than this gate
   -- reads. Measured as byte offsets into this routine's own body -- which is
   -- byte-identical to its stored `prosrc`, as the `c_bodies` digests of part
-  -- 9 certify -- the gate's `IF` is at 14235 and it is reached by NONE of:
+  -- 9 certify -- the gate's `IF` is at 15195 and it is reached by NONE of:
   --   * the `invoices`-arm refusal of (a) at 5100, which fires when the
   --     invoice row says a plan is active and this routine can read none. It
   --     states «the fact and the read disagree or this read is blinded» and
@@ -884,7 +884,7 @@ BEGIN
   --     that moves these numbers reds there instead of leaving them silently
   --     stale -- which is the hole round 16 named in its own report and
   --     could only name;
-  --   * obligation (d) at 25769, whose ceiling is not one of the four
+  --   * obligation (d) at 26729, whose ceiling is not one of the four
   --     conditions of the `IF` -- the string `60` does not occur in it.
   -- The `RAISE` the gate takes was already honest about this («(a) to (c)»);
   -- the comment and the heading were not, and they are the ones that moved.
@@ -919,6 +919,19 @@ BEGIN
   -- catalogue read happens ONLY when an obligation has already failed, so a
   -- sound schedule never reaches it at all, and in every state this file
   -- installs all five indexes of the two relations carry the three flags true.
+  -- THAT DISCIPLINE CLAIM IS STILL TRUE AND HAS BEEN READ AGAINST THE CODE,
+  -- SO THE NEXT READER NEED NOT RE-DERIVE IT (`TL-P4-COORD-R95` §6 item 1):
+  -- this routine's only `pg_index` reading is at `1af9163:960`-`:965`, inside
+  -- the four-condition obligation gate at `1af9163:959` -- the one the scope
+  -- paragraph further down this body locates by offset -- so the reading is
+  -- taken only where an obligation has ALREADY failed. ROUND 27's HOIST DID
+  -- NOT TOUCH THIS ROUTINE: it moved `installment_plan_fact_sync()`'s
+  -- reading only, which is why THAT routine's near-identical declaration had
+  -- to be corrected and this one did not.
+  -- (The gate's own predicate is deliberately NOT quoted here: law H17 of
+  -- `packages/domain-core/test/phase4-s7-installment-aging.test.ts` locates
+  -- that gate by its statement text, and a comment reproducing it above the
+  -- statement would be found first and would silently retarget the law.)
   -- The direction it covers is the only one a missing index entry can produce:
   -- entries can only be ABSENT, so a sum read through an unenforcing index can
   -- only UNDER-report, which makes (a), (b) and (c) FAIL -- it can never make
@@ -1288,10 +1301,20 @@ DECLARE
   -- a disagreement is the one runtime reading that distinguishes «the index
   -- holds an entry for every qualifying row» from «the index is present».
   v_active_ix BIGINT;
-  -- THE OBSERVED CATALOGUE STATE OF EVERY INDEX ON `installment_plans`, read
-  -- ONLY on a refusal path, so that a refusal states what it observed and
-  -- attributes a cause only where this routine has established one
-  -- (`TL-P4-COORD-R55` ordered items 2 and 3, F13-2 and F13-3).
+  -- THE OBSERVED CATALOGUE STATE OF EVERY INDEX ON `installment_plans`. READ
+  -- UNCONDITIONALLY, ON EVERY NON-DELETE PLAN EVENT AND BEFORE THE PROBE
+  -- (the reading at `1af9163:1610`-`:1616`, immediately inside `IF TG_OP <>
+  -- 'DELETE'` at `1af9163:1609`), and read a SECOND time on the blind arm's
+  -- own refusal path (`1af9163:1929`-`:1937`). A refusal states what it
+  -- observed and attributes a cause only where this routine has established
+  -- one (`TL-P4-COORD-R55` ordered items 2 and 3, F13-2 and F13-3).
+  -- UNTIL `27a7c998` IT WAS READ ONLY ON A REFUSAL PATH -- inside `IF NOT
+  -- v_seen`, the probe's own failure path, at `54e3bbb7:1516`-`:1521` -- and
+  -- THIS DECLARATION WENT ON ASSERTING THAT DISCIPLINE FOR FOUR ROUNDS AFTER
+  -- FINDING C's hoist abolished it, byte-identical at `54e3bbb7`,
+  -- `27a7c998`, `b9682e1` and `1af9163` (`TL-P4-COORD-R95` §1, F-1). A
+  -- declaration is read BEFORE the body, so what is true at `1af9163` is
+  -- stated first.
   v_unenforcing TEXT;
 BEGIN
   -- `OLD` IS NOT ASSIGNED ON AN INSERT AND `NEW` IS NOT ASSIGNED ON A DELETE,
@@ -1481,7 +1504,31 @@ BEGIN
   -- CANDIDATE CAUSE BEFORE NAMING ONE (`TL-P4-COORD-R55` ordered items 2 and
   -- 3, F13-2 and F13-3). Until ROUND 13 -- the round `TL-P4-COORD-R55` ruled
   -- on, named here because «this round» is a floating referent that falsifies
-  -- itself the moment another round lands. That is the defect round 28
+  -- itself the moment another round lands.
+  --
+  -- AND THE RULE GOVERNS A LEXEME **SET**, NOT A PHRASE, BECAUSE A RULE ABOUT
+  -- ONE PHRASE IS SATISFIED BY COINING A SECOND (`TL-P4-COORD-R95` §4, which
+  -- re-drafts `TL-P4-COORD-R94` §4 after its own first application was
+  -- breached by exactly that move). THE GOVERNED SET, stated here because
+  -- this is the one place in the shipped tree that names the class at all:
+  --
+  --     «this round», «this commit», «this head», «this slice», «now»,
+  --     «the parent», «currently»
+  --
+  -- -- and any new deictic a round coins, WHICH THE COINING ROUND MUST ADD TO
+  -- THIS LIST. «this head» is in the set because round 30 coined it and
+  -- classified none of it; it is STRICTLY WORSE than «this round», because a
+  -- head moves with every commit and not only with every round. Round 32
+  -- settled its figure: **21 occurrences on 21 lines** over the slice's
+  -- eleven files at `1af9163`, from `rg -ioN -e 'this head\b'` and
+  -- `rg -icN -e 'this head\b'`; the word boundary matters, because an
+  -- unbounded pattern also matches «this headING» and reports 22.
+  -- A member of this set is a defect ONLY where the sentence would become
+  -- false when the next commit lands; a member already read and classified
+  -- against the code is not one, and sweeping the classified set again buys
+  -- nothing.
+  --
+  -- The «this round» instance above is the defect round 28
   -- corrected further down this same block -- where the text now reads
   -- UNTIL `27a7c998` -- and left standing here, eight lines above a line it
   -- edited (`TL-P4-COORD-R93` §4; round 29 FINDING 4) -- this probe raised
@@ -1530,6 +1577,53 @@ BEGIN
   -- ── AND THE ENFORCEMENT READING IS UNCONDITIONAL ON THIS PATH, WHICH IS
   --    FINDING C's REPAIR (`TL-P4-COORD-R86` §3 FINDING C;
   --    `PATCH-REQ-P4S7-FINDING-C` proposal P1).
+  --
+  --    ── AND MOVING THIS READING FALSIFIED EVERY SENTENCE ASSERTING THE
+  --       DISCIPLINE IT ABOLISHED, WHICH IS A SECOND CLASS AND NOT THE ONE
+  --       FOUR ROUNDS SWEPT (`TL-P4-COORD-R95` §2, stated here so the next
+  --       round that moves a guard does not have to be told again)
+  --
+  --    Rounds 27 to 30 hunted OUTCOME vocabulary -- «what answers», «the arm
+  --    that catches», «fail-open», «planner choice», «NOTHING REFUSES». A
+  --    sentence asserting the DISCIPLINE under which a guard is REACHED
+  --    shares no words with that class, so it is invisible to its patterns,
+  --    and that is where declaration comments, variable documentation and
+  --    `COMMENT ON` prose live. Two shipped sentences asserting THIS
+  --    reading's abolished discipline survived four rounds of sweeps:
+  --
+  --      * `1af9163:1291`-`:1294`, `v_unenforcing`'s own declaration above
+  --        («read ONLY on a refusal path»), found by the round-31 challenge
+  --        and corrected in place; and
+  --      * `apps/api/src/modules/selling/selling-errors.ts:739`
+  --        («on the three refusal paths»), which NO round of the chain
+  --        reached, found by round 32's enumeration of this class and
+  --        corrected in place.
+  --
+  --    SO WHEN A ROUND MOVES A GUARD IT MUST ENUMERATE TWO CLASSES: what the
+  --    guard now DOES (outcome), and under what DISCIPLINE it is now REACHED.
+  --    The pattern family for the second class, designed against the
+  --    discipline and not the outcome, and the one round 32 ran over the
+  --    slice's eleven files:
+  --
+  --      read only | reads only | taken only | taken on | read on a/the/every
+  --      | happens only | fires only | raised only | refuses only | only on a
+  --      | only when | only once | only after | only if | only where | no
+  --      longer only | never before | not until | not reached | reached only
+  --      | reached when | reachable only | conditional on | unconditional |
+  --      before the probe | inside `IF | on every | does not wait | waits for
+  --      | solely
+  --
+  --    Sharpest of them for a MOVED guard is «refusal path | failure path |
+  --    only on a … path»: eight lines over the eleven files at `1af9163`, of
+  --    which exactly the two above were present-tense and false.
+  --    WHAT THE FAMILY DOES NOT REACH, stated rather than left implied: a
+  --    discipline asserted with NO discipline lexeme at all -- for example
+  --    the reachability classification of the second reading further down
+  --    this body, which says «UNMEASURED AT RUNTIME, NOT DEAD CODE» and
+  --    matches nothing above; a claim split across a line break so that no
+  --    single-line pattern spans it; and a discipline carried by STRUCTURE
+  --    alone, such as a comment whose placement above a branch is the whole
+  --    of its claim. No stopping rule is asserted for this class.
   --
   --    UNTIL `27a7c998` BOTH REFUSALS BELOW SAT INSIDE `IF NOT v_seen`, so
   --    every detection of an unenforcing index was downstream of the PROBE
@@ -1805,8 +1899,25 @@ BEGIN
     --   hoisted reading above finds nothing to refuse and the write arrives
     --   here. The DELETE path is NOT the only route to this refusal, and the
     --   suites' narrower sentence about the DELETE path is about cause 1.
-    --   PROVEN IN LIVE CODE; the window itself is UNMEASURED, exactly as the
-    --   disclosure below part 3a's cross-check says.
+    --
+    --   AND CAUSE 2 NEEDS A CONJUNCTION TOO, WHICH THIS VERY BLOCK STATES
+    --   ABOVE AND THIS ENTRY OMITTED WHILE CARRYING THE STRONGER OF THE TWO
+    --   LABELS ON THE WEAKER OF THE TWO CLAIMS (`TL-P4-COORD-R95` §6 item 5,
+    --   F-6). The paragraph at `1af9163:1773`-`:1778` says the window is
+    --   CLOSED while this transaction holds the invoice row, and this routine
+    --   takes that row `FOR NO KEY UPDATE` at `1af9163:1715`-`:1717` --
+    --   BEFORE both counts, which are at `1af9163:1752` and `1af9163:1756`.
+    --   So cause 2 requires `installment_plans_active_exclusive` DROPPED
+    --   **and** this routine's own lock to have found no row to take. That is
+    --   the SAME KIND of claim as cause 1's -- a reading of the control flow
+    --   plus PostgreSQL's semantics, over a state no arm constructs -- so it
+    --   now carries the SAME LABEL: **DESIGN ONLY**, not PROVEN IN LIVE CODE.
+    --   WHAT IS PROVEN IN LIVE CODE HERE IS NARROWER AND IS ONLY THIS: in
+    --   cause 2's state every index of the relation is enforcing, so the
+    --   hoisted reading finds nothing and does not refuse before this loop --
+    --   a property of the control flow in this file and nothing more. The
+    --   window itself stays UNMEASURED, exactly as the disclosure below
+    --   part 3a's cross-check says.
     IF v_active_ix IS DISTINCT FROM v_active THEN
       RAISE EXCEPTION 'installment.plan_index_disagrees: invoice %/% carries % plan(s) with status = ''active'' when counted with the status test in a FILTER above the scan -- a spelling the PARTIAL unique index cannot serve, by the predicate-implication rule -- and % when counted with status = ''active'' in the WHERE, which it can. THE FIRST READING IS NOT «OVER THE ROWS THEMSELVES» AND IS NO LONGER DESCRIBED AS IT WAS (TL-P4-COORD-R55 ordered item 3): it is index-served too, by installment_plans_pkey in every statistics-free plan, so what the two readings establish is that THE PARTIAL UNIQUE INDEX disagrees with another access path, not that either is a heap scan. Both readings are of the same rows in the same transaction. The index-served reading can only under-report, and it does so when the index holds no entry for a row that qualifies for it -- which is an index that is PRESENT AND NOT ENFORCING (indisready false, the state an interrupted CREATE INDEX CONCURRENTLY or REINDEX CONCURRENTLY leaves, which pg_indexes renders identically to the correct one) and which REINDEX will refuse. TWO STATES REACH THIS AND THE REMEDY DIFFERS: if the index is unenforcing, nothing may be derived from the bound it is supposed to hold and the index must be rebuilt before any plan is written; if installment_plans_active_exclusive has been dropped, another transaction may have committed a plan on this invoice between these two readings and the remedy is to restore that trigger so that a plan write takes the invoice row first',
         v_business, v_invoice, v_active, v_active_ix USING ERRCODE = 'P0001';
@@ -1979,6 +2090,12 @@ DECLARE
   v_self     TEXT;
   -- The observed catalogue state of every index of `installment_plans`, read
   -- only on a refusal path (`TL-P4-COORD-R55` ordered items 2 and 3).
+  -- STILL TRUE AT `1af9163`, READ AGAINST THE CODE RATHER THAN LEFT TO BE
+  -- RE-DERIVED (`TL-P4-COORD-R95` §6 item 1): the one reading is at
+  -- `1af9163:2221`-`:2225`, inside `IF v_flag IS DISTINCT FROM v_state` at
+  -- `1af9163:2210`, which is the disagreement arm and raises on every exit
+  -- from it. Round 27's hoist moved `installment_plan_fact_sync()`'s reading
+  -- and NOT this one, so this declaration was not falsified by it.
   v_unenforcing TEXT;
 BEGIN
   -- ---- THE ORDER THIS ROUTINE DEPENDS ON IS A TRIGGER-NAME ORDER, AND IT IS
@@ -3890,8 +4007,26 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 --           Both still answer when the index is **DROPPED** rather than
 --           present-but-unenforcing, because a dropped index leaves no
 --           `pg_index` row for the hoisted reading to match, so that reading
---           cannot fire -- that is a reading of the control flow above and
---           NOT a measurement, and it is not labelled as one. The same two
+--           cannot fire.
+--           THE SUBJECT OF «DROPPED» IS THE PARTIAL UNIQUE INDEX AND CAN BE
+--           NOTHING ELSE, WHICH THIS ENTRY LEFT TO CONTEXT AND NOW SAYS
+--           (`TL-P4-COORD-R95` §6 item 5, F-8): `DROP INDEX
+--           public.installment_plans_pkey` FAILS -- `ERROR:  cannot drop
+--           index installment_plans_pkey because constraint
+--           installment_plans_pkey on table installment_plans requires it`
+--           -- so for the PRIMARY KEY the DROPPED state does not exist at
+--           all, and that arm is reachable only through the three
+--           enforcement flags.
+--           AND THE SCOPING IS NO LONGER A READING ONLY. Re-measured for
+--           round 32 on PostgreSQL 16.13, `template1` and the probe database
+--           both `en_US.utf8`: with the partial unique index dropped, ONE
+--           `pg_index` row remains for this relation and all three of its
+--           flags are true, so the hoisted predicate `NOT (indisvalid AND
+--           indisready AND indislive)` matches no row, `string_agg` returns
+--           NULL, and `IF v_unenforcing IS NOT NULL` is false -- the refusal
+--           cannot fire. **PROVEN BY DATABASE CATALOGUE**, upgraded from
+--           DESIGN ONLY on this round's own reading and not on another
+--           agent's. The same two
 --           with the index ENFORCING are cases `E2 two concurrent plan
 --           creations on ONE invoice, index ENFORCING: the loser is refused
 --           BY NAME, not 23505 (F-4)` and `E5 REPEATABLE READ and
@@ -4645,10 +4780,10 @@ DECLARE
   -- of any pinned signature, which is the one shape a digest of a signature
   -- cannot see.
   c_bodies    CONSTANT TEXT[][] := ARRAY[
-    ['public.installment_plan_fact_sync()',                       '4224aa2d6d30729e892a4cbdf24d5113d7d804dd350e595c7b5f9b19edeb0be9'],
-    ['public.installment_plan_fact_verify()',                     '50f02f27f3f411a97f3140fa05d24980f2a3dfdd4b376bc5b8c0f67fe4b946c3'],
+    ['public.installment_plan_fact_sync()',                       'ac81029839368210ebb29114bdba48facf7190d321dc393a83ecc3fc320eba77'],
+    ['public.installment_plan_fact_verify()',                     'f9dda4f03c5b05e69b840dba08347bc1d68b2eabfbfd7d6416304f581e98142b'],
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
-    ['public.installment_schedule_verify()',                      'c69837085b4386c24f939412a851c0b7d09d2e51ba0dda5182f90ccf1c8f8408'],
+    ['public.installment_schedule_verify()',                      'c334ebf3b393ceb5d7c010e931c309cb42fb112e7a44a2e406f4f17e997700a3'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
     ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A

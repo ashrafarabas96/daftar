@@ -736,8 +736,26 @@ const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
   //
   // `plan_index_unenforcing`: an index of `installment_plans` carries
   // `indisvalid`, `indisready` or `indislive` false — read out of `pg_index`
-  // INSIDE the failing event, on the three refusal paths whose other
-  // candidate cause is row security. It exists because one catalogue flag on
+  // INSIDE the failing event, at FOUR sites, and ONE OF THE FOUR IS NO LONGER
+  // ON A REFUSAL PATH AT ALL. In `installment_plan_fact_sync()` the reading is
+  // UNCONDITIONAL, on every non-DELETE plan event and BEFORE the probe
+  // (`1af9163` spec `:1610`-`:1616`, inside `IF TG_OP <> 'DELETE'` at
+  // `:1609`); the other three are on refusal paths whose other candidate cause
+  // is row security — the same routine's blind arm (spec `:1929`-`:1937`) and
+  // the deferred verifier's disagreement arm (spec `:2221`-`:2225`) — plus
+  // `installment_schedule_verify()`'s, whose alternative cause is a failed
+  // schedule obligation and NOT row security (that routine names row security
+  // nowhere).
+  // «ON THE THREE REFUSAL PATHS» STOOD HERE AND WAS FALSIFIED BY `27a7c998`
+  // (`TL-P4-COORD-R95` §2's second class; found by round 32's enumeration of
+  // it, not by the round-31 challenge, which reached the specification's copy
+  // of the same claim and not this one). It was TRUE at `54e3bbb7`, where all
+  // three row-security-alternative readings sat on refusal paths and the
+  // first of them was inside `IF NOT v_seen`. The cardinality was right then
+  // and is right now — three of the four have row security as the other
+  // candidate cause — but the DISCIPLINE is not, and this sentence is
+  // byte-identical at `54e3bbb7`, `27a7c998`, `b9682e1` and `1af9163`, each at
+  // `:739`. It exists because one catalogue flag on
   // `installment_plans_pkey` — an index the specification did not name once —
   // made A lawful plan write fail under `plan_fact_blind`, whose message
   // had just been rewritten to say the cause was row security and to look in

@@ -444,16 +444,36 @@ describe('P4-S7 the installment.* rendering contract', () => {
     //    ROUND 17 — the `expect(lines).toHaveLength(1)` pin that immediately
     //    follows this block's own `const lines = r.logged.filter(…)` in
     //    section (2) above, CITED BY THAT IDENTIFIER AND NOT BY A LINE
-    //    NUMBER. A bare `` `:321` `` stood here and was FALSE AT BOTH SHAs:
-    //    measured with `grep -n 'toHaveLength(1)'` on each blob, that pin is
-    //    at `:334 @ 27a7c998` and `:346 @ b9682e1`, and `:321` is a comment
-    //    line at each. Three readers produced three different wrong values
-    //    for it across rounds 28, 29 and the `R92` reading, which is why the
-    //    remedy here is an anchor and not a better number
-    //    (`TL-P4-COORD-R93` §3). Where a line is still useful it is given
-    //    WITH ITS SHA. That pin reds BEFORE its scope reads `lines[0]` at
-    //    all — and
-    //    NOT by any ordering of the log. No ordering is asserted here and
+    //    NUMBER. A bare `` `:321` `` stood here.
+    //
+    //    IT WAS NOT WRONG WHEN IT WAS WRITTEN, AND THE SENTENCE THAT STOOD
+    //    HERE SAID IT WAS (`TL-P4-COORD-R95` §3, withdrawing `R94` §1 and
+    //    ordering this correction). Re-measured for round 32 with
+    //    `grep -n 'toHaveLength(1)'` on each blob:
+    //    `expect(lines).toHaveLength(1)` is at `:321 @ 73b86d2` — the commit that WROTE this citation — and at
+    //    `:321 @ 54e3bbb7`, then at `:334 @ 27a7c998` and `:346 @ b9682e1`
+    //    and `:346 @ 1af9163`. So the citation was EXACT at birth and went
+    //    STALE when `27a7c998` inserted thirteen lines above it (321 + 13 =
+    //    334). That makes the case for the anchor remedy STRONGER, not
+    //    weaker: a citation that is right when written and false two commits
+    //    later cannot be fixed by being more careful, only by being anchored.
+    //
+    //    AND THE COUNT OF WRONG READERS IS DROPPED RATHER THAN CORRECTED.
+    //    A sentence here said «Three readers produced three different wrong
+    //    values … across rounds 28, 29 and the `R92` reading». That is wrong:
+    //    round 29's values are `:334` and `:346`, which THIS BLOCK ITSELF
+    //    QUOTES AS THE RIGHT ONES, and `R92` §6 named no SHA and is ambiguous
+    //    rather than wrong. Reading each one's actual value, exactly one
+    //    reading produced demonstrably wrong values — `TL-P4-COORD-R93` §3 —
+    //    and `TL-P4-COORD-R94` then reported FOUR readers and `R95` ONE.
+    //    Four → three → one for a single referent is the chain's own evidence
+    //    that THE COUNT IS THE DEFECTIVE INSTRUMENT, so the remedy is kept
+    //    and the cardinality is not restated at all: nothing here depends on
+    //    how many readers erred, only on the fact that a bare line number
+    //    expires. Where a line is still useful it is given WITH ITS SHA.
+    //
+    //    That pin reds BEFORE its scope reads `lines[0]` at all — and NOT by
+    //    any ordering of the log. No ordering is asserted here and
     //    none is available: `filter` preserves emission order and nothing
     //    orders the shipped `logger.error` call first, so a same-message
     //    plant emitted FIRST would be `lines[0]`. A paragraph that stood
