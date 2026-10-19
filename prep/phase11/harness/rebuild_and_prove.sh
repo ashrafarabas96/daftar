@@ -63,7 +63,7 @@ echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry
 # Concatenating them in the written order gives a different, wrong digest.
 # `check_fenced_figures.py` joined the set when step 0 started depending on it:
 # an instrument a run refuses on is part of what the run must pin.
-echo "HARNESS_SHA256    : $(cat $(ls $H/check_fenced_figures.py $H/proofs.py $H/proofs_b.py $H/races.py $H/races_b.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
+echo "HARNESS_SHA256    : $(cat $(ls $H/check_fenced_figures.py $H/check_harness_bytes.py $H/proofs.py $H/proofs_b.py $H/races.py $H/races_b.py $H/run_migrations.py $H/render_bootstrap.py $H/world.sql $H/world_b.sql $H/rebuild_and_prove.sh 2>/dev/null) | sha256sum | cut -d' ' -f1)"
 echo "PG_VERSION        : $($PG/postgres --version)"
 echo "PG_CLUSTER_DIR    : $S/data (port $PORT, socket $SOCK)"
 echo "NODE_VERSION      : $(node -v) (repository engines: $(node -e "process.stdout.write(require('$REPO/package.json').engines.node)")) -- NO npm suite is run here"
@@ -85,6 +85,32 @@ echo
 #
 # Its own red proof runs before it, as the renderer's selftest does.
 echo "=== 0c. the documents' quoted figures (every key=value shown as output must be emitted by something) ==="
+# 0c-0. THE HARNESS'S OWN BYTES, before anything that reads them. The
+# coordinator's `C21-F1` left this instrument through a DEFAULT ARGUMENT --
+# `def scan(..., skip=("hyphen in the key",))` switches a named guard off for
+# every real run -- which no shape rule and no constants digest covered. The
+# ruling was to pin the FILE rather than the shapes inside it, against a table
+# held outside the harness (`prep/phase11/P11-HANDOFF-MANIFEST.md` §2a) and read
+# by a reader that shares no code with the checker and is pinned by a row of the
+# same table. It runs FIRST here because every number printed below comes from
+# bytes this step is what checks. The scan and `--check-blocks` run it as a
+# subprocess too, so a reader who runs them alone is not outside the law.
+echo "--- 0c-0. the harness's own bytes against the external pin ---"
+python3 -I $H/check_harness_bytes.py
+RC_HARNESS_BYTES=$?
+if [ $RC_HARNESS_BYTES -ne 0 ]; then
+  echo "A harness file's bytes are not the bytes the manifest pins, a harness file has "
+  echo "no row, a pinned row has no file, or the table could not be read. The refusal "
+  echo "above names which. If the change was deliberate, run "
+  echo "\`python3 -I $H/check_harness_bytes.py --emit\` and commit the table it prints "
+  echo "IN THE SAME COMMIT as the change -- that pairing is bounded by review and by "
+  echo "nothing in this harness, which is the one limit stated at the law."
+  # Fatal, and fatal HERE: every figure, digest and exit code printed below is
+  # read out of bytes this step is what checks, so continuing would publish
+  # numbers whose instrument is unaccounted for.
+  echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (refused at step 0c-0; nothing below ran)"
+  exit $RC_HARNESS_BYTES
+fi
 python3 -I $H/check_fenced_figures.py --selftest || { echo "the fenced-figure check cannot fail; refusing to trust it"; exit 1; }
 python3 -I $H/check_fenced_figures.py
 RC_FIGURES=$?
@@ -329,6 +355,7 @@ echo "EXIT_PROOFS_A     : $RC_PROOFS  (prep/phase11/harness/proofs.py)"
 echo "EXIT_PROOFS_B     : $RC_B  (prep/phase11/harness/proofs_b.py)"
 echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idempotence)"
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
+echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (prep/phase11/harness/check_harness_bytes.py, run at step 0c-0 before anything that reads the harness: every harness file's bytes against the pin table in the manifest)"
 echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 0c beside the figure scan)"
 echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 0c: after the cluster is up, before the database is recreated)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"

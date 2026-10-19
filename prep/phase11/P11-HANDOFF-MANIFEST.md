@@ -44,6 +44,53 @@ Each document exists in **two places**: the shared project-files location (the c
 | `prep/phase11/ddl/` + `prep/phase11/harness/` | — (Git only) | **committed** | the applied DDL and the harness; in Git rather than off-Git because they are executable, not prose |
 | `P11-HANDOFF-MANIFEST.md` (this file) | `/mnt/project-files/phase11/` | `prep/phase11/` — **committed** | self-referential; recompute with `sha256sum` |
 
+### 2a. The harness's own bytes, pinned here
+
+This table is the pin the harness is read against, and it is here rather than in
+the harness because **a file cannot be the authority on its own bytes**: the edit
+that moves the bytes can delete the comparison in the same stroke. The reader is
+`prep/phase11/harness/check_harness_bytes.py`, which shares no code with
+`check_fenced_figures.py`, is pinned by a row of this table itself, and refuses
+by name — `HARNESS-BYTES-MOVED`, `HARNESS-FILE-UNPINNED`,
+`HARNESS-FILE-ABSENT`, `HARNESS-PIN-UNREADABLE`, `HARNESS-UNREADABLE`. The scan
+and `--check-blocks` run it as a SUBPROCESS and refuse on it, so it is not a
+`--selftest`-only instrument; `rebuild_and_prove.sh` runs it as its own exit
+code. Regenerate with `python3 -I check_harness_bytes.py --emit` **in the same
+commit as the change it records**.
+
+**The one limit, stated at the law:** an edit that changes a harness file AND its
+row here in the same commit is bounded only by REVIEW. A pin inside the thing it
+pins is not a pin, which is why this phase's chain is author, independent
+challenger, coordinator, with the diff read by someone who did not write it.
+
+<!-- P11-HARNESS-BYTES-PIN v1 BEGIN -->
+```
+22aca4d9da065fd346805cefeeaaa86184c81c5c4d89dcbe85b2f71bcad2a64e  check_fenced_figures.py
+7a775549817cc3471097c9bf87d2a13cfb123939b323ce7d20557b28c07703b9  check_harness_bytes.py
+3555bc5947f567fc2ef67b512bafad49c7b0ab0baae1d0b59a7fca98d93324ad  mutations/M10-noop.sql
+b6b715810b22883898e778cbcafac136517ca3bde7c1b0c3000cca2282c0ac37  mutations/M11-defeat-the-write-identity-comparison.sql
+4481a3e78a4bdeec5b443a1395a5e24b12a75801b3c0270f0a45f61359c5b616  mutations/M13-column-acl-and-notnull.sql
+bf055412f8c14c0071b3242760dc6638bbde81b2f75ad926804be9fc138844e9  mutations/M14-restore-the-ledgers-forgeability.sql
+c4dc7ed65f839201706c89dc20863878e1f8f3e2e9cf83c5523b47b7676c55a2  mutations/M15-drop-the-own-transaction-write-policy.sql
+1723aba93e06db2bc3ece4b30fa0a032bd4421f0675135253a1b3c0a20fe2099  mutations/M18-make-the-write-policy-permissive.sql
+4f898a2565a3683d19feec16a082f195de83417cff807e099818913a04359cea  mutations/M20-re-add-the-xmin-filter.sql
+d6d16fc4bcb4b29235a6a06d5606a5c61a980653a9ab057f66e6834141e998c0  mutations/M21-drop-force-on-the-ledger.sql
+dec4091025a28e212e98d1dd1509a8522337ab4038c26b31a408279c4a64da91  mutations/M7-drop-deferred-grid-closure.sql
+723fadf21fb9c534c88747daddbab2513360b8386ac251718a777fd59311ee99  mutations/M8-drop-per-verb-guards.sql
+18db19d2bb80cf922133dd041752210c823dd716fd1b792522c305e341201930  mutations/M9-drop-both.sql
+21cbd79cd3558f47dc43aa5d56003fe776b0a6f95cfc96bdcea939c724b8f08f  proofs.py
+05b3eaddb18fe0db3af4b838abcd1f824eec4f97a9afafe6009762a861b7ace8  proofs_b.py
+8aa0059c405295e4e289a20137ab9e6a19eeb8ee7c8c54cf5ee684fe8f11313c  races.py
+4edd65bdad7544c30061a02d6e55a73e01a8efda6eaf88f138955edc06c49491  races_b.py
+362859efea33ca858a5147748eec511e6572b8c4658615d4a19929eaff879450  rebuild_and_prove.sh
+73720ff9da0caaf7eff624c34aaedb10ee70151c34b26e4c1b64d98e145bf73b  render_bootstrap.py
+c558e5deed66856fb66ffc1b8eca38d6defdef1154156cdca8a0a7690ba7c422  run_migrations.py
+10844c6f72090fb5aff606d7c839b71e144f0606d7065740917b7689b85e340f  world.sql
+6ae8f159ca5e653c4cfd46c85816339257bddfbad4f076188db45f3fec89afcc  world_b.sql
+```
+<!-- P11-HARNESS-BYTES-PIN v1 END -->
+
+
 **Nothing is uncommitted.** The working tree is clean at the preparation SHA, and the shared copies are the same bytes. Note that `/mnt/project-files/` is **not in Git**: the Git copies under `prep/phase11/` are the durable ones, and that duplication exists precisely because this container is ephemeral.
 
 **Where to look first if an artifact appears to be missing** (PART 13's order, and its warning that a referenced companion document absent from an archive does **not** mean the work never existed): `git show <prep SHA>:prep/phase11/` on this branch; then `/mnt/project-files/phase11/`; then `git log --all --diff-filter=A -- 'prep/phase11/*'`. Do not recreate any of these until that search proves the file absent.
@@ -2016,6 +2063,16 @@ does NOT do**: the honesty of a guard's name; what a transformer may do (round
 the file's own bytes, since `HARNESS_SHA256` is printed and never compared with
 a stored value, which is what the published digests are for.
 
+> **Measured FALSE by the coordinator's review of this head, and §7.21 is the
+> answer.** The fourth line read as a disclosure and worked as a hole: the
+> review's escape was a DEFAULT ARGUMENT, which no rule above covers, and a
+> residual that would have covered every escape in the list — `C20-F1`
+> included, which was ruled a blocker — cannot discharge the next one. The
+> harness's own bytes are a LAW now, pinned in §2a and read by a second
+> reader that shares no code with the checker, and what is left on that line
+> is one thing: an edit that moves a file and its pinned row together, which
+> review bounds and no instrument here can.
+
 **Still disclosed, not closed:** everything §7.15 to §7.19 list, the three
 carried residuals, `R19-S1`'s fail-closed refusal of a nested checkout with its
 CI consequence, the guard matrix's completeness question — which the round
@@ -2045,6 +2102,116 @@ that refuses it deleted, and **`GIT-TOPLEVEL-DISAGREES` reached by name** for
 the first time. `check_fenced_figures.py` is 4,251 lines at this head, sha256
 `6779c399…`; the decision constants are pinned at
 `96dde48abdaa78790e558068cd2bf341ada1a45038a4950a8272e62e3d7e6145`.
+
+---
+
+## 7.21 The COORDINATOR DIFF REVIEW of `142f88e` — `NO-SIGN`: the escape was a DEFAULT ARGUMENT, and the arm guarding the previous fix never ran the refusal
+
+The review reproduced every one of round 20's and `C20`'s five escapes as closed
+(`1/5/5`, each read by the refusal NAME), confirmed that no script or CI step
+re-pins the constants digest, that `GIT-TOPLEVEL-DISAGREES` is reachable live,
+and that the database suite at the full SHA is green on PG 16 — 121 cases twice,
+Pack B 53 twice, `digest mismatches: []`, every `EXIT_*` 0. Then it found two
+blockers, and both are about the same thing: **what the instrument is allowed not
+to look at.**
+
+**`C21-F1` (BLOCKER, fail-open) — one line, outside every rule and every
+residual.**
+
+```
+-def scan(docs_dir, harness_dir, quiet=False, skip=()):
++def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):
+```
+
+`_main` calls `scan()` with no `skip`, so the default switches a named guard off
+for every real run, and the gates returned `0/0/0` with a fabricated figure
+committed. It is outside the decision parse, because `scan` is not one of the
+four functions the parse reads; outside the constants digest, because that hashes
+body literals and not defaults; and outside every rule key. The same shape was
+available through `"signed values"`, `"percent in the value"` and
+`"boolean spellings"`, through `_fold_digits`, through a flag on a compiled
+pattern, and through any line of the file nobody has thought of yet.
+
+**The ruling, and it ends the class instead of chasing it:** stop pinning shapes
+inside the file and pin **the file**. §2a of this manifest now carries a digest
+for every executable file under `prep/phase11/harness/`, and
+`harness/check_harness_bytes.py` reads the harness against it — a reader that
+**shares no code** with `check_fenced_figures.py`, imports nothing from it, is
+itself a pinned row of the same table, and refuses by name:
+`HARNESS-BYTES-MOVED`, `HARNESS-FILE-UNPINNED`, `HARNESS-FILE-ABSENT`,
+`HARNESS-PIN-UNREADABLE`, `HARNESS-UNREADABLE`, and
+`HARNESS-BYTES-NOT-ISOLATED` if it is run without `-I`. `frame_admissible` runs
+it as a **SUBPROCESS** — never an import, because an instrument that is part of
+the set it measures must not be loaded into the process measuring it — so the
+scan and `--check-blocks` refuse on it and it is not a `--selftest`-only
+instrument; `rebuild_and_prove.sh` runs it at step **`0c-0`**, before anything
+that reads these bytes, as `EXIT_HARNESS_BYTES`, and a refusal there is fatal,
+because every figure printed below it is read out of the bytes it checks.
+
+**The one limit, stated at the law rather than beside it:** an edit that changes a
+harness file **and** its pinned row in the same commit is bounded only by REVIEW.
+A pin inside the thing it pins is not a pin. That is why this phase's chain is
+author, independent challenger, coordinator, with the diff read by someone who
+did not write it.
+
+**`C21-F2` (BLOCKER, measured-false claim) — the arm for the previous fix never
+ran the refusal.** §7.20 said the argument-edit pin was "armed by performing the
+move in this process". It was not. The arm digested the canonical text, digested
+an edited copy, saw the two differ, and printed `the edit reds by name -> as
+required`. The coordinator deleted the refusal itself
+(`if got == DECISION_CONSTANTS_SHA256:` → `if True:`) and the arm went on
+printing `as required`, with the plant passing the gates CI runs. **An arm that
+compares two digests has measured arithmetic, not an instrument** — which is this
+phase's own `R12` lesson, that a claim about an instrument is verified only by
+RUNNING the instrument, found again inside the arm that carries it. The arm now
+MOVES a pinned constant in this process, reads the refusal BY NAME, takes the
+scan's exit code, and deletes the check by value beside it.
+
+**Five registered refusals had no arm that reds when the check is deleted, and
+the review named them.** Each is armed now, read by refusal name in both
+directions, with the object checks keyed (`OBJECT_KEYS = ("attr-identity",
+"fn-identity", "const-pin", "harness-bytes")`) so one is deleted per copy,
+exactly as `RULE_KEYS` does for the shape rules:
+
+- **`GIT-TOPLEVEL-DISAGREES`** — the arm read `rc=5`, and the same world refuses
+  `rc=5` with the census deleted for an unrelated reason, while the arm printed
+  `as required` and §7.20 called the refusal armed. **The exit code was never the
+  measurement.** It reads the name now, and requires that deleting the census
+  takes THAT name away.
+- **the `shadow` key's second branch** — a BINDING inside the frame's own body
+  that takes a frame module's name. Round 20 armed the parameter branch and left
+  this one unarmed, so deleting half the rule red nothing.
+- **`MODULE-ATTR-FOREIGN`** — the branch for a planter who rebinds BEFORE the
+  import-time snapshot, where identity is satisfied and provenance refuses. The
+  arm moves the snapshot WITH the attribute, which is that planter exactly.
+- **`FRAME-FUNCTION-FOREIGN`** and **`FRAME-FUNCTION-NESTED`** — a body compiled
+  under another file name, and a body defined inside another function. Neither
+  carries `__wrapped__`, so neither was caught by the decorator arm.
+
+Arming the last two found a fifth thing: with `fn-identity` deleted, a body that
+is not in this file reaches the parse and `inspect.getsource` raises, so the
+instrument broke rather than refusing. `FRAME-SOURCE-UNREADABLE` and
+`DECISION-CONSTANTS-UNREADABLE` are named refusals now — the same correction
+round 20 made for a module-level lambda, in the two places `C21`'s own arms
+reach.
+
+**`C21` `R-1` (`P3`), closed rather than carried:** the constants digest read a
+compiled pattern by `.pattern` alone, so adding `re.I` left it unchanged. A flag
+is part of what a pattern decides, so the flags go in with the pattern and
+`DECISION_CONSTANTS_SHA256` moves to `9d67a25b20b0…`. **`R-2` (`_fold_digits`
+outside the digest and the parse) is covered by the byte law**, which is what the
+ruling said it would cover; it remains outside the PARSE, and residual 2 — what a
+transformer may do — still says so. **`R-3`** is the pre-existing cold root
+build, which is not this phase's.
+
+**Still disclosed, not closed:** everything §7.15 to §7.20 list, the three
+carried residuals, `R19-S1`'s fail-closed refusal of a nested checkout with its
+CI consequence, the completeness of both admit-lists, what a transformer may do
+under another name, and the byte law's one limit above. **No signature is claimed
+here.** This is the author answering a review; the round-21 challenge on
+`142f88e..HEAD` and the coordinator diff review after it are owed, and **`24f6ebe`
+is still the last fully signed head**. `READY_TO_PROMOTE = NO`. `OD-P11-07` is the
+owner's.
 
 ---
 

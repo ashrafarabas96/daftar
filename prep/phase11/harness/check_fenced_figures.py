@@ -966,7 +966,74 @@ def planted_tokens():
 _FRAME_PARSED = []
 
 
-def frame_admissible():
+# The object-level checks, by key, so each can be DELETED BY VALUE on a copy
+# of the call rather than by editing the file. The coordinator's `C21` review:
+# four of these had no arm that reds when the check is removed, and one -- the
+# constants pin -- had an arm that compared two digests and never read the
+# refusal at all, so deleting the comparison left the arm printing
+# `as required`. A check with no deletion control is a check nobody has
+# measured ([[a fix is done only when deleting IT reds a gate]]).
+OBJECT_KEYS = ("attr-identity", "fn-identity", "const-pin", "harness-bytes")
+
+
+def _objects_enabled(objects):
+    """`None` = every object check (the real run). A set = only those keys."""
+    return frozenset(OBJECT_KEYS) if objects is None else frozenset(objects)
+
+
+def harness_bytes_pinned():
+    """(ok, refusals) that every harness file's BYTES are the pinned bytes.
+
+    The coordinator's `C21-F1` walked out of this instrument through a DEFAULT
+    ARGUMENT -- `def scan(..., skip=("hyphen in the key",))` -- which is
+    outside the decision parse (`scan` is not one of the four functions it
+    reads), outside the constants digest (which hashes body literals, not
+    defaults) and outside every rule key. Its ruling was to stop pinning shapes
+    inside this file and pin THE FILE, against a value held outside it, read by
+    a reader sharing no code with it.
+
+    So this is a SUBPROCESS, never an import: an instrument that is part of the
+    set it measures must not be loaded into the process it is measuring, and
+    `check_harness_bytes.py` is itself a pinned row of the same table. Its
+    refusal lines are passed through unchanged, because the name that refused
+    is the thing an arm reads.
+    """
+    reader = os.path.join(os.path.dirname(os.path.realpath(__file__)), "check_harness_bytes.py")
+    if not os.path.isfile(reader):
+        return False, (
+            "HARNESS-BYTES-READER-ABSENT: the reader that pins this harness's bytes is "
+            "not at %s. Deleting the instrument is a way of silencing it, so its "
+            "absence is a refusal and not a skip" % reader,
+        )
+    try:
+        got = subprocess.run(
+            [sys.executable, "-I", reader],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, (
+            "HARNESS-BYTES-READER-FAILED: the byte pin reader could not be run (%s), so "
+            "this run cannot say whether the harness's bytes moved" % exc,
+        )
+    if got.returncode == 0:
+        return True, ()
+    msgs = [
+        line.split("REFUSED: ", 1)[1]
+        for line in got.stdout.splitlines()
+        if line.startswith("REFUSED: ")
+    ]
+    if not msgs:
+        msgs = [
+            "HARNESS-BYTES-READER-FAILED: the byte pin reader exited %d and named no "
+            "refusal. Its output was %r" % (got.returncode, got.stdout[-400:])
+        ]
+    return False, tuple(msgs)
+
+
+def frame_admissible(objects=None):
     """(ok, refusals) for the REAL decision frame, parsed once per process.
 
     `R19-S3`. The decision parse lived in `--selftest` only, so the bare scan
@@ -976,18 +1043,48 @@ def frame_admissible():
     parse is cheap and deterministic; it is cached because `--selftest` calls
     `scan` once per arm and the answer cannot change inside one process.
     """
+    if objects is not None:
+        # A deletion control: one object check removed, by value, on a copy of
+        # the call. Never cached, because the point is to differ from the run.
+        return _frame_refusals(_objects_enabled(objects))
     if not _FRAME_PARSED:
-        _ok, msgs = module_call_identity()
-        _ok2, more = frame_function_identity()
-        _ok3, pinned = decision_constants_pinned()
-        msgs = list(msgs) + list(more) + list(pinned)
-        for func in (figures_on, tokens_in, _exempted, _is_figure):
-            _ok, m, _k = decision_frame(
-                _source_of(func), DECISION_EXCEPTIONS.get(func.__name__, ())
-            )
-            msgs = msgs + m
-        _FRAME_PARSED.append(tuple(msgs))
+        _FRAME_PARSED.append(_frame_refusals(_objects_enabled(None))[1])
     return not _FRAME_PARSED[0], _FRAME_PARSED[0]
+
+
+def _frame_refusals(keys):
+    """(ok, refusals) with exactly the object checks in `keys` consulted."""
+    msgs = []
+    if "attr-identity" in keys:
+        _ok, m = module_call_identity()
+        msgs += list(m)
+    if "fn-identity" in keys:
+        _ok, m = frame_function_identity()
+        msgs += list(m)
+    if "const-pin" in keys:
+        _ok, m = decision_constants_pinned()
+        msgs += list(m)
+    if "harness-bytes" in keys:
+        _ok, m = harness_bytes_pinned()
+        msgs += list(m)
+    for func in (figures_on, tokens_in, _exempted, _is_figure):
+        try:
+            tree = _source_of(func)
+        except (OSError, TypeError, SyntaxError, IndexError) as exc:
+            # `C21`: with `fn-identity` deleted, a body compiled under another
+            # file name reaches this parse and `inspect.getsource` cannot find
+            # it. A traceback tells a reader the instrument broke rather than
+            # that the frame is inadmissible, so it is a NAMED refusal -- the
+            # same correction round 20 made for a module-level lambda.
+            msgs.append(
+                "FRAME-SOURCE-UNREADABLE: the source of `%s` could not be read (%s: %s), "
+                "so this run cannot say what the function that decides contains"
+                % (func.__name__, type(exc).__name__, exc)
+            )
+            continue
+        _ok, m, _k = decision_frame(tree, DECISION_EXCEPTIONS.get(func.__name__, ()))
+        msgs = msgs + m
+    return not msgs, tuple(msgs)
 
 
 def scan(docs_dir, harness_dir, quiet=False, skip=()):
@@ -2035,16 +2132,52 @@ def structure_test():
 #      do not admit is refused BY NAME, so the admit-lists are read through a
 #      refusal rather than through their own completeness -- but the documents
 #      say only what is checked, which is that a dead entry reds.
-#   4. THE FILE'S OWN BYTES. Every plant above changes
-#      `check_fenced_figures.py`, and nothing inside a run compares the file
-#      with a stored digest: `HARNESS_SHA256` is printed, not checked. A reader
-#      who recomputes the published digest sees the change; the run does not.
-#      That is the whole of what the published digests are for.
+#
+# THE FILE'S OWN BYTES WERE THE FOURTH LINE HERE, and they are no longer
+# outside the rules -- they are a LAW, because the coordinator's twenty-first
+# review walked out through them. Its escape was one line, and no rule above
+# covers it:
+#
+#     -def scan(docs_dir, harness_dir, quiet=False, skip=()):
+#     +def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):
+#
+# `_main` calls `scan()` with no `skip`, so the default switches a named guard
+# off for every real run. It is outside the decision parse (`scan` is not one of
+# the four functions it reads), outside the constants digest (which hashes body
+# literals, not defaults) and outside every rule key -- and the same shape was
+# available through `_fold_digits`, through a flag on a compiled pattern, and
+# through any line of this file nobody has thought of. The previous wording,
+# that `HARNESS_SHA256` is printed and not checked, read as a disclosure and
+# worked as a hole: residual 4 would have covered every escape in this list,
+# including the one that was ruled a blocker.
+#
+# So the ruling, and it ends the class instead of chasing it: THE HARNESS'S OWN
+# BYTES ARE PINNED OUTSIDE THE HARNESS. Every executable file under
+# `prep/phase11/harness/` is digested and compared with a row of the table in
+# `prep/phase11/P11-HANDOFF-MANIFEST.md` §2a by `check_harness_bytes.py` -- a
+# reader that shares NO CODE with this file, is itself a pinned row of the same
+# table, and refuses by name (`HARNESS-BYTES-MOVED`, `HARNESS-FILE-UNPINNED`,
+# `HARNESS-FILE-ABSENT`, `HARNESS-PIN-UNREADABLE`, `HARNESS-UNREADABLE`). It is
+# run as a SUBPROCESS by `frame_admissible`, so the scan and `--check-blocks`
+# refuse on it, and by `rebuild_and_prove.sh` as its own exit code before
+# anything that reads these bytes. A default argument, a flag, a transformer
+# that returns early, a deleted comparison: one law, by the bytes, not a rule
+# per shape.
+#
+#   THE ONE LIMIT, and it is the only thing left on this line: an edit that
+#   changes a harness file AND its pinned row in the same commit is bounded
+#   only by REVIEW. A pin inside the thing it pins is not a pin. That is why
+#   this phase's chain is author, independent challenger, coordinator, with the
+#   diff read by someone who did not write it.
 #
 # Every claim in this paragraph is armed: round 19's two escapes, round 20's
-# three, and the coordinator's three, each with the ONE rule that refuses it
-# deleted beside it (`RULE_KEYS`), or -- for the checks that are about objects
-# rather than shapes -- performed in this process and read by refusal name.
+# three, the coordinator's three, and `C21`'s own line, each with the ONE thing
+# that refuses it deleted beside it -- a rule by key (`RULE_KEYS`), an object
+# check by key (`OBJECT_KEYS`), or, for the byte law, the comparison itself
+# deleted from a COPY of the reader. Each arm reads the REFUSAL NAME. That last
+# point is `C21-F2`: the arm that used to stand for the argument-edit pin
+# compared two digests and never ran the refusal, so when the coordinator
+# deleted the comparison the arm went on printing `as required`.
 
 FRAME_NODES = frozenset(
     (
@@ -2161,9 +2294,12 @@ DECISION_EXCEPTIONS = {
 # the six functions the parses cover (their docstrings excluded, because prose
 # decides nothing), and the module-level names those functions READ, by their
 # value in what is RUNNING -- a compiled pattern by its `.pattern`, anything
-# else by `repr`. Regenerate it with `--decision-constants` after a
+# else by `repr`. A compiled pattern carries its FLAGS with it: the
+# coordinator's `C21` `R-1` added `re.I` to a pinned pattern and the digest did
+# not move, and a flag is part of what a pattern decides. Regenerate it with
+# `--decision-constants` after a
 # deliberate change, exactly as a generated block is regenerated.
-DECISION_CONSTANTS_SHA256 = "96dde48abdaa78790e558068cd2bf341ada1a45038a4950a8272e62e3d7e6145"
+DECISION_CONSTANTS_SHA256 = "9d67a25b20b0efccc07d4d7b0b69229f5426228ffe3c2ea32937117c3ead388c"
 
 
 def _frame_globals(fn):
@@ -2185,7 +2321,13 @@ def _frame_globals(fn):
     for g in sorted(_data_loads(fn) - params - loops - bound):
         obj = globals().get(g, None)
         text = getattr(obj, "pattern", None)
-        out.append((g, text if isinstance(text, str) else repr(obj)))
+        if isinstance(text, str):
+            # `C21` `R-1`: the digest read a compiled pattern by `.pattern`
+            # alone, so adding `re.I` left it unchanged -- and a flag is part of
+            # what a pattern decides. The flags go in with the pattern.
+            out.append((g, "%s flags=%d" % (text, int(getattr(obj, "flags", 0)))))
+        else:
+            out.append((g, repr(obj)))
     return out
 
 
@@ -2210,7 +2352,20 @@ def decision_constants():
 
 def decision_constants_pinned():
     """(ok, refusals) that the matcher's decision constants are the pinned ones."""
-    got = hashlib.sha256(decision_constants().encode("utf-8")).hexdigest()
+    try:
+        text = decision_constants()
+    except (OSError, TypeError, SyntaxError, IndexError) as exc:
+        # Same correction as in `_frame_refusals`: a body this file cannot read
+        # is a NAMED refusal and never a traceback, whichever instrument reaches
+        # it first. `C21`'s `FRAME-FUNCTION-FOREIGN` arm reaches it here when
+        # `fn-identity` is deleted, because the constants are read off the same
+        # four functions.
+        return False, (
+            "DECISION-CONSTANTS-UNREADABLE: the constants the matcher's decisions read "
+            "could not be collected (%s: %s), so this run cannot say whether they are "
+            "the pinned ones" % (type(exc).__name__, exc),
+        )
+    got = hashlib.sha256(text.encode("utf-8")).hexdigest()
     if got == DECISION_CONSTANTS_SHA256:
         return True, ()
     return False, (
@@ -3127,6 +3282,24 @@ def decision_test():
         (
             "R19 pre-emptive: a parameter shadowing the module name rule 5 matches",
             ast.parse(shadowed).body[0],
+            ("shadow",),
+        )
+    )
+    # `C21`: the `shadow` key has TWO branches -- a parameter or loop target
+    # named for a frame module, and a BINDING inside the body that takes the
+    # same name. Round 20 armed the first and left the second with no arm, so
+    # deleting half the rule reds nothing. This is the second half: the frame
+    # binds `re` in its own body, after which rule 5 matches a listed pair by a
+    # spelling the planter owns.
+    rebound = textwrap.dedent(inspect.getsource(_is_figure)).replace(
+        '    if "=" not in s:\n        return False\n',
+        '    if "=" not in s:\n        return False\n    re = key\n',
+        1,
+    )
+    arms.append(
+        (
+            "C21: the frame BINDS the module name rule 5 matches, in its own body",
+            ast.parse(rebound).body[0],
             ("shadow",),
         )
     )
@@ -4056,20 +4229,65 @@ def identity_arms_test():
         )
     )
 
-    # 3. `C20-F1`: an ARGUMENT of an admitted call. The pin is measured on the
-    # canonical text rather than by editing the file, because a red proof does
-    # not edit its subject; the end-to-end direction is the published probe.
-    text = decision_constants()
-    edited = text.replace("[0-9][0-9,._]*", "(?!4242$)[0-9][0-9,._]*", 1)
-    live = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    moved = hashlib.sha256(edited.encode("utf-8")).hexdigest()
-    pin_ok, _pin_msgs = decision_constants_pinned()
-    good = pin_ok and edited != text and moved != live and live == DECISION_CONSTANTS_SHA256
+    # 3. `C20-F1`: an ARGUMENT of an admitted call, and the coordinator's
+    # `C21-F2` on the arm that used to stand here.
+    #
+    # WHAT WAS WRONG WITH THE OLD ARM, kept because it is the lesson. It
+    # digested the canonical text, digested an edited copy of that text, saw the
+    # two differ, and printed `the edit reds by name -> as required`. It never
+    # ran the refusal. The coordinator deleted the comparison
+    # (`if got == DECISION_CONSTANTS_SHA256:` -> `if True:`) and the arm went on
+    # printing `as required`, with the fabricated figure passing the gates CI
+    # runs. **An arm that compares two digests has measured arithmetic, not an
+    # instrument** -- a claim about an instrument is verified only by RUNNING
+    # the instrument. So this arm MOVES a pinned constant in this process, reads
+    # the refusal BY NAME, takes the scan's exit code, and deletes the check by
+    # value beside it.
+    target = None
+    for _f in (figures_on, tokens_in, _exempted, _is_figure):
+        for g, _t in _frame_globals(_source_of(_f)):
+            if isinstance(globals().get(g), tuple) and len(globals()[g]) > 1:
+                target = g
+                break
+        if target:
+            break
+    before = globals().get(target)
+    cache = list(_FRAME_PARSED)
+    try:
+        # A NARROWING, which is what `C20-F1`'s shape is: one boolean spelling
+        # dropped from the set the matcher recognises, so a figure whose value
+        # is that spelling stops being a figure. The file is untouched; the
+        # object the decisions read is what moves.
+        globals()[target] = before[:-1]
+        _with, msgs = decision_constants_pinned()
+        deleted_ok, deleted_msgs = frame_admissible(
+            objects=frozenset(OBJECT_KEYS) - {"const-pin"}
+        )
+        _FRAME_PARSED[:] = []
+        scanned = _arm(PROBE, ())
+    finally:
+        globals()[target] = before
+        _FRAME_PARSED[:] = cache
+    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    good = (
+        (not _with)
+        and name == "DECISION-CONSTANTS-MOVED"
+        and scanned == 5
+        and deleted_ok
+        and not deleted_msgs
+    )
     ok = ok and good
     print(
-        "  identity C20-F1 `(?!4242$)` added to the pattern INSIDE the admitted call: the "
-        "pinned constants digest %s and the edited ones %s, so the edit reds by name -> %s"
-        % (live[:12], moved[:12], "as required" if good else "**SELFTEST FAILED**")
+        "  identity C20-F1/C21-F2 a pinned constant MOVED in this process (`%s` narrowed "
+        "by one entry): refused as %s, the scan rc=%d, and with `const-pin` DELETED the "
+        "frame named %s -> %s"
+        % (
+            target,
+            name,
+            scanned,
+            "nothing at all" if not deleted_msgs else "%d refusal(s)" % len(deleted_msgs),
+            "as required" if good else "**SELFTEST FAILED**",
+        )
     )
 
     # 4. `C20` `P2`: the frame gate in front of `--check-blocks`, which had none
@@ -4089,6 +4307,115 @@ def identity_arms_test():
         "report (want 5), rc=%d without one (want 2, nothing enrolled) -> %s"
         % (refused, plain, "as required" if good else "**SELFTEST FAILED**")
     )
+
+    # 5. `C21`: `MODULE-ATTR-FOREIGN` was registered and had no arm. It is the
+    # branch for a planter who rebinds BEFORE the import-time snapshot is
+    # taken, so identity is satisfied and provenance is what refuses. The arm
+    # moves the snapshot WITH the attribute, which is that planter exactly.
+    real = re.fullmatch
+
+    def _foreign_fullmatch(pattern, string, *a, **k):
+        return real(pattern, string, *a, **k)
+
+    cache = list(_FRAME_PARSED)
+    snap = dict(_AT_IMPORT["re"])
+    try:
+        re.fullmatch = _foreign_fullmatch
+        _AT_IMPORT["re"]["fullmatch"] = _foreign_fullmatch
+        _with, msgs = module_call_identity()
+        identity_blind = re.fullmatch is _AT_IMPORT["re"].get("fullmatch")
+        deleted_ok, deleted_msgs = frame_admissible(
+            objects=frozenset(OBJECT_KEYS) - {"attr-identity"}
+        )
+        _FRAME_PARSED[:] = []
+        scanned = _arm(PROBE, ())
+    finally:
+        re.fullmatch = real
+        _AT_IMPORT["re"].clear()
+        _AT_IMPORT["re"].update(snap)
+        _FRAME_PARSED[:] = cache
+    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    good = (
+        (not _with)
+        and name == "MODULE-ATTR-FOREIGN"
+        and identity_blind
+        and scanned == 5
+        and deleted_ok
+        and not deleted_msgs
+    )
+    ok = ok and good
+    print(
+        "  identity C21 `re.fullmatch` rebound WITH the import-time snapshot: refused as "
+        "%s, the scan rc=%d, the identity test saw %s, and with `attr-identity` DELETED "
+        "the frame named %s -> %s"
+        % (
+            name,
+            scanned,
+            "nothing wrong" if identity_blind else "it",
+            "nothing at all" if not deleted_msgs else "%d refusal(s)" % len(deleted_msgs),
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+
+    # 6 and 7. `C21`: `FRAME-FUNCTION-FOREIGN` and `FRAME-FUNCTION-NESTED`,
+    # both registered since round 20 with no arm. One body compiled under
+    # another filename; one body defined inside something else. Neither carries
+    # `__wrapped__`, so neither is caught by arm 2.
+    original = _is_figure
+    src = textwrap.dedent(inspect.getsource(original))
+    for label, maker, want in (
+        ("a body compiled under another file name", "foreign", "FRAME-FUNCTION-FOREIGN"),
+        ("a body defined inside another function", "nested", "FRAME-FUNCTION-NESTED"),
+    ):
+        box = {}
+        if maker == "foreign":
+            exec(compile(src, "/elsewhere/not-this-file.py", "exec"), box)
+            planted = box["_is_figure"]
+        else:
+            exec(compile("def _outer():\n" + textwrap.indent(src, "    ")
+                         + "    return _is_figure\n", __file__, "exec"), box)
+            planted = box["_outer"]()
+        cache = list(_FRAME_PARSED)
+        try:
+            globals()["_is_figure"] = planted
+            _with, msgs = frame_function_identity()
+            deleted_ok, deleted_msgs = frame_admissible(
+                objects=frozenset(OBJECT_KEYS) - {"fn-identity"}
+            )
+            _FRAME_PARSED[:] = []
+            scanned = _arm(PROBE, ())
+        finally:
+            globals()["_is_figure"] = original
+            _FRAME_PARSED[:] = cache
+        name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+        # The deletion control is read BY REFUSAL NAME, not by exit code and not
+        # by a count: deleting this check must take THIS refusal away. What reds
+        # in its place -- here the parse failing to read a body that is not in
+        # this file -- is printed rather than counted, because a different
+        # refusal is a different claim.
+        gone = [m for m in deleted_msgs if m.split(":")[0] == want]
+        instead = sorted({m.split(":")[0] for m in deleted_msgs}) or ["nothing at all"]
+        good = (
+            (not _with)
+            and name == want
+            and getattr(planted, "__wrapped__", None) is None
+            and scanned == 5
+            and not gone
+        )
+        ok = ok and good
+        print(
+            "  identity C21 %s: refused as %s (want %s), no `__wrapped__` to notice, the "
+            "scan rc=%d, and with `fn-identity` DELETED that refusal is gone and what "
+            "reds instead is %s -> %s"
+            % (
+                label,
+                name,
+                want,
+                scanned,
+                ", ".join(instead),
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
     return ok
 
 
@@ -4156,6 +4483,149 @@ def anchor_names_test():
     return ok
 
 
+def gitfile_name_test():
+    """`R20-S2`, read the way the coordinator's `C21` required: by NAME.
+
+    The arm registered for this shape asserted `rc=5` and nothing else, and
+    `rc=5` is what the same world gives with the census deleted -- it refuses
+    as `GIT-EMPTY-SUBJECT` there, for an unrelated reason, while the arm went
+    on printing `as required` and the manifest called the refusal armed. The
+    exit code was never the measurement; the name is.
+    """
+    names = {}
+    for label, skip in (
+        ("with the census", ()),
+        ("with the census deleted", ("no repository redirects the subject",)),
+    ):
+        subject, harness = _gitfile_world()
+        was = os.getcwd()
+        try:
+            os.chdir(harness)
+            try:
+                haystack(harness, skip)
+                names[label] = "NO REFUSAL"
+            except Refusal as why:
+                names[label] = str(why).split(":")[0]
+        finally:
+            os.chdir(was)
+    good = (
+        names["with the census"] == "GIT-TOPLEVEL-DISAGREES"
+        and names["with the census deleted"] != "GIT-TOPLEVEL-DISAGREES"
+    )
+    print(
+        "  anchor R20-S2/C21 a `.git` FILE whose gitdir carries `core.worktree`: refuses "
+        "as %s, and with the census deleted as %s -> %s"
+        % (
+            names["with the census"],
+            names["with the census deleted"],
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+    return good
+
+
+def harness_bytes_arm():
+    """`C21-F1`, end to end, on COPIES: the shape, and the law deleted.
+
+    The review's own escape was a default argument --
+    `def scan(..., skip=("hyphen in the key",))` switches a named guard off for
+    every real run -- outside the decision parse, outside the constants digest
+    and outside every rule key. The law that closes it is the harness's own
+    bytes against a table held in the manifest.
+
+    Both directions are measured on COPIES and never on the subject: a red
+    proof does not edit the thing it is proving, and these files are the
+    instrument this whole run is read through. One copy of the harness carries
+    the review's line; one copy of the READER has its comparison deleted. The
+    arm reads the REFUSAL NAME, because the exit code alone is what `C21`
+    showed to be worthless.
+    """
+    here = os.path.dirname(os.path.realpath(__file__))
+    reader = os.path.join(here, "check_harness_bytes.py")
+    pin = os.path.join(os.path.dirname(here), "P11-HANDOFF-MANIFEST.md")
+    subject = os.path.basename(__file__)
+    ok = True
+    with tempfile.TemporaryDirectory() as tmp:
+        copy = os.path.join(tmp, "harness")
+        shutil.copytree(here, copy)
+        target = os.path.join(copy, subject)
+        with open(target, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        tail = '\n    """0 = every quoted figure is emitted.'
+        original = "def scan(docs_dir, harness_dir, quiet=False, skip=()):" + tail
+        plant = (
+            'def scan(docs_dir, harness_dir, quiet=False, skip=("hyphen in the key",)):'
+            + tail
+        )
+        if text.count(original) != 1:
+            print(
+                "  bytes  C21-F1 **SELFTEST FAILED**: the line this arm plants into a "
+                "copy (%r) is not in the subject exactly once, so the arm is measuring "
+                "nothing" % original
+            )
+            return False
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(text.replace(original, plant, 1))
+        for label, run_with in (("the real reader", reader),):
+            got = subprocess.run(
+                [sys.executable, "-I", run_with, "--harness", copy, "--pin", pin],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+            )
+            lines = [
+                l.split("REFUSED: ", 1)[1] for l in got.stdout.splitlines()
+                if l.startswith("REFUSED: ")
+            ]
+            names = sorted({l.split(":")[0] for l in lines})
+            named_the_file = any(("`%s`" % subject) in l for l in lines)
+            good = names == ["HARNESS-BYTES-MOVED"] and named_the_file and got.returncode == 5
+            ok = ok and good
+            print(
+                "  bytes  C21-F1 `skip` given a non-empty DEFAULT in a copy, read by %s: "
+                "refused as %s naming %s, rc=%d -> %s"
+                % (
+                    label,
+                    ", ".join(names) or "NOTHING",
+                    subject if named_the_file else "no file",
+                    got.returncode,
+                    "as required" if good else "**SELFTEST FAILED**",
+                )
+            )
+        # The deletion control: the comparison removed from a COPY of the
+        # reader, which is the one edit that would let every byte move
+        # unnoticed. It lives outside the harness copy so that its own row is
+        # not what reds.
+        broken = os.path.join(tmp, "reader_with_the_law_deleted.py")
+        with open(reader, "r", encoding="utf-8") as fh:
+            rtext = fh.read()
+        cmp_line = "        if got != rows[rel]:"
+        if rtext.count(cmp_line) != 1:
+            print(
+                "  bytes  C21-F2 **SELFTEST FAILED**: the comparison this control deletes "
+                "(%r) is not in the reader exactly once" % cmp_line
+            )
+            return False
+        with open(broken, "w", encoding="utf-8") as fh:
+            fh.write(rtext.replace(cmp_line, "        if False:", 1))
+        got = subprocess.run(
+            [sys.executable, "-I", broken, "--harness", copy, "--pin", pin],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120,
+        )
+        named = [l for l in got.stdout.splitlines() if l.startswith("REFUSED: ")]
+        good = got.returncode == 0 and not named
+        ok = ok and good
+        print(
+            "  bytes  C21-F2 the same copy read by a reader with the comparison DELETED: "
+            "rc=%d and it named %s -> %s"
+            % (
+                got.returncode,
+                "nothing, so the comparison is the whole of the law" if not named
+                else "%d refusal(s), so this control measures nothing" % len(named),
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
+    return ok
+
+
 def selftest():
     # THE PARSES RUN FIRST, and an inadmissible frame is not executed.
     #
@@ -4190,6 +4660,8 @@ def selftest():
     ok = identity_arms_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
+    ok = gitfile_name_test() and ok
+    ok = harness_bytes_arm() and ok
     ok = guard_matrix() and ok
     ok = identity_test() and ok
     ok = blocks_test() and ok
