@@ -825,8 +825,19 @@ candidates because `postgres`, `refusal`, `heads/main`, `catalog.foo_invalid`,
 `locale=en_US.utf8`, which the round got to PASS through the substring
 weakness, is not a candidate either.
 
-**EVERY GUARD IN THE MATCHER IS NOW MEASURED, not just the one the round
-named.** Each was deleted on its own and the arms it reds recorded:
+**WITHDRAWN IN ROUND 14, AND THE WITHDRAWAL IS THE POINT OF §7.14.** The
+paragraph and table that follow claimed that EVERY guard in the matcher had
+been deleted on its own and the arms it reds recorded, and closed with "no
+guard reds nothing". That was **false of the matcher it described**:
+`figure_on()` applied **fourteen** guards, the heading strip and the trailing
+`--` strip among them, and those two were in no row and had never been deleted.
+The twelve rows below each reproduce, row for row, and the challenger
+re-measured them; what was wrong was the claim OVER the guards, which is the
+previous round's finding one level up. The claim is not repaired here, because
+a hand-written table cannot carry it: §7.14 replaces it with a table the
+instrument computes. The rows below stand as the round-13 record only.
+
+Each of these twelve was deleted on its own and the arms it reds recorded:
 
 | guard deleted | arms that go red |
 |---|---|
@@ -843,7 +854,7 @@ named.** Each was deleted on its own and the arms it reds recorded:
 | HTML-comment strip | HTML comment |
 | **the figure value class** | **all seven `R13-S3` false positives** |
 
-No guard reds nothing. The selftest is **20 catch arms, 13 skip arms and 4
+The selftest at that head was **20 catch arms, 13 skip arms and 4
 others**: every shape either round planted, the named exclusions, and the seven
 false positives as arms that must now come back clean. The skip arms land on
 exit **2** — no candidate at all — which is the inert refusal doing double duty
@@ -887,8 +898,189 @@ races with 0 findings, 80 frozen entries and 0 digest mismatches, every `EXIT_*`
 cannot be committed before it; the clean-tree re-run at the pushed SHA is
 published beside it.
 
-**A FOURTEENTH round is owed** narrow on `cb19811..HEAD`, with the coordinator
-diff review after it. `24f6ebe` is still the last fully signed head.
+**Round 14 ran and REJECTED this head**; see §7.14.
+
+---
+
+## 7.14 The FOURTEENTH round — `REJECT` at `3bce189`, and the completeness claim becomes an instrument
+
+Frozen at `/mnt/project-files/phase11/P11-CHALLENGE-3bce189.md`, sha256
+`d15315e19cb3b115d17c02c24c040602fefa873e3f08611fafa1bff90868c98b`, 404 lines /
+19,973 bytes. Everything in `3bce189` reproduced on a fresh clone with
+`P11_REPO` set — every digest with `ls` sorting, all three published evidence
+files matching their claimed sha256 and line count, the 37 selftest arms, and
+the historical re-run over `51686d9` **byte for byte** what §7.13 pastes.
+
+**`R14-F1` (BLOCKER) — the claim over the guards had no red proof.** §7.13
+said, in bold, that every guard in the matcher had been deleted on its own and
+the arms it reds recorded, then gave twelve rows and closed with "no guard reds
+nothing". `figure_on()` applied **fourteen**. The two missing ones were the
+heading strip and the trailing `--` strip, and neither is dead code: measured
+against a control the deletion does not move, each alone decides a shape that
+is otherwise invisible. Delete either and the selftest still passed, the real
+tree was unchanged, and the next round's escape was already written. The
+challenger derived the guard list **from the code** where I had derived it from
+my own table — which is §7.13's own new rule, run the thing you are about to
+describe, applied one argument too narrowly: the thing to run was the guard
+list.
+
+**THE DISCHARGE IS NOT TWO ROWS.** A hand-written table cannot carry a claim
+about the code it describes, because nothing reds when the two drift apart, and
+that is exactly what happened. So:
+
+1. `GUARDS` in `check_fenced_figures.py` is now **the authority**:
+   `figure_on()` applies exactly the guards named in it.
+2. `--selftest` **deletes each one in turn** and reports which arms stop giving
+   their required answer. A guard that flips no arm **fails the selftest**,
+   which the proof script refuses on — so a guard added without an arm stops
+   the phase instead of silently widening the net.
+3. The table below is **computed by that run**, not typed. The row count cannot
+   disagree with the guard count because there are no rows.
+4. And because the matrix can only prove every NAMED guard load-bearing, an
+   **identity test** proves there is no unnamed one: every transformation sits
+   behind a named guard, so with all of them skipped the stripper must be the
+   **identity**. It is checked over 16 probe lines and 6 shapes. An
+   unconditional transformation — a case fold, a strip, a rule added in a
+   hurry — comes back as a difference.
+
+**AND THAT CLAIM IS RUN, NOT ASSERTED,** because a counterfactual about an
+instrument is still a claim about an instrument. §7.13's twelve rows are kept
+in the file as a negative control, and the selftest skips exactly those twelve
+and prints what the stripper still does:
+
+```text
+  control: with ONLY §7.13's twelve rows skipped, '### fabricated_count=999' still becomes 'fabricated_count=999' -- the two guards that table never named
+  control: with ONLY §7.13's twelve rows skipped, 'fabricated_count=999 -- a plain comment' still becomes 'fabricated_count=999' -- the two guards that table never named
+```
+
+So the mechanism **does** catch `R14-F1`, demonstrated on the very table that
+missed it, and it reds if a later head renames those two guards out of
+existence.
+
+**MY OWN INSTRUMENT THEN FOUND TWO THINGS IN ME**, which is the only evidence
+worth having that it is an instrument. The matrix reported that a guard I had
+just written — the final whitespace strip — **reds nothing**, because the
+leading and trailing strippers already cover it; by this phase's own rule an
+unmeasured guard goes, so it is **deleted**. And the identity test rejected one
+of my probe shapes: with `nfkc` skipped a full-width separator is not an `=`,
+so refusing that shape was correct and my expectation was wrong. The instrument
+was right twice and I was wrong twice, before the round.
+
+| guard deleted | arms | which arms stop answering |
+|---|---|---|
+| `nfkc` | 1 | R14-S1 full-width equals |
+| `format characters` | 1 | R14-S1 zero-width space |
+| `arabic-indic digits` | 2 | R14-S1 arabic-indic digits, R14-S1 extended arabic digits |
+| `html comment markers` | 1 | R13 HTML comment |
+| `inline code span` | 1 | R13-S1 N16 backticked comment |
+| `blockquote and indent` | 5 | R13 leading tab, R13 blockquote, R13 nested list item +2 more |
+| `list marker` | 2 | R13 list item, R13 nested list item |
+| `heading marker` | 1 | R14-F1 heading |
+| `table cell (leading)` | 1 | R13 table cell |
+| `bracket` | 2 | R13 parentheses, R14-S3 percent inside brackets |
+| `emphasis (leading)` | 1 | R13 bold |
+| `dash marker (leading)` | 1 | R14-S1 behind a -- marker |
+| `label prefix` | 1 | R13 colon prefix |
+| `trailing -- comment` | 1 | R14-F1 plain -- comment |
+| `trailing punctuation` | 6 | R13 trailing semicolon, R13 parentheses, R13 HTML comment +3 more |
+| `emphasis (trailing)` | 1 | R13 bold |
+| `table cell (trailing)` | 1 | R13 table cell |
+| `figure value class` | 8 | R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more |
+| `boolean spellings` | 2 | R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints |
+| `signed values` | 2 | R14-S1 negative, R14-S1 positive sign |
+| `percent in the value` | 3 | R13 percent, R14-S3 percent on a real figure, R14-S3 percent inside brackets |
+| `hyphen in the key` | 1 | R14-S1 hyphen in the key |
+| `key class` | 1 | named: UPPERCASE key |
+| `boolean case folding` | 1 | R14-S1 boolean True |
+| `named exemptions` | 2 | R14-S2 exempt port=55512, R14-S2 exempt migrations=87 |
+
+**`R14-S1` (`P2`) — nine spellings, and NORMALISATION rather than nine
+patches.** A fabricated row count in Arabic-Indic digits, a negative, an
+explicit positive sign, `True`, `t`, a figure behind a `--` marker, a hyphen in
+the key, a zero-width space before the value, and a full-width `＝`. The
+sharpest were `t` and `True`, because the class CLAIMED booleans and admitted
+one spelling of two, and **`t`/`f` is what `psql` prints**, which is what these
+documents transcribe. The Arabic-Indic form is sharper still in consequence:
+**that is the spelling the owner's own report uses for every figure he reads.**
+The challenger drove it to the end — three fabricated figures planted in the
+Arabic report produced a complete green proof run of this phase, with
+`EXIT_SCRIPT` 0. On the coordinator's ruling the answer is one change at one
+place, in four steps, each separately deletable and each with the challenger's
+own plant as its arm: **NFKC**, then **delete format characters** (category
+`Cf`, where U+200B lives, which NFKC does not remove), then **map Arabic-Indic
+and Extended Arabic-Indic digits to ASCII** (which NFKC also does not do:
+U+0669 has no compatibility decomposition), then **the boolean set, closed and
+named**: `true`, `false`, `t`, `f`, in any case.
+
+**This is the same cause as Phase 6's open `P1` `G-A`**, where a mistyped key,
+U+200B and U+FF1A are all accepted. Two phases, one cause; the coordinator has
+ruled once for both, and `OD-P6-09` stays with the owner. Raised, not solved
+twice.
+
+**`R14-S2` (`P3`) — the price moved rather than shrank, and it is now measured
+by a command.** Narrowing the value narrowed the key space while widening the
+context widened it back, so every numeric assignment in any decoration in any
+document is a candidate: the round measured 13 of 16 realistic shapes redding
+the gate, against 7 of 14 for the previous design. `--surface` now measures it
+over a documented list against the REAL haystack and prints the count, so the
+number in the header is reproducible rather than asserted:
+
+    python3 -I prep/phase11/harness/check_fenced_figures.py --surface
+
+At this head it prints **8 of 17** — eight would red, seven pass because
+something emits them, two are exempt. That list is not the challenger's list of
+16, so the two numbers are each true of their own set and are not comparable;
+this one is the one a reader can re-run. On the coordinator's ruling the two
+tokens exempted **by exact name** are this phase's own scratch port and its own
+migration count. That exemption is a SHAPE fix and it carries the known cost of
+one: **it cannot name a token not yet written, and a fabricated migration count
+now passes.** It is two literals, it sits in `EXEMPT` where a reader finds it,
+and deleting it reds an arm. No waiver list beyond those two, because an
+enumerated exemption moves the hole from shape to time.
+
+**`R14-S3` (`P3`) — the figure checked must be the figure shown.** The trailing
+punctuation stripper took the percent sign with it, so a zero written as a
+percentage was verified against the bare zero and passed on a figure nothing
+emits; and because the haystack is a substring blob, that reached any
+percentage whose bare figure appears anywhere. The percent sign is no longer
+stripped and is part of the value, so the token checked is the token shown. The
+remaining stripping is not total, and the bound is the one the round stated: a
+figure with a trailing period still passes on the bare figure, a period being a
+sentence ending, while the same figure with a thousands separator added reds.
+
+**Still disclosed, not closed:** the haystack is a substring match over one
+blob; a non-numeric, non-boolean value shown as output is deliberately not a
+candidate; the two exempted literals; and the arm's second direction stays a
+rule rather than an instrument.
+
+**EVIDENCE AT THIS HEAD.** The run is
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND14.txt`, run
+`p11-20261019T085632Z-24702`: Pack A 121 ×2 and Pack B 53 ×2 with 0 failed, 13
+races with 0 findings, 80 frozen entries and 0 digest mismatches, every `EXIT_*`
+0 including `EXIT_FENCED_FIGURES` at step `0c`, on PostgreSQL 16.15 at
+`en_US.utf8` with both roles `NOSUPERUSER NOBYPASSRLS`. The harness digest moves
+to `3a16daab…`; the pack digests do not move. That run's tree was dirty,
+because the evidence of a commit cannot be committed before it; the clean-tree
+re-run at the pushed SHA is published beside it. **The historical red proof was
+re-run again under this fourth design** — a redesigned instrument inherits none
+of its predecessor's evidence — and `51686d9` still names both occurrences of
+the fabricated figure and exits 1.
+
+**AND THE ROUND'S OWN ESCAPE IS REPRODUCED AS A COMMITTED BASELINE, which is
+the stronger half of this evidence.** Before the fix, on `3bce189`, the
+challenger's three plants driven through the real script on a clone produce a
+**complete green proof run of this phase**: `EXIT_FENCED_FIGURES` 0,
+`EXIT_SCRIPT` 0, step `0c` reporting 7 candidate figures and 0 not emitted
+while three fabricated figures sat in the Arabic report. That log is committed
+as `RUN-EVIDENCE-R14-S1-BASELINE-GREEN-WITH-THREE-FABRICATED-FIGURES.txt`, and
+it contains none of the planted tokens, so committing it into the haystack
+cannot legitimise them. The same three, driven the same way at this head, are
+named and refused. A fixture proves a check can fail; the head that was green
+with the defect in it proves this check fails on the thing it was rebuilt for.
+
+**A FIFTEENTH round is owed** narrow on `3bce189..HEAD`, with the coordinator
+diff review after it. **`24f6ebe` is still the last fully signed head**, and
+nothing in this phase is self-signed.
 
 ---
 
