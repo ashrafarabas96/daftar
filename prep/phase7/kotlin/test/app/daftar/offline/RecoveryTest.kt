@@ -445,12 +445,11 @@ class RecoveryTest {
         // IN_FLIGHT or UNKNOWN_OUTCOME, plus the send refusal added for C-02′,
         // which exists only for IN_FLIGHT. Every one of them is a refusal of a
         // queue move, where "the device is working on it" is a fact.
-        val waitIsHonest = mapOf(
-            "offline.already_released" to "the row is released and the device is working through it",
-            "offline.cancel_after_send" to "an attempt is out and its answer has not been seen",
-            "offline.no_attempt_in_flight" to "the row is queued or re-asking after a lost answer",
-            "offline.already_sending" to "the attempt is out now",
-        )
+        // Declared in `WaitIsHonest` and read here as a VALUE rather than
+        // written out, because `QueueModelCheckTest` needs the same set and
+        // used to read it out of THIS FILE'S SOURCE TEXT, anchored on the
+        // words of the declaration (O-01, eleventh review).
+        val waitIsHonest = WaitIsHonest.reasons
         val literal = CODE_LITERAL
         val codes = kernelSources()
             .flatMap { file -> literal.findAll(file.readText()).map { it.groupValues[1] } }
