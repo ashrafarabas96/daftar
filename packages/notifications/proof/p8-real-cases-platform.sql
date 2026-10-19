@@ -37,10 +37,10 @@ SELECT p8.case_equals('P4a the platform sees both tenants'' businesses',
 SELECT p8.case_equals('P4b and every membership, with no business scope',
   (SELECT count(*) FROM memberships
     WHERE business_id = 'bbbbbbbb-0000-4000-8000-000000000001'), 3::bigint);
-SELECT p8.case_refuses('P4c but it may not read a customer at all',
-  'SELECT count(*) FROM customers', 'permission denied for table customers',
-  -- S-5: the subject is the frozen `customers` relation, which this pack does not create.
-  $w$to_regclass('public.' || @SUBJECT@) IS NOT NULL$w$,
+-- ROUND 29: a RELATION case. `customers` is frozen and this pack does not
+-- create it, so the derived witness reads the catalogue for it.
+SELECT p8.case_refuses_relation('P4c but it may not read a customer at all',
+  'SELECT count(*) FROM @REL@', 'permission denied for table customers',
   'customers');
 
 -- The Phase 8 worker needs the customer's phone and locale, and the customer's

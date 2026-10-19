@@ -52,30 +52,27 @@ $q$);
 SELECT p8.case_equals('W-1b and the status actually moved',
   (SELECT status FROM notifications WHERE id = '0fffffff-0000-4000-8000-0000000000a1'), 'sent');
 
-SELECT p8.case_refuses('W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped', $q$
-  UPDATE notifications SET obligation_key = 'B1|rewritten'
-   WHERE id = @SUBJECT@
+-- ROUND 29: a ROW case. The relation, the key column and the key value are
+-- declared, the statement is built from them, and the witness is BUILT from the
+-- same three values rather than written here — so there is no witness text to
+-- point somewhere else (U-2, U-3), and no second subject to declare instead
+-- (N-2). The row is read, so the refusal cannot be about an empty set (S-5).
+SELECT p8.case_refuses_row('W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped', $q$
+  UPDATE @REL@ SET obligation_key = 'B1|rewritten'
+   WHERE id = @KEY@
 $q$, 'permission denied',
-   -- S-5, and this is the case the challenger measured: pointed at a uuid no fixture creates,
-   -- `W-2` passed with rc 0 and the same `passes` figure, because the column-scoped GRANT
-   -- refuses before the row is read. The witness is the row the rewrite is aimed at.
-   -- ROUND 28, F-B: ONE subject, substituted into the statement AND the witness, so
-   -- the coordinator's divergence — move only the statement's uuid and the witness
-   -- stays true — cannot be written in this form at all.
-   $w$EXISTS (SELECT 1 FROM notifications WHERE id = @SUBJECT@)$w$,
-   '0fffffff-0000-4000-8000-0000000000a1');
+   'notifications', 'id', '0fffffff-0000-4000-8000-0000000000a1');
 
-SELECT p8.case_refuses('W-3 nor create an obligation — that is not the worker''s to write', $q$
-  INSERT INTO notifications (tenant_id, business_id, kind, consent_class, customer_id,
+SELECT p8.case_refuses_relation('W-3 nor create an obligation — that is not the worker''s to write', $q$
+  INSERT INTO @REL@ (tenant_id, business_id, kind, consent_class, customer_id,
                              locale, subject_refs, obligation_key, source_event_id)
   VALUES ('11111111-1111-4111-8111-111111111111', 'bbbbbbbb-0000-4000-8000-000000000001',
           'low_stock', 'operational', 'cccccccc-0000-4000-8000-000000000001',
           'ar', '{}'::jsonb, 'B1|event:w-insert|low_stock|customer:1',
           '0eeeeeee-0000-4000-8000-0000000000a9')
 $q$, 'permission denied',
-   -- S-5: an INSERT has no pre-existing row, so the subject is the RELATION it is
-   -- refused on. If `notifications` were absent the refusal would be a different fact.
-   $w$to_regclass(@SUBJECT@) IS NOT NULL$w$,
+   -- ROUND 29: a RELATION case — an INSERT has no pre-existing row, so the
+   -- subject is the relation it is refused on, and the form says so.
    'notifications');
 
 -- W-4 is the dangerous shape and the reason W-1b exists: an UPDATE that the
@@ -113,15 +110,16 @@ SELECT p8.case_equals('W-5b and the appended attempt is readable by the worker',
 -- refused before the append-only trigger is ever consulted. The trigger itself
 -- is proved against the OWNER at case X1, which is the principal that holds
 -- UPDATE and could otherwise edit a history.
-SELECT p8.case_refuses('W-6 and may not edit one afterwards — refused by the GRANT, before the trigger', $q$
-  UPDATE notification_attempts SET outcome = 'rejected'
-   WHERE attempt_key = @SUBJECT@
+-- ROUND 29: a ROW case, and the one the coordinator's N-2 attacked by declaring
+-- the RELATION as the subject while the statement kept a key no fixture creates.
+-- A row case now names the key column and the key value; the relation form
+-- refuses a statement that carries a key predicate at all, so that attack has
+-- nowhere to land.
+SELECT p8.case_refuses_row('W-6 and may not edit one afterwards — refused by the GRANT, before the trigger', $q$
+  UPDATE @REL@ SET outcome = 'rejected'
+   WHERE attempt_key = @KEY@
 $q$, 'permission denied',
-   -- S-5: the subject is the attempt `W-5` appended a moment ago, in this same
-   -- transaction. If `W-5` ever stopped appending it, this case would go on passing
-   -- against an empty set — so the witness is that very row, by its own key.
-   $w$EXISTS (SELECT 1 FROM notification_attempts
-               WHERE attempt_key = @SUBJECT@)$w$,
+   'notification_attempts', 'attempt_key',
    'B1|event:w1|invoice_issued|customer:1::whatsapp#1');
 
 -- I-9a1: the staleness bound is configuration and it FAILS CLOSED. B1B's
@@ -147,12 +145,9 @@ SELECT p8.case_permits('H-3 an unattributable landing goes to the quarantine, wh
   INSERT INTO notification_provider_quarantine (provider, provider_event_id, status_token, verification)
   VALUES ('meta_cloud', 'evt-unmatched-w1', 'delivered', 'signature_missing')
 $q$);
-SELECT p8.case_refuses('H-3b and the worker cannot read the quarantine back', $q$
-  SELECT count(*) FROM notification_provider_quarantine
+SELECT p8.case_refuses_relation('H-3b and the worker cannot read the quarantine back', $q$
+  SELECT count(*) FROM @REL@
 $q$, 'permission denied',
-   -- S-5: the subject is the RELATION; a refusal to read a table that is not there
-   -- reads exactly like a refusal to read one that is.
-   $w$to_regclass(@SUBJECT@) IS NOT NULL$w$,
    'notification_provider_quarantine');
 SELECT p8.case_refuses('H-3c a VERIFIED event may not be quarantined — it belongs in the attributed relation', $q$
   INSERT INTO notification_provider_quarantine (provider, provider_event_id, status_token, verification)

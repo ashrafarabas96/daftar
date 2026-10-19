@@ -37,42 +37,218 @@ SET search_path = p8, public;
 --
 -- The four-argument form is GONE rather than deprecated. A form that still
 -- accepts an unbound witness is the hole, whatever its comment says.
+-- ROUND 29, U-2. The sentinel subject: a syntactically valid uuid that no
+-- fixture in this pack creates, declared ONCE here so that the value the witness
+-- test uses and the value the refusal names are the same value. It is a function
+-- rather than a literal repeated at each site because two spellings of one
+-- constant is the shape this phase has paid for before.
+CREATE OR REPLACE FUNCTION p8.sentinel_subject() RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $$ SELECT 'ffffffff-ffff-4fff-8fff-ffffffffffff'::TEXT $$;
+
+-- ROUND 29, U-3/U-7. The identifier substitution ALWAYS quotes. `quote_ident`
+-- does not: for a plain lower-case name it returns the name unchanged, so
+-- `quote_ident('notifications')` is the bare word `notifications`, and a check
+-- that the statement contains it is satisfied by `UPDATE notifications` written
+-- by hand — the substring test U-3 was about, reappearing inside the function
+-- that was meant to replace it. Measured while writing this: a direct call
+-- claiming subject `notifications` over a hand-written `UPDATE notifications`
+-- passed. With the quotes always present, the only way a statement carries this
+-- form is if this substitution put it there.
+CREATE OR REPLACE FUNCTION p8.quoted_ident(t TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $$ SELECT '"' || replace(t, '"', '""') || '"' $$;
+
 DROP FUNCTION IF EXISTS p8.case_refuses(TEXT, TEXT, TEXT, TEXT);
+-- ROUND 29, U-7. The four-argument core with a caller-supplied BOOLEAN is
+-- dropped by signature, so no database carrying an older copy of this file keeps
+-- a door this one closed.
+DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, BOOLEAN);
 DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
-CREATE OR REPLACE FUNCTION p8.case_refuses(label TEXT, stmt TEXT, expect TEXT, witness TEXT, subject TEXT) RETURNS void
+-- ROUND 29. THE WITNESS IS NO LONGER SUPPLIED BY THE CASE.
+--
+-- Round 28 took an author-written witness and required it to mention the
+-- subject. Two reviewers broke that in three ways in one round:
+--
+--   U-2  `@SUBJECT@ IS NOT NULL` mentions the subject, evaluates TRUE, reads
+--        nothing, and the case passed against a uuid no fixture creates.
+--   U-3  `position(subject in stmt)` is satisfied by the subject's text in a
+--        COMMENT: witness about `notifications`, statement about
+--        `notification_provider_quarantine`, accepted.
+--   N-2  changing which subject is DECLARED converts a row case into a
+--        relation case — statement `WHERE attempt_key = 'NO-SUCH-ATTEMPT'`,
+--        subject `notification_attempts`, witness `to_regclass(@SUBJECT@) IS
+--        NOT NULL` — and the whole gate stayed green at `passes=101`.
+--
+-- Every one of those is the same shape: the witness and the statement were two
+-- texts a reviewer could move independently. Adding another test on the
+-- witness's text would have been a fourth turn of the same screw. So the
+-- witness is DERIVED here, from the same values the statement is built from,
+-- and there is no witness argument to write. A case declares WHAT its refusal
+-- is about, in one of exactly three forms, and this file constructs the
+-- evidence:
+--
+--   case_refuses_row(label, stmt, expect, relation, key_column, key_value)
+--       The refusal is about a ROW. The statement must carry @REL@ and @KEY@;
+--       the witness built from them is `SELECT 1 FROM <relation> WHERE
+--       <key_column> = <key_value>` and must return at least one row, and no
+--       row for the sentinel key. Vacuity is impossible: the row is read.
+--
+--   case_refuses_relation(label, stmt, expect, relation)
+--       The refusal is about a RELATION. The statement must carry @REL@ and
+--       must contain NO key predicate — a statement with a WHERE is about a
+--       row, and must say so, which is what closes N-2.
+--
+--   case_refuses_role(label, stmt, expect, role)
+--       The refusal is about a ROLE, with the same no-WHERE rule.
+--
+-- The five-argument form is GONE. So is every argument a case could use to
+-- say what its own evidence is.
+DROP FUNCTION IF EXISTS p8.case_refuses(TEXT, TEXT, TEXT, TEXT, TEXT);
+
+-- Comments are stripped before any binding test (the coordinator's N-2 ruling).
+-- U-3 was a subject's text inside a comment; the same hole run the other way is
+-- a PLACEHOLDER inside a comment satisfying the requirement that the statement
+-- carry one. Neither survives reading the statement without its comments.
+CREATE OR REPLACE FUNCTION p8.strip_sql_comments(t TEXT) RETURNS TEXT
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT regexp_replace(regexp_replace(t, '/\*.*?\*/', ' ', 'gs'), '--[^\n]*', ' ', 'g')
+$$;
+
+-- A case statement may not carry its own exception handler (the coordinator's
+-- N-3). The witness law is derived from the SQLSTATE that ARRIVES, and a
+-- `DO … EXCEPTION WHEN insufficient_privilege THEN RAISE EXCEPTION 'denied …'`
+-- re-raises a permission denial as P0001, which the derivation cannot see.
+-- Refusing the handler is cheaper than reading through it.
+CREATE OR REPLACE FUNCTION p8.assert_no_handler(label TEXT, stmt TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
-DECLARE msg TEXT; sst TEXT; ok BOOLEAN; stmt2 TEXT; wit2 TEXT;
 BEGIN
-  IF subject IS NULL OR subject = '' THEN
-    RAISE EXCEPTION '% FAIL: NO SUBJECT DECLARED — this form takes the subject as ONE value and '
-                    'puts it in both the statement and the witness; an empty one binds nothing', label;
+  IF p8.strip_sql_comments(stmt) ~* '(^|[^a-z_])exception([^a-z_]|$)' THEN
+    RAISE EXCEPTION '% FAIL: THE STATEMENT CARRIES AN EXCEPTION HANDLER — the witness law is '
+                    'derived from the SQLSTATE that arrives, and a handler can re-raise a '
+                    'permission denial as P0001, which that derivation cannot see (N-3). Write '
+                    'the statement without a handler', label;
   END IF;
-  IF position('@SUBJECT@' in witness) = 0 THEN
-    RAISE EXCEPTION '% FAIL: SUBJECT NOT IN THE WITNESS — the witness "%" never mentions @SUBJECT@, '
-                    'so it is a free expression again and can be true of something the statement '
-                    'does not touch (F-B)', label, witness;
+END $$;
+
+-- The common binding test: the statement must be BUILT from the declared
+-- relation, and may not reach for a row unless the form says it does.
+CREATE OR REPLACE FUNCTION p8.assert_statement_built(label TEXT, stmt TEXT, what TEXT,
+                                                     allow_key BOOLEAN) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE bare TEXT;
+BEGIN
+  bare := p8.strip_sql_comments(stmt);
+  IF position('@REL@' in bare) = 0 THEN
+    RAISE EXCEPTION '% FAIL: THE STATEMENT IS NOT BUILT FROM ITS SUBJECT — it does not carry @REL@ '
+                    'outside a comment, so it is not a product of the declared subject "%" and the '
+                    'evidence below could be about something else (F-B, U-3)', label, what;
   END IF;
-  IF position('@SUBJECT@' in stmt) = 0 AND position(subject in stmt) = 0 THEN
-    RAISE EXCEPTION '% FAIL: SUBJECT NOT IN THE STATEMENT — the declared subject "%" appears in the '
-                    'witness and NOT in the statement, which is exactly the divergence F-B '
-                    'measured: a witness true of a row the statement no longer reads', label, subject;
+  IF NOT allow_key AND bare ~* '(^|[^a-z_])where([^a-z_]|$)' THEN
+    RAISE EXCEPTION '% FAIL: A RELATION CASE WITH A KEY PREDICATE — this form says the refusal is '
+                    'about "%" itself, and the statement selects a row, so the refusal it measures '
+                    'would arrive whether that row existed or not. Use case_refuses_row and declare '
+                    'the key (N-2)', label, what;
   END IF;
-  stmt2 := replace(stmt, '@SUBJECT@', quote_literal(subject));
-  wit2  := replace(witness, '@SUBJECT@', quote_literal(subject));
+  IF allow_key AND position('@KEY@' in bare) = 0 THEN
+    RAISE EXCEPTION '% FAIL: A ROW CASE WITH NO KEY IN ITS STATEMENT — this form says the refusal '
+                    'is about one row of "%", and the statement does not carry @KEY@ outside a '
+                    'comment, so nothing ties the refusal to the row the witness reads', label, what;
+  END IF;
+END $$;
+
+-- The derived witness, for all three forms: a query that must return at least
+-- one row for the declared subject and NO row for a sentinel. The sentinel leg
+-- is what makes the first leg a measurement rather than a shape: an expression
+-- that answers the same way for both reads nothing (U-2).
+CREATE OR REPLACE FUNCTION p8.assert_witness(label TEXT, what TEXT, query TEXT,
+                                             sentinel_query TEXT) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE n BIGINT; m BIGINT; msg TEXT; sst TEXT;
+BEGIN
   BEGIN
-    EXECUTE 'SELECT (' || wit2 || ')::boolean' INTO ok;
+    EXECUTE 'SELECT count(*) FROM (' || query || ') p8w' INTO n;
   EXCEPTION WHEN others THEN
     GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, sst = RETURNED_SQLSTATE;
-    RAISE EXCEPTION '% FAIL: the WITNESS itself could not be read — [%] %. A refusal whose '
-                    'subject cannot even be looked for is not evidence', label, sst, msg;
+    RAISE EXCEPTION '% FAIL: THE WITNESS COULD NOT BE READ — [%] %. A refusal whose subject cannot '
+                    'even be looked for is not evidence', label, sst, msg;
   END;
-  IF ok IS NOT TRUE THEN
-    RAISE EXCEPTION '% FAIL: NO SUBJECT — the witness "%" is not true of subject "%", so the thing '
-                    'this refusal is about is not there, and the refusal below would arrive whether '
-                    'it existed or not. A refusal against an empty set measures nothing',
-      label, witness, subject;
+  IF n < 1 THEN
+    RAISE EXCEPTION '% FAIL: NO SUBJECT — nothing answers for "%", so the thing this refusal is '
+                    'about is not there and the refusal would arrive whether it existed or not. A '
+                    'refusal against an empty set measures nothing (S-5)', label, what;
   END IF;
-  PERFORM p8.case_refuses_core(label, stmt2, expect, true);
+  BEGIN
+    EXECUTE 'SELECT count(*) FROM (' || sentinel_query || ') p8w' INTO m;
+  EXCEPTION WHEN others THEN
+    m := 0;   -- the sentinel's shape reached the query, which is the property
+  END;
+  IF m > 0 THEN
+    RAISE EXCEPTION '% FAIL: THE WITNESS DOES NOT READ ITS SUBJECT — it answers for "%" AND for a '
+                    'sentinel that nothing creates, so it is true however the subject is spelled '
+                    'and witnesses nothing (U-2)', label, what;
+  END IF;
+END $$;
+
+CREATE OR REPLACE FUNCTION p8.case_refuses_row(label TEXT, stmt TEXT, expect TEXT,
+                                               relation TEXT, key_column TEXT, key_value TEXT)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE stmt2 TEXT; wq TEXT; sq TEXT;
+BEGIN
+  IF relation IS NULL OR relation = '' OR key_column IS NULL OR key_column = ''
+     OR key_value IS NULL OR key_value = '' THEN
+    RAISE EXCEPTION '% FAIL: NO SUBJECT DECLARED — a row case names the relation, the key column '
+                    'and the key value, and all three are built into the statement and the '
+                    'witness', label;
+  END IF;
+  IF key_value = p8.sentinel_subject() THEN
+    RAISE EXCEPTION '% FAIL: THE SENTINEL IS NOT A SUBJECT — this case declares the sentinel value '
+                    'itself as its key', label;
+  END IF;
+  PERFORM p8.assert_no_handler(label, stmt);
+  PERFORM p8.assert_statement_built(label, stmt, relation || '.' || key_column, true);
+  wq := 'SELECT 1 FROM ' || p8.quoted_ident(relation) || ' WHERE '
+        || p8.quoted_ident(key_column) || '::text = ' || quote_literal(key_value);
+  sq := 'SELECT 1 FROM ' || p8.quoted_ident(relation) || ' WHERE '
+        || p8.quoted_ident(key_column) || '::text = ' || quote_literal(p8.sentinel_subject());
+  PERFORM p8.assert_witness(label, relation || ' keyed by ' || key_column || ' = ' || key_value,
+                            wq, sq);
+  stmt2 := replace(replace(stmt, '@REL@', p8.quoted_ident(relation)),
+                   '@KEY@', quote_literal(key_value));
+  PERFORM p8.case_refuses_core(label, stmt2, expect, key_value);
+END $$;
+
+CREATE OR REPLACE FUNCTION p8.case_refuses_relation(label TEXT, stmt TEXT, expect TEXT,
+                                                    relation TEXT)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE stmt2 TEXT; wq TEXT; sq TEXT;
+BEGIN
+  IF relation IS NULL OR relation = '' THEN
+    RAISE EXCEPTION '% FAIL: NO SUBJECT DECLARED — a relation case names the relation its refusal '
+                    'is about', label;
+  END IF;
+  PERFORM p8.assert_no_handler(label, stmt);
+  PERFORM p8.assert_statement_built(label, stmt, relation, false);
+  wq := 'SELECT 1 FROM pg_class WHERE relname = ' || quote_literal(relation);
+  sq := 'SELECT 1 FROM pg_class WHERE relname = ' || quote_literal(p8.sentinel_subject());
+  PERFORM p8.assert_witness(label, 'relation ' || relation, wq, sq);
+  stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation));
+  PERFORM p8.case_refuses_core(label, stmt2, expect, relation);
+END $$;
+
+CREATE OR REPLACE FUNCTION p8.case_refuses_role(label TEXT, stmt TEXT, expect TEXT, role_name TEXT)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE stmt2 TEXT; wq TEXT; sq TEXT;
+BEGIN
+  IF role_name IS NULL OR role_name = '' THEN
+    RAISE EXCEPTION '% FAIL: NO SUBJECT DECLARED — a role case names the role its refusal is '
+                    'about', label;
+  END IF;
+  PERFORM p8.assert_no_handler(label, stmt);
+  PERFORM p8.assert_statement_built(label, stmt, role_name, false);
+  wq := 'SELECT 1 FROM pg_roles WHERE rolname = ' || quote_literal(role_name);
+  sq := 'SELECT 1 FROM pg_roles WHERE rolname = ' || quote_literal(p8.sentinel_subject());
+  PERFORM p8.assert_witness(label, 'role ' || role_name, wq, sq);
+  stmt2 := replace(stmt, '@REL@', p8.quoted_ident(role_name));
+  PERFORM p8.case_refuses_core(label, stmt2, expect, role_name);
 END $$;
 
 -- ROUND 28, T-2. The paragraph above said the obligation is DERIVED from the
@@ -106,7 +282,7 @@ BEGIN
                     'set. Call the four-argument form with a boolean naming the subject this '
                     'refusal is about (S-5)', label, expect;
   END IF;
-  PERFORM p8.case_refuses_core(label, stmt, expect, false);
+  PERFORM p8.case_refuses_core(label, stmt, expect, NULL);
 END $$;
 
 -- `case_refuses_unwitnessed` is DELETED, not kept and forbidden (round 28,
@@ -116,10 +292,43 @@ END $$;
 -- file), and the DROP above removes it from any database where an older copy of
 -- this file created it.
 
-CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, witnessed BOOLEAN) RETURNS void
+-- ROUND 29, U-7. This function used to take `witnessed BOOLEAN` — a claim
+-- supplied by the caller and believed. The nineteenth challenge called it
+-- directly with `true`, no witness, no subject and a dead uuid, and it passed:
+-- F-A, on the head that closes F-A, through a door the same commit opened. The
+-- lesson round 28 wrote for `case_refuses_unwitnessed` applied to its own
+-- replacement, and deleting a door is not the same as not building one.
+--
+-- So the fourth argument is no longer a claim but a VALUE, and this function
+-- checks the claim itself: the subject must appear in the statement as the
+-- quoted literal substitution would have put it there. A caller cannot assert
+-- "witnessed" any more; it can only hand over a subject that the statement
+-- demonstrably reads.
+--
+-- That is a narrowing, not a closure — a direct caller can still supply a
+-- subject bound into its own statement and skip the witness. The enforceable
+-- closure is STATIC and lives in the gate: `CORE-NET` greps every case file for
+-- a direct call and reds by name, with a control that plants one. REVOKE is not
+-- available here: the wrappers are not SECURITY DEFINER, so the case-running
+-- roles need EXECUTE on this function either way.
+CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
-DECLARE msg TEXT; cons TEXT; sst TEXT;
+DECLARE msg TEXT; cons TEXT; sst TEXT; witnessed BOOLEAN;
 BEGIN
+  witnessed := subject IS NOT NULL;
+  -- ROUND 29, N-3. Every path into this function passes through here, including
+  -- the unwitnessed three-argument wrapper, which is the one the coordinator's
+  -- laundering attack used. The three new forms check it too; checking it twice
+  -- costs nothing and means no future caller can arrive without it.
+  PERFORM p8.assert_no_handler(label, stmt);
+  IF witnessed AND position(quote_literal(subject) in stmt) = 0
+            AND position(p8.quoted_ident(subject) in stmt) = 0 THEN
+    RAISE EXCEPTION '% FAIL: THE SUBJECT IS NOT BOUND INTO THE STATEMENT — this form was given '
+                    'subject "%" and the statement contains it neither as % nor as %, which is how '
+                    'the two substitutions write it, so "witnessed" is a claim about a statement '
+                    'that does not read the subject (U-7)',
+                    label, subject, quote_literal(subject), p8.quoted_ident(subject);
+  END IF;
   BEGIN
     EXECUTE stmt;
   EXCEPTION WHEN others THEN

@@ -89,15 +89,12 @@ SELECT p8.case_equals('A6d and app_bypass() itself still says no', app_bypass(),
 -- `CURRENT_USER` is not settable by a GRANTed role here: `SET ROLE
 -- daftar_platform` must be refused, since daftar_app is not a member of it.
 -- That refusal is the mechanism §6 rests on, so it is asserted, not assumed.
-SELECT p8.case_refuses('A7 the app may not become the platform',
-                       'SET ROLE daftar_platform', 'permission denied to set role',
-                       -- S-5: the subject is the ROLE. If `daftar_platform` did not exist the
-                       -- refusal would still arrive, and would mean something else entirely.
-                       -- ROUND 28, F-B: the subject is declared ONCE and substituted into both
-                       -- halves, so the witness cannot be true of something the statement does
-                       -- not name. The statement carries the role's text verbatim.
-                       $w$EXISTS (SELECT 1 FROM pg_roles WHERE rolname = @SUBJECT@)$w$,
-                       'daftar_platform');
+-- ROUND 29: a ROLE case. The subject is the role, the statement is built from
+-- it, and the witness — that the role exists — is derived here from the same
+-- value rather than written at the call site.
+SELECT p8.case_refuses_role('A7 the app may not become the platform',
+                            'SET ROLE @REL@', 'permission denied to set role',
+                            'daftar_platform');
 
 -- ---- A8: back in scope, the row is still there ----
 -- A guard against the shape of failure where an isolation suite passes because
@@ -113,12 +110,11 @@ SET LOCAL app.business_id = '';
 SELECT p8.case_equals('A9 an empty scope sees nothing', (SELECT count(*) FROM notifications), 0::bigint);
 
 -- ---- A10: the quarantine is unreadable to the app tier ----
-SELECT p8.case_refuses('A10 the app may not read unattributed events',
-                       'SELECT count(*) FROM notification_provider_quarantine',
+-- ROUND 29: a RELATION case. No key predicate is permitted in this form, which
+-- is what stops a row case being declared as a relation case (N-2).
+SELECT p8.case_refuses_relation('A10 the app may not read unattributed events',
+                       'SELECT count(*) FROM @REL@',
                        'permission denied for table notification_provider_quarantine',
-                       -- S-5: the subject is the RELATION. A refusal to read a table that is
-                       -- not there reads the same as a refusal to read one that is.
-                       $w$to_regclass(@SUBJECT@) IS NOT NULL$w$,
                        'notification_provider_quarantine');
 
 -- ---- A11: the SETTINGS relation is isolated, measured and not merely asserted ----

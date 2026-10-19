@@ -41,6 +41,36 @@ disagree, so the set cannot be widened or narrowed quietly in passing. Adding an
 arm and removing one both now cost the same deliberate act: re-seal, in the same
 commit.
 
+ROUND 29 CORRECTION — READ THIS BEFORE THE PARAGRAPH ABOVE. The sealed set of
+round 28 was still narrower than the sentence it printed. The nineteenth
+challenge measured it (U-1, P1): the identity is the label a line PRINTS, and an
+identity is not a measurement. Thirteen declared identities were printed by more
+than one independent measurement — `ISOLATION` five times, `RETIREMENT` three,
+`ANCHOR-ID r/s/t` three each — so twenty of the run's arm lines were redundant to
+the census and the loss of any one of them was free. Measured by deleting one
+line at a time from the gate's own log and running this program:
+
+    drop the ISOLATION arm this round added to prove F-C   rc=0  109/109
+    drop any of the three RETIREMENT arms                  rc=0  109/109
+
+The gate's own `CENSUS-LOSS` arm removed an identity exactly one line printed, so
+it proved the half of the law that was never in doubt.
+
+So the declaration is now a MULTIPLICITY: every entry is a pair, the identity and
+the number of lines that must print it, and the census compares per-identity
+counts. `ARM COUNT CHANGED` names the identity, what was declared and what was
+printed. The gate was changed in the same commit to give each distinct
+measurement an id of its own, so every declared count is 1 — but the law does not
+depend on that, which is the point: a count of 1 is a claim, and so is a count of
+5.
+
+The same challenge closed the other half of the shape law (U-5): two arm-shaped
+spellings with no colon — a lower-case head and a Mixed-Case head — matched
+neither the arm pattern nor the colon-less pattern, so an arm written either way
+was invisible. The rule is no longer a pattern that admits: a prefixed line that
+this program cannot classify as an arm or as a DECLARED non-arm is now refused.
+Refuse by name, fail on absence, never skip what you cannot classify.
+
 Usage:  p8-arm-census.py <run-log>          census; exit 0, or a named refusal, 1
         p8-arm-census.py --seal <run-log>   print a fresh declaration block
 The second mode is a GENERATOR for the author and **exits 2 in every case**,
@@ -66,6 +96,7 @@ if not sys.flags.isolated:
         "with an instrument the subject can supply\n")
     raise SystemExit(1)
 
+import collections
 import hashlib
 import re
 
@@ -103,6 +134,25 @@ ARM_LABELS = (
     # Round 28, F-B: the subject bound into both the statement and the witness.
     "WITNESS-BIND",
     "WITNESS-BIND-CTL",
+    # ROUND 29. U-7/N-1: the one door into the witness law. U-6: the sandbox
+    # refusal that protects the frozen set. U-1/N-4: the census's own shape and
+    # multiplicity laws.
+    "CORE-NET",
+    "CORE-NET-CTL",
+    "SANDBOX",
+    "SANDBOX-CTL",
+    "CENSUS-BASE",
+    "CENSUS-MULT",
+    "CENSUS-MULT-CTL",
+    "CENSUS-SHAPE",
+    "CENSUS-SHAPE-CTL",
+    "WITNESS-ROW",
+    "WITNESS-ROW-CTL",
+    "WITNESS-KEY",
+    "WITNESS-KEY-CTL",
+    "WITNESS-HANDLER",
+    "WITNESS-HANDLER-CTL",
+    "WITNESS-SENTINEL",
     "HATCH",
     "BASELINE",
     "I1-conc",
@@ -154,6 +204,26 @@ NOT_ARM_PREFIXES = (
     # Round 28, F-C: the line that states where the gate was invoked from and
     # where it runs. It is a fact the run reports, with its own ABORT paths.
     "cwd:",
+    # ROUND 29, U-5. Replacing the two admitting patterns with "refuse what you
+    # cannot classify" made every one of these visible for the first time, which
+    # is the point: each had been skipped in silence by both patterns. They are
+    # declared here one shape at a time, and each is a CLAIM that the line
+    # asserts nothing the gate does not measure elsewhere.
+    #
+    # The section headers the runner prints to divide its log.
+    "=== ",
+    # The figures the run reports and asserts elsewhere: the case count (which
+    # BASELINE CASE COUNT compares against a literal), the cluster's state
+    # between phases, the migration count, each role's privilege shape (asserted
+    # by the gate's own preconditions), the server version and collation (an
+    # ABORT when wrong), and the frozen boundary's anchor (ANCHOR LEG).
+    "baseline cases rc=",
+    "cluster left at the baseline",
+    "cluster restored to the baseline",
+    "migrations applied = ",
+    "role daftar_",
+    "server_version=",
+    "the frozen boundary is anchored to ",
 )
 
 # ---------------------------------------------------------------------
@@ -170,117 +240,156 @@ NOT_ARM_PREFIXES = (
 # being edited WITHOUT NOTICING, by a patcher, a merge, or a hand reaching for
 # one line. Regenerate both together with `--seal` and commit them together.
 EXPECTED_ARMS = (
-    "ANCHOR-ID r",
-    "ANCHOR-ID s",
-    "ANCHOR-ID t",
-    "ANCHOR-MUT m",
-    "ANCHOR-MUT n",
-    "ANCHOR-MUT o",
-    "ANCHOR-MUT p",
-    "ANCHOR-MUT q",
-    "ARGSHAPE u",
-    "ARGSHAPE v",
-    "ARGSHAPE w",
-    "ARGSHAPE x",
-    "ARGSHAPE y",
-    "ARGSHAPE z",
-    "BASELINE CASE",
-    "CENSUS-LOSS",
-    "CENSUS-LOSS-CTL-1",
-    "CENSUS-LOSS-CTL-2",
-    "CENSUS-LOSS-CTL-3",
-    "CENSUS-SEAL",
-    "CENSUS-UNKNOWN",
-    "CENSUS-UNKNOWN-CTL",
-    "GRAFTS",
-    "GUARD-CTL y1",
-    "GUARD-CTL y10",
-    "GUARD-CTL y11",
-    "GUARD-CTL y12",
-    "GUARD-CTL y13",
-    "GUARD-CTL y14",
-    "GUARD-CTL y15",
-    "GUARD-CTL y16",
-    "GUARD-CTL y17",
-    "GUARD-CTL y18",
-    "GUARD-CTL y2",
-    "GUARD-CTL y20a",
-    "GUARD-CTL y20b",
-    "GUARD-CTL y20c",
-    "GUARD-CTL y20d",
-    "GUARD-CTL y21a",
-    "GUARD-CTL y21b",
-    "GUARD-CTL y21c",
-    "GUARD-CTL y21d",
-    "GUARD-CTL y3",
-    "GUARD-CTL y4",
-    "GUARD-CTL y5",
-    "GUARD-CTL y6",
-    "GUARD-CTL y7",
-    "GUARD-CTL y8",
-    "GUARD-CTL y9",
-    "HATCH",
-    "I1-conc PASS",
-    "INTEGRITY-MUT a",
-    "INTEGRITY-MUT b",
-    "INTEGRITY-MUT c",
-    "INTEGRITY-MUT d",
-    "INTEGRITY-MUT e",
-    "INTEGRITY-MUT f",
-    "INTEGRITY-MUT g",
-    "INTEGRITY-MUT h",
-    "INTEGRITY-MUT i",
-    "INTEGRITY-MUT j",
-    "INTEGRITY-MUT k",
-    "INTEGRITY-MUT l",
-    "INTEGRITY-MUT m2",
-    "INTEGRITY-MUT n2",
-    "INTEGRITY-MUT o2",
-    "ISOLATION",
-    "LINEAGE",
-    "MUT 1",
-    "MUT 10",
-    "MUT 10b",
-    "MUT 11",
-    "MUT 12",
-    "MUT 13",
-    "MUT 14",
-    "MUT 15",
-    "MUT 16",
-    "MUT 1b",
-    "MUT 2",
-    "MUT 2b",
-    "MUT 3",
-    "MUT 4",
-    "MUT 5",
-    "MUT 6",
-    "MUT 7",
-    "MUT 8",
-    "MUT 8b",
-    "MUT 9",
-    "MUT 9b",
-    "RETIREMENT",
-    "RETIREMENT-NET y19",
-    "SHALLOW",
-    "VACUITY a",
-    "VACUITY b",
-    "VACUITY c",
-    "VACUITY f",
-    "VACUITY g",
-    "VACUITY n6a",
-    "VACUITY n6d",
-    "VACUITY-CTL-1",
-    "VACUITY-CTL-2",
-    "VACUITY-CTL-3",
-    "WITNESS unwitnessed",
-    "WITNESS w2",
-    "WITNESS-BIND",
-    "WITNESS-BIND-CTL",
-    "WITNESS-CTL",
-    "WITNESS-SQLSTATE",
-    "WITNESS-SQLSTATE-CTL",
+    ("ANCHOR-ID r.10", 1),
+    ("ANCHOR-ID r.4", 1),
+    ("ANCHOR-ID r.7", 1),
+    ("ANCHOR-ID s.10", 1),
+    ("ANCHOR-ID s.4", 1),
+    ("ANCHOR-ID s.7", 1),
+    ("ANCHOR-ID t.10", 1),
+    ("ANCHOR-ID t.4", 1),
+    ("ANCHOR-ID t.7", 1),
+    ("ANCHOR-MUT m.3", 1),
+    ("ANCHOR-MUT m.6", 1),
+    ("ANCHOR-MUT n.3", 1),
+    ("ANCHOR-MUT n.6", 1),
+    ("ANCHOR-MUT o.3", 1),
+    ("ANCHOR-MUT o.6", 1),
+    ("ANCHOR-MUT p.3", 1),
+    ("ANCHOR-MUT p.6", 1),
+    ("ANCHOR-MUT q.3", 1),
+    ("ANCHOR-MUT q.6", 1),
+    ("ARGSHAPE u", 1),
+    ("ARGSHAPE v", 1),
+    ("ARGSHAPE w", 1),
+    ("ARGSHAPE x", 1),
+    ("ARGSHAPE y", 1),
+    ("ARGSHAPE z", 1),
+    ("BASELINE CASE", 1),
+    ("CENSUS-BASE", 1),
+    ("CENSUS-LOSS", 1),
+    ("CENSUS-LOSS-CTL-1", 1),
+    ("CENSUS-LOSS-CTL-2", 1),
+    ("CENSUS-LOSS-CTL-3", 1),
+    ("CENSUS-MULT a1", 1),
+    ("CENSUS-MULT a2", 1),
+    ("CENSUS-MULT-CTL", 1),
+    ("CENSUS-SEAL", 1),
+    ("CENSUS-SHAPE", 1),
+    ("CENSUS-SHAPE-CTL", 1),
+    ("CENSUS-UNKNOWN", 1),
+    ("CENSUS-UNKNOWN-CTL", 1),
+    ("CORE-NET", 1),
+    ("CORE-NET y22", 1),
+    ("CORE-NET-CTL y23", 1),
+    ("GRAFTS g5", 1),
+    ("GRAFTS g7", 1),
+    ("GUARD-CTL y1", 1),
+    ("GUARD-CTL y10", 1),
+    ("GUARD-CTL y11", 1),
+    ("GUARD-CTL y12", 1),
+    ("GUARD-CTL y13", 1),
+    ("GUARD-CTL y14", 1),
+    ("GUARD-CTL y15", 1),
+    ("GUARD-CTL y16", 1),
+    ("GUARD-CTL y17", 1),
+    ("GUARD-CTL y18", 1),
+    ("GUARD-CTL y2", 1),
+    ("GUARD-CTL y20a", 1),
+    ("GUARD-CTL y20b", 1),
+    ("GUARD-CTL y20c", 1),
+    ("GUARD-CTL y20d", 1),
+    ("GUARD-CTL y21a", 1),
+    ("GUARD-CTL y21b", 1),
+    ("GUARD-CTL y21c", 1),
+    ("GUARD-CTL y21d", 1),
+    ("GUARD-CTL y3", 1),
+    ("GUARD-CTL y4", 1),
+    ("GUARD-CTL y5", 1),
+    ("GUARD-CTL y6", 1),
+    ("GUARD-CTL y7", 1),
+    ("GUARD-CTL y8", 1),
+    ("GUARD-CTL y9", 1),
+    ("HATCH", 1),
+    ("I1-conc PASS", 1),
+    ("INTEGRITY-MUT a", 1),
+    ("INTEGRITY-MUT b", 1),
+    ("INTEGRITY-MUT c", 1),
+    ("INTEGRITY-MUT d", 1),
+    ("INTEGRITY-MUT e", 1),
+    ("INTEGRITY-MUT f", 1),
+    ("INTEGRITY-MUT g", 1),
+    ("INTEGRITY-MUT h", 1),
+    ("INTEGRITY-MUT i", 1),
+    ("INTEGRITY-MUT j", 1),
+    ("INTEGRITY-MUT k", 1),
+    ("INTEGRITY-MUT l", 1),
+    ("INTEGRITY-MUT m2", 1),
+    ("INTEGRITY-MUT n2", 1),
+    ("INTEGRITY-MUT o2", 1),
+    ("ISOLATION i10", 1),
+    ("ISOLATION i11", 1),
+    ("ISOLATION i12", 1),
+    ("ISOLATION i4", 1),
+    ("ISOLATION i7", 1),
+    ("LINEAGE a5", 1),
+    ("LINEAGE a7", 1),
+    ("MUT 1", 1),
+    ("MUT 10", 1),
+    ("MUT 10b", 1),
+    ("MUT 11", 1),
+    ("MUT 12", 1),
+    ("MUT 13", 1),
+    ("MUT 14", 1),
+    ("MUT 15", 1),
+    ("MUT 16", 1),
+    ("MUT 1b", 1),
+    ("MUT 2", 1),
+    ("MUT 2b", 1),
+    ("MUT 3", 1),
+    ("MUT 4", 1),
+    ("MUT 5", 1),
+    ("MUT 6", 1),
+    ("MUT 7", 1),
+    ("MUT 8", 1),
+    ("MUT 8b", 1),
+    ("MUT 9", 1),
+    ("MUT 9b", 1),
+    ("RETIREMENT n1", 1),
+    ("RETIREMENT n2", 1),
+    ("RETIREMENT n3", 1),
+    ("RETIREMENT-NET y19", 1),
+    ("SANDBOX y24", 1),
+    ("SANDBOX y25", 1),
+    ("SANDBOX-CTL y26", 1),
+    ("SHALLOW s12", 1),
+    ("SHALLOW s8", 1),
+    ("VACUITY a", 1),
+    ("VACUITY b", 1),
+    ("VACUITY c", 1),
+    ("VACUITY f", 1),
+    ("VACUITY g", 1),
+    ("VACUITY n6a", 1),
+    ("VACUITY n6d", 1),
+    ("VACUITY-CTL-1", 1),
+    ("VACUITY-CTL-2", 1),
+    ("VACUITY-CTL-3", 1),
+    ("WITNESS unwitnessed", 1),
+    ("WITNESS w2", 1),
+    ("WITNESS-BIND", 1),
+    ("WITNESS-BIND-CTL", 1),
+    ("WITNESS-CTL", 1),
+    ("WITNESS-HANDLER", 1),
+    ("WITNESS-HANDLER-CTL", 1),
+    ("WITNESS-KEY", 1),
+    ("WITNESS-KEY-CTL", 1),
+    ("WITNESS-ROW", 1),
+    ("WITNESS-ROW-CTL", 1),
+    ("WITNESS-SENTINEL", 1),
+    ("WITNESS-SQLSTATE", 1),
+    ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "ecc2cb430ba068193dd56cb73e34d4c15ee001b4f126f382766f04b235416f42"
+EXPECTED_SEAL = "754cb0164cbecbafcd59c417cebdb1391808f049ca4b05661eed052165eaac62"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
@@ -292,15 +401,20 @@ EXPECTED_SEAL = "ecc2cb430ba068193dd56cb73e34d4c15ee001b4f126f382766f04b235416f4
 # narrower. The head now admits a lower-case initial, and the four prose lines
 # that newly match are declared below, which is the price and is paid on
 # purpose.
-SHAPE = re.compile(r"^(?P<head>[A-Za-z][A-Za-z0-9-]*)(?P<id>[ ][A-Za-z0-9]+)?[ ]?[^:]*:")
+SHAPE = re.compile(r"^(?P<head>[A-Za-z][A-Za-z0-9-]*)(?P<id>[ ][A-Za-z0-9.]+)?[ ]?[^:]*:")
+# ROUND 29: the id may carry a dot. The anchor families print one line per
+# mutant per SITE (`ANCHOR-MUT m.3`), and a site is a measurement, so the
+# identity has to be able to name it (U-1, and the coordinator's ruling that
+# the census must count measurements rather than printed names).
 
-# And the other half of the same residual: a label with NO colon matched
-# nothing, so `MUT 17 passed` would have been invisible. A line that opens with
-# an ALL-CAPS word and carries no colon is therefore refused too, unless it is
-# declared. Measured across a whole run before this was added: exactly ONE line
-# in the gate's log is of that shape, the final `RUN=… FAILED=…`, which is why
-# this can be a refusal rather than a widening nobody could satisfy.
-COLONLESS = re.compile(r"^[A-Z][A-Z0-9-]+\b")
+# ROUND 29, U-5. There used to be a SECOND pattern here, matching a colon-less
+# ALL-CAPS opener, so that `MUT 17 passed` would be refused rather than skipped.
+# The nineteenth challenge stepped around it in two characters: `probe z2
+# passed` fails on its first character and `Probe z3 passed` on its second, and
+# both left the census at 109/109, rc 0. The pattern is GONE rather than
+# widened, because the rule it was trying to express is not "these shapes are
+# arms" but "a line this program cannot classify is a refusal" — and that rule
+# needs no pattern at all. See `census`.
 
 
 def head_of(label):
@@ -314,7 +428,13 @@ def head_of(label):
 
 
 def census(path):
-    seen = set()
+    """Return (Counter of identity -> lines that printed it, unclassified lines).
+
+    ROUND 29, U-1: a SET of identities cannot see the loss of a line whose
+    identity another line also prints, so what is returned is a COUNT per
+    identity and not a membership test.
+    """
+    seen = collections.Counter()
     unknown = []
     with open(path, encoding="utf-8", errors="replace") as fh:
         for raw in fh:
@@ -333,10 +453,18 @@ def census(path):
             line = line[m_pref.end():]
             m = SHAPE.match(line)
             if not m:
-                # Round 28: a colon-less ALL-CAPS opener is arm-shaped enough to
-                # be an arm nobody declared, so it is refused rather than
-                # skipped.
-                if COLONLESS.match(line) and not line.startswith(NOT_ARM_PREFIXES):
+                # ROUND 29, U-5. This used to admit only a colon-less ALL-CAPS
+                # opener, so `probe z2 passed` (lower-case head) and `Probe z3
+                # passed` (Mixed-Case head) matched neither pattern and were
+                # skipped in silence — an arm written either way was invisible,
+                # exactly as the seven VACUITY arms were invisible to round 26's
+                # grep. A pattern that ADMITS can always be stepped around; a
+                # pattern that REFUSES cannot. So every prefixed line this
+                # program cannot classify as an arm is now refused unless it is
+                # a DECLARED non-arm, which is this project's first lesson read
+                # back onto its own instrument: fail on absence, never skip what
+                # you cannot classify.
+                if not line.startswith(NOT_ARM_PREFIXES):
                     unknown.append(line[:60])
                 continue
             if line.startswith(NOT_ARM_PREFIXES):
@@ -354,23 +482,34 @@ def census(path):
             # 85 where the arms are 87.
             printed = m.group("head")
             ident = printed if m.group("id") is None else printed + m.group("id")
-            seen.add(ident)
-    return sorted(seen), unknown
+            seen[ident] += 1
+    return seen, unknown
 
 
-def seal_of(arms):
-    """The SHA-256 of the declared set, as one newline-terminated block."""
-    return hashlib.sha256(("\n".join(arms) + "\n").encode("utf-8")).hexdigest()
+def seal_of(pairs):
+    """The SHA-256 of the declared multiplicity, as one newline-terminated block.
+
+    ROUND 29: the seal covers the COUNTS as well as the identities, so changing
+    a declared count from 5 to 4 — which is how U-1's hole would be papered over
+    — breaks the seal exactly as deleting an identity does.
+    """
+    body = "".join("%s\t%d\n" % (ident, n) for ident, n in pairs)
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
-def declaration(arms):
+def declaration(pairs):
     """The literal block an author pastes back into this file."""
     out = ["EXPECTED_ARMS = ("]
-    for a in arms:
-        out.append('    "%s",' % a)
+    for ident, n in pairs:
+        out.append('    ("%s", %d),' % (ident, n))
     out.append(")")
-    out.append('EXPECTED_SEAL = "%s"' % seal_of(arms))
+    out.append('EXPECTED_SEAL = "%s"' % seal_of(pairs))
     return "\n".join(out) + "\n"
+
+
+def pairs_of(counter):
+    """The counter as a sorted tuple of (identity, count) pairs."""
+    return [(ident, counter[ident]) for ident in sorted(counter)]
 
 
 def main(argv):
@@ -400,20 +539,53 @@ def main(argv):
                 "CENSUS FAIL: ARM LABEL UNKNOWN, so the set cannot be sealed "
                 "from this log: " + "; ".join(sorted(set(unknown))) + "\n")
             return 2
-        sys.stdout.write(declaration(arms))
+        pairs = pairs_of(arms)
+        sys.stdout.write(declaration(pairs))
+        # ROUND 29, U-4. `ARM MISSING` ends by telling the author to re-seal, and
+        # this generator used to regenerate the declaration from the log and
+        # print nothing about what had changed. An author re-sealing after a loss
+        # they did not intend got a block one entry shorter and a total they had
+        # no reason to question — the refusal prescribing its own laundering. So
+        # the generator now states the DIFF against the declaration it would
+        # replace, by name and in both directions, and both totals.
+        was = {ident: n for ident, n in EXPECTED_ARMS}
+        now = dict(pairs)
+        delta = []
+        for ident in sorted(set(was) | set(now)):
+            if ident not in now:
+                delta.append("- %s (was %d)" % (ident, was[ident]))
+            elif ident not in was:
+                delta.append("+ %s (%d)" % (ident, now[ident]))
+            elif was[ident] != now[ident]:
+                delta.append("~ %s (%d -> %d)" % (ident, was[ident], now[ident]))
         sys.stderr.write(
-            "CENSUS: %d identities printed for pasting into p8-arm-census.py. "
-            "This mode MEASURES NOTHING and exits 2 by design\n" % len(arms))
+            "CENSUS: %d identities / %d arm lines printed for pasting into "
+            "p8-arm-census.py; the declaration being replaced holds %d "
+            "identities / %d lines\n"
+            % (len(pairs), sum(now.values()), len(was), sum(was.values())))
+        if delta:
+            sys.stderr.write(
+                "CENSUS: what this block CHANGES, which you are asked to read "
+                "before pasting it — an entry leaving is a measurement the gate "
+                "stops making:\n  " + "\n  ".join(delta) + "\n")
+        else:
+            sys.stderr.write(
+                "CENSUS: this block is identical to the declaration in the "
+                "file; nothing arrived and nothing departed\n")
+        sys.stderr.write(
+            "CENSUS: this mode MEASURES NOTHING and exits 2 by design\n")
         return 2
 
     # ---- the seal, before the log is read -------------------------------
-    declared = list(EXPECTED_ARMS)
+    declared_pairs = list(EXPECTED_ARMS)
+    declared = [ident for ident, _ in declared_pairs]
+    declared_count = {ident: n for ident, n in declared_pairs}
     # The SEAL is read first. Round 28 learned this from its own arm: the arm
     # that renames one declared identity also disturbs the sort order, so with
     # the set check first the refusal came back "NOT A SET" and the seal was
     # never reached — a guard in front of a guard, which this phase has paid for
     # before. The seal is the stronger statement, so it speaks first.
-    actual_seal = seal_of(declared)
+    actual_seal = seal_of(declared_pairs)
     if actual_seal != EXPECTED_SEAL:
         sys.stderr.write(
             "CENSUS FAIL: SEAL BROKEN — EXPECTED_ARMS digests to %s and "
@@ -424,9 +596,19 @@ def main(argv):
         return 1
     if sorted(set(declared)) != declared:
         sys.stderr.write(
-            "CENSUS FAIL: THE DECLARATION IS NOT A SET — EXPECTED_ARMS must be "
-            "sorted and free of duplicates, because a duplicate hides a "
-            "departure behind an arrival. Regenerate it with --seal\n")
+            "CENSUS FAIL: THE DECLARATION IS NOT A SET — the identities in "
+            "EXPECTED_ARMS must be sorted and free of duplicates, because a "
+            "duplicate hides a departure behind an arrival. Regenerate it with "
+            "--seal\n")
+        return 1
+    bad = [ident for ident, n in declared_pairs if not isinstance(n, int) or n < 1]
+    if bad:
+        sys.stderr.write(
+            "CENSUS FAIL: THE DECLARATION IS NOT A MULTIPLICITY — every entry "
+            "must be (identity, count) with a count of at least 1, and these "
+            "are not: %s. A count of 0 would declare an arm that must never "
+            "print, which is a different claim and has no instrument here\n"
+            % ", ".join(bad))
         return 1
 
     try:
@@ -450,11 +632,15 @@ def main(argv):
         return 1
 
     # ---- both directions, named ----------------------------------------
-    missing = [a for a in declared if a not in set(arms)]
+    seen_count = arms
+    arms = sorted(seen_count)
+    total_seen = sum(seen_count.values())
+    total_declared = sum(declared_count.values())
+    missing = [a for a in declared if a not in seen_count]
     if missing:
         sys.stderr.write(
-            "CENSUS FAIL: ARM MISSING — the declared set names %d arms and this "
-            "run printed %d; these never named themselves: %s. An arm that "
+            "CENSUS FAIL: ARM MISSING — the declared set names %d identities "
+            "and this run printed %d; these never named themselves: %s. An arm that "
             "stops reporting is a measurement the gate no longer makes, and "
             "before round 28 it only moved the number down. If an arm was "
             "retired on purpose, re-seal with --seal in the SAME commit that "
@@ -468,18 +654,45 @@ def main(argv):
             "them through; the SET is what refuses them. Re-seal with --seal in "
             "the SAME commit that adds them\n" % ", ".join(extra))
         return 1
-    if len(arms) != len(declared):
-        # Unreachable while the two checks above hold; it is here because a
+    # ROUND 29, U-1. The identity is present in both directions by now, and
+    # that was the whole law until the nineteenth challenge showed what it
+    # misses: five separate measurements printed `ISOLATION`, so four of them
+    # could stop reporting and the identity was still there. The COUNT per
+    # identity is the measurement-level statement, and it is refused by name.
+    moved = ["%s: declared %d, printed %d"
+             % (ident, declared_count[ident], seen_count[ident])
+             for ident in declared if seen_count[ident] != declared_count[ident]]
+    if moved:
+        sys.stderr.write(
+            "CENSUS FAIL: ARM COUNT CHANGED — every declared identity printed "
+            "at least once, so the SET holds, and these identities did not "
+            "print the declared NUMBER of lines: %s. An identity is not a "
+            "measurement: where several lines share one identity, losing one of "
+            "them leaves the set intact and the gate silent, which is U-1. If "
+            "the change is deliberate, re-seal with --seal in the SAME commit\n"
+            % "; ".join(moved))
+        return 1
+    if total_seen != total_declared:
+        # Unreachable while the three checks above hold; it is here because a
         # literal total is the only thing that bounds a loss no comparison
         # happened to look at.
         sys.stderr.write(
-            "CENSUS FAIL: COUNT DISAGREES — %d arms seen, %d declared, with "
-            "neither set differing by name, so this program's own comparison "
-            "has moved\n" % (len(arms), len(declared)))
+            "CENSUS FAIL: COUNT DISAGREES — %d arm lines seen, %d declared, "
+            "with no identity and no count differing by name, so this "
+            "program's own comparison has moved\n"
+            % (total_seen, total_declared))
         return 1
 
-    sys.stdout.write("ARM CENSUS: %d named arms, every one of the %d declared\n"
-                     % (len(arms), len(declared)))
+    # ROUND 29, the coordinator's N-5. This line used to ASSERT the agreement it
+    # was reporting — "every one of the N declared" — so with the comparisons
+    # above deleted it printed "108 named arms, every one of the 109 declared"
+    # at rc 0: a sentence that was false about the very log it had just read. A
+    # success line must be COMPUTED from the comparison, never written as a
+    # claim beside it. These are four numbers and no claim: where a guard is
+    # missing they disagree in plain sight.
+    sys.stdout.write(
+        "ARM CENSUS: %d named arms of %d declared, %d arm lines of %d declared\n"
+        % (len(arms), len(declared), total_seen, total_declared))
     # Comma-separated, because an identity contains a space ("MUT 14") and a
     # space-joined list cannot be read back unambiguously.
     sys.stdout.write("ARM CENSUS LIST: %s\n" % ", ".join(arms))
