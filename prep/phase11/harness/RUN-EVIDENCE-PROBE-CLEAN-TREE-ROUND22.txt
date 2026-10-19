@@ -1,0 +1,106 @@
+PHASE 11 — ROUND 22: R22-F1(a) re-measured under the clean-tree law.
+
+Every world below is a throwaway clone of scratch commit
+6c7b984cd3fb09ff8da27038e04ca89237275e20 (see
+RUN-EVIDENCE-AUTHORITATIVE-ROUND22.txt for what that tree is). The plant is the
+challenger's own: three uncommitted hunks in check_fenced_figures.py -- the guard
+off at the CALL SITE, the byte comparison skipped FOR THE LIVE DIRECTORY ONLY,
+and harness_bytes_pinned returning before the reader's path is built -- plus one
+uncommitted fabricated figure in a fenced block of the manifest. At 868f25d that
+world gave selftest 0 / blocks 0 / scan 0 with the figure through.
+
+READ THE FOUR WORLDS TOGETHER, because the third is the limit and not a pass:
+  control      the candidate tree, committed            -> 0/0/0/0, 0 failed arms
+  uncommitted  the plant, nothing committed             -> 1/5/5/5, SELF-TREE-DIRTY
+                                                            first in the scan,
+                                                            HARNESS-TREE-DIRTY in
+                                                            the reader
+  nolaw        the plant AND the clean-tree law deleted
+               in the same uncommitted file             -> scan 0: THE DECLARED
+                                                            LIMIT, and 3 arms fail
+  committed    the same plant, committed                -> scan 0, --selftest reds
+                                                            with 3 failed arms
+  the script in the dirty clone                         -> rc 5, SOURCE-TREE-DIRTY,
+                                                            no cluster built
+
+The three failing arms in the last two worlds name what is missing:
+HARNESS-BYTES-UNCOMMITTED never appears, because the second reader is never
+invoked. That is the plant's third hunk, caught inside the harness for the first
+time. What the law does NOT stop is the `nolaw` world, and that is why the second
+half of the limit is a rule for whoever READS a transcript: evidence comes from a
+clean tree whose HEAD is the committed sha, and reviewers run from fresh clones.
+
+=== 2. the round-22 escape, re-measured on throwaway clones of that commit ===
+=== R22-F1(a) re-measured under the clean-tree law, on throwaway clones ===
+subject: the candidate tree, committed at 6c7b984cd3fb09ff8da27038e04ca89237275e20
+plant  : the challenger's own three hunks in check_fenced_figures.py plus a
+         fabricated figure in a fenced block, ALL UNCOMMITTED -- which is
+         exactly the world that gave 0/0/0 at 868f25d.
+
+--- control ---
+  selftest       rc=0
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=0
+      selftest failures: 0
+  planted: three hunks and one fabricated figure, nothing committed
+--- uncommitted ---
+  selftest       rc=1
+  --check-blocks rc=5
+  scan           rc=5
+  second reader  rc=5
+      blocks refused: FRAME-INADMISSIBLE
+      scan refused: FRAME-INADMISSIBLE
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 0
+  planted: three hunks and one fabricated figure, nothing committed
+  and the clean-tree law deleted in the same uncommitted file
+--- nolaw ---
+  selftest       rc=1
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=5
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 3
+  planted: three hunks and one fabricated figure, nothing committed
+--- committed ---
+  selftest       rc=1
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=0
+      selftest failures: 3
+--- the authoritative script in the dirty clone (no cluster is built) ---
+  REFUSED: SOURCE-TREE-DIRTY: the work tree at /var/tmp/p11pr24-uncommitted carries uncommitted
+  changes, so nothing below would be a measurement of the committed code and
+  its transcript would not be evidence. The entries:
+     M prep/phase11/P11-HANDOFF-MANIFEST.md
+     M prep/phase11/harness/check_fenced_figures.py
+  EXIT_SOURCE_TREE_DIRTY: 5  (refused before the cluster, the identity block and every gate)
+  script rc=5
+
+=== 3. the authoritative suite on the committed clone ===
+=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment administrator ===
+--- 2a. the renderer's own check, proved red before it is trusted ---
+UNRENDERED PLACEHOLDERS, refusing to write /tmp/tmpnbmtaz8i/bad.out: __NEWROLE_PASSWORD__
+  selftest RED case  : rc=1, output written=False -> RED as required
+bootstrap rendered: 1 placeholders substituted, 0 left
+  selftest GREEN case: rc=0 -> renders and passes
+bootstrap rendered: 16 placeholders substituted, 0 left
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+
+=== the four gates on the committed clone (section 1 of the same run) ===
+=== 1. the FINAL candidate tree, committed into a scratch clone; the four gates ===
+scratch commit: 6c7b984cd3fb09ff8da27038e04ca89237275e20
+--- second reader ---
+HARNESS-BYTES OK: 22 deciding files are the files the commit holds
+rc=0
+--- selftest ---
+rc=0
+--- scan ---
+quoted figures: 9 documents, haystack from commit 6c7b984cd3fb09ff8da27038e04ca89237275e20 (60 files), 7 candidate figures, 0 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+rc=0
+--- blocks ---
+generated blocks: 3 enrolled, 0 finding(s)
+rc=0
+

@@ -1,0 +1,605 @@
+PHASE 11 — ROUND 22 ANSWER: the clean-tree law, measured.
+
+WHAT TREE THIS MEASURED, stated exactly. The run below was made on a THROWAWAY
+CLONE into which the candidate tree was committed, because the gates now refuse a
+dirty tree by name and the project's own working tree is never mutated for a
+proof. The scratch commit is 6c7b984cd3fb09ff8da27038e04ca89237275e20 and its
+tree is the tree of the commit that carries this file MINUS the two transcripts
+added by that commit (this file and RUN-EVIDENCE-PROBE-CLEAN-TREE-ROUND22.txt),
+which are .txt and therefore not deciding files: the law walks .py, .sh and .sql.
+So HARNESS_SHA256 and every digest below belong to that scratch commit, and the
+deciding bytes they cover are byte-identical to the ones this commit carries.
+
+Sections: 1 the four gates on the committed clone, 2 the round-22 escape
+re-measured on throwaway clones, 3 the authoritative suite from zero on PG 16 at
+en_US.utf8 with NOSUPERUSER NOBYPASSRLS roles.
+
+=== 1. the FINAL candidate tree, committed into a scratch clone; the four gates ===
+scratch commit: 6c7b984cd3fb09ff8da27038e04ca89237275e20
+--- second reader ---
+HARNESS-BYTES OK: 22 deciding files are the files the commit holds
+rc=0
+--- selftest ---
+rc=0
+--- scan ---
+quoted figures: 9 documents, haystack from commit 6c7b984cd3fb09ff8da27038e04ca89237275e20 (60 files), 7 candidate figures, 0 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+rc=0
+--- blocks ---
+generated blocks: 3 enrolled, 0 finding(s)
+rc=0
+
+=== 2. the round-22 escape, re-measured on throwaway clones of that commit ===
+=== R22-F1(a) re-measured under the clean-tree law, on throwaway clones ===
+subject: the candidate tree, committed at 6c7b984cd3fb09ff8da27038e04ca89237275e20
+plant  : the challenger's own three hunks in check_fenced_figures.py plus a
+         fabricated figure in a fenced block, ALL UNCOMMITTED -- which is
+         exactly the world that gave 0/0/0 at 868f25d.
+
+--- control ---
+  selftest       rc=0
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=0
+      selftest failures: 0
+  planted: three hunks and one fabricated figure, nothing committed
+--- uncommitted ---
+  selftest       rc=1
+  --check-blocks rc=5
+  scan           rc=5
+  second reader  rc=5
+      blocks refused: FRAME-INADMISSIBLE
+      scan refused: FRAME-INADMISSIBLE
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 0
+  planted: three hunks and one fabricated figure, nothing committed
+  and the clean-tree law deleted in the same uncommitted file
+--- nolaw ---
+  selftest       rc=1
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=5
+      reader refused: HARNESS-TREE-DIRTY
+      selftest failures: 3
+  planted: three hunks and one fabricated figure, nothing committed
+--- committed ---
+  selftest       rc=1
+  --check-blocks rc=0
+  scan           rc=0
+  second reader  rc=0
+      selftest failures: 3
+--- the authoritative script in the dirty clone (no cluster is built) ---
+  REFUSED: SOURCE-TREE-DIRTY: the work tree at /var/tmp/p11pr24-uncommitted carries uncommitted
+  changes, so nothing below would be a measurement of the committed code and
+  its transcript would not be evidence. The entries:
+     M prep/phase11/P11-HANDOFF-MANIFEST.md
+     M prep/phase11/harness/check_fenced_figures.py
+  EXIT_SOURCE_TREE_DIRTY: 5  (refused before the cluster, the identity block and every gate)
+  script rc=5
+
+=== 3. the authoritative suite on the committed clone ===
+=== 0. creating the scratch cluster at /var/tmp/p11u25 on en_US.utf8 ===
+=== 0b. starting the cluster (it is reaped between turns in this container) ===
+waiting for server to start.... done
+server started
+RUN_ID            : p11-20261019T171958Z-30962
+RUN_AT_UTC_START  : 2026-10-19T17:19:58Z
+HOST_KERNEL       : Linux 6.18.44-fc-v139
+SOURCE_REPO       : /home/user/daftar
+SOURCE_BRANCH     : HEAD
+SOURCE_SHA        : 6c7b984cd3fb09ff8da27038e04ca89237275e20
+SOURCE_TREE_DIRTY : no
+MIGRATIONS_SHA    : b128c7033a3381bd2237d0a1405f0676ac509960
+MANIFEST_SHA256   : 4b4dd6e9e1359eba6536a0c70c0f3cf056e62b47bfed833026541df5ffbe6804
+BOOTSTRAP_SHA256  : 19df5cca37a6a887ede923e6f108163e579ac42f68cb0c8b48730eb2f2a3c507
+PACK_A_DDL_SHA256 : f87a7ce0efb295d772d2415f962de2c3f2c173d40b36be4bada38da4b9194456
+PACK_B_DDL_SHA256 : d5820ada9f3f0ddee2a3475271a996f5c2e3be83190845d2e85130d601c8ff75
+HARNESS_SHA256    : 2024797162cf8870a0a0235f4abf69fd02d9c0d2d18117bd1f04dc80228c6be0
+PG_VERSION        : postgres (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)
+PG_CLUSTER_DIR    : /var/tmp/p11u25/data (port 55825, socket /var/tmp/p11u25/run)
+NODE_VERSION      : v22.22.0 (repository engines: >=24 <25) -- NO npm suite is run here
+FIXTURES          : world.sql (Pack A), world_b.sql (Pack B, with its definer fixture). Within the packs present, no fixture and no case is skipped; a pack that is not on the branch is named as skipped above and below.
+
+=== 0c. the documents' quoted figures (every key=value shown as output must be emitted by something) ===
+--- 0c-0. the deciding files against the commit ---
+HARNESS-BYTES OK: 22 deciding files are the files the commit holds
+  structure _strip                 15 named guards, every rebinding inside one -> as required
+  structure _segments              1 named guards, every rebinding inside one -> as required
+  structure: 10 of 10 planted transformations refused -- all of them
+  decision figures_on     node set + decisions on named guards or listed calls + classified calls + one binding per name + no re-entry -> as required
+  decision tokens_in      node set + decisions on named guards or listed calls + classified calls + one binding per name + no re-entry -> as required
+  decision _exempted      node set + decisions on named guards or listed calls + classified calls + one binding per name + no re-entry -> as required
+  decision _is_figure     node set + decisions on named guards or listed calls + classified calls + one binding per name + no re-entry -> as required
+  decision: 20 of 20 planted decisions refused, the unplanted frame accepted -- all of them
+  decision R19-F1 B1 a second test on the listed pair, inside no guard: refused=yes, with `positions` DELETED it passes -> as required
+    refusal: _is_figure: line 8 calls `re.fullmatch` in a test position inside no named guard, and no entry of DECIDING_MODULE_CALLS admits it -- a module call that decides outside the guard its entry names, or in a position the list does not cover, is refused by name
+  decision R19-F1 B2 the listed pair reached through a helper that RETURNS it: refused=yes, with `positions` DELETED it passes -> as required
+    refusal: _r19_shape: line 2 calls `re.fullmatch` in a return position inside no named guard, and no entry of DECIDING_MODULE_CALLS admits it -- a module call that decides outside the guard its entry names, or in a position the list does not cover, is refused by name
+  decision R20-F1 A4 a whitelisted method on an object of the planter's own: refused=yes, with `receiver` and `data` DELETED it passes -> as required
+    refusal: _is_figure: line 8 calls the whitelisted method `.strip` on `_ARM_SHAPE`, which is not a value this frame can account for -- a parameter, a `for` target, or a name bound from one. A method whitelist is a list of NAMES, so an object of someone else's with a whitelisted method on it decides without calling a module at all
+  decision R20-F1 A4c the same object through a name BOUND in the frame: refused=yes, with `receiver` and `data` DELETED it passes -> as required
+    refusal: _is_figure: line 9 calls the whitelisted method `.strip` on `local`, which is not a value this frame can account for -- a parameter, a `for` target, or a name bound from one. A method whitelist is a list of NAMES, so an object of someone else's with a whitelisted method on it decides without calling a module at all
+  decision R20-F1 A4 the receiver rule alone: a whitelisted method on DATA the frame reads: refused=yes, with `receiver` DELETED it passes -> as required
+    refusal: _is_figure: line 8 calls the whitelisted method `.strip` on `BOOLEANS`, which is not a value this frame can account for -- a parameter, a `for` target, or a name bound from one. A method whitelist is a list of NAMES, so an object of someone else's with a whitelisted method on it decides without calling a module at all
+  decision C20 P3/R21-S3 a module-level lambda, refused by name rather than followed: refused=yes, with `lambda` DELETED it passes -> as required
+    refusal: _is_figure: line 8 calls `_ARM_LAMBDA`, which this file binds to a `lambda` rather than to a `def`. The rules descend into a function by parsing its source, and a lambda's source is the statement it sits in -- so it is refused by name rather than followed into a traceback
+  decision C20 P2 a SECOND test matching the listed entry, inside its own guard: refused=yes, with `one-site` DELETED it passes -> as required
+    refusal: _is_figure: the deciding-call entry `re.fullmatch` in a test position admits EXACTLY ONE site and matched 2 (line 15, line 17) -- a count stated as a law is tested as a function of its domain, and at zero the entry permits a decision nothing takes while above one it covers a call nobody read
+  decision R19 pre-emptive: a parameter shadowing the module name rule 5 matches: refused=yes, with `shadow` DELETED it passes -> as required
+    refusal: _is_figure: `re` is a parameter or a loop target here, and it is the name rule 5 matches a module by -- a listed pair whose module name can be rebound is matched by spelling and not by identity
+  decision C21: the frame BINDS the module name rule 5 matches, in its own body: refused=yes, with `shadow` DELETED it passes -> as required
+    refusal: _is_figure: line 10 binds `re`, which is the name rule 5 matches a module by -- see the parameter case above
+  decision R20-F1 the data rule alone: an object read where the frame reads its data: refused=yes, with `data` DELETED it passes -> as required
+    refusal: _decided: reads the module-level name `_ARM_SHAPE`, which holds <__main__._ArmShape object at 0x7fde96c8d010>. A name the frame reads from outside itself must be DATA -- a string, or a tuple, set or frozenset of strings -- because an OBJECT read from there decides through its own methods without calling a module
+  catch  N0 control: a bare line            rc=1 (want 1) -> as required
+  catch  R13 leading tab                    rc=1 (want 1) -> as required
+  catch  R13 trailing period                rc=1 (want 1) -> as required
+  catch  R13 thousands separator            rc=1 (want 1) -> as required
+  catch  R13 percent                        rc=1 (want 1) -> as required
+  catch  R13 trailing semicolon             rc=1 (want 1) -> as required
+  catch  R13 blockquote                     rc=1 (want 1) -> as required
+  catch  R13 list item                      rc=1 (want 1) -> as required
+  catch  R13 nested list item               rc=1 (want 1) -> as required
+  catch  R13 parentheses                    rc=1 (want 1) -> as required
+  catch  R13 trailing comma                 rc=1 (want 1) -> as required
+  catch  R13 bold                           rc=1 (want 1) -> as required
+  catch  R13 HTML comment                   rc=1 (want 1) -> as required
+  catch  R13 colon prefix                   rc=1 (want 1) -> as required
+  catch  R13 table cell                     rc=1 (want 1) -> as required
+  catch  R13-S1 N16 backticked comment      rc=1 (want 1) -> as required
+  catch  R12 in a backtick fence            rc=1 (want 1) -> as required
+  catch  R12 in a tilde fence               rc=1 (want 1) -> as required
+  catch  R12 four-space indented            rc=1 (want 1) -> as required
+  catch  a decimal figure                   rc=1 (want 1) -> as required
+  catch  R14-F1 heading                     rc=1 (want 1) -> as required
+  catch  R14-F1 plain -- comment            rc=1 (want 1) -> as required
+  catch  R14-S1 arabic-indic digits         rc=1 (want 1) -> as required
+  catch  R14-S1 extended arabic digits      rc=1 (want 1) -> as required
+  catch  R14-S1 negative                    rc=1 (want 1) -> as required
+  catch  R14-S1 positive sign               rc=1 (want 1) -> as required
+  catch  R14-S1 boolean True                rc=1 (want 1) -> as required
+  catch  R14-S1 boolean t as psql prints    rc=1 (want 1) -> as required
+  catch  R14-S1 boolean f as psql prints    rc=1 (want 1) -> as required
+  catch  R14-S1 zero-width space            rc=1 (want 1) -> as required
+  catch  R14-S1 full-width equals           rc=1 (want 1) -> as required
+  catch  R14-S1 hyphen in the key           rc=1 (want 1) -> as required
+  catch  R14-S1 behind a -- marker          rc=1 (want 1) -> as required
+  catch  R15-S2 text before the marker      rc=1 (want 1) -> as required
+  catch  R15-S2 label before the marker     rc=1 (want 1) -> as required
+  catch  R15-S3 devanagari digits           rc=1 (want 1) -> as required
+  catch  R15-S3 bengali digits              rc=1 (want 1) -> as required
+  catch  R15-S3 thai digits                 rc=1 (want 1) -> as required
+  catch  R14-S3 percent on a real figure    rc=1 (want 1) -> as required
+  catch  R14-S3 percent inside brackets     rc=1 (want 1) -> as required
+  skip   named: inline code span only       rc=2 (want 2) -> as required
+  skip   named: UPPERCASE key               rc=2 (want 2) -> as required
+  skip   named: prose on the line           rc=2 (want 2) -> as required
+  skip   R13-S3 p11_repo=/var/tmp/myclone   rc=2 (want 2) -> as required
+  skip   R13-S3 ref=heads/main              rc=2 (want 2) -> as required
+  skip   R13-S3 expect=catalog.foo_invalid  rc=2 (want 2) -> as required
+  skip   R13-S3 kind=refusal                rc=2 (want 2) -> as required
+  skip   R13-S3 role=postgres               rc=2 (want 2) -> as required
+  skip   R13-S3 id=PATCH-REQ-P8-08          rc=2 (want 2) -> as required
+  skip   R13-S3 unanimity=agreement         rc=2 (want 2) -> as required
+  skip   R13-S3 locale=en_US.utf8           rc=2 (want 2) -> as required
+  skip   a quoted SQL fragment              rc=2 (want 2) -> as required
+  skip   a quoted shell assignment          rc=2 (want 2) -> as required
+  skip   R14-S2 exempt port=55512           rc=2 (want 2) -> as required
+  skip   R14-S2 exempt migrations=87        rc=2 (want 2) -> as required
+  pass   an emitted figure                  rc=0 (want 0) -> as required
+  pass   R14-S3 control: the figure itself  rc=0 (want 0) -> as required
+  catch  R12 E4a markdown in a subdirectory rc=1 (want 1) -> as required
+  catch  R12 E4b a doc is not its own evidence rc=1 (want 1) -> as required
+  catch  R15-S4 a planted token is not its own evidence rc=1 (want 1) -> as required
+  catch  R16-F1 an untracked scratch file is not evidence rc=1 (want 1) -> as required
+  catch  R16-F1 a gitignored .pyc is not evidence rc=1 (want 1) -> as required
+  catch  R16-F1 the checker is not its own evidence rc=1 (want 1) -> as required
+  refuse R16-F1 a directory that is no repository is refused rc=5 (want 5) -> as required
+  refuse R17 a repository planted inside the haystack is refused rc=5 (want 5) -> as required
+  catch  R18-F1 no planted repository, run from the repository root rc=1 (want 1) -> as required
+  catch  R18-F1 no planted repository, run from the harness directory rc=1 (want 1) -> as required
+  catch  R18-F1 no planted repository, run from an unrelated subdir rc=1 (want 1) -> as required
+  refuse R18-F1 planted at the harness, run from the repository root rc=5 (want 5) -> as required
+  refuse R18-F1 planted at the harness, run from the harness directory rc=5 (want 5) -> as required
+  refuse R18-F1 planted at the harness, run from an unrelated subdir rc=5 (want 5) -> as required
+  refuse R18-F1 planted one level above, run from the repository root rc=5 (want 5) -> as required
+  refuse R18-F1 planted one level above, run from the harness directory rc=5 (want 5) -> as required
+  refuse R18-F1 planted one level above, run from an unrelated subdir rc=5 (want 5) -> as required
+  refuse R18-F1 planted two levels above, run from the repository root rc=5 (want 5) -> as required
+  refuse R18-F1 planted two levels above, run from the harness directory rc=5 (want 5) -> as required
+  refuse R18-F1 planted two levels above, run from an unrelated subdir rc=5 (want 5) -> as required
+  refuse R19-S2 a BARE repository planted one level above, run from the repository root rc=5 (want 5) -> as required
+  refuse R19-S2 a BARE repository planted one level above, run from the harness directory rc=5 (want 5) -> as required
+  refuse R19-S2 a BARE repository planted one level above, run from an unrelated subdir rc=5 (want 5) -> as required
+  refuse R20-S2 git's toplevel and the census disagree rc=5 (want 5) -> as required
+  40 catch arms, 15 skip arms, 2 pass arms, 24 others -- all as required
+  identity R20-F1 A1 `re.fullmatch` rebound at module level: refused as MODULE-ATTR-REBOUND, the scan rc=5, and round 19's module-only check saw nothing wrong -> as required
+  identity C20 a decorator around `_is_figure`: refused as FRAME-FUNCTION-WRAPPED, the scan rc=5, and the AST the parse reads is clean, which is the hole -> as required
+  identity R21-F1 a deciding file edited on disk and NOT in the commit (the review's own `skip=` default, in a copy): the committed copy named nothing, the edited one SELF-BYTES-UNCOMMITTED, SELF-TREE-DIRTY, and with the comparison DELETED that name is gone and SELF-TREE-DIRTY remains -> as required
+  identity C20 the frame gate in front of --check-blocks: rc=5 with a refusal to report (want 5), rc=2 without one (want 2, nothing enrolled) -> as required
+  identity C21 `re.fullmatch` rebound WITH the import-time snapshot: refused as MODULE-ATTR-FOREIGN, the scan rc=5, the identity test saw nothing wrong, and with `attr-identity` DELETED the frame named nothing at all -> as required
+  identity C21 a body compiled under another file name: refused as FRAME-FUNCTION-FOREIGN (want FRAME-FUNCTION-FOREIGN), no `__wrapped__` to notice, the scan rc=5, and with `fn-identity` DELETED that refusal is gone and what reds instead is figures_on -> as required
+  identity C21 a body defined inside another function: refused as FRAME-FUNCTION-NESTED (want FRAME-FUNCTION-NESTED), no `__wrapped__` to notice, the scan rc=5, and with `fn-identity` DELETED that refusal is gone and what reds instead is figures_on -> as required
+  frame  R19-S3 the scan refuses an inadmissible frame rc=5 (want 5), and with no refusal to report the same arm rc=1 (want 1) -> as required
+  anchor R19-S2 bare repository, from the repository root    refuses as GIT-BARE-REPOSITORY, and with the anchor deleted as GIT-FAILED -> as required
+  anchor R19-S2 bare repository, from the harness directory  refuses as GIT-BARE-REPOSITORY, and with the anchor deleted as GIT-FAILED -> as required
+  anchor R19-S2 bare repository, from an unrelated subdir    refuses as GIT-BARE-REPOSITORY, and with the anchor deleted as GIT-FAILED -> as required
+  anchor R20-S2/C21 a `.git` FILE whose gitdir carries `core.worktree`: refuses as GIT-TOPLEVEL-DISAGREES, and with the census deleted as GIT-FAILED -> as required
+  bytes  control: a committed copy of the harness, read by the second reader: rc=0 -> as required
+  bytes  C21-F1 the review's own `skip=` default, on disk in the copy and in no commit: refused as HARNESS-BYTES-UNCOMMITTED, HARNESS-TREE-DIRTY naming check_fenced_figures.py, rc=5 -> as required
+  bytes  R21-F1 the same copy read by a reader with the comparison DELETED: rc=5 and it named HARNESS-TREE-DIRTY -> as required
+  live   both byte keys consulted, one deciding file drifted after the commit: the run named HARNESS-BYTES-UNCOMMITTED, HARNESS-TREE-DIRTY, SELF-BYTES-UNCOMMITTED, SELF-TREE-DIRTY and the scan rc=5 -> as required
+  live   `self-bytes` DELETED from the live consultation: SELF-BYTES-UNCOMMITTED is gone and HARNESS-BYTES-UNCOMMITTED remains -> as required
+  live   `harness-bytes` DELETED from the live consultation: HARNESS-BYTES-UNCOMMITTED is gone and SELF-BYTES-UNCOMMITTED remains -> as required
+  live   R22-S1 the second reader DELETED from the tree: the run named HARNESS-BYTES-READER-ABSENT, SELF-FILE-ABSENT, SELF-TREE-DIRTY and the scan rc=5 -> as required
+  live   R22-S1 this file committed NOWHERE in the bound world: the run named FRAME-SOURCE-NOT-IN-COMMIT and the scan rc=5 -> as required
+  live   R22-S1 the commit's copy defines no `_is_figure`: the run named FRAME-SOURCE-NOT-IN-COMMIT and the scan rc=5 -> as required
+  -- each guard deleted on its own, and the arms that stop answering --
+  guard  nfkc                     reds  1 arm(s): R14-S1 full-width equals                             -> measured
+  guard  format characters        reds  1 arm(s): R14-S1 zero-width space                              -> measured
+  guard  non-ascii digits         reds  5 arm(s): R14-S1 arabic-indic digits, R14-S1 extended arabic digits, R15-S3 devanagari digits +2 more -> measured
+  guard  html comment markers     reds  1 arm(s): R13 HTML comment                                     -> measured
+  guard  inline code span         reds  1 arm(s): R13-S1 N16 backticked comment                        -> measured
+  guard  blockquote and indent    reds  8 arm(s): R13 leading tab, R13 blockquote, R13 nested list item +5 more -> measured
+  guard  list marker              reds  2 arm(s): R13 list item, R13 nested list item                  -> measured
+  guard  heading marker           reds  1 arm(s): R14-F1 heading                                       -> measured
+  guard  table cell (leading)     reds  1 arm(s): R13 table cell                                       -> measured
+  guard  bracket                  reds  2 arm(s): R13 parentheses, R14-S3 percent inside brackets      -> measured
+  guard  emphasis (leading)       reds  1 arm(s): R13 bold                                             -> measured
+  guard  dash marker splits the line reds  4 arm(s): R14-F1 plain -- comment, R14-S1 behind a -- marker, R15-S2 text before the marker +1 more -> measured
+  guard  label prefix             reds  1 arm(s): R13 colon prefix                                     -> measured
+  guard  trailing punctuation     reds  7 arm(s): R13 trailing semicolon, R13 parentheses, R13 HTML comment +4 more -> measured
+  guard  emphasis (trailing)      reds  1 arm(s): R13 bold                                             -> measured
+  guard  table cell (trailing)    reds  1 arm(s): R13 table cell                                       -> measured
+  guard  figure value class       reds  8 arm(s): R13-S3 p11_repo=/var/tmp/myclone, R13-S3 ref=heads/main, R13-S3 expect=catalog.foo_invalid +5 more -> measured
+  guard  boolean spellings        reds  2 arm(s): R14-S1 boolean t as psql prints, R14-S1 boolean f as psql prints -> measured
+  guard  signed values            reds  2 arm(s): R14-S1 negative, R14-S1 positive sign                -> measured
+  guard  percent in the value     reds  3 arm(s): R13 percent, R14-S3 percent on a real figure, R14-S3 percent inside brackets -> measured
+  guard  hyphen in the key        reds  1 arm(s): R14-S1 hyphen in the key                             -> measured
+  guard  key class                reds  1 arm(s): named: UPPERCASE key                                 -> measured
+  guard  boolean case folding     reds  1 arm(s): R14-S1 boolean True                                  -> measured
+  guard  named exemptions         reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87 -> measured
+  guard  planted tokens           reds  1 arm(s): R15-S4 a planted token is not its own evidence       -> measured
+  guard  haystack from the commit reds 17 arm(s): R16-F1 an untracked scratch file is not evidence, R16-F1 a gitignored .pyc is not evidence, R16-F1 a directory that is no repository is refused +14 more -> measured
+  guard  no repository redirects the subject reds 10 arm(s): R17 a repository planted inside the haystack is refused, R18-F1 planted at the harness, run from the repository root, R18-F1 planted at the harness, run from the harness directory +7 more -> measured
+  guard  markdown is not evidence reds  1 arm(s): R12 E4b a doc is not its own evidence                -> measured
+  guard  the checker is not its own evidence reds  1 arm(s): R16-F1 the checker is not its own evidence           -> measured
+  29 guards, every one of them deleted and measured -- none reds nothing
+  control: with ONLY §7.13's twelve rows skipped, '### fabricated_count=999' still becomes 'fabricated_count=999' -- a guard that table never named
+  control: with ONLY §7.13's twelve rows skipped, 'fabricated_count=999 -- a plain comment' still becomes ['fabricated_count=999 ', ' a plain comment'] -- a guard that table never named
+  identity: 16 probe lines and 6 shapes -- with every guard skipped the matcher transforms nothing and decides only `key=value`
+  blocks R16-S2 a correct block, and numbers of other instruments rc=0 (want 0) -> as required
+  blocks R16-S2 the claim typed verbatim outside the block rc=1 (want 1) -> as required
+  blocks R16-S2 the claim REWORDED, which no sentinel named rc=1 (want 1) -> as required
+  blocks R16-S2 the claim reworded in Arabic-Indic digits rc=1 (want 1) -> as required
+  blocks R16-S2 a block whose body was edited           rc=1 (want 1) -> as required
+  blocks R17-S2 a row's verdict swapped for another row's rc=1 (want 1) -> as required
+  blocks R17-S2 control: the same row's verdict stated correctly rc=0 (want 0) -> as required
+  blocks R17-S2-B1 residual: the verdict one clause away is NOT caught rc=0 (want 0) -> as required
+  blocks: 8 arms over the enrolment rule -- all as required
+  provenance: 8 arms carry the finding's own line verbatim, 65 name a shape the finding described rather than quoted -- all as recorded
+quoted figures: 9 documents, haystack from commit 6c7b984cd3fb09ff8da27038e04ca89237275e20 (60 files), 7 candidate figures, 0 not emitted
+  the decision frame was parsed before this verdict: four functions, no refusal
+generated blocks: 3 enrolled, 0 finding(s)
+
+=== 1. drop and recreate the database ===
+NOTICE:  database "daftar" does not exist, skipping
+DB_COLLATION      : en_US.utf8 / en_US.utf8 / UTF8   (measured on the database under test, not on template1)
+=== 2. bootstrap.sql (the runtime roles + extensions), as the deployment administrator ===
+--- 2a. the renderer's own check, proved red before it is trusted ---
+UNRENDERED PLACEHOLDERS, refusing to write /tmp/tmpnbmtaz8i/bad.out: __NEWROLE_PASSWORD__
+  selftest RED case  : rc=1, output written=False -> RED as required
+bootstrap rendered: 1 placeholders substituted, 0 left
+  selftest GREEN case: rc=0 -> renders and passes
+bootstrap rendered: 16 placeholders substituted, 0 left
+=== 3. migrations 0000..0086 as daftar_migrator (NOT superuser) ===
+APPLIED 87/87 as daftar_migrator
+LAST: 0086_phase4_rls_quals_once_per_query.sql
+=== 4. Pack A (apparel / variant matrix), unnumbered, as daftar_migrator ===
+ set_config | set_config | set_config 
+------------+------------+------------
+ 9          | 11         | 34
+(1 row)
+
+psql:/var/tmp/p11sc24/prep/phase11/ddl/p11-pack-a-apparel.sql:1581: NOTICE:  Phase 11 Pack A: ledger grants generated for 3 role(s) from relacl/attacl
+PACK A APPLIED in one transaction, end-state assertion passed
+=== 4b. Pack B (lot / expiry), unnumbered, as daftar_migrator ===
+psql:/var/tmp/p11sc24/prep/phase11/ddl/p11-pack-b-lot-expiry.sql:857: NOTICE:  P11 PACK B end-state assertion passed: 19 checks
+PACK B APPLIED in one transaction, end-state assertion passed
+=== 5. the world (Pack A) ===
+    step     
+-------------
+ WORLD BUILT
+(1 row)
+
+=== 5b. the lot world (Pack B) ===
+ fixture_configure_lot_product 
+-------------------------------
+ 
+(1 row)
+
+ fixture_configure_lot_product 
+-------------------------------
+ 
+(1 row)
+
+        step        | tracked | lot_tracked | base_variants 
+--------------------+---------+-------------+---------------
+ PACK B WORLD BUILT |       2 |           1 |             2
+(1 row)
+
+             step             
+------------------------------
+ PACK B COMMAND FIXTURE READY
+(1 row)
+
+=== 6. proofs (Pack A, apparel) ===
+case                                                                     verdict                      detail
+--------------------------------------------------------------------------------------------------------------------------------------------
+happy path: a registered combination is accepted                         GREEN                        {"size": "s", "color": "red"}
+jsonb itself canonicalizes key order, which is what makes the index work GREEN                        t
+attributes is an array, not an object                                    RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a nested value                                            RED (refused as required)    catalog.variant_attributes_shape_invalid
+attributes has a non-text value                                          RED (refused as required)    catalog.variant_attributes_shape_invalid
+an axis the product's matrix does not register                           RED (refused as required)    catalog.variant_axis_unregistered
+a value that exists but is archived                                      RED (refused as required)    catalog.variant_axis_value_unregistered
+a value that does not exist at all                                       RED (refused as required)    catalog.variant_axis_value_unregistered
+a partial combination (one of two registered axes)                       RED (refused as required)    catalog.variant_axis_set_incomplete
+a product with no registered axes cannot carry attributes                RED (refused as required)    catalog.variant_axis_unregistered
+a base variant write is refused by the pre-existing authority, not by Pack A RED (refused as required)    catalog.base_variant_not_mutable
+the same combination twice                                               RED (refused as required)    product_variants_matrix_uq
+the same combination with the keys written in the other order            RED (refused as required)    product_variants_matrix_uq
+attributes changed at all (the combination is the identity)              RED (refused as required)    catalog.variant_matrix_immutable
+an axis named by existing variants cannot be removed                     RED (refused as required)    catalog.matrix_axis_in_use
+P0-01 the combination cannot be BLANKED either (the early return used to allow it) RED (refused as required)    catalog.variant_matrix_immutable
+P0-01 and the cell therefore still has exactly ONE stock identity        GREEN                        1
+a plain product's non-base variant may carry no combination at all (why the CHECK is unavailable) GREEN                        1
+and ITS combination is immutable in the other direction too              RED (refused as required)    catalog.variant_matrix_immutable
+P0-02 a value named by existing variants cannot be DELETED               RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor ARCHIVED (the non-key UPDATE the FOR KEY SHARE lock did not cover) RED (refused as required)    catalog.attribute_value_in_use
+P1-03 nor REPOINTED to another code, which is the same removal           RED (refused as required)    catalog.attribute_value_in_use
+a value no variant names is still archivable (the guard refuses removal, not administration) GREEN                        archived
+and un-archiving it is not a removal either                              GREEN                        active
+P1-04 an axis in use cannot be REPOINTED either (an UPDATE is the same removal) RED (refused as required)    catalog.matrix_axis_in_use
+P1-04 and the matrix still registers exactly its two axes                GREEN                        size,color
+an axis named by existing variants can be neither renamed nor archived in the REGISTRY RED (refused as required)    catalog.attribute_axis_in_use
+P2-06 an ARCHIVED axis cannot be added to a product's matrix             RED (refused as required)    catalog.variant_axis_archived
+P1-N01 an axis cannot be ADDED to a matrix that already has variants     RED (refused as required)    catalog.matrix_axis_set_frozen
+P1-N01 and the populated product still registers exactly its two axes    GREEN                        size,color
+P1-N01 and no committed LIVE variant of this business names other than exactly its product's registered set GREEN                        0
+P1-N01 the freeze is on POPULATED matrices only: an empty grid can still be extended GREEN                        3
+PA-01 a '{}' non-base variant is refused on a product that HAS a matrix  RED (refused as required)    catalog.variant_axis_set_incomplete
+PA-01 and on a matrix product whose grid is still EMPTY, which is about the matrix and not about the cells RED (refused as required)    catalog.variant_axis_set_incomplete
+PA-01 and no committed non-base variant of a MATRIX product carries an empty combination GREEN                        0
+PA-02 the documented recovery runs: archive the cells at zero stock, register another axis, regenerate the grid GREEN                        axes=3
+live_cells=1
+archived_cells=2
+PA-02 and the archived cell holds no stock, which is what makes it outside the grid GREEN                        keyed=0 moved=0
+PA-02 residual: a stock key on the OTHER archived cell is accepted today, and no trigger on the key reads variant status (MPR-09) GREEN                        archived_variant_on_hand=5.0000
+triggers_reading_variant_sta
+PA-02 and once the grid is live again, the axis set is frozen again (the filter is not an opening) RED (refused as required)    catalog.matrix_axis_set_frozen
+P1-01 premise: a 2-axis grid is archived at zero stock and a third axis is then registered GREEN                        axes=3
+live=0
+P1-01 un-archiving a 2-axis cell onto a 3-axis grid is refused at COMMIT (the fourth door) RED (refused as required)    catalog.variant_axis_set_incomplete
+P1-01 and the refusal comes from the deferred state check, not from a per-verb guard RED (refused as required)    deferred grid closure at COMMIT
+P1-01 and inside a multi-statement transaction it is the COMMIT that refuses RED (refused as required)    catalog.variant_axis_set_incomplete
+P1-01 the law is on the COMMITTED state: a grid is built in one transaction through states it would refuse GREEN                        live=1
+P1-01 a cell that matches the CURRENT grid can be archived and un-archived GREEN                        archived=archived
+back=active
+P1-01 a transaction that registers an axis while the cells are archived and then un-archives one is refused at COMMIT RED (refused as required)    catalog.variant_axis_set_incomplete
+P1-01 and that refusal rolled the whole transaction back: the axis it created is gone and the cell is live GREEN                        axis_left=0
+cell=active
+axes=3
+P1-01 and after an un-archive, no committed LIVE variant of this business is outside its product's grid GREEN                        0
+P1-01 write-path coverage: the plan and the catalogue's grants agree, in both directions GREEN                        held_not_planned= planned_not_held=
+P1-01 sweep daftar_app DELETE on product_attribute_axes -> refused       RED (refused as required)    foreign key
+P1-01 sweep daftar_app INSERT on product_attribute_axes -> accepted, and cannot reach the state GREEN                        added=1
+P1-01 sweep daftar_app UPDATE on product_attribute_axes -> refused       RED (refused as required)    catalog.attribute_axis_in_use
+P1-01 sweep daftar_app DELETE on product_attribute_values -> refused     RED (refused as required)    catalog.attribute_value_in_use
+P1-01 sweep daftar_app INSERT on product_attribute_values -> accepted, and cannot reach the state GREEN                        added=1
+P1-01 sweep daftar_app UPDATE on product_attribute_values -> refused     RED (refused as required)    catalog.attribute_value_in_use
+P1-01 sweep daftar_app DELETE on product_matrix_axes -> refused          RED (refused as required)    catalog.matrix_axis_in_use
+P1-01 sweep daftar_app INSERT on product_matrix_axes -> refused          RED (refused as required)    catalog.matrix_axis_set_frozen
+P1-01 sweep daftar_app UPDATE on product_matrix_axes -> refused          RED (refused as required)    catalog.matrix_axis_in_use
+P1-01 sweep daftar_app INSERT on product_variants -> refused             RED (refused as required)    catalog.variant_axis_set_incomplete
+P1-01 sweep daftar_app UPDATE on product_variants -> refused             RED (refused as required)    deferred grid closure at COMMIT
+P1-01 sweep daftar_inventory_internal INSERT(business_id) on product_variants -> refused RED (refused as required)    catalog.base_variant_not_mutable
+P1-01 and after the whole sweep the grid is still closed                 GREEN                        0
+P1-01/5 the challenger's scenario: the chain, then daftar_app with the context RESET before COMMIT, is REFUSED RED (refused as required)    catalog.matrix_grid_unverifiable
+P1-01/5 and that refusal rolled the chain back: the axis is gone and nothing is outside the grid GREEN                        axis_left=0
+axes=3
+outside=0
+P1-01/5 a DELETE committed by a session that is no longer the writing session is REFUSED (the read-back has no answer here) RED (refused as required)    catalog.matrix_grid_unverifiable
+P1-01/5 and the delete was rolled back: the fixture product keeps both axes GREEN                        axes=2
+P1-01/5 the same shape WITHOUT the identity change commits (the arm refuses blindness, not transactions) GREEN                        added=1
+PA6-05 forging the old GUC inside the transaction no longer helps: the chain is REFUSED RED (refused as required)    catalog.matrix_grid_unverifiable
+PA6-06 and the SESSION-level forgery, set before BEGIN with no set_config inside at all, is REFUSED RED (refused as required)    catalog.matrix_grid_unverifiable
+PA6-09 the pooled-connection shape: one session SET, then TWO successive transactions, BOTH refused RED (refused as required)    catalog.matrix_grid_unverifiable
+PA6-09 and nothing committed from either transaction: no forged axis exists and nothing is outside the grid GREEN                        forged_axes=0
+axes=3
+outside=0
+PA6-L1 daftar_app cannot choose what is recorded about it: supplying recorded_identity is permission denied RED (refused as required)    permission denied for table catalog_grid_ctx_ledger
+PA6-L2 nor plant a row for ANOTHER transaction: the own-transaction write policy refuses it RED (refused as required)    new row violates row-level security policy
+PA6-L3 nor remove the honest rows: UPDATE on the ledger is permission denied RED (refused as required)    permission denied for table catalog_grid_ctx_ledger
+PA6-L4 nor DELETE them, which is the one lever unanimity could not survive RED (refused as required)    permission denied for table catalog_grid_ctx_ledger
+PA6-L5 the one insert it may make records the server's own answer, not the caller's GREEN                        identity=daftar_app|aaaaaaaa-0000-0000-0000-00000000000a|111
+PA6-L6 a transaction that wrote under TWO identities and came back to the first is REFUSED (first-write-wins passed this) RED (refused as required)    catalog.matrix_grid_unverifiable
+PA6-L7 and nothing from that transaction committed, and the closure invariant still holds GREEN                        unanim=0
+outside=0
+PA6-L8 several statements under ONE identity still commit (the arm refuses a change of identity, not a transaction) GREEN                        recorded=2 identities=1
+PA6-L9 and that lawful transaction left nothing behind                   GREEN                        lawful=0
+PA7-S1 the harmful chain inside a RELEASEd savepoint is REFUSED (it committed at 2bfb6d5, rc 0, 1 variant outside its grid) RED (refused as required)    catalog.matrix_grid_unverifiable
+PA7-S2 the isolating control: the identical chain at TOP LEVEL is REFUSED too, so the savepoint was the whole difference RED (refused as required)    catalog.matrix_grid_unverifiable
+PA7-S3 and a WHOLLY LAWFUL build inside a RELEASEd savepoint COMMITS (the same clause refused it at 2bfb6d5) GREEN                        built=1
+PA7-S4 a PL/pgSQL EXCEPTION block opens the same subtransaction with no SAVEPOINT keyword, and its ledger rows are COUNTED GREEN                        recorded=1
+PA7-S5 a write under ANOTHER identity that was ROLLED BACK leaves no ledger row, and the transaction commits GREEN                        identities=1
+PA7-S7 the statement trigger fires for a ZERO-ROW statement, so a no-op supplies a consenting ledger row for free GREEN                        recorded=1
+PA7-S8 and the exploit built on that free consent -- harmful chain in a savepoint, a ZERO-ROW no-op as the only top-level write -- is REFUSED RED (refused as required)    catalog.matrix_grid_unverifiable
+PA7-S9 R7-06: TRUNCATE on the governed relations is not granted to the application role, so no write can escape the recorder RED (refused as required)    permission denied for table product_variants
+PA8-O1 the plant is refused for the OWNER too, because the ledger is FORCE RLS and a policy binds its owner RED (refused as required)    new row violates row-level security policy
+PA9-O2 the OWNER can choose what is recorded about itself for its OWN txid: the privilege leg does not bind it GREEN                        chosen=1
+PA9-O3 and it buys the owner nothing on the path the law judges: a chosen row beside a real write is REFUSED RED (refused as required)    catalog.matrix_grid_unverifiable
+PA9-O4 the narrowing: a governed write engaging no live grid COMMITS with two identities recorded (attribution lost, no unlawful state) GREEN                        identities=2
+PA9-P1 R9-F2: an owner-written prune deletes NOTHING and its own verification confirms the nothing GREEN                        deleted=0
+owner_sees=0
+PA9-P2 and a superuser sees the rows the owner just failed to delete and believed were gone GREEN                        present=true
+PA7-S6 and nothing from the two refused savepoint chains committed: no axis of theirs exists and nothing is outside its grid GREEN                        sp=0
+outside=0
+P1-01 a principal that cannot read the registries is REFUSED, not passed (catalog.matrix_grid_unverifiable) RED (refused as required)    catalog.matrix_grid_unverifiable
+P1-01 and the privilege that case withdrew is restored, measured rather than assumed GREEN                        select_restored=true
+PA-03 a same-named relation in another schema no longer contributes to the policy-set pin GREEN                        qualified=business_isolation,tenant_membership
+unqualified_w
+PA-04 the two spellings the challenge measured through the list are now caught GREEN                        gt=true
+notnull=true
+PA-04 and so are the four the list already carried, plus an absent USING clause GREEN                        true=true
+oneone=true
+cast=true
+parens=true
+nousing=true
+PA-04 and it does not call the pack's own tenant qualifier, a false constant, or a nullable column's IS NOT NULL a tautology GREEN                        own=false
+falseconst=false
+nullable=false
+notnullable=true
+P2-01 the self-comparison the challenge measured as a live cross-tenant hole is caught GREEN                        self=true
+notdistinct=true
+negated=true
+P2-01 and form 4 rests on NOT NULL: over a nullable column the self-comparison is not a tautology, but IS NOT DISTINCT FROM still is GREEN                        nullable_eq=false
+nullable_nd=true
+notnull_eq=true
+twocols=f
+P2-01 and the spellings that honestly remain are named and measured as still passing (PR-SEC-P11-01) GREEN                        anyarray=false
+orself=false
+coalesce=false
+P3-01 form 2 evaluates the stored expression, so its side effects happen as the installer (a stated limit, measured) GREEN                        verdict=false
+side_effect_ran_as=postgres
+PA-04 and PUBLIC cannot execute the test, which reads the catalogue      GREEN                        f
+P2-N02 an axis a product's matrix registers cannot be archived either    RED (refused as required)    catalog.attribute_axis_in_use
+P2-N02 and once no matrix registers it, archiving the same axis is allowed (a guard, not a blanket refusal) GREEN                        archived
+P2-06 the validator still RAISES its archived-axis refusal, now unreachable from a committed state (defence in depth, STRUCTURAL, comment-stripped) GREEN                        t
+P2-06 and the pin is not vacuous: the stripper answers, and leaves no comment behind for a name to hide in GREEN                        true,true
+P2-07 an in-use axis cannot be deleted by the APPLICATION role either (the guard under live RLS) RED (refused as required)    catalog.matrix_axis_in_use
+P2-07 nor can it delete an in-use VALUE                                  RED (refused as required)    catalog.attribute_value_in_use
+P2-07 the guards are SECURITY INVOKER, because a DEFINER one cannot satisfy the restrictive policy GREEN                        0
+P2-07 the measurement itself: that role reads NOTHING without a session context, and WITH one it reads the business's variants GREEN                        no-context=0
+with-context=true
+grant_left_behind=false
+P2-07 and Pack A leaves product_variants' policy set exactly as it found it GREEN                        business_isolation,tenant_membership
+as daftar_app in business B, business A's axes are invisible             GREEN                        0
+as daftar_app in business B, inserting an axis FOR business A is refused RED (refused as required)    row-level security
+as daftar_app in business B, business A's matrix rows are invisible      GREEN                        0
+with business A's own context the same rows ARE visible (the read is not broken, it is scoped) GREEN                        6
+business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation) GREEN                        0
+daftar_app does not bypass RLS                                           GREEN                        f
+
+TOTAL 121 cases, 0 failed
+=== 6a2. proofs (Pack B, lot/expiry) ===
+case                                                                                                                    verdict                   detail
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+a lot code must be the catalogue's canonical form, not a second normalization                                           RED (refused as required) stock_lots_code_canonical_ck
+the same lot code twice for one variant                                                                                 RED (refused as required) stock_lots_code_uq
+expiry before production                                                                                                RED (refused as required) stock_lots_dates_ck
+a status outside active/blocked/closed (a quarantine is a status, not a value change)                                   RED (refused as required) stock_lots_status_ck
+an overlay row naming a lot of ANOTHER variant                                                                          RED (refused as required) stock_lot_movements_lot_fk
+an overlay row naming a movement of another stock key                                                                   RED (refused as required) stock_lot_movements_movement_fk
+a zero overlay delta                                                                                                    RED (refused as required) stock_lot_movements_qty_ck
+the happy path: a lot-tracked movement whose allocation sums exactly                                                    GREEN                     2
+the allocation sums to less than the movement (C-LOT-01)                                                                RED (refused as required) inventory.lot_allocation_sum_mismatch
+a lot-tracked movement with NO allocation at all                                                                        RED (refused as required) inventory.lot_allocation_missing
+an allocation on a variant that is NOT lot-tracked                                                                      RED (refused as required) stock_lot_movements_lot_fk
+an allocation whose SIGN disagrees with the movement                                                                    RED (refused as required) inventory.lot_allocation_sign_invalid
+SET CONSTRAINTS ALL IMMEDIATE does not switch the conservation law off                                                  RED (refused as required) inventory.lot_allocation_sum_mismatch
+an overlay row cannot be updated, not even by the principal that owns the table                                         RED (refused as required) inventory.ledger_immutable
+nor deleted                                                                                                             RED (refused as required) inventory.ledger_immutable
+the per-lot cache cannot disagree with the stock key's on-hand                                                          RED (refused as required) inventory.lot_level_conservation_violated
+and it commits when it does agree                                                                                       GREEN                     10
+a negative per-lot on-hand                                                                                              RED (refused as required) stock_lot_levels_on_hand_ck
+the fold reports the lot's own quantity from the movements, not the cache                                               GREEN                     6
+the fold refuses a key outside the transaction's business                                                               RED (refused as required) inventory.scope_mismatch
+daftar_app cannot switch lot tracking on (it is inventory configuration)                                                RED (refused as required) inventory.configuration_authority_required
+nor set it at insert time                                                                                               RED (refused as required) inventory.configuration_authority_required
+lot tracking cannot change once the product has stock history                                                           RED (refused as required) inventory.lot_tracking_history_locked
+a lot of something that holds no stock at all                                                                           RED (refused as required) products_lot_requires_tracking_ck
+the expiry policy admits exactly one value in this phase                                                                RED (refused as required) products_expiry_policy_ck
+as daftar_app in business B, business A's lots are invisible                                                            GREEN                     0
+with business A's own context the same lots ARE visible                                                                 GREEN                     3
+business A's context with the WRONG tenant sees nothing                                                                 GREEN                     0
+daftar_app cannot write a lot at all (the overlay is the authority's)                                                   RED (refused as required) permission denied
+no monetary column exists on any overlay relation (L-P11-02)                                                            GREEN                     0
+the costing key is untouched: stock_levels still has no column below the variant                                        GREEN                     0
+P1-01 a movement that moves the key away from the per-lot cache is refused AT THE MOVEMENT                              RED (refused as required) inventory.lot_level_conservation_violated
+P1-01 and a key with no per-lot cache at all is still lawful (the half that waits for the writer)                       GREEN                     true
+P1-01 and the refusal is the same when the COMMIT is judged as daftar_app (NOSUPERUSER NOBYPASSRLS)                     RED (refused as required) inventory.lot_level_conservation_violated
+P1-02 a COMMIT that cannot read its own movement is REFUSED, not passed                                                 RED (refused as required) inventory.lot_conservation_unverifiable
+P1-02 and the lawful path still commits (the fail-closed arm is not a blanket refusal)                                  GREEN                     true
+P2-03 a role with no overlay privilege cannot read the table directly                                                   RED (refused as required) permission denied
+P2-03 nor through the SECURITY DEFINER fold, which is no longer PUBLIC-executable                                       RED (refused as required) permission denied
+P2-03 and the end state says so from the catalogue, not from this test                                                  GREEN                     false
+P2-04 the fold still answers inside its own scope                                                                       GREEN                     true
+P2-04 with the tenant context dropped it REFUSES instead of answering 0                                                 RED (refused as required) inventory.scope_mismatch
+P2-04 and with a FOREIGN tenant it refuses too (the lot is not visible, which is not the same as empty)                 RED (refused as required) inventory.scope_mismatch
+P3 a lot that movements name cannot have its expiry date rewritten (the guard binds the OWNER)                          RED (refused as required) inventory.lot_facts_frozen
+P3 nor its receipt order, which the picker's index orders by                                                            RED (refused as required) inventory.lot_facts_frozen
+P3 and the inventory principal cannot rewrite a lot fact at all, by the grant                                           RED (refused as required) permission denied
+P3 but a lot no movement names is still correctable, because a receipt typo is real                                     GREEN                     2027-04-30
+P3 and the status of a lot is NOT a fact of the goods: a quarantine is still allowed                                    GREEN                     active
+P3 a lot that movements name cannot have its CODE rewritten either (both columns moved together)                        RED (refused as required) inventory.lot_facts_frozen
+P3 and moving the stored code ALONE is refused by the canonical-form CHECK, not by the guard (the mask, named)          RED (refused as required) stock_lots_code_canonical_ck
+PB-17 a direct write to the stock key fires neither conservation trigger, and the exposure is a GRANT (scope, measured) GREEN                     diverged_by=5.0000
+restored=key=cache
+table_updaters=daftar_migrator
+on_hand_updaters=daftar_inventory_internal,daftar_migrator
+PB-17 and the routine that closes it is named in the law, not left to a reader (SPEC ONLY at this SHA)                  GREEN                     core_routine=1 overlay_routine=0
+D-32 a COMMIT that cannot read the stock key behind its own cache row is REFUSED, not passed                            RED (refused as required) inventory.lot_conservation_unverifiable
+D-32 and the lawful cache write still commits, so the arm is not a blanket refusal                                      GREEN                     lawful=key=cache
+
+PACK B TOTAL 53 cases, 0 failed
+=== 6c. the same suites, a SECOND time on the same database (idempotence) ===
+
+TOTAL 121 cases, 0 failed
+
+PACK B TOTAL 53 cases, 0 failed
+=== 6b. real concurrency: the races, two live backends, no sleep() (Pack A) ===
+## RESULT MATRIX — 9 races, real backends, no sleep()
+
+| race                                                       | T1 | T2 | observed | verdict |
+|------------------------------------------------------------|---|---|---|---|
+| A  duplicate combination                                   | INSERT {size:s,color:red}, then COMMIT | INSERT the same combination, concurrently | T2 blocked while T1 held the speculative insert: True. Rows after both: 1. T2: refused on product_variants_matrix_uq | backends in a transaction together: 2/2 | PASS — exactly one commits; the index refuses the other, and it BLOCKS rather than racing |
+| B  axis removed vs variant inserted                        | DELETE the 'color' axis of this product, then COMMIT | INSERT a variant naming 'color', concurrently | T2 blocked: True. T2: ERROR:  catalog.variant_axis_unregistered: axis co. Variants naming an unregistered axis after both commit: 0 | backends in a transaction together: 2/2 | PASS — the closure invariant holds after both commit |
+| B2 variant inserted vs axis removed (reverse order)        | INSERT a variant naming 'color', then COMMIT | DELETE the 'color' axis, concurrently | T2 blocked: True. T2: refused on catalog.matrix_axis_in_use. Axis rows after both: 1; variants naming it: 1 | backends in a transaction together: 2/2 | PASS — the deleter waits on the inserter's FOR SHARE row lock and the guard then SEES the committed variant (R62's mechanism: the executor locks OLD before the trigger body) |
+| C  attributes changed vs first stock movement              | UPDATE attributes while no stock exists yet, then COMMIT | INSERT the variant's FIRST stock_levels row, concurrently | T1: ERROR:  catalog.variant_matrix_immutable. T2 blocked: False. T2: committed. Final: {"size": "s", "color": "red"} | stock rows: 1 | backends in a transaction together: 2/2 | PASS — the interleaving does not produce a changed-attributes-with-stock row |
+| D  value archived vs variant inserted                      | INSERT a variant naming the value row of this run, then COMMIT | UPDATE that value row to status='archived', concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a non-active value after both: 0 | backends in a transaction together: 2/2 | PASS — FOR SHARE makes the non-key UPDATE wait, and the new in-use guard then refuses it |
+| E  value deleted vs variant inserted                       | INSERT a variant naming the value row of this run, then COMMIT | DELETE that value row, concurrently | T2 blocked: True. T2: refused on catalog.attribute_value_in_use. Variants naming a value that no longer exists: 0 | backends in a transaction together: 2/2 | PASS — the deleter waits, then the guard sees the committed variant and refuses |
+| F  value deleted vs variant inserted (reverse order)       | DELETE this run's value row, then COMMIT | INSERT a variant naming this run's value row, concurrently | T2 blocked: True. T2: refused on catalog.variant_axis_value_unregistered. Orphan variants: 0 | backends in a transaction together: 2/2 | PASS — the inserter waits on the deleted row and is then refused by its own registry read |
+| G  first variant inserted vs a third axis added            | INSERT the product's first variant {size:s,color:red}, then COMMIT | INSERT a third axis into the same matrix, concurrently | T2 blocked: True. T2: refused on catalog.matrix_axis_set_frozen. Axes after both: 2; variants not naming exactly the registered set: 0 | backends in a transaction together: 2/2 | PASS — the axis write waits on the variant's shared advisory lock and the freeze guard then SEES the committed variant |
+| H  a third axis added vs the first variant (reverse order) | INSERT a third axis while the product has no variants, then COMMIT | INSERT a 2-axis variant, concurrently | T2 blocked: True. T2: refused on catalog.variant_axis_set_incomplete. Axes after both: 3; non-base variants: 0; not naming exactly the registered set: 0 | backends in a transaction together: 2/2 | PASS — the variant write waits, then its completeness count sees the third axis and refuses the partial combination |
+
+9 races run; 0 finding(s).
+=== 6d. real concurrency: the lot overlay's races (Pack B) ===
+| race | interleaving | commits | committed state | verdict |
+|---|---|---|---|---|
+| R1 a key-mover against a cache-writer, T1 commits first | T1 ok / T2 ok; T1 commits first; overlap 2/2 | T1 commit: ERROR:  inventory.lot_level_conservation_violated: per-lot on-hand sums to 13.0000 but the; T2 commit: ERROR:  inventory.lot_level_conservation_violated: per-lot on-hand sums to 17.0000 but the | before key 13.0000 = cache 13.0000; after key 13.0000 vs cache 13.0000; key moved 0.0, expected 0; committed: neither, expected neither | PASS — neither may commit: each transaction is judged on what IT commits, not on the pair |
+| R1b the same pair, T2 commits first | T1 ok / T2 ok; T2 commits first; overlap 2/2 | T1 commit: ERROR:  inventory.lot_level_conservation_violated: per-lot on-hand sums to 13.0000 but the; T2 commit: ERROR:  inventory.lot_level_conservation_violated: per-lot on-hand sums to 17.0000 but the | before key 13.0000 = cache 13.0000; after key 13.0000 vs cache 13.0000; key moved 0.0, expected 0; committed: neither, expected neither | PASS — neither may commit, in this arrival order either |
+| R2 two lawful movements on one key through different lots, T1 commits first | T1 ok / T2 ok [BLOCKED]; T1 commits first; overlap 2/2 | T1 commit: ok; T2 commit: ok | before key 13.0000 = cache 13.0000; after key 19.0000 vs cache 19.0000; key moved 6.0, expected 6; committed: both, expected both | PASS — both commit and the key moves by 4+2; the command's own lock on the key row serializes them |
+| R2b the same pair, T2 commits first | T1 ok / T2 ok [BLOCKED]; T2 commits first; overlap 2/2 | T1 commit: ok; T2 commit: ok | before key 19.0000 = cache 19.0000; after key 25.0000 vs cache 25.0000; key moved 6.0, expected 6; committed: both, expected both | PASS — both commit in the reverse order too, and the key moves by 4+2 |
+
+4 Pack B races run; 0 finding(s).
+UNMEASURED still: a cache writer that moves the cache WITHOUT moving the key and is
+lawful doing it — no principal can be that today, because any one-sided change is
+refused on its own. That is §3.6's writer, and the lock order belongs with it.
+=== 7. the frozen tree, after the run ===
+tracked changes under infrastructure/database: 0
+frozenThrough: 0079_phase4_pos_till_sessions_cart.sql | frozen entries: 80 | digest mismatches: []
+
+RUN_ID            : p11-20261019T171958Z-30962
+RUN_AT_UTC_END    : 2026-10-19T17:23:08Z
+EXIT_PROOFS_A     : 0  (prep/phase11/harness/proofs.py)
+EXIT_PROOFS_B     : 0  (prep/phase11/harness/proofs_b.py)
+EXIT_PROOFS_A_RUN2: 0  (the same file, the same database -- idempotence)
+EXIT_PROOFS_B_RUN2: 0  (the same file, the same database -- idempotence)
+EXIT_HARNESS_BYTES: 0  (prep/phase11/harness/check_harness_bytes.py, run at step 0c-0 before anything that reads the harness: every deciding file's bytes against the blob the resolved commit holds, by a reader that shares no code with the checker)
+EXIT_GENERATED_BLOCKS: 0  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 0c beside the figure scan)
+EXIT_FENCED_FIGURES: 0  (prep/phase11/harness/check_fenced_figures.py, run at step 0c: after the cluster is up, before the database is recreated)
+EXIT_RACES        : 0  (prep/phase11/harness/races.py)
+EXIT_RACES_B      : 0  (prep/phase11/harness/races_b.py)
+EXIT_SCRIPT       : 0  (0 means every step above returned 0)
+AUTHORITATIVE rc=0

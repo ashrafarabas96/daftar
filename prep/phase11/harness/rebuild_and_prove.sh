@@ -30,6 +30,30 @@ export P11_SOCK=$SOCK P11_PORT=$PORT
 H=$REPO/prep/phase11/harness
 PSQL_P="$PG/psql -h $SOCK -p $PORT"
 
+DIRTY="$(git -C $REPO status --porcelain)"
+if [ -n "$DIRTY" ]; then
+  # THE COORDINATOR'S `F1` RULING, round 22. The byte law covers every deciding
+  # file and it cannot cover THE FILE THAT INVOKES IT: an uncommitted version of
+  # this script with the four checking lines replaced by `true`, or an
+  # uncommitted `check_fenced_figures.py` whose call site passes a guard off and
+  # whose invocation of the second reader returns early, produced a full green
+  # run with the law never executed. No check inside a self-run entry point can
+  # stop that -- the entry point is what would run the check.
+  #
+  # What CAN be true is that such a tree produces NO ADMISSIBLE TRANSCRIPT. So a
+  # dirty tree is FATAL here, and refused by name in both readers as well, where
+  # deleting it from this script does not reach. A transcript is evidence only
+  # when it was produced from a CLEAN tree whose HEAD is the committed sha, and
+  # reviewers run from fresh clones. An uncommitted edit -- one file or many --
+  # is then the declared limit rather than a measured escape.
+  echo "REFUSED: SOURCE-TREE-DIRTY: the work tree at $REPO carries uncommitted"
+  echo "changes, so nothing below would be a measurement of the committed code and"
+  echo "its transcript would not be evidence. The entries:"
+  git -C $REPO status --porcelain | sed 's/^/  /'
+  echo "EXIT_SOURCE_TREE_DIRTY: 5  (refused before the cluster, the identity block and every gate)"
+  exit 5
+fi
+
 # ── 0. the cluster, created here when it does not exist ──────────────────────
 if [ ! -d "$S/data" ]; then
   echo "=== 0. creating the scratch cluster at $S on en_US.utf8 ==="
@@ -95,8 +119,12 @@ echo "=== 0c. the documents' quoted figures (every key=value shown as output mus
 # under the harness must equal `git show <resolved sha>:<path>`. It runs FIRST
 # here because every number printed below is read out of those bytes. The scan
 # and `--check-blocks` read the same law themselves -- once with their own code
-# and once through this reader, which shares none of it -- so a reader who runs
-# them alone is not outside it.
+# and once through this reader, which shares none of it. What that does NOT buy,
+# and the sentence here used to claim it did: the line that INVOKES the reader
+# lives in the file the same edit changes, so a reader who runs the scan alone
+# is not outside an uncommitted edit to the scan. What is true is that a dirty
+# tree is refused by name by this script above, by the scan and by this reader,
+# so no admissible transcript comes out of such a tree.
 echo "--- 0c-0. the deciding files against the commit ---"
 python3 -I $H/check_harness_bytes.py
 RC_HARNESS_BYTES=$?
@@ -128,8 +156,9 @@ if [ $RC_FIGURES -ne 0 ]; then
   echo "discovery, or a DECISION FRAME the closed sub-language does not admit -- which "
   echo "now includes a listed module ATTRIBUTE rebound since this file imported it, a "
   echo "frame function whose source is not the code that runs, and a CONSTANT the "
-  echo "matcher decides on that no longer digests to the pinned value, in which case run "
-  echo "\`--decision-constants\` and commit what it prints (exit 5). "
+  echo "frame function whose source is not the code that runs, or a DECIDING FILE whose "
+  echo "bytes are not the bytes the commit holds -- there is no pinned digest to move "
+  echo "any more, and no refusal here tells its reader what would silence it (exit 5). "
   echo "In every case this run would publish a number with no instrument behind it, or "
   echo "would have checked it against the working directory rather than against the "
   echo "commit. Refusing to run."

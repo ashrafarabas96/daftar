@@ -80,6 +80,16 @@ def _git(root, argv):
     env["PATH"] = "/usr/bin:/bin:/usr/local/bin"
     env["GIT_GRAFT_FILE"] = os.devnull
     env["GIT_CONFIG_NOSYSTEM"] = "1"
+    # `R22-S3`. Dropping every `GIT_*` key is not the whole environment: the
+    # GLOBAL config is found through `HOME` *and* through `XDG_CONFIG_HOME`,
+    # which is not a `GIT_*` key and survived the scrub, so an injected global
+    # config reached this reader and not the older one. The challenger measured
+    # the content route CLOSED -- `git show` applies no smudge filter and a
+    # global `core.worktree` does not move `rev-parse --show-toplevel` -- so
+    # this is the asymmetry closed, not an escape patched: the older reader's
+    # own hardening, missing from the reader whose whole answer comes out of git.
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["XDG_CONFIG_HOME"] = os.devnull
     env["HOME"] = os.devnull
     got = subprocess.run(
         ["/usr/bin/git", "--no-replace-objects", "-C", root] + list(argv),
@@ -106,26 +116,168 @@ def _deciding_files(harness_dir):
     return sorted(out)
 
 
+class Anchor(Exception):
+    """A named refusal while resolving the commit the deciding files are read from."""
+
+
+def _census_top(subject):
+    """The ONE repository that contains the subject, derived STRUCTURALLY.
+
+    `F2`, the coordinator's third review: this reader used to ask git for the
+    toplevel (`rev-parse --show-toplevel` from the harness directory) and take
+    the answer. An UNTRACKED nested `.git` inside the harness, with the plant
+    committed into it, therefore answered for the subject and this reader
+    returned 0 -- the chain stayed red only because the other reader refused.
+    An independent second reader that can be redirected by the subject is not
+    independent in the only direction that matters.
+
+    So the anchor is derived the way the haystack's is, and DERIVED AGAIN HERE
+    rather than imported: a census of every ancestor of the subject up to `/`,
+    and of the subject itself, for a `.git` entry. None, more than one, a
+    subject that is its own repository, a `.git` anywhere inside the subject, a
+    bare repository, a census that disagrees with git's own discovery, or a
+    `HEAD` that differs between the subject and the toplevel -- each is a NAMED
+    refusal and none of them picks a repository. Sharing the other reader's
+    code would make one bug a bug in both; writing it twice is the point.
+    """
+    repos = []
+    at = subject
+    while True:
+        if os.path.exists(os.path.join(at, ".git")):
+            repos.append(at)
+        parent = os.path.dirname(at)
+        if parent == at:
+            break
+        at = parent
+    if not repos:
+        raise Anchor(
+            "HARNESS-NO-REPOSITORY: no ancestor of the harness %s holds a `.git`, so "
+            "there is no commit to read the deciding files against." % subject
+        )
+    if len(repos) > 1:
+        raise Anchor(
+            "HARNESS-NESTED-REPO: %d repositories contain the harness %s (%s). This "
+            "reader does not choose between them, because choosing is what let the "
+            "subject pick the commit it was read against."
+            % (len(repos), subject, ", ".join(repos))
+        )
+    top = repos[0]
+    if not (subject + os.sep).startswith(top + os.sep):
+        raise Anchor(
+            "HARNESS-SUBJECT-IS-A-REPO: the harness %s is the repository root itself, "
+            "or lies outside it, so a repository planted at the harness would BE the "
+            "toplevel." % subject
+        )
+    for d, subdirs, names in os.walk(subject):
+        if ".git" in subdirs or ".git" in names:
+            raise Anchor(
+                "HARNESS-NESTED-REPO: %s exists inside the harness, so a commit of "
+                "that repository could stand in for the subject's."
+                % os.path.join(d, ".git")
+            )
+    try:
+        bare = _git(subject, ["rev-parse", "--is-bare-repository"]).decode(
+            "ascii", "replace"
+        ).strip()
+        discovered = os.path.realpath(
+            _git(subject, ["rev-parse", "--show-toplevel"]).decode("utf-8", "replace").strip()
+        )
+        here = _git(subject, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
+            "ascii", "replace"
+        ).strip()
+        there = _git(top, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
+            "ascii", "replace"
+        ).strip()
+    except (RuntimeError, OSError) as exc:
+        raise Anchor(
+            "HARNESS-ANCHOR-UNRESOLVED: the census named %s and git could not be asked "
+            "to confirm it (%s)." % (top, exc)
+        )
+    if bare != "false":
+        raise Anchor(
+            "HARNESS-BARE-REPOSITORY: git resolves the harness %s inside a BARE "
+            "repository, which an ancestor walk cannot see: it holds no `.git` entry "
+            "to find. The deciding files are read from a work tree or not at all."
+            % subject
+        )
+    if discovered != os.path.realpath(top):
+        raise Anchor(
+            "HARNESS-TOPLEVEL-DISAGREES: the census of ancestors names %s as the one "
+            "repository holding the harness %s, and git's own discovery names %s. "
+            "Where the two differ, every answer taken from git comes from a repository "
+            "the census never examined." % (top, subject, discovered)
+        )
+    if here != there:
+        raise Anchor(
+            "HARNESS-HEAD-DISAGREES: `HEAD` resolved from the harness is %s and `HEAD` "
+            "resolved from %s is %s, so the bytes would be read against one commit and "
+            "reported against another." % (here[:12], top, there[:12])
+        )
+    if len(here) != FULL_SHA:
+        raise Anchor(
+            "HARNESS-ANCHOR-UNRESOLVED: `rev-parse --verify HEAD^{commit}` returned "
+            "%r, which is not a full 40-character object name." % here
+        )
+    return os.path.realpath(top), here
+
+
+def _tree_dirty(top):
+    """The uncommitted entries in the whole work tree, or a named refusal.
+
+    THE COORDINATOR'S `F1` RULING, and it is what turns an uncommitted edit
+    from a hole into a declared limit. The byte law covered every deciding
+    file; it did not cover THE FILE THAT INVOKES IT. An uncommitted
+    `rebuild_and_prove.sh` with four lines replaced by `true`, or an
+    uncommitted `check_fenced_figures.py` whose call site passes the guard off
+    and whose invocation of this reader returns early, produced a full green
+    run with the law never executed. No check inside a self-run entry point
+    can stop that -- the entry point is what would run the check.
+
+    What CAN be true, and is enforced here and in the shell step and in the
+    other reader, is that such a tree produces NO ADMISSIBLE TRANSCRIPT: a
+    dirty tree is refused by name, wherever the run is entered. So a transcript
+    is evidence only when it was produced from a clean tree whose `HEAD` is the
+    committed sha, and reviewers run from fresh clones. An uncommitted edit --
+    one file or many -- is then the declared limit rather than a measured
+    escape, because what it can no longer produce is a green run anyone is
+    allowed to read.
+    """
+    try:
+        out = _git(top, ["status", "--porcelain"]).decode("utf-8", "surrogateescape")
+    except (RuntimeError, OSError) as exc:
+        return (
+            "HARNESS-TREE-STATE-UNREADABLE: whether the work tree at %s carries "
+            "uncommitted changes could not be determined (%s)." % (top, exc),
+        )
+    entries = [l for l in out.split("\n") if l.strip()]
+    if not entries:
+        return ()
+    return (
+        "HARNESS-TREE-DIRTY: the work tree at %s carries %d uncommitted entr%s, so a "
+        "run from it is not a run of the committed code and its transcript is not "
+        "evidence. The first of them: %s"
+        % (
+            top,
+            len(entries),
+            "y" if len(entries) == 1 else "ies",
+            "; ".join(e.strip() for e in entries[:5]),
+        ),
+    )
+
+
 def check(harness_dir=None):
     """(ok, refusals) that every deciding file is the file the commit holds."""
     harness_dir = harness_dir or _here()
     try:
-        top = os.path.realpath(
-            _git(harness_dir, ["rev-parse", "--show-toplevel"]).decode("utf-8", "replace").strip()
-        )
-        sha = _git(harness_dir, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
-            "ascii", "replace"
-        ).strip()
+        top, sha = _census_top(os.path.realpath(harness_dir))
+    except Anchor as why:
+        return False, (str(why),)
     except (RuntimeError, OSError) as exc:
         return False, (
             "HARNESS-ANCHOR-UNRESOLVED: the deciding files are read against the commit "
             "and the commit could not be resolved (%s)." % exc,
         )
-    if len(sha) != FULL_SHA:
-        return False, (
-            "HARNESS-ANCHOR-UNRESOLVED: `rev-parse --verify HEAD^{commit}` returned %r, "
-            "which is not a full 40-character object name." % sha,
-        )
+    dirty = _tree_dirty(top)
     rel_root = os.path.relpath(os.path.realpath(harness_dir), top)
     try:
         listed = _git(
@@ -140,7 +292,7 @@ def check(harness_dir=None):
         n for n in listed.split("\0") if n and n.endswith(DECIDING_SUFFIXES)
     }
     found = _deciding_files(harness_dir)
-    msgs = []
+    msgs = list(dirty)
     for n in found:
         rel = os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)
         if rel not in tracked:
@@ -192,12 +344,7 @@ def check(harness_dir=None):
 def digests(harness_dir=None):
     """The committed digest of each deciding file, for publication."""
     harness_dir = harness_dir or _here()
-    top = os.path.realpath(
-        _git(harness_dir, ["rev-parse", "--show-toplevel"]).decode("utf-8", "replace").strip()
-    )
-    sha = _git(harness_dir, ["rev-parse", "--verify", "HEAD^{commit}"]).decode(
-        "ascii", "replace"
-    ).strip()
+    top, sha = _census_top(os.path.realpath(harness_dir))
     rows = []
     for n in _deciding_files(harness_dir):
         rel = os.path.relpath(os.path.realpath(os.path.join(harness_dir, n)), top)

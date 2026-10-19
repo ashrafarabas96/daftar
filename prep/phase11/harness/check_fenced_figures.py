@@ -1005,6 +1005,70 @@ def _deciding_files(harness_dir):
     return sorted(out)
 
 
+def _tree_dirty(top):
+    """The uncommitted entries in the WHOLE work tree, or a named refusal.
+
+    THE COORDINATOR'S `F1`, measured on this head: the byte law covered every
+    deciding file and not THE FILE THAT INVOKES IT. An uncommitted
+    `rebuild_and_prove.sh` with four lines replaced by `true`, or -- the
+    challenger's `R22-F1(a)` -- three uncommitted hunks in this file that pass
+    the guard off at the call site, skip the comparison for the live directory
+    only and return before the second reader is built, produced
+    `selftest 0 / blocks 0 / scan 0` with a fabricated figure in a document.
+    Nothing inside a self-run entry point can stop that: the entry point is
+    what would run the check.
+
+    What can be true, and is enforced here, in the second reader and in the
+    shell step, is that such a tree PRODUCES NO ADMISSIBLE TRANSCRIPT. A dirty
+    tree is refused by name wherever the run is entered, including the bare
+    scan a reader or CI runs alone. So the sentence this file used to carry --
+    "an escape therefore has to be COMMITTED to work" -- is replaced by the
+    one that is true: a transcript is evidence only when it was produced from a
+    CLEAN tree whose `HEAD` is the committed sha, and reviewers run from fresh
+    clones. An uncommitted edit, one file or many, is the declared limit.
+    """
+    try:
+        out = _git(top, ["status", "--porcelain"]).decode("utf-8", "surrogateescape")
+    except (Refusal, RuntimeError, OSError) as exc:
+        return (
+            "SELF-TREE-STATE-UNREADABLE: whether the work tree at %s carries "
+            "uncommitted changes could not be determined (%s)." % (top, exc),
+        )
+    entries = [l for l in out.split("\n") if l.strip()]
+    if not entries:
+        return ()
+    return (
+        "SELF-TREE-DIRTY: the work tree at %s carries %d uncommitted entr%s, so this "
+        "run is not a run of the committed code and its output is not evidence. The "
+        "first of them: %s"
+        % (
+            top,
+            len(entries),
+            "y" if len(entries) == 1 else "ies",
+            "; ".join(e.strip() for e in entries[:5]),
+        ),
+    )
+
+
+def _harness_dir():
+    """The harness this run's deciding files are read from.
+
+    One function rather than the same expression in three places, and it is
+    here for the arms: round 22 found `self-bytes` and `harness-bytes`
+    UNARMED, because every arm exercised the law on a COPY -- which measures
+    the instrument in another directory and never that THIS run consults it.
+    An arm can now bind the live consultation to a prepared world the way the
+    identity arms rebind `re.fullmatch`, so the deletion control deletes the
+    key from the call the run actually makes.
+
+    It is one more line a planter could move, and moving it is a COMMITTED edit
+    to a deciding file: it lands in the diff under the published digest. That
+    is the same declared limit the law itself carries, and it buys two
+    deletion controls that did not exist.
+    """
+    return os.path.dirname(os.path.realpath(__file__))
+
+
 def committed_harness(harness_dir=None, compare=True):
     """(refusals, {relpath: committed text}) for the deciding files.
 
@@ -1022,8 +1086,21 @@ def committed_harness(harness_dir=None, compare=True):
     `git show <resolved anchored sha>:<path>`, and the frame parse takes its
     source from that blob rather than from `inspect.getsource`. The anchor is
     the same structural one the haystack already uses -- the most attacked and
-    best armed machinery in this phase -- so an escape from any round between 16
-    and 21 has to be COMMITTED to work, and a commit is what review reads.
+    best armed machinery in this phase.
+
+    AND THE SENTENCE THAT USED TO STAND HERE WAS MEASURED FALSE. It said an
+    escape from any round between 16 to 21 "has to be COMMITTED to work".
+    Round 22 planted three uncommitted hunks in this file -- the guard off at
+    the call site, the comparison skipped for the live directory only, the
+    second reader never invoked -- and got a fabricated figure through at
+    0/0/0; one uncommitted line in the shell step did the same to the whole
+    authoritative run. No check inside a self-run entry point can stop that.
+    What is true is the limit: a transcript is evidence only when it was
+    produced from a CLEAN tree whose `HEAD` is the committed sha, and reviewers
+    run from fresh clones -- which `_tree_dirty` refuses by name here, in the
+    second reader and in the shell step, so an uncommitted edit produces no
+    admissible transcript. An uncommitted edit, one file or many, is therefore
+    the declared limit and not a measured escape.
 
     WHAT THIS DOES NOT DO, stated here rather than beside it: it does not stop a
     planter who commits. Nothing executable can. What it changes is that the
@@ -1037,7 +1114,7 @@ def committed_harness(harness_dir=None, compare=True):
     # is the by-value deletion of the comparison itself, which is what makes
     # the arm a measurement rather than an assertion -- the arm runs the same
     # poisoned world with it deleted and requires that nothing reds.
-    harness_dir = harness_dir or os.path.dirname(os.path.realpath(__file__))
+    harness_dir = harness_dir or _harness_dir()
     try:
         top = _subject_top(harness_dir)
         sha = _commit_of(top)
@@ -1065,7 +1142,7 @@ def committed_harness(harness_dir=None, compare=True):
         }
     except Refusal as why:
         return ("SELF-ANCHOR-UNRESOLVED: %s" % why,), {}
-    msgs = []
+    msgs = list(_tree_dirty(top))
     want = [n for n in found if rel_of[n] in tracked]
     for n in found:
         if rel_of[n] not in tracked:
@@ -1152,7 +1229,8 @@ def harness_bytes_pinned():
     are passed through unchanged, because the name that refused is what an arm
     reads.
     """
-    reader = os.path.join(os.path.dirname(os.path.realpath(__file__)), "check_harness_bytes.py")
+    harness = _harness_dir()
+    reader = os.path.join(harness, "check_harness_bytes.py")
     if not os.path.isfile(reader):
         return False, (
             "HARNESS-BYTES-READER-ABSENT: the second reader of the byte law is not at "
@@ -1161,7 +1239,7 @@ def harness_bytes_pinned():
         )
     try:
         got = subprocess.run(
-            [sys.executable, "-I", reader],
+            [sys.executable, "-I", reader, "--harness", harness],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -2333,7 +2411,14 @@ def structure_test():
 #
 # An escape from any round between 16 and 21 -- a gitignored artefact, an AST
 # gap, a receiver, a rebound attribute, an argument, a re-pin, an added
-# admit-list entry -- therefore has to be COMMITTED to work.
+# admit-list entry -- is read against the commit, and a WORKING-TREE edit now
+# produces no admissible transcript rather than a green one: a dirty tree is
+# refused BY NAME here, in the second reader and in the shell step. This
+# paragraph used to say such an escape "has to be COMMITTED to work", and round
+# 22 measured that false with three uncommitted hunks in this file. The true
+# sentence is the limit: a transcript is evidence only when produced from a
+# CLEAN tree whose `HEAD` is the committed sha, and reviewers run from fresh
+# clones. An uncommitted edit, one file or many, is the declared limit.
 #
 #   WHAT THIS DOES NOT DO: it does not stop a planter who commits. Nothing
 #   executable can. What it changes is that the change is in the diff, under the
@@ -4491,12 +4576,18 @@ def identity_arms_test():
         fh.write(planted)
     moved_msgs, _b2 = committed_harness(copy)
     deleted_msgs, _b3 = committed_harness(copy, compare=False)
-    name = moved_msgs[0].split(":")[0] if moved_msgs else "NO REFUSAL"
+    # The NAME SET and not the first name: since round 22 the same world also
+    # carries the clean-tree law, which refuses `SELF-TREE-DIRTY` for the very
+    # edit this arm plants. Two laws naming the same world is the intent; what
+    # the arm reads is whether ITS name is there, and whether deleting ITS
+    # comparison takes ITS name away and leaves the other one standing.
+    moved = sorted({m.split(":")[0] for m in moved_msgs})
+    left = sorted({m.split(":")[0] for m in deleted_msgs})
     good = (
         planted != was
         and not clean_msgs
-        and name == "SELF-BYTES-UNCOMMITTED"
-        and not [m for m in deleted_msgs if m.split(":")[0] == "SELF-BYTES-UNCOMMITTED"]
+        and "SELF-BYTES-UNCOMMITTED" in moved
+        and "SELF-BYTES-UNCOMMITTED" not in left
     )
     ok = ok and good
     print(
@@ -4505,8 +4596,10 @@ def identity_arms_test():
         "edited one %s, and with the comparison DELETED %s -> %s"
         % (
             "nothing" if not clean_msgs else "%d refusal(s)" % len(clean_msgs),
-            name,
-            "that refusal is gone" if not [m for m in deleted_msgs if m.split(":")[0] == "SELF-BYTES-UNCOMMITTED"] else "it still reds, so the arm measures nothing",
+            ", ".join(moved) or "NO REFUSAL",
+            "that name is gone and %s remains" % (", ".join(left) or "nothing")
+            if "SELF-BYTES-UNCOMMITTED" not in left
+            else "it still reds, so the arm measures nothing",
             "as required" if good else "**SELFTEST FAILED**",
         )
     )
@@ -4814,7 +4907,9 @@ def harness_bytes_arm():
     ]
     names = sorted({l.split(":")[0] for l in lines})
     named_the_file = any(("`%s" % "prep/phase11/harness/" + subject) in l for l in lines)
-    good = names == ["HARNESS-BYTES-UNCOMMITTED"] and named_the_file and got.returncode == 5
+    good = (
+        "HARNESS-BYTES-UNCOMMITTED" in names and named_the_file and got.returncode == 5
+    )
     ok = ok and good
     print(
         "  bytes  C21-F1 the review's own `skip=` default, on disk in the copy and in no "
@@ -4845,21 +4940,246 @@ def harness_bytes_arm():
         [sys.executable, "-I", broken, "--harness", copy],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=180,
     )
-    named = [l for l in got.stdout.splitlines() if l.startswith("REFUSED: ")]
-    good = got.returncode == 0 and not named
+    named = sorted({
+        l.split("REFUSED: ", 1)[1].split(":")[0]
+        for l in got.stdout.splitlines() if l.startswith("REFUSED: ")
+    })
+    # BY NAME, and the clean-tree law is expected to stand: deleting the byte
+    # comparison must take `HARNESS-BYTES-UNCOMMITTED` away, and it must not
+    # take away `HARNESS-TREE-DIRTY`, which is a different law about the same
+    # world. A control that demanded silence here would be asserting that one
+    # deletion disables both, which is the opposite of what is wanted.
+    good = "HARNESS-BYTES-UNCOMMITTED" not in named and named == ["HARNESS-TREE-DIRTY"]
     ok = ok and good
     print(
         "  bytes  R21-F1 the same copy read by a reader with the comparison DELETED: "
         "rc=%d and it named %s -> %s"
         % (
             got.returncode,
-            "nothing, so the comparison is the whole of the law" if not named
-            else "%d refusal(s), so this control measures nothing" % len(named),
+            ", ".join(named) or "nothing",
             "as required" if good else "**SELFTEST FAILED**",
         )
     )
     return ok
 
+
+
+def _deciding_copy(prefix, mutate=None, exclude=(), after=None):
+    """A scratch repository holding a copy of the harness's DECIDING files.
+
+    Only the deciding files, because they are the whole subject of the byte law
+    and copying the evidence transcripts beside them costs seconds per arm for
+    nothing. `mutate` runs BEFORE the commit, so it changes what the COMMIT
+    holds; `exclude` is committed-without; `after` runs after the commit, so it
+    changes what the WORKING TREE holds. The difference between the two is the
+    law.
+    """
+    here = _harness_dir()
+    world = tempfile.mkdtemp(prefix=prefix)
+    atexit.register(shutil.rmtree, world, True)
+    copy = os.path.join(world, "prep", "phase11", "harness")
+    os.makedirs(copy)
+    for rel in _deciding_files(here):
+        dst = os.path.join(copy, rel)
+        if not os.path.isdir(os.path.dirname(dst)):
+            os.makedirs(os.path.dirname(dst))
+        shutil.copy2(os.path.join(here, rel), dst)
+    if mutate is not None:
+        mutate(copy)
+    _git(world, ["init", "-q"])
+    _git(world, ["add", "-A", "--", "."])
+    for rel in exclude:
+        _git(world, ["rm", "--cached", "-q", "--", "prep/phase11/harness/" + rel])
+    _git(
+        world,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "a copy of the harness's deciding files"],
+    )
+    if after is not None:
+        after(copy)
+    return world, copy
+
+
+def _live_names(copy, keys):
+    """The refusal NAMES the LIVE consultation produces with the harness bound
+    to `copy` and exactly `keys` consulted.
+
+    The binding is the identity arms' technique -- they rebind `re.fullmatch`
+    in this process and read what the frame says -- applied to the directory
+    the law reads. That is what makes this a control on THIS RUN: round 22
+    found `self-bytes` and `harness-bytes` unarmed precisely because every arm
+    ran the instruments on a copy, in another directory, and nothing measured
+    that the run consults them.
+    """
+    real = globals()["_harness_dir"]
+    committed, parsed = list(_COMMITTED), list(_FRAME_PARSED)
+    ast_cache = dict(_COMMITTED_AST)
+    try:
+        globals()["_harness_dir"] = lambda: copy
+        _COMMITTED[:] = []
+        _COMMITTED_AST.clear()
+        _FRAME_PARSED[:] = []
+        try:
+            _ok, msgs = frame_admissible(objects=keys)
+        except Refusal as why:
+            msgs = (str(why),)
+        _FRAME_PARSED[:] = []
+        try:
+            scanned = _arm(PROBE, ())
+        except Refusal:
+            # The rc a reader gets: `_main` maps a refusal raised out of the
+            # scan to 5. Caught here so one bound world cannot end the selftest
+            # with a traceback instead of a verdict.
+            scanned = 5
+    finally:
+        globals()["_harness_dir"] = real
+        _COMMITTED[:] = committed
+        _COMMITTED_AST.clear()
+        _COMMITTED_AST.update(ast_cache)
+        _FRAME_PARSED[:] = parsed
+    return sorted({m.split(":")[0] for m in msgs}), scanned
+
+
+def live_byte_keys_arm():
+    """`R22-F1(b)`: the two byte keys, DELETED FROM THE LIVE CONSULTATION.
+
+    The round-22 finding, in the challenger's words: of the four object checks,
+    two had a key-deletion arm and `self-bytes` and `harness-bytes` -- the two
+    that carry this law entirely -- had none. Deleting either from
+    `_frame_refusals` and committing the deletion red nothing, because the
+    three byte arms exercise the instruments on a COPY and `an arm on a copy of
+    the instrument is not a control on the run`.
+
+    So the deletion is applied HERE, to the call this process makes, with the
+    harness bound to a prepared world: one deciding file drifted on disk after
+    the commit, which is the shape the law is about. With both keys consulted
+    the run must name both refusals; with one key deleted THAT NAME must be
+    gone and the other must remain. The scan is run in the same bound world,
+    so what is measured is the verdict a reader would get and not a return
+    value.
+
+    Four more names ride this arm, each a round-22 residual (`R22-S1`) that no
+    arm read by name: the second reader DELETED (`HARNESS-BYTES-READER-ABSENT`,
+    whose own text says absence is a refusal and not a skip), a committed
+    deciding file missing from the tree (`SELF-FILE-ABSENT`), and the two sites
+    of `FRAME-SOURCE-NOT-IN-COMMIT` -- this file absent from the commit
+    entirely, and a commit whose copy of this file defines no function under
+    the name that is running.
+    """
+    ok = True
+    drift = "\n# a line this arm appends AFTER the commit, so the tree drifts\n"
+
+    def _drift(copy):
+        with open(os.path.join(copy, "proofs.py"), "a", encoding="utf-8") as fh:
+            fh.write(drift)
+
+    _world, copy = _deciding_copy("p11-livekeys-", after=_drift)
+    both, scanned = _live_names(copy, frozenset(OBJECT_KEYS))
+    want_self, want_harness = "SELF-BYTES-UNCOMMITTED", "HARNESS-BYTES-UNCOMMITTED"
+    good = want_self in both and want_harness in both and scanned == 5
+    ok = ok and good
+    print(
+        "  live   both byte keys consulted, one deciding file drifted after the commit: "
+        "the run named %s and the scan rc=%d -> %s"
+        % (", ".join(both) or "NOTHING", scanned, "as required" if good else "**SELFTEST FAILED**")
+    )
+    for key, gone, stays in (
+        ("self-bytes", want_self, want_harness),
+        ("harness-bytes", want_harness, want_self),
+    ):
+        names, _rc = _live_names(copy, frozenset(OBJECT_KEYS) - {key})
+        good = gone not in names and stays in names
+        ok = ok and good
+        print(
+            "  live   `%s` DELETED from the live consultation: %s is %s and %s %s -> %s"
+            % (
+                key,
+                gone,
+                "gone" if gone not in names else "STILL THERE",
+                stays,
+                "remains" if stays in names else "IS ALSO GONE",
+                "as required" if good else "**SELFTEST FAILED**",
+            )
+        )
+
+    # `R22-S1`, first and second names: the reader deleted from the tree. One
+    # world measures both, because a deleted deciding file is absent to this
+    # file's own reader and the second reader is the file that is gone.
+    def _unlink_reader(copy):
+        os.unlink(os.path.join(copy, "check_harness_bytes.py"))
+
+    _world, gone_copy = _deciding_copy("p11-readergone-", after=_unlink_reader)
+    names, scanned = _live_names(gone_copy, frozenset(OBJECT_KEYS))
+    good = (
+        "HARNESS-BYTES-READER-ABSENT" in names
+        and "SELF-FILE-ABSENT" in names
+        and scanned == 5
+    )
+    ok = ok and good
+    print(
+        "  live   R22-S1 the second reader DELETED from the tree: the run named %s and "
+        "the scan rc=%d -> %s"
+        % (", ".join(names) or "NOTHING", scanned, "as required" if good else "**SELFTEST FAILED**")
+    )
+
+    # `R22-S1`, third name, site one: this file is on disk and in no commit, so
+    # there are no committed bytes to parse the rules out of.
+    subject = os.path.basename(os.path.realpath(__file__))
+    _world, no_subject = _deciding_copy("p11-nosubject-", exclude=(subject,))
+    names, scanned = _live_names(no_subject, frozenset(OBJECT_KEYS))
+    good = "FRAME-SOURCE-NOT-IN-COMMIT" in names and scanned == 5
+    ok = ok and good
+    print(
+        "  live   R22-S1 this file committed NOWHERE in the bound world: the run named "
+        "%s and the scan rc=%d -> %s"
+        % (", ".join(names) or "NOTHING", scanned, "as required" if good else "**SELFTEST FAILED**")
+    )
+
+    # `R22-S1`, third name, site two: the commit holds this file and its copy
+    # defines no function under the name that is running. The rename is
+    # committed and then undone on disk, so what differs is the COMMIT.
+    # Assembled rather than written, so this line is not itself an occurrence of
+    # what it counts -- which is how the first version of this control failed.
+    marker = "def " + '_is_figure(s, skip=()):\n    """Is `s` a bare '
+    real_text = open(os.path.realpath(__file__), encoding="utf-8").read()
+    if real_text.count(marker) != 1:
+        print(
+            "  live   R22-S1 **SELFTEST FAILED**: the definition this control renames is "
+            "not in this file exactly once, so the arm would measure nothing"
+        )
+        return False
+
+    def _rename(copy):
+        target = os.path.join(copy, subject)
+        text = open(target, encoding="utf-8").read()
+        # The NAME is renamed and the rest of the anchor put back, because a
+        # replacement that swallowed the docstring's opening quotes left the
+        # committed copy unparseable: the run then refused
+        # `FRAME-SOURCE-UNREADABLE` for a syntax error, which is a different
+        # claim, and the arm was measuring the wrong refusal.
+        open(target, "w", encoding="utf-8").write(
+            text.replace(
+                marker,
+                marker.replace(
+                    "def " + "_is_figure(", "def _is_figure_not_under_this_name(", 1
+                ),
+                1,
+            )
+        )
+
+    def _restore(copy):
+        open(os.path.join(copy, subject), "w", encoding="utf-8").write(real_text)
+
+    _world, renamed = _deciding_copy("p11-renamed-", mutate=_rename, after=_restore)
+    names, scanned = _live_names(renamed, frozenset(OBJECT_KEYS))
+    good = "FRAME-SOURCE-NOT-IN-COMMIT" in names and scanned == 5
+    ok = ok and good
+    print(
+        "  live   R22-S1 the commit's copy defines no `_is_figure`: the run named %s and "
+        "the scan rc=%d -> %s"
+        % (", ".join(names) or "NOTHING", scanned, "as required" if good else "**SELFTEST FAILED**")
+    )
+    return ok
 
 
 def selftest():
@@ -4898,6 +5218,7 @@ def selftest():
     ok = anchor_names_test() and ok
     ok = gitfile_name_test() and ok
     ok = harness_bytes_arm() and ok
+    ok = live_byte_keys_arm() and ok
     ok = guard_matrix() and ok
     ok = identity_test() and ok
     ok = blocks_test() and ok

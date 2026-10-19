@@ -71,16 +71,31 @@ runs the second reader at step `0c-0`, fatally, before anything that reads those
 bytes.
 
 **What this does not do, stated at the law:** it does not stop a planter who
-COMMITS. Nothing executable can. What it changes is that every escape from
-rounds 16 to 21 — the gitignored artefact, the AST gaps, the receiver, the
-rebound attribute, the argument, the re-pin, the added admit-list entry — has to
-be in the diff, under the digests published below, in front of an independent
-challenger and the coordinator. That is the whole of the guarantee, and it is
+COMMITS. Nothing executable can. **Nor, round 22 measured, does it stop an
+UNCOMMITTED edit to the file that invokes the law** — which is why a dirty work
+tree is now refused by name wherever the run is entered (`SELF-TREE-DIRTY`,
+`HARNESS-TREE-DIRTY`, `SOURCE-TREE-DIRTY`) and why the limit is stated for the
+reader: a transcript is evidence only when it was produced from a CLEAN tree
+whose `HEAD` is the committed sha, and reviewers run from fresh clones (§7.23).
+What the law changes is that every escape from rounds 16 to 21 — the gitignored
+artefact, the AST gaps, the receiver, the rebound attribute, the argument, the
+re-pin, the added admit-list entry — has to be in the diff, under the digests
+published below, in front of an independent challenger and the coordinator. That is the whole of the guarantee, and it is
 why this phase's chain has three links and why no author signs their own work.
 
 The digests below are **published for a reader**, not compared by the run: they
 say which commit's bytes the reviews were issued against. Nothing in the harness
 reads this list.
+
+**They were taken at `868f25d`, the previously reviewed commit, and three of them
+have moved in the commit that carries §7.23** — `check_fenced_figures.py`,
+`check_harness_bytes.py` and `rebuild_and_prove.sh`. That is not an omission to
+be tidied by editing the rows: a list inside a commit cannot carry its own
+commit's digests, and the ruling that removed the self-pin is the reason this
+list is published rather than compared. **The authority is the commit**, read with
+`python3 -I harness/check_harness_bytes.py --digests`, which prints the rows for
+whatever commit the reader is standing on; the rows for this head are published
+beside the artefacts under `/mnt/project-files/phase11/`.
 
 <!-- P11-DECIDING-BYTES-PUBLISHED-AT-THE-REVIEWED-COMMIT -->
 ```
@@ -2305,15 +2320,37 @@ the COMMIT.**
   `abspath`, bare repositories and `core.worktree` redirects refused — which is
   the most attacked and best armed machinery in this phase.
 
-An escape from any round between 16 and 21 therefore has to be **committed** to
-work: the gitignored artefact, the AST gaps, the receiver, the rebound attribute,
-the argument, the re-pin, the added admit-list entry.
+**And the sentence that used to stand here was measured false in round 22.** It
+said an escape from any round between 16 and 21 "therefore has to be **committed**
+to work". The challenger planted three uncommitted hunks in the checker — the
+guard off at the call site, the byte comparison skipped for the live directory
+only, the second reader never invoked — and got a fabricated figure through at
+`selftest 0 / blocks 0 / scan 0`; one uncommitted line in `rebuild_and_prove.sh`
+(`RC_HARNESS_BYTES=0`) did the same to the whole authoritative run. The
+coordinator's review found the second half independently. **No check inside a
+self-run entry point can stop that: the entry point is what would run the check.**
+
+**THE CLEAN-TREE LAW, which is what can be true.** A dirty work tree is refused
+BY NAME wherever the run is entered — `SELF-TREE-DIRTY` in the scan and
+`--check-blocks`, `HARNESS-TREE-DIRTY` in the second reader, `SOURCE-TREE-DIRTY`
+in `rebuild_and_prove.sh`, which refuses before the cluster, the identity block
+and every gate. So the true sentence, and the one this manifest now carries
+everywhere: **a transcript is evidence only when it was produced from a CLEAN
+tree whose `HEAD` is the committed sha, and reviewers run from fresh clones.** An
+uncommitted edit — one file or many — is therefore the **declared limit** and not
+a measured escape: what it can no longer produce is a green run anyone is allowed
+to read.
 
 **What this does not do, stated at the law and not in a footnote:** it does not
-stop a planter who commits. Nothing executable can. What it changes is that the
-change is in the diff, under the published digest, in front of an independent
-challenger and the coordinator. That is the whole of the guarantee, and it is why
-this phase's chain has three links and why no author signs their own work.
+stop a planter who commits. Nothing executable can. Nor does it stop an
+uncommitted edit that deletes the clean-tree law in the same stroke — that is the
+same sentence one level down, and it is why the second half of the limit is a
+rule for the READER and not a check in the code: the reviewer runs from a fresh
+clone of the commit, where no uncommitted edit exists to delete anything. What
+the law changes is that the change has to be in the diff, under the published
+digest, in front of an independent challenger and the coordinator. That is the
+whole of the guarantee, and it is why this phase's chain has three links and why
+no author signs their own work.
 
 **`R21-S1`, and the coordinator ruled this sentence alone would block.** Item 3
 of the bound disclosed that the admit-lists are checked for dead entries and not
@@ -2389,6 +2426,133 @@ arm below it measured anything; its second used a key with no hyphen, and the
 escape under test switches the hyphen guard off, so the parent still red it. An
 arm whose control does not red measures nothing.
 
+
+---
+
+## 7.23 ROUND 22 (`REJECT` at `868f25d`) and the coordinator's diff review of the same head (`NO-SIGN`) — the clean-tree law, and the limit stated for the READER
+
+Both reviews, run independently, found the same thing from two directions: **the
+byte law covered every deciding file and not the file that INVOKES it.** The
+coordinator replaced an uncommitted `rebuild_and_prove.sh` line by line — `101`,
+`117`, `118`, `142` set to `true` — and got the full suite, cluster and database
+and all, at `rc 0` with every `EXIT_*` 0 and `EXIT_HARNESS_BYTES` 0 while the
+reader never ran. The challenger did it in ONE file and without the shell: three
+uncommitted hunks in `check_fenced_figures.py` — the guard off at the **call
+site** (so no arm's anchor moves), the byte comparison skipped **for the live
+directory only** (so every copy-based arm still printed `as required`), and
+`harness_bytes_pinned` returning before the reader's path is built — plus an
+uncommitted fabricated figure in a fenced block of this manifest. Measured:
+`selftest 0 / blocks 0 / scan 0`, the figure through, and the second reader
+refusing correctly when run on its own and run by nothing.
+
+**Both reviews first re-measured the head's own claims and found them true**: the
+nine published digests equal the committed bytes (recomputed from `git archive`,
+not from the author's tree), the authoritative suite green from zero on both
+clones, an uncommitted `skip=` default and an uncommitted `(?!4242$)` narrowing
+each refused BY NAME by both readers, textconv through `.git/config`, a
+tree-deleted file, a symlink to an untracked file and `git show`'s lack of smudge
+filters all fail-closed, and each of the two comparison copies load-bearing.
+Four of the five refusals the previous review found unarmed were confirmed armed
+by renaming each refusal's own literal on a committed copy.
+
+**THE RULING, and it is a change of what the claim is about.** No check inside a
+self-run entry point can stop an uncommitted edit to that entry point: the entry
+point is what would run the check. What can be true is that such a tree produces
+**no admissible transcript**. So:
+
+1. **A dirty work tree is FATAL and refused BY NAME, wherever the run is
+   entered.** `SELF-TREE-DIRTY` in the scan and in `--check-blocks`,
+   `HARNESS-TREE-DIRTY` in the second reader — which is where deleting it from
+   the script does not reach — and `SOURCE-TREE-DIRTY` in
+   `rebuild_and_prove.sh`, refused **before the cluster, the identity block and
+   every gate**. The bare scan a reader or CI runs alone therefore carries a
+   refusal rather than a green.
+2. **The limit is stated at the law, in the terms that are true:** a transcript
+   is evidence only when it was produced from a CLEAN tree whose `HEAD` is the
+   committed sha, and reviewers run from fresh clones. An uncommitted edit — one
+   file or many — is the **declared limit**. The sentence this head carried in
+   three places (`an escape therefore has to be COMMITTED to work`, and `a
+   reader who runs them alone is not outside it`) is **measured false and
+   deleted at every copy**: the instrument's header, this manifest, the shell
+   step, the conservation-laws row and the Arabic report, in the OUTCOME
+   sentences and in the DISCIPLINE sentences alike.
+
+**`R22-F1(b)` (BLOCKER): the two keys that carry this law had no deletion
+control.** Of the four object checks, `attr-identity` and `fn-identity` had key
+arms; `self-bytes` and `harness-bytes` did not, and deleting either from the live
+consultation — committed, on a throwaway clone — red nothing. The three byte arms
+ran the instruments **on a copy**, in another directory, which measures the
+instrument and never that THIS run consults it. *An arm on a copy of the
+instrument is not a control on the run.* So the live consultation is bound to a
+prepared world the way the identity arms rebind `re.fullmatch` — one deciding
+file drifted on disk after the commit — and the deletion is applied to the call
+the run makes: with both keys consulted the run names both refusals; with one key
+deleted THAT name is gone and the other stands. The scan is run in the same bound
+world, so what is read is the verdict and not a return value.
+
+**`R22-S1` is closed rather than carried:** `HARNESS-BYTES-READER-ABSENT` and
+`SELF-FILE-ABSENT` are armed in one world (the reader deleted from the tree), and
+both sites of `FRAME-SOURCE-NOT-IN-COMMIT` in two more — this file committed
+nowhere, and a commit whose copy of this file defines no function under the name
+that is running. **`R22-S2` is closed:** the shell step no longer tells its reader
+to run `--decision-constants` and commit what it prints, after the pin that step
+existed to move was deleted. **`R22-S3` is closed:** the second reader's `_git`
+now also clears `GIT_CONFIG_GLOBAL` and `XDG_CONFIG_HOME`, which are not `GIT_*`
+keys and survived the scrub — the challenger measured the content route closed,
+so this is the older reader's own hardening brought across rather than an escape
+patched. **`F2` is closed:** the second reader derived its commit by asking git
+for the toplevel from the harness directory, so an untracked nested `.git` with
+the plant committed into it answered for the subject and the reader returned 0.
+It now derives the anchor **structurally and independently** — its own ancestor
+census, written twice rather than imported, with `HARNESS-NO-REPOSITORY`,
+`HARNESS-NESTED-REPO`, `HARNESS-SUBJECT-IS-A-REPO`, `HARNESS-BARE-REPOSITORY`,
+`HARNESS-TOPLEVEL-DISAGREES` and `HARNESS-HEAD-DISAGREES` each a named refusal
+that picks nothing.
+
+**`R22-S4` and `R22-S5` stay named residuals.** `S4`: step `0c-0` runs `python3`
+from `PATH` and `-I` does not disable a `.pth` in system site-packages — an
+operator who controls the interpreter controls the run, which is scope and not a
+hole in the law, recorded because the law's authority is one subprocess. `S5` is
+the standing `G6` cold root build, red on `main` too.
+
+**EVIDENCE, and it includes what the law still does not stop.** All four worlds
+are throwaway clones of the candidate tree, committed before the gates run;
+nothing was edited in the working tree used for the project and no frozen
+migration was touched. The transcripts are
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND22.txt` (the four gates on the committed
+clone, the probe, and the authoritative suite from zero on PG 16 at `en_US.utf8`
+with `NOSUPERUSER NOBYPASSRLS` roles: `SOURCE_TREE_DIRTY : no`, 121 cases twice
+and Pack B 53 twice at 0 failed, every `EXIT_*` 0 including `EXIT_HARNESS_BYTES`)
+and `harness/RUN-EVIDENCE-PROBE-CLEAN-TREE-ROUND22.txt` (the four plant worlds
+side by side). Both say in their own headers which tree they measured: a scratch
+commit whose tree is this commit's minus those two `.txt` files, which are not
+deciding files — the law walks `.py`, `.sh` and `.sql` — so the deciding bytes
+they cover are the bytes this commit carries.
+
+| world | selftest / blocks / scan / reader | what refused |
+|---|---|---|
+| control: the candidate tree, committed | 0 / 0 / 0 / 0, 0 failed arms | nothing |
+| the challenger's three hunks + the figure, UNCOMMITTED | 1 / 5 / 5 / 5 | `SELF-TREE-DIRTY` first in the scan and in `--check-blocks`, `HARNESS-TREE-DIRTY` in the reader |
+| the same, plus the clean-tree law deleted in the same uncommitted file | 1 / 0 / 0 / 5, **3 failed arms** | nothing in the scan — **the declared limit** |
+| the same plant COMMITTED | 1 / 0 / 0 / 0, **3 failed arms** | nothing in the scan; `--selftest` reds |
+| `rebuild_and_prove.sh` in the dirty clone | `rc 5`, no cluster built | `SOURCE-TREE-DIRTY`, before anything ran |
+
+Three things are worth reading in that table rather than skimming. **`R22-F1(a)`
+as the challenger built it is closed:** the scan a reader runs alone reds by name.
+**The law does not stop an uncommitted edit that deletes the law too** — that is
+the same sentence one level down, and it is why the second half of the limit is a
+rule for the READER: a reviewer runs from a fresh clone of the commit, where
+there is no uncommitted edit to delete anything with. **And the plant's third
+hunk is caught by the new arms:** in both the `nolaw` and the COMMITTED world
+three arms fail, naming exactly what is missing — `HARNESS-BYTES-UNCOMMITTED`
+never appears, because the second reader is never invoked. A committed version of
+this plant therefore survives the bare scan and reds `--selftest`, which is the
+first time this class has been caught by anything in the harness.
+
+**No signature is claimed.** Round 23 of the independent challenge and the
+coordinator diff review after it are owed on this range; **`24f6ebe` is still the
+last fully signed head**, `READY_TO_PROMOTE = NO`, no migration number exists,
+and `OD-P11-07` is the owner's alone.
 
 ---
 
