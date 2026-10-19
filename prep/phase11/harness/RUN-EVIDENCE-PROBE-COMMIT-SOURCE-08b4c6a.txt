@@ -1,0 +1,68 @@
+=== R21-F1 and C21-F1 end to end, on throwaway clones ===
+subject: 08b4c6aaa9236a91eb983d2bbcbd15d80f94efab (this head)
+parent : 142f88e3e6370e37070073b4bc1f784a6b99b968 (where round 21 found the escape)
+
+The plant is zz-c22-probe=4242, COMMITTED in the owner's Arabic report inside a
+FENCED block -- a hyphenated key, because the escape under test switches the
+hyphen guard off, and inline code is not a candidate at all. Both corrections
+come from arms of mine that measured nothing on the first run and are recorded
+rather than dropped. The control must RED the figure (rc 1) or no arm below
+measures anything.
+
+### at THIS head: the edit NOT committed -- the working tree alone
+--- sha 08b4c6a arm: control (the edit committed: no) ---
+  selftest       rc=0
+  --check-blocks rc=0
+  scan           rc=1
+      NOT EMITTED lines: 1
+  tracebacks: 0
+--- sha 08b4c6a arm: skipdefault (the edit committed: no) ---
+  selftest       rc=1
+  --check-blocks rc=5
+  scan           rc=5
+      REFUSED: FRAME-INADMISSIBLE
+      the first of them: SELF-BYTES-UNCOMMITTED
+      NOT EMITTED lines: 0
+  tracebacks: 0
+      the tool now prints: DECISION_CONSTANTS_DIGEST (informational, published in the manifest) = '9d67a25b20b0efccc07d4d7b0b69229f5426228ffe3c2ea32937117c3ead388c'
+--- sha 08b4c6a arm: repin (the edit committed: no) ---
+  selftest       rc=1
+  --check-blocks rc=5
+  scan           rc=5
+      REFUSED: FRAME-INADMISSIBLE
+      the first of them: SELF-BYTES-UNCOMMITTED
+      NOT EMITTED lines: 0
+  tracebacks: 0
+
+### at THIS head: the SAME edits COMMITTED -- what the law does not stop,
+### and what review is therefore for
+--- sha 08b4c6a arm: skipdefault (the edit committed: yes) ---
+  selftest       rc=1
+  --check-blocks rc=0
+  scan           rc=0
+      NOT EMITTED lines: 0
+  tracebacks: 0
+      the tool now prints: DECISION_CONSTANTS_DIGEST (informational, published in the manifest) = '9d67a25b20b0efccc07d4d7b0b69229f5426228ffe3c2ea32937117c3ead388c'
+--- sha 08b4c6a arm: repin (the edit committed: yes) ---
+  selftest       rc=0
+  --check-blocks rc=0
+  scan           rc=0
+      NOT EMITTED lines: 0
+  tracebacks: 0
+
+### at the PARENT, where round 21 and the coordinator found them
+--- sha 142f88e arm: skipdefault (the edit committed: yes) ---
+  selftest       rc=0
+  --check-blocks rc=0
+  scan           rc=0
+      NOT EMITTED lines: 0
+  tracebacks: 0
+      the tool now prints: DECISION_CONSTANTS_SHA256 = '6450ea7d817e040a576d078e5b905f2afd1e3ff26b262d2dc5f1415d18eced5d'
+--- sha 142f88e arm: repin (the edit committed: yes) ---
+  selftest       rc=1
+  --check-blocks rc=5
+  scan           rc=5
+      REFUSED: FRAME-INADMISSIBLE
+      the first of them: DECISION-CONSTANTS-MOVED
+      NOT EMITTED lines: 0
+  tracebacks: 0

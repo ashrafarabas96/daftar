@@ -2342,6 +2342,54 @@ with their arms now reading refusal names in both directions.
 review after it are owed; **`24f6ebe` is still the last fully signed head**.
 `READY_TO_PROMOTE = NO`. `OD-P11-07` is the owner's.
 
+**EVIDENCE AT THIS HEAD.** Authoritative run
+`prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-08b4c6a.txt`, run
+`p11-20261019T161149Z-23823`, on a **clean clone at the pushed SHA**
+(`SOURCE_TREE_DIRTY : no`). Pack A 121 cases twice and Pack B 53 cases twice with
+0 failed, the races with no findings, `digest mismatches: []`, and **every
+`EXIT_*` 0** — including the new `EXIT_HARNESS_BYTES` at step `0c-0`, where the
+second reader checks every deciding file against the commit before anything reads
+those bytes — on PostgreSQL 16.15 at `en_US.utf8` with both roles `NOSUPERUSER
+NOBYPASSRLS`. `HARNESS_SHA256` moves to `e6744fe54f70…`; the pack digests and the
+migrations tree do not move. The run before it, at `04f2db2`, is kept as
+`RUN-EVIDENCE-AUTHORITATIVE-04f2db2.txt` so each transcript names its own head.
+
+**The probe is `RUN-EVIDENCE-PROBE-COMMIT-SOURCE-08b4c6a.txt`, and it measures
+what the law does and what it does not, in both directions.** The plant is
+`zz-c22-probe=4242`, committed in the owner's Arabic report inside a fenced
+block; the control reds it at `scan 1`.
+
+| at | arm | edit committed | selftest | blocks | scan |
+|---|---|---|---|---|---|
+| `08b4c6a` | control | — | 0 | 0 | **1** (`NOT EMITTED`) |
+| `08b4c6a` | the review's `skip=` default | no | 1 | **5** | **5** (`SELF-BYTES-UNCOMMITTED`) |
+| `08b4c6a` | `(?!4242$)` in `_is_figure`'s pattern | no | 1 | **5** | **5** (`SELF-BYTES-UNCOMMITTED`) |
+| `08b4c6a` | the `skip=` default | **yes** | **1** | 0 | 0 |
+| `08b4c6a` | the pattern narrowing | **yes** | 0 | 0 | 0 |
+| `142f88e` | the `skip=` default | yes | 0 | 0 | 0 |
+
+The last row is the coordinator's `C21-F1` as it stood. The two uncommitted rows
+are the law: an edit in the working tree is refused BY NAME and never measured.
+**The two committed rows are the limit, measured rather than asserted** — a
+committed pattern narrowing passes every gate, and a committed `skip=` default
+passes the scan while `--selftest` reds it, which matters because
+`rebuild_and_prove.sh` runs the selftest first and refuses to trust a checker
+that cannot fail. Nothing executable closes the committed direction. The diff,
+the published digests and two reviewers do.
+
+**One arm of mine did not measure what I intended, and is reported rather than
+dropped.** At the parent I ran the pattern narrowing WITHOUT the second edit
+round 21 used — the re-pin of the in-file literal — so it reds there as
+`DECISION-CONSTANTS-MOVED` (`1/5/5`), which measures the old pin catching a
+narrowing and not the escape. Round 21's escape needed both edits and is the
+challenger's measurement, in its own report, not mine. **Two earlier corrections
+to the same probe, for the same reason:** its first version planted the figure as
+INLINE code, which is not a candidate at all, so the control returned `0` and no
+arm below it measured anything; its second used a key with no hyphen, and the
+escape under test switches the hyphen guard off, so the parent still red it. An
+arm whose control does not red measures nothing.
+
+
 ---
 
 ## 8. Coordinator state
