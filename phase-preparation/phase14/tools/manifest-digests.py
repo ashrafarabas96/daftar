@@ -89,7 +89,7 @@ PLACEHOLDER = 'UNSIGNED'
 # forgery is three entries with an EMPTY `HEAD`, which git rejects and a
 # HEAD/objects/refs test accepts. The question is now put to git.
 _DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
-_DOMAIN_SHA = 'd6a48ae0a4f8961ff25b35aff8a61c5e2c6e234cd2b85505544e610de1c44483'
+_DOMAIN_SHA = '8d41b50248167737d051b6b54bcf921e7f3d33f66d8bfbda6420a3ba8830d386'
 
 
 def _load_domain():
@@ -203,6 +203,37 @@ def _refuse_unrunnable_git(exc):
     raise SystemExit(2)
 
 
+def _owns_an_object(count_objects_v):
+    """True when `count-objects -v` shows this directory owns >= 1 object ITSELF.
+
+    CHALLENGE R29-P2-01 (P2): the commit bar was satisfied by BORROWED objects.
+    `objects/info/alternates` is a file INSIDE the candidate, and neither
+    GIT_NO_REPLACE_OBJECTS nor GIT_GRAFT_FILE reaches it, so a directory owning
+    NO git object at all -- `HEAD` holding one sha, an empty `refs/`, and
+    `alternates` naming any readable object store -- answered both legs rc 0 and
+    was EXCLUDED, taking a planted retracted claim out of enforcement with it.
+    Two files and three directories.
+    The challenger MEASURED the discriminator rather than proposing one:
+    `count-objects -v` reports `count: 0 / in-pack: 0 / packs: 0` for the
+    alternates world, while a real bare clone reports its own objects and this
+    repository's `.git` reports `in-pack: 7155`. It also named the instrument to
+    AVOID: `cat-file --batch-all-objects` reads THROUGH alternates and does not
+    discriminate at all. A `--shared` clone fails this leg and therefore stays in
+    the domain, which is fail-closed and is the direction this pack refuses in.
+    """
+    loose = packed = None
+    for line in count_objects_v.splitlines():
+        k, _, v = line.partition(':')
+        if k.strip() == 'count':
+            try: loose = int(v.strip())
+            except ValueError: return False
+        elif k.strip() == 'in-pack':
+            try: packed = int(v.strip())
+            except ValueError: return False
+    if loose is None or packed is None:
+        return False               # the output was not what this leg reads: refuse
+    return (loose + packed) > 0
+
 def _git_is_repo(path):
     """True / False / None -- None meaning git could not be asked.
 
@@ -233,6 +264,10 @@ def _git_is_repo(path):
                                capture_output=True, text=True, env=env)
             if r.returncode != 0:
                 return False
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, 'count-objects', '-v'],
+                           capture_output=True, text=True, env=env)
+        if r.returncode != 0 or not _owns_an_object(r.stdout):
+            return False
     except OSError:
         return None
     return True
@@ -876,7 +911,16 @@ def main():
         if not os.path.exists(p):
             stale.append('%s: ROW WITH NO FILE in %s' % (name, a.dir))
             out.append(ln); continue
-        b = open(p,'rb').read()
+        # CHALLENGE R29-P2-02: a file that exists at the `os.path.exists` above
+        # and cannot be read here left an unhandled OSError at rc 1, the code
+        # that means STALE. It is refused by name instead.
+        try:
+            b = open(p,'rb').read()
+        except OSError as exc:
+            stale.append('%s: FILE VANISHED OR COULD NOT BE READ (%s: %s), so this row was not'
+                         ' checked against its file and nothing here is a verdict about it.'
+                         % (name, type(exc).__name__, exc))
+            out.append(ln); continue
         h = hashlib.sha256(b).hexdigest()
         drifted = h != dig or ('%d' % len(b)) != size.replace(',','')
         if dig == PLACEHOLDER or size == PLACEHOLDER:
@@ -908,8 +952,16 @@ def main():
         if name.startswith(REVIEWER_PREFIXES):
             wdir = a.witness or witness_default()
             wpath = os.path.join(wdir, name)
-            wh = (hashlib.sha256(open(wpath,'rb').read()).hexdigest()
-                  if os.path.isfile(wpath) else None)
+            try:
+                wh = (hashlib.sha256(open(wpath,'rb').read()).hexdigest()
+                      if os.path.isfile(wpath) else None)
+            except OSError as exc:
+                # The counterpart folder is written by every session; a report
+                # that cannot be read is not a witness that disagrees.
+                stale.append('%s: THE COUNTERPART COPY COULD NOT BE READ at %s (%s: %s), so this'
+                             ' row was not held to it and nothing here is a verdict about that'
+                             ' witness.' % (name, wpath, type(exc).__name__, exc))
+                wh = None
             sig = signed_history.get(name)
             mv = moved.get(name)
             why = None

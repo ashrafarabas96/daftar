@@ -498,11 +498,70 @@ if [ -n "$WT2" ]; then
     printf 'FAIL  %-26s mkfifo is not available here, so this arm asked nothing\n' \
            plant-fifo-in-the-pack; fail=$((fail+1))
   fi
+  # CHALLENGE R29-P3-01, and the lesson that cost round 28 applied to my own
+  # sentence: the refusal names a FIFO, a socket and a device, and only the FIFO
+  # had a plant. The challenger built all four and each was refused correctly --
+  # which is the point: a shape that is named and unarmed is covered by nothing
+  # but luck. Each named shape now has its own arm, and they are two lines each.
+  if python3 -I -c "
+import socket,sys
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])" "$WP/zz-sock" 2>/dev/null; then
+    named plant-socket-in-the-pack 1 "NOT A REGULAR FILE IN THE PACK: zz-sock" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/zz-sock"
+  else
+    printf 'FAIL  %-26s an AF_UNIX socket could not be bound here, so this arm asked nothing\n' \
+           plant-socket-in-the-pack; fail=$((fail+1))
+  fi
+  for zzspec in "zz-chardev c 1 3" "zz-blockdev b 7 0"; do
+    set -- $zzspec
+    if mknod "$WP/$1" "$2" "$3" "$4" 2>/dev/null; then
+      named "plant-$1" 1 "NOT A REGULAR FILE IN THE PACK: $1" \
+        "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+      rm -f "$WP/$1"
+    else
+      printf 'FAIL  %-26s mknod is not available here, so this arm asked nothing\n' "plant-$1"
+      fail=$((fail+1))
+    fi
+  done
+  # A HARD LINK is the shape that must NOT be refused: it is an ordinary
+  # directory entry for an ordinary file, indistinguishable from any other name
+  # for the same inode, so it is PINNED like any file and refuses only for
+  # having no row. The challenger measured both directions (a hard link to a
+  # pack file and to a file outside) and this arm keeps the distinction armed,
+  # because a later widening of the link refusal would silently swallow it.
+  if ln "$WP/P14-HANDOFF-MANIFEST.md" "$WP/zz-hard" 2>/dev/null; then
+    named plant-hard-link-is-pinned 1 "zz-hard: ARTIFACT WITH NO ROW" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/zz-hard"
+  else
+    printf 'FAIL  %-26s a hard link could not be created here, so this arm asked nothing\n' \
+           plant-hard-link-is-pinned; fail=$((fail+1))
+  fi
+  # CHALLENGE R29-P2-01 (P2): the commit bar was satisfied by BORROWED objects.
+  # `objects/info/alternates` is a file INSIDE the candidate that no GIT_* this
+  # pack scrubs can reach, so a directory owning no object at all answered both
+  # legs rc 0 and was EXCLUDED -- taking a planted retracted claim out of
+  # enforcement. The third leg reads `count-objects -v`, and this arm is the
+  # world it was added for.
+  if mkdir -p "$WP/zz-hide/objects/info" "$WP/zz-hide/refs" \
+     && git -C "$REPO" rev-parse HEAD > "$WP/zz-hide/HEAD" 2>/dev/null \
+     && printf '%s\n' "$REPO/.git/objects" > "$WP/zz-hide/objects/info/alternates"; then
+    plant plant-repo-with-borrowed-objects zz-hide/zz-doc.md "SUBTREE WITH NO ROW: zz-hide/"
+  else
+    printf 'FAIL  %-26s the alternates world could not be built, so this arm asked nothing\n' \
+           plant-repo-with-borrowed-objects; fail=$((fail+1))
+  fi
+  rm -rf "$WP/zz-hide"
   # An UNREADABLE directory is refused by name in the same sweep, and that
   # refusal is NOT armed here: this container runs as uid 0, where `chmod 000`
   # does not stop a listing (measured: `os.listdir` on a 000 directory
   # succeeds). It is UNMEASURED-at-runtime rather than covered, and the
-  # amendment says so instead of a plant pretending otherwise.
+  # amendment says so instead of a plant pretending otherwise. The same is true
+  # of the VANISHED-FILE refusals added for R29-P2-02: the window they close is
+  # reached by a concurrent writer, so they are measured by a 45-run delay sweep
+  # published in the amendment, not by a deterministic plant.
   # The other side of the same exclusion, and the residual it leaves, measured
   # rather than asserted: inside a REAL repository (git answers rc 0) the
   # document is excluded, this gate stays GREEN, and the summary SAYS which

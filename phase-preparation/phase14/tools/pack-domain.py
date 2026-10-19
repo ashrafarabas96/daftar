@@ -52,8 +52,9 @@ import os, hashlib
 # a false sentence in three outputs.
 DOMAIN = ('EVERY file under the pack directory, at any depth, in any extension and in any case,'
           ' excluding only the contents of a directory that git itself accepts as a repository'
-          ' HOLDING AT LEAST ONE COMMIT (`git --git-dir=<dir> rev-parse --git-dir` AND'
-          ' `rev-parse --verify HEAD^{commit}`, both rc 0); a symbolic link of any kind, a'
+          ' THAT OWNS AT LEAST ONE GIT OBJECT OF ITS OWN (`git --git-dir=<dir> rev-parse'
+          ' --git-dir`, `rev-parse --verify HEAD^{commit}` and a non-zero loose+packed count from'
+          ' `count-objects -v`, all three); a symbolic link of any kind, a'
           ' directory that cannot be read and anything that is not a regular file are REFUSED by'
           ' name rather than digested, followed or skipped')
 
@@ -163,7 +164,20 @@ def walk(root, gitq):
         refusals.append('DIRECTORY COULD NOT BE WALKED: %s (%s: %s), so what it holds is UNDECIDED'
                         ' and nothing here is a verdict about it.'
                         % (getattr(exc, 'filename', '<unknown>'), type(exc).__name__, exc))
-    for r, dirs, files in os.walk(root, onerror=_onerror):
+    # CHALLENGE R29-P2-02 (P2): `classify_dirs` refuses a link BEFORE asking git,
+    # which is right, but `os.walk` then makes its OWN descent-time decision, and
+    # between the two the answer can change. The challenger swapped a directory
+    # for a link mid-walk: of 30 runs, 16 refused by name, 2 found the moved
+    # copy, FOUR ended rc 0 saying nothing about the directory -- R28-P1-01's
+    # silent skip handed back -- and the rest ended rc 1 with an unhandled
+    # FileNotFoundError, which is this gate's STALE code. Reachable rather than
+    # theoretical: three lanes read a shared folder every session writes.
+    # `followlinks=True` removes the second decision: whatever the path is at
+    # descent time, the walk ENTERS it, so a swap lands either on the explicit
+    # link refusal above (which is kept, and is what makes this safe) or on real
+    # rows that must be pinned -- never on silence. It cannot loop on a cycle
+    # inside the pack, because a link is refused and never descended from.
+    for r, dirs, files in os.walk(root, onerror=_onerror, followlinks=True):
         kept, exc, ref = classify_dirs(r, dirs, gitq, _rel)
         dirs[:] = kept
         excluded += exc
@@ -216,7 +230,22 @@ def subtree_digest(d, gitq):
     entries, excluded, refusals = walk(d, gitq)
     rows, total = [], 0
     for rel, ap in entries:
-        b = open(ap, 'rb').read()
+        # CHALLENGE R29-P2-02, the other half: a file enumerated by the walk and
+        # GONE by the time it is read raised an unhandled OSError at rc 1, which
+        # means STALE. A digest taken over a file that vanished under us is not a
+        # digest of anything, so the read refuses BY NAME. The digest that comes
+        # out will not match the row either -- it is taken over fewer files --
+        # and that is the point: the refusal says WHY it does not match, instead
+        # of a traceback at the code that means `stale`.
+        try:
+            b = open(ap, 'rb').read()
+        except OSError as exc:
+            refusals.append('FILE VANISHED OR COULD NOT BE READ: %s (%s: %s). It was enumerated by'
+                            ' this walk and could not be read afterwards, so this digest covers a'
+                            ' set this directory no longer holds and NOTHING here is a verdict'
+                            ' about it. Re-run when nothing else is writing the directory.'
+                            % (rel, type(exc).__name__, exc))
+            continue
         rows.append('%s  %s\n' % (hashlib.sha256(b).hexdigest(), rel))
         total += len(b)
     text = ('%d file(s)\n' % len(rows)) + ''.join(rows)

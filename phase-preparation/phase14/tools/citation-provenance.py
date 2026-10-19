@@ -117,7 +117,7 @@ def tracked(repo, rev):
 # The domain is now ONE module, loaded by path and refused unless its sha256
 # equals the literal below, so these three tools cannot drift from one another.
 _DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
-_DOMAIN_SHA = 'd6a48ae0a4f8961ff25b35aff8a61c5e2c6e234cd2b85505544e610de1c44483'
+_DOMAIN_SHA = '8d41b50248167737d051b6b54bcf921e7f3d33f66d8bfbda6420a3ba8830d386'
 
 
 def _load_domain():
@@ -144,6 +144,37 @@ def _load_domain():
 _D = _load_domain()
 
 
+def _owns_an_object(count_objects_v):
+    """True when `count-objects -v` shows this directory owns >= 1 object ITSELF.
+
+    CHALLENGE R29-P2-01 (P2): the commit bar was satisfied by BORROWED objects.
+    `objects/info/alternates` is a file INSIDE the candidate, and neither
+    GIT_NO_REPLACE_OBJECTS nor GIT_GRAFT_FILE reaches it, so a directory owning
+    NO git object at all -- `HEAD` holding one sha, an empty `refs/`, and
+    `alternates` naming any readable object store -- answered both legs rc 0 and
+    was EXCLUDED, taking a planted retracted claim out of enforcement with it.
+    Two files and three directories.
+    The challenger MEASURED the discriminator rather than proposing one:
+    `count-objects -v` reports `count: 0 / in-pack: 0 / packs: 0` for the
+    alternates world, while a real bare clone reports its own objects and this
+    repository's `.git` reports `in-pack: 7155`. It also named the instrument to
+    AVOID: `cat-file --batch-all-objects` reads THROUGH alternates and does not
+    discriminate at all. A `--shared` clone fails this leg and therefore stays in
+    the domain, which is fail-closed and is the direction this pack refuses in.
+    """
+    loose = packed = None
+    for line in count_objects_v.splitlines():
+        k, _, v = line.partition(':')
+        if k.strip() == 'count':
+            try: loose = int(v.strip())
+            except ValueError: return False
+        elif k.strip() == 'in-pack':
+            try: packed = int(v.strip())
+            except ValueError: return False
+    if loose is None or packed is None:
+        return False               # the output was not what this leg reads: refuse
+    return (loose + packed) > 0
+
 def _git_is_repo(path):
     """True / False / None (git could not be asked), through this tool's own runner."""
     if _GIT_BIN is None:
@@ -154,6 +185,11 @@ def _git_is_repo(path):
                                capture_output=True, text=True, env=GIT_ENV)
             if r.returncode != 0:
                 return False
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects',
+                            'count-objects', '-v'],
+                           capture_output=True, text=True, env=GIT_ENV)
+        if r.returncode != 0 or not _owns_an_object(r.stdout):
+            return False
     except (FileNotFoundError, PermissionError, OSError):
         return None
     return True
@@ -271,7 +307,16 @@ def main():
     docs = sorted(docs)
     hits = collections.defaultdict(set)          # cited token -> {doc, ...}
     for d in docs:
-        text = open(os.path.join(a.pack,d), encoding='utf-8').read()
+        # CHALLENGE R29-P2-02: a document enumerated by the walk and gone by the
+        # time it is read is a CONFIGURATION condition, not a stale block.
+        try:
+            text = open(os.path.join(a.pack,d), encoding='utf-8').read()
+        except OSError as exc:
+            print('DOCUMENT VANISHED OR COULD NOT BE READ: %s (%s: %s). It was enumerated by this'
+                  ' run and could not be read afterwards, so the population this block describes'
+                  ' is UNDECIDED and nothing here is a verdict about it.'
+                  % (d, type(exc).__name__, exc), file=sys.stderr)
+            return 2
         # The generated block is itself full of `path` tokens, so a scan that
         # read it would count its own rows and never reach a fixed point. Strip
         # the generated region before scanning. (The hand-kept table this

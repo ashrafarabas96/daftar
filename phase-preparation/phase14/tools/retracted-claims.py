@@ -25,7 +25,7 @@ import argparse, hashlib, os, shutil, subprocess, sys
 # shared module cannot drift, and an edited one refuses in all three until each
 # pin is updated deliberately.
 _DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
-_DOMAIN_SHA = 'd6a48ae0a4f8961ff25b35aff8a61c5e2c6e234cd2b85505544e610de1c44483'
+_DOMAIN_SHA = '8d41b50248167737d051b6b54bcf921e7f3d33f66d8bfbda6420a3ba8830d386'
 
 # CHALLENGE R27-P1-01, the other half: this tool had NO git at all, so it could
 # not ask the question its sibling asks. The pinned resolution is the one the
@@ -60,6 +60,37 @@ def _load_domain():
 _D = _load_domain()
 
 
+def _owns_an_object(count_objects_v):
+    """True when `count-objects -v` shows this directory owns >= 1 object ITSELF.
+
+    CHALLENGE R29-P2-01 (P2): the commit bar was satisfied by BORROWED objects.
+    `objects/info/alternates` is a file INSIDE the candidate, and neither
+    GIT_NO_REPLACE_OBJECTS nor GIT_GRAFT_FILE reaches it, so a directory owning
+    NO git object at all -- `HEAD` holding one sha, an empty `refs/`, and
+    `alternates` naming any readable object store -- answered both legs rc 0 and
+    was EXCLUDED, taking a planted retracted claim out of enforcement with it.
+    Two files and three directories.
+    The challenger MEASURED the discriminator rather than proposing one:
+    `count-objects -v` reports `count: 0 / in-pack: 0 / packs: 0` for the
+    alternates world, while a real bare clone reports its own objects and this
+    repository's `.git` reports `in-pack: 7155`. It also named the instrument to
+    AVOID: `cat-file --batch-all-objects` reads THROUGH alternates and does not
+    discriminate at all. A `--shared` clone fails this leg and therefore stays in
+    the domain, which is fail-closed and is the direction this pack refuses in.
+    """
+    loose = packed = None
+    for line in count_objects_v.splitlines():
+        k, _, v = line.partition(':')
+        if k.strip() == 'count':
+            try: loose = int(v.strip())
+            except ValueError: return False
+        elif k.strip() == 'in-pack':
+            try: packed = int(v.strip())
+            except ValueError: return False
+    if loose is None or packed is None:
+        return False               # the output was not what this leg reads: refuse
+    return (loose + packed) > 0
+
 def _git_is_repo(path):
     """True / False / None (git could not be asked)."""
     if _GIT_BIN is None:
@@ -70,6 +101,11 @@ def _git_is_repo(path):
                                capture_output=True, text=True, env=_GIT_ENV)
             if r.returncode != 0:
                 return False
+        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects',
+                            'count-objects', '-v'],
+                           capture_output=True, text=True, env=_GIT_ENV)
+        if r.returncode != 0 or not _owns_an_object(r.stdout):
+            return False
     except (FileNotFoundError, PermissionError, OSError):
         return None
     return True
@@ -153,10 +189,25 @@ def main():
               % (a.list, len(ghosts), a.pack, ', '.join(ghosts)), file=sys.stderr)
         return 2
 
-    bad = 0; exempt = 0
+    bad = 0; exempt = 0; unread = 0
     for path in sorted(files):
         base = os.path.basename(path)
-        text = open(path, encoding='utf-8', errors='replace').read().split('\n')
+        # CHALLENGE R29-P2-02: this exact line raised an unhandled
+        # FileNotFoundError at rc 1 -- which means STALE here -- when a document
+        # enumerated by the walk was removed before it was read. Reproduced
+        # before the fix: of 45 runs against one concurrent remover, 4 ended in
+        # that traceback. A document that cannot be read has NOT been checked for
+        # a retracted claim, so it is refused by name and the run cannot pass.
+        try:
+            text = open(path, encoding='utf-8', errors='replace').read().split('\n')
+        except OSError as exc:
+            print('DOCUMENT VANISHED OR COULD NOT BE READ: %s (%s: %s). It was enumerated by this'
+                  ' run and could not be read afterwards, so it was NOT checked for a retracted'
+                  ' claim and nothing here is a verdict about it. Re-run when nothing else is'
+                  ' writing the pack.' % (os.path.relpath(path, a.pack), type(exc).__name__, exc),
+                  file=sys.stderr)
+            unread += 1
+            continue
         # A challenge report is the record of what a reviewer CLAIMED, committed
         # byte-for-byte as received. Editing one to satisfy this check would be
         # falsifying a review, so they are exempt in code rather than by being
@@ -197,6 +248,11 @@ def main():
           % (_D['DOMAIN'], len(_excluded),
              (': ' + ', '.join(os.path.relpath(x, a.pack) for x in sorted(_excluded)))
              if _excluded else ''))
+    if unread:
+        print('%d pack document(s) could not be read, so the population this run measured is'
+              ' SMALLER than the population it enumerated and this is not a pass.' % unread,
+              file=sys.stderr)
+        return 2
     if bad:
         print('%d occurrence(s) of a retracted claim survive outside the files that record the'
               ' retraction. Correct the prose, or add the file to the allowed list ONLY if it'
