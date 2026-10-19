@@ -854,6 +854,86 @@ describe("the challenger's REJECT at a869aab — the leaf the remedy itself left
     }
   });
 
+  it('F-A: the fold creates no new ACCEPTANCE, and the two arms the challenger called unmeasured are measured', () => {
+    // Asked for by name before its round, and derived rather than hoped for:
+    // every priced key IS canonical, because a line whose `stockKey` is not the
+    // canonical key of its own product is refused earlier — so `fold(priced) ===
+    // priced`, and a declared key that exactly matches any priced key is in
+    // `seen` and never reaches the near-miss test. The arms below are the
+    // measurement of that.
+    const other = stockKeyOf({ productId: OTHER_PRODUCT, variantId: null });
+    const twoLines: CommercialQuoteInput = {
+      quoteId: QUOTE_ID,
+      orderId: ORDER,
+      version: 1,
+      currency: 'ILS',
+      lines: [
+        { stockKey: other, productId: OTHER_PRODUCT, variantId: null, quantity: '2.0000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '2000' },
+        { stockKey: KEY, productId: PRODUCT, variantId: VARIANT, quantity: '3.0000', unitPriceMinor: '1000', discountMinor: '0', lineTotalMinor: '3000' },
+      ],
+      displayedTotalMinor: '5000',
+      issuedAt: '2026-10-01T09:00:00Z',
+      expiresAt: '2026-10-01T10:00:00Z',
+    };
+    const whole = WHOLE_UNITS.get(KEY);
+    if (whole === undefined) throw new Error('the fixture must declare the whole-unit product');
+    expect(other).toBe(other.trim().toLowerCase());
+    expect(KEY).toBe(KEY.trim().toLowerCase());
+    const build = (pairs: [string, UnitPrecisionDeclaration][]): CommercialQuote => buildCommercialQuote(twoLines, { unitPrecisionByStockKey: new Map(pairs) });
+    // Both keys exact: lawful, and the law is applied — the quantities are whole.
+    expect(
+      build([
+        [other, whole],
+        [KEY, whole],
+      ]).lines[1]?.quantity,
+    ).toBe('3.0000');
+    // An exact match for one line beside a near miss of the OTHER is refused,
+    // whichever order they are declared in, and the refusal names the key with
+    // the priced key it nearly is.
+    for (const pairs of [
+      [
+        [other, whole],
+        [KEY.toUpperCase(), whole],
+      ],
+      [
+        // A trailing space rather than a case change, because `OTHER_PRODUCT` is
+        // all digits and upper-casing it changes nothing — the first version of
+        // this arm was ACCEPTED for that reason and the case caught it, which is
+        // the only reason it is written this way.
+        [`${other} `, whole],
+        [KEY, whole],
+      ],
+    ] as [string, UnitPrecisionDeclaration][][]) {
+      const error = refusalOf(() => build(pairs), 'an exact match beside a near miss of the other line');
+      expect(error.code).toBe('order.quote_field_undeclared');
+      expect(error.details?.expected).toBe(String(error.details?.stated).trim().toLowerCase());
+    }
+    // TWO declarations folding to ONE priced key: the padded one is the mistake
+    // and it is named, rather than the pair being reported as a collision.
+    const collision = refusalOf(
+      () =>
+        build([
+          [KEY, whole],
+          [`${KEY} `, whole],
+          [other, whole],
+        ]),
+      'two declarations folding to one priced key',
+    );
+    expect(collision.details?.stated).toBe(`${KEY} `);
+    // And two NON-priced keys that fold to each other are ACCEPTED, because
+    // neither folds to a key this quote prices: the fold is asked only about
+    // priced keys, so it cannot invent a refusal between two keys of the
+    // caller's own. That is rule 3's superset half, unchanged.
+    expect(
+      build([
+        [other, whole],
+        [KEY, whole],
+        ['ZZZ ', whole],
+        ['zzz', whole],
+      ]).lines[1]?.quantity,
+    ).toBe('3.0000');
+  });
+
   it('E-A: the no-MATCH rule does NOT run on the re-verification path, where another refusal owns that fact', () => {
     // The scoping is measured, not assumed: applying it there made the sales
     // authority's own coverage refusal answer under a different code and
