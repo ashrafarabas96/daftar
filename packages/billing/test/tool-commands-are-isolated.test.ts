@@ -457,7 +457,15 @@ const classifiableInterpreter = (spelling: string): boolean => {
  *
  * Refusal counts as an OFFENCE, so this can only produce a false RED.
  */
-const EXECUTABLE_LETTERS = new Set('BbdEhiIOPqRsSuVvx?'.split(''));
+/**
+ * ROUND 36, THE CHALLENGER'S F-63 (P3). `?` sat in this set and nothing could
+ * ever reach it: the only path in is `-[A-Za-z]+`, which `-?` cannot match, so
+ * the letter was a claim no arm could exercise. By this project's rule such a
+ * claim goes red or goes away. It goes away, and `-?` is therefore refused by
+ * name like any other token this list does not know -- which is the safe
+ * direction and is armed below.
+ */
+const EXECUTABLE_LETTERS = new Set('BbdEhiIOPqRsSuVvx'.split(''));
 const VALUE_FLAGS: ReadonlySet<string> = new Set(['-X', '-W']);
 const PLAIN_VALUE = /^[A-Za-z0-9_.:=,+-]+$/;
 
@@ -492,6 +500,42 @@ const executableArgv = (flags: string): { argv: string[] } | { refusal: string; 
   return { argv };
 };
 
+/**
+ * Runs the probe, in a DIRECTORY THIS LAW OWNS.
+ *
+ * ROUND 36, THE CHALLENGER'S F-62 (P2). An allow-listed value can still have a
+ * side effect in the current directory, and the probe inherited the suite's:
+ * `-X pycache_prefix=<name>` needs no path separator, so it passed the value
+ * filter, and CPython wrote its startup bytecode under
+ * `packages/billing/<name>/usr/lib/python3.13/...` -- 7 `.pyc` files, measured
+ * here, one of them `sitecustomize.cpython-313.pyc`, the very mechanism this
+ * law exists to defend against. One document line dirtied the working tree,
+ * and the NEXT run reddened on files the gate itself had created, naming them
+ * as unreadable binaries, with the line that caused it already gone from the
+ * inputs. It denies the gate rather than hiding a defect, which is why it is
+ * P2 -- and the repair is not to refuse `pycache_prefix=` by name, which
+ * closes one instance, but to give the run a disposable cwd, which closes the
+ * class: whatever an allow-listed value writes, it writes somewhere nobody
+ * keeps.
+ *
+ * `ownCwd` is how the arm DELETES this guard: with it false the probe inherits
+ * the suite's directory again, and the same line must leave files behind.
+ */
+const probeIsolated = (argv: readonly string[], ownCwd: boolean): boolean => {
+  const scratch = ownCwd ? mkdtempSync(join(tmpdir(), 'p5probe-')) : undefined;
+  try {
+    const r = spawnSync(HARNESS_PYTHON, [...argv, '-c', PROBE], {
+      encoding: 'utf8',
+      timeout: 10_000,
+      env: { PATH: '/usr/bin:/bin' },
+      ...(scratch === undefined ? {} : { cwd: scratch }),
+    });
+    return r.status === 0 && (r.stdout ?? '').trim() === '1';
+  } finally {
+    if (scratch !== undefined) rmSync(scratch, { recursive: true, force: true });
+  }
+};
+
 const verdicts = new Map<string, { isolated: boolean; refusal?: string }>();
 
 /**
@@ -512,12 +556,9 @@ const verdictFor = (interpreter: string, flags: string): { isolated: boolean; re
   } else if (!classifiableInterpreter(interpreter)) {
     out = { isolated: false, refusal: `${REFUSED_INTERPRETER} ${interpreter}` };
   } else {
-    const r = spawnSync(HARNESS_PYTHON, [...parsed.argv, '-c', PROBE], {
-      encoding: 'utf8',
-      timeout: 10_000,
-      env: { PATH: '/usr/bin:/bin' },
-    });
-    out = { isolated: r.status === 0 && (r.stdout ?? '').trim() === '1' };
+    // The live verdict always owns its directory; `false` exists for the
+    // deletion arm alone, and that arm counts its own call sites.
+    out = { isolated: probeIsolated(parsed.argv, true) };
   }
   verdicts.set(key, out);
   return out;
@@ -818,6 +859,78 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(offencesOutsideQuotedBlocks('doc', undeclared)[0]).toHaveLength(1);
     // And the exemption ends with its block: prose after the fence is covered.
     expect(offencesOutsideQuotedBlocks('doc', after)[0]).toHaveLength(1);
+  });
+
+  it('F-62: an allow-listed value writes only into a directory this law owns', () => {
+    // ROUND 36, THE CHALLENGER'S F-62 (P2). `-X pycache_prefix=<name>` needs
+    // no path separator, so it passes the value filter, and CPython writes its
+    // startup bytecode under <cwd>/<name>/... . The repair is the cwd, not a
+    // refusal by name: whatever an allow-listed value writes must land
+    // somewhere nobody keeps.
+    const flags = ' -I -X pycache_prefix=p5pyc';
+    const parsed = executableArgv(flags);
+    expect('argv' in parsed, 'the value no longer reaches argv, so this arm measures nothing').toBe(true);
+    const argv = 'argv' in parsed ? parsed.argv : [];
+    expect(argv, 'the allow-list no longer passes the pycache_prefix value through').toStrictEqual(['-I', '-X', 'pycache_prefix=p5pyc']);
+
+    // THE GUARD: run it the way the law does. Nothing lands beside the suite.
+    const before = existsSync(join(process.cwd(), 'p5pyc'));
+    expect(before, 'a p5pyc directory exists before this arm ran, so the arm cannot attribute one').toBe(false);
+    expect(probeIsolated(argv, true), 'the probe no longer reports this isolated command as isolated').toBe(true);
+    expect(existsSync(join(process.cwd(), 'p5pyc')), 'THE PROBE WROTE INTO THE WORKING TREE: a directory the gate created is sitting beside the suite').toBe(
+      false,
+    );
+
+    // GUARD DELETION, in a directory this arm owns so that deleting the guard
+    // cannot dirty the repository either. With `ownCwd` false the probe
+    // inherits the cwd, and the same command must leave the bytecode behind --
+    // otherwise the guard above is guarding nothing.
+    const deleted = mkdtempSync(join(tmpdir(), 'f62-'));
+    const previous = process.cwd();
+    try {
+      process.chdir(deleted);
+      expect(probeIsolated(argv, false), 'the deletion changed the verdict, so it is not a pure deletion').toBe(true);
+      const written = readdirSync(deleted);
+      expect(written, 'with the guard deleted the allow-listed value wrote nothing, so the guard guards nothing').toStrictEqual(['p5pyc']);
+    } finally {
+      process.chdir(previous);
+      rmSync(deleted, { recursive: true, force: true });
+    }
+
+    // And `false` is reachable from this arm only: a live verdict that stopped
+    // owning its directory would dirty the tree silently.
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    const deleting = (here.match(/probeIsolated\((?:[^()]|\([^()]*\))*false\)/g) ?? []).length;
+    const owning = (here.match(/probeIsolated\((?:[^()]|\([^()]*\))*true\)/g) ?? []).length;
+    expect(deleting, 'a second caller deletes the owned directory: it must be an arm, counted here').toBe(1);
+    expect(owning, 'the callers that own their directory are no longer the live verdict plus this arm').toBe(2);
+  });
+
+  it('F-63: `-?` is refused by name, and no letter sits in the set unreachable', () => {
+    // ROUND 36, THE CHALLENGER'S F-63 (P3). `?` was in EXECUTABLE_LETTERS and
+    // nothing could reach it, because the only path in is `-[A-Za-z]+`. A
+    // claim nothing can exercise goes red or goes away; it went away, and the
+    // token is refused like any other the list does not know.
+    const refused = executableArgv(' -?');
+    expect('refusal' in refused, '`-?` is no longer refused, so an unknown token reaches CPython').toBe(true);
+    expect('refusal' in refused ? refused.refusal : '', '`-?` is refused without naming the refusal').toBe(REFUSED_TOKEN);
+    const v = verdictFor('python3', ' -I -?');
+    expect(v.isolated, 'a segment carrying `-?` was executed or cleared').toBe(false);
+    expect(v.refusal, '`-?` is refused without a name in the verdict').toContain(REFUSED_TOKEN);
+
+    // Every letter in the set must be REACHABLE through the one path in, or it
+    // is F-63 again under another letter. Measured as a function of the set,
+    // not asserted as a count.
+    const unreachable = [...EXECUTABLE_LETTERS].filter((c) => !/^-[A-Za-z]+$/.test(`-${c}`));
+    expect(unreachable, 'a letter in EXECUTABLE_LETTERS cannot be reached by any token this law accepts').toStrictEqual([]);
+    // And each one is still argument-free in THIS CPython, asked rather than
+    // assumed: `-<c> -c <probe>` must print 1 when isolation is also asked.
+    for (const c of EXECUTABLE_LETTERS) {
+      if (c === 'h' || c === 'V' || c === 'i') continue; // print-and-exit or interactive: not a verdict
+      expect(verdictFor('python3', ` -I -${c}`).isolated, `-${c} is listed as argument-free but CPython ${CPYTHON_HERE} does not isolate \`-I -${c}\``).toBe(
+        true,
+      );
+    }
   });
 
   it('the declared quotation block is an exemption, and is armed like one', () => {
