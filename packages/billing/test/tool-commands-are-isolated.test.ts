@@ -608,7 +608,7 @@ const matchCount = (text: string, re: RegExp = INVOCATION): number => {
  * the copied text, and `quoted` below reds if the exemption ever stops being
  * used, so it cannot outlive its reason.
  */
-const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => {
+const scanDocument = (label: string, text: string, honourDeclaration: boolean): [string[], number] => {
   const found: string[] = [];
   let exemptBlocks = 0;
   let inFence = false;
@@ -620,7 +620,12 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
         exempt = false;
       } else {
         inFence = true;
-        exempt = /f-50-quote/.test(line);
+        // ROUND 35, THE COORDINATOR: a declared quotation block IS an
+        // exemption, so it owes a deletion arm like every other one. The
+        // recognition lives HERE and nowhere else, and `honourDeclaration`
+        // is how an arm deletes it -- one implementation, so no copy can
+        // drift from the live scan the way a hand-kept twin would.
+        exempt = honourDeclaration && /f-50-quote/.test(line);
         if (exempt) exemptBlocks += 1;
       }
       continue;
@@ -633,6 +638,9 @@ const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], nu
   }
   return [found, exemptBlocks];
 };
+
+/** The live scan: the declaration is honoured. The ONLY caller that honours it. */
+const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true);
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -810,6 +818,65 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(offencesOutsideQuotedBlocks('doc', undeclared)[0]).toHaveLength(1);
     // And the exemption ends with its block: prose after the fence is covered.
     expect(offencesOutsideQuotedBlocks('doc', after)[0]).toHaveLength(1);
+  });
+
+  it('the declared quotation block is an exemption, and is armed like one', () => {
+    // ROUND 35, THE COORDINATOR, after this law reddened on the round-35
+    // records themselves and the fix was to declare the block: an exemption
+    // owes three things, and a quotation block had none of them.
+    const dir = mkdtempSync(join(tmpdir(), 'f61q-'));
+    const marker = join(dir, 'MARKER-QUOTED');
+    const shim = join(dir, 'python3');
+    writeFileSync(shim, `#!/bin/sh\nprintf executed-from-inside-a-quote > ${marker}\necho 1\n`);
+    chmodSync(shim, 0o755);
+    const attack = `${shim} tools/manifest-digests.py --dir d --check`;
+
+    // ONE: the same attack line OUTSIDE a block reds, BY NAME. The exemption
+    // has to be the declaration and nothing else about the line.
+    const outside = offencesOutsideQuotedBlocks('doc', `Example: \`${attack}\``);
+    expect(outside[0], 'the attack line outside a quotation block is not reported').toHaveLength(1);
+    expect(outside[0][0], 'the attack line outside a block is reported without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
+    expect(existsSync(marker), 'the shim RAN while being reported outside a block').toBe(false);
+
+    // TWO: the payload inside a declared block is not executed. The block is
+    // exempt from the SCAN, and the scan is the only thing that spawns, so
+    // the proof is the marker's absence and not the empty offence list.
+    const quotedLive = ['```text f-50-quote', `$ ${attack}`, '```'].join('\n');
+    expect(offencesOutsideQuotedBlocks('doc', quotedLive)).toStrictEqual([[], 1]);
+    expect(existsSync(marker), 'THE LAW RAN A PAYLOAD IT HAD EXEMPTED: the marker file exists').toBe(false);
+
+    // THREE: delete the recognition and the very same block reds, by name.
+    // One deletion, in the one place the recognition lives.
+    verdicts.clear();
+    const deleted = scanDocument('doc', quotedLive, false);
+    expect(deleted[1], 'the deletion still counted an exempt block').toBe(0);
+    expect(deleted[0], 'with the declaration no longer recognised the block is still exempt, so the exemption is not what makes it exempt').toHaveLength(1);
+    expect(deleted[0][0], 'the deletion reds without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
+    // Even redding, nothing ran: the refusal is a classification, not a spawn.
+    expect(existsSync(marker), 'the deletion arm ran the payload it was scanning').toBe(false);
+
+    // The payload must be LIVE, or all three arms above prove nothing.
+    const live = spawnSync(shim, ['tools/manifest-digests.py'], { encoding: 'utf8', timeout: 10_000, env: { PATH: '/usr/bin:/bin' } });
+    expect(live.status, 'the quoted payload does not run, so it is not a payload').toBe(0);
+    expect(existsSync(marker), 'the quoted payload wrote no marker, so it is not live').toBe(true);
+
+    // And `honourDeclaration` is false in the arms only: a live scan that
+    // stopped honouring the declaration would red the pack, not pass quietly,
+    // but the count is pinned so the parameter cannot grow a second meaning.
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    // The needles are ASSEMBLED, or each one counts its own literal and the
+    // arm reports one caller too many -- B-10's self-counting shape, for the
+    // third time in this file.
+    const honourNeedle = ['scanDocument(label,', 'text,', 'true)'].join(' ');
+    const honouring = here.split(honourNeedle).length - 1;
+    // Counted by SHAPE rather than by one spelling, so a differently written
+    // deleting caller is counted too: any `scanDocument(...)` whose last
+    // argument is `false`.
+    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false\)/g) ?? []).length;
+    expect(honouring, 'the live wrapper that honours the declaration is no longer the only one').toBe(1);
+    expect(deleting, 'a second caller deletes the declaration recognition: it must be an arm, counted here').toBe(1);
+
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it('holds over the pack documents this author owns, when the pack is present', () => {
