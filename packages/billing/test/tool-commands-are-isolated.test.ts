@@ -241,6 +241,19 @@ const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
 const REFUSED_TEST_WITHOUT_LAW_GATE = 'REFUSED-TEST-DOES-NOT-RUN-THE-LAW';
 
 /**
+ * ROUND 52, THE COORDINATOR'S CD-51-01 (P1). Round 51's arm REGEX-MATCHED the
+ * `test` script for the gate's command, which a single edit to the same file
+ * satisfies while throwing the gate's verdict away:
+ * `vitest run --exclude=<the law files>; python3 -I tools/law-ran.py; true`
+ * printed 277 passed, then `LAW-NOT-RUN` from the gate -- which DID catch it --
+ * and `npm test` exited 0 WITH A PLANT PRESENT, because `;` and `|| true`
+ * discard an exit code. A regex says the command APPEARS; only byte equality
+ * says the command is the whole of what runs. So the script is pinned as a
+ * LITERAL, here and in the gate itself.
+ */
+const PINNED_TEST_SCRIPT = 'vitest run && python3 -I tools/law-ran.py';
+
+/**
  * ROUND 51, THE COORDINATOR'S P3. An arm that read a pack document with no
  * guard failed with ENOENT when the pack was absent -- a stack trace, not a
  * verdict, and indistinguishable from a broken test. Absence is named.
@@ -2795,6 +2808,29 @@ describe('every written invocation of the pack tools is isolated', () => {
       lawRan,
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: \`npm test\` no longer runs \`python3 -I tools/law-ran.py\`, so the command people actually run can be made to collect neither law file and still exit 0 (CD-50-01). The gate must be chained into \`test\` itself, not only offered as \`gate:law\``,
     ).toStrictEqual(['gate:law', 'test']);
+    // CD-51-01: and the script is the pinned LITERAL, byte for byte. A regex
+    // match says the gate's command appears somewhere in the script; equality
+    // says it is the whole of what runs, so `;` or `|| true` after it, or a
+    // `--exclude` before it, is a changed literal rather than a passing regex.
+    expect(
+      scripts['test'],
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: the \`test\` script is not the pinned command. It must be exactly \`${PINNED_TEST_SCRIPT}\` -- \`&&\` so a red first leg stops the second, and nothing after the gate to discard its exit code. If this command must change, change it HERE in the same commit and say why in the message`,
+    ).toBe(PINNED_TEST_SCRIPT);
+    //
+    // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED WHERE IT IS MEASURED. An
+    // exit code DISCARDED by the command that ran this suite cannot be
+    // recovered by anything this suite or the gate does: `; true` and
+    // `|| true` throw away vitest's verdict and the gate's alike, and every
+    // instrument in this package is reached through the very file that edit
+    // changes. What this arm and the gate's twin of it buy is that the attack
+    // must now change a PINNED LITERAL that two programs declare, so it sits
+    // in the diff beside a digest line, and the gate -- which still runs --
+    // names the defect in the output rather than going quiet. The terminus is
+    // a check that does not pass through `package.json`: a CI step running
+    // `npm run gate:law` and reading its exit code. This package has no CI and
+    // is not in the root workspaces; that is PATCH-REQ-P5-001, with the
+    // Repo/CI owner, and it is the closure of this regress rather than
+    // hygiene.
 
     // CD-48-02 (P3), THE COORDINATOR'S: replacing the expectation source with
     // the handed text left the suite green, because no file in this repository

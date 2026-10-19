@@ -100,6 +100,25 @@ from pathlib import Path
 
 LAW_NOT_RUN = "LAW-NOT-RUN"
 
+# ROUND 52, THE COORDINATOR'S CD-51-01 (P1). Round 51 chained this step into the
+# `test` script and the law checked that chaining with a REGEX, which one edit to
+# the same file satisfies while discarding the verdict:
+# `vitest run --exclude=<the law>; python3 -I tools/law-ran.py; true` printed 277
+# passed, then this step's own LAW-NOT-RUN -- it DID catch it -- and `npm test`
+# exited 0 with a plant present. So the command is pinned as a LITERAL in two
+# programs that share no code: the law's own arm and this one.
+#
+# WHAT THIS CANNOT DO, said plainly: an exit code thrown away by the command that
+# started this step cannot be recovered by this step. `;` and `|| true` discard
+# vitest's verdict and this one alike, and every instrument in this package is
+# reached through the file that edit changes. What the pinned literal buys is
+# that the attack must change bytes two programs declare, so it appears in the
+# diff beside a digest line, and this step still RUNS and names the defect in the
+# output instead of going quiet. The closure is a check that does not pass
+# through `package.json` -- a CI step that runs this gate and reads its exit code
+# -- which is PATCH-REQ-P5-001 with the Repo/CI owner.
+PINNED_TEST_SCRIPT = "vitest run && python3 -I tools/law-ran.py"
+
 # The literal counts. A count stated as a law is tested as a function, and a
 # count stated as a number must be the number -- "more than zero tests ran" is
 # the kind of bound this phase has been burned by four times. Change these in
@@ -123,6 +142,25 @@ def main() -> int:
     )
     args = ap.parse_args()
     package = Path(args.package).resolve()
+
+    # CD-51-01: the `test` script must be the pinned literal, read from the
+    # package manifest by this program as well as by the law, so neither is the
+    # only reader. A missing manifest, a missing script or a changed byte is a
+    # refusal by name.
+    manifest = package / "package.json"
+    if not manifest.is_file():
+        refuse(f"no package.json at {manifest}, so nothing says what `npm test` runs")
+    try:
+        scripts = json.loads(manifest.read_text()).get("scripts")
+    except json.JSONDecodeError as exc:
+        refuse(f"{manifest} is not JSON: {exc}")
+    if not isinstance(scripts, dict):
+        refuse(f"{manifest} has no scripts object, so nothing says what `npm test` runs")
+    if scripts.get("test") != PINNED_TEST_SCRIPT:
+        refuse(
+            f"the `test` script is {scripts.get('test')!r}, not the pinned {PINNED_TEST_SCRIPT!r}. "
+            "A command with anything after this gate, or a filter before the suite, discards what either one measures"
+        )
 
     # R49-F2: the runner is resolved as a PATH ON DISK under the package, not
     # by a PATH lookup and not through `node_modules/.bin`. Both candidates are
@@ -161,6 +199,12 @@ def main() -> int:
                 "PATH": f"{Path(node).parent}:/usr/bin:/bin",
                 "HOME": os.environ.get("HOME", "/tmp"),
                 "TMPDIR": os.environ.get("TMPDIR", "/tmp"),
+                # R49-F2's last clause: a rebuilt environment drops the one
+                # variable the suite's own subject set READS, so without this
+                # the run this step starts would measure the DEFAULT pack while
+                # the operator had named another. Forwarded EXPLICITLY, and only
+                # when it is set, so the subject is the one that was asked for.
+                **({"P5_PACK_DIR": os.environ["P5_PACK_DIR"]} if os.environ.get("P5_PACK_DIR") else {}),
             },
         )
         if not out.is_file():
