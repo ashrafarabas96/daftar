@@ -436,6 +436,73 @@ if [ -n "$WT2" ]; then
   # arms the outcome; this one arms the discipline.
   plant plant-spelling-dot-git    zz.git/zz-doc.md         "SUBTREE WITH NO ROW: zz.git/"
   rm -rf "$WP/zz.git"
+  # CHALLENGE R28-P2-01: a repository git accepts but that resolves NO commit --
+  # the challenger's is 20 bytes of `HEAD` and two empty directories, the same
+  # entry count as round 27's forgery -- is NOT a repository for this pack's
+  # purposes and stays in the domain, so a document inside it is pinned and a
+  # retracted claim inside it is ENFORCED. Before this head it was excluded, and
+  # the challenger measured the enforcement hole that followed.
+  mkdir -p "$WP/zz-hide/objects" "$WP/zz-hide/refs"
+  printf 'ref: refs/heads/main' > "$WP/zz-hide/HEAD"
+  plant plant-repo-without-commit zz-hide/zz-doc.md        "SUBTREE WITH NO ROW: zz-hide/"
+  rm -rf "$WP/zz-hide"
+  # CHALLENGE R28-P1-01, a FAIL-OPEN, and the shape the ruling named: a symbolic
+  # link to an EXISTING DIRECTORY. `os.walk` neither descends into it nor lists
+  # it among files, so round 27's two link arms -- the two shapes a reviewer had
+  # named -- left this one skipped in silence. Both levels are armed, because
+  # the subtree digest and the top-level enumeration are different code paths.
+  ZZOUT="$T/zz-outside"; mkdir -p "$ZZOUT"
+  printf 'planted behind a link\n' > "$ZZOUT/zz-doc.md"
+  if ln -s "$ZZOUT" "$WP/zz-link" 2>/dev/null; then
+    named plant-link-to-directory 1 "SYMBOLIC LINK IN THE PACK: zz-link names .* (a link to a directory)" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/zz-link"
+  else
+    printf 'FAIL  %-26s the link could not be created, so this arm asked nothing\n' \
+           plant-link-to-directory; fail=$((fail+1))
+  fi
+  if ln -s "$ZZOUT" "$WP/proofs/zz-link" 2>/dev/null; then
+    named plant-link-to-directory-subtree 1 "proofs/: SYMBOLIC LINK IN THE PACK: zz-link" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/proofs/zz-link"
+  else
+    printf 'FAIL  %-26s the link could not be created, so this arm asked nothing\n' \
+           plant-link-to-directory-subtree; fail=$((fail+1))
+  fi
+  # ...and the half that makes it a fail-open rather than a pin gap: the link
+  # defeated an ENFORCEMENT. A document behind the link carrying a claim from
+  # RETRACTED-CLAIMS.tsv left `retracted-claims.py` at rc 0; the same bytes at
+  # the top level give rc 1. The refusal is this pack's "cannot measure" code,
+  # 2, because a link means the population is undecided -- never 0.
+  ZZRET="$T/zz-retracted"; mkdir -p "$ZZRET"
+  printf '# zz\n\nthe three absent ones are cited only for Phase 4 surface facts\n' > "$ZZRET/zz-doc.md"
+  if ln -s "$ZZRET" "$WP/zz-rlink" 2>/dev/null; then
+    named plant-retracted-behind-link 2 "SYMBOLIC LINK IN THE PACK: zz-rlink" \
+      "python3 -I $WH/retracted-claims.py --pack $WP --check"
+    rm -f "$WP/zz-rlink"
+    cp "$ZZRET/zz-doc.md" "$WP/zz-doc.md"
+    named plant-retracted-at-top-level 1 "RETRACTED CLAIM PRESENT: zz-doc.md" \
+      "python3 -I $WH/retracted-claims.py --pack $WP --check"
+    rm -f "$WP/zz-doc.md"
+  else
+    printf 'FAIL  %-26s the link could not be created, so the enforcement arms asked nothing\n' \
+           plant-retracted-behind-link; fail=$((fail+1))
+  fi
+  # The rest of the ruling's sweep for shapes the walk does not read as bytes.
+  # A FIFO is listed among `files` and `open().read()` on one does not return.
+  if mkfifo "$WP/zz-fifo" 2>/dev/null; then
+    named plant-fifo-in-the-pack 1 "NOT A REGULAR FILE IN THE PACK: zz-fifo" \
+      "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"
+    rm -f "$WP/zz-fifo"
+  else
+    printf 'FAIL  %-26s mkfifo is not available here, so this arm asked nothing\n' \
+           plant-fifo-in-the-pack; fail=$((fail+1))
+  fi
+  # An UNREADABLE directory is refused by name in the same sweep, and that
+  # refusal is NOT armed here: this container runs as uid 0, where `chmod 000`
+  # does not stop a listing (measured: `os.listdir` on a 000 directory
+  # succeeds). It is UNMEASURED-at-runtime rather than covered, and the
+  # amendment says so instead of a plant pretending otherwise.
   # The other side of the same exclusion, and the residual it leaves, measured
   # rather than asserted: inside a REAL repository (git answers rc 0) the
   # document is excluded, this gate stays GREEN, and the summary SAYS which
@@ -443,7 +510,17 @@ if [ -n "$WT2" ]; then
   # this pack claims to. The arm exists so that sentence is measured and so a
   # future head that silently starts pinning it, or silently stops naming it,
   # reds here.
-  if git init -q --bare "$WP/zz-real" 2>/dev/null; then
+  # CHALLENGE R28-P2-01 and the coordinator's ruling: `rev-parse --git-dir` alone
+  # accepts a 20-byte forgery, so a repository must now also RESOLVE A COMMIT.
+  # This arm therefore builds one that does, by plumbing and with no worktree; a
+  # bare `git init` with no commits stays in the domain, which is the arm below.
+  if git init -q --bare "$WP/zz-real" 2>/dev/null \
+     && ZZE=$(git --git-dir="$WP/zz-real" hash-object -w --stdin </dev/null) \
+     && ZZT=$(printf '100644 blob %s\tkeep\n' "$ZZE" | git --git-dir="$WP/zz-real" mktree) \
+     && ZZC=$(git --git-dir="$WP/zz-real" -c user.email=p14@local -c user.name=p14 \
+                  commit-tree "$ZZT" -m 'a repository that resolves a commit') \
+     && git --git-dir="$WP/zz-real" update-ref refs/heads/main "$ZZC"; then
+    printf 'ref: refs/heads/main\n' > "$WP/zz-real/HEAD"
     printf 'planted inside a REAL repository\n' > "$WP/zz-real/zz-doc.md"
     named plant-real-repo-excluded 0 "excluded as repositories: zz-real" \
       "python3 -I $WH/manifest-digests.py --manifest $WP/P14-HANDOFF-MANIFEST.md --dir $WP --check"

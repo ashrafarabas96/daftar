@@ -117,7 +117,7 @@ def tracked(repo, rev):
 # The domain is now ONE module, loaded by path and refused unless its sha256
 # equals the literal below, so these three tools cannot drift from one another.
 _DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
-_DOMAIN_SHA = '471a2b3ef7c37f64e54a9710e93432041139ffce49c590963262c9ec805a1fbd'
+_DOMAIN_SHA = 'd6a48ae0a4f8961ff25b35aff8a61c5e2c6e234cd2b85505544e610de1c44483'
 
 
 def _load_domain():
@@ -149,12 +149,14 @@ def _git_is_repo(path):
     if _GIT_BIN is None:
         return None
     try:
-        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects',
-                            'rev-parse', '--git-dir'],
-                           capture_output=True, text=True, env=GIT_ENV)
+        for _args in (['rev-parse', '--git-dir'], ['rev-parse', '--verify', 'HEAD^{commit}']):
+            r = subprocess.run([_GIT_BIN, '--git-dir=' + path, '--no-replace-objects'] + _args,
+                               capture_output=True, text=True, env=GIT_ENV)
+            if r.returncode != 0:
+                return False
     except (FileNotFoundError, PermissionError, OSError):
         return None
-    return r.returncode == 0
+    return True
 
 
 def _refuse_domain(refusals):

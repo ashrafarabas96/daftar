@@ -59,9 +59,17 @@ PLACEHOLDER = 'UNSIGNED'
 # The digest is written so a reviewer can recompute it without this tool, and the
 # recipe is the tool's text EXACTLY -- the count line first, then one line per
 # file -- because a published recipe that is merely close is a false sentence
-# about how the figure was made. It is faithful only on a tree the tool would
-# accept: a refused name or link makes the tool refuse and leaves the shell
-# computing a digest of something the pack does not contain.
+# about how the figure was made. CHALLENGE R28-P3-01 bounded that sentence and
+# the clause is now part of it: the recipe reproduces the row **when the run
+# reports 0 excluded directories**, because `find -type f` descends into a
+# directory git accepts as a repository and this tool does not -- with a real
+# repository inside `proofs/` the challenger measured the tool holding the row
+# at rc 0 while the recipe returned a different digest. It is also faithful only
+# on a tree the tool would ACCEPT: a refused name, link, FIFO or unreadable
+# directory makes the tool refuse and leaves the shell computing a digest of
+# something the pack does not contain. Both directions are safe -- the tool is
+# the stricter of the two -- and both are said rather than left to a reviewer to
+# discover.
 #
 #   { printf '%s file(s)\n' "$(find <dir> -type f | wc -l)"; \
 #     find <dir> -type f | LC_ALL=C sort | while read -r f; do \
@@ -81,7 +89,7 @@ PLACEHOLDER = 'UNSIGNED'
 # forgery is three entries with an EMPTY `HEAD`, which git rejects and a
 # HEAD/objects/refs test accepts. The question is now put to git.
 _DOMAIN_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pack-domain.py')
-_DOMAIN_SHA = '471a2b3ef7c37f64e54a9710e93432041139ffce49c590963262c9ec805a1fbd'
+_DOMAIN_SHA = 'd6a48ae0a4f8961ff25b35aff8a61c5e2c6e234cd2b85505544e610de1c44483'
 
 
 def _load_domain():
@@ -203,6 +211,15 @@ def _git_is_repo(path):
     repository and would have excluded `proofs/`. Measured on this container:
     `--git-dir=` answers rc 0 for a real bare repository and for the real
     `.git`, rc 128 for `proofs/` and rc 128 for the challenger's cheapest
+    CHALLENGE R28-P2-01: `rev-parse --git-dir` alone accepts a 20-byte forgery --
+    `HEAD` holding `ref: refs/heads/main` with no trailing newline plus two EMPTY
+    directories, measured rc 0 by the challenger and reproduced here. git checks
+    neither that the branch exists nor that `objects/` holds anything. So the
+    question is now composite, as the coordinator ruled: a repository must also
+    RESOLVE A COMMIT. Measured on this container: the forgery is rc 128 on
+    `--verify HEAD^{commit}` and the real `.git` is rc 0. A repository with no
+    commits fails this too and therefore stays in the domain, which is
+    fail-closed and is the direction this pack refuses in.
     forgery (three entries with an EMPTY HEAD). The runner is this tool's own
     hardened one -- every GIT_* scrubbed, replace objects and grafts disabled,
     the binary resolved once on the pinned PATH and passed absolute."""
@@ -211,11 +228,14 @@ def _git_is_repo(path):
     env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_')}
     env.update(GIT_NO_REPLACE_OBJECTS='1', GIT_GRAFT_FILE=os.devnull, PATH=_PINNED_PATH)
     try:
-        r = subprocess.run([_GIT_BIN, '--git-dir=' + path, 'rev-parse', '--git-dir'],
-                           capture_output=True, text=True, env=env)
+        for _args in (['rev-parse', '--git-dir'], ['rev-parse', '--verify', 'HEAD^{commit}']):
+            r = subprocess.run([_GIT_BIN, '--git-dir=' + path] + _args,
+                               capture_output=True, text=True, env=env)
+            if r.returncode != 0:
+                return False
     except OSError:
         return None
-    return r.returncode == 0
+    return True
 
 
 def main():

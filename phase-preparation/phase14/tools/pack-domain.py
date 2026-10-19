@@ -52,7 +52,10 @@ import os, hashlib
 # a false sentence in three outputs.
 DOMAIN = ('EVERY file under the pack directory, at any depth, in any extension and in any case,'
           ' excluding only the contents of a directory that git itself accepts as a repository'
-          ' (`git --git-dir=<dir> rev-parse --git-dir`, rc 0)')
+          ' HOLDING AT LEAST ONE COMMIT (`git --git-dir=<dir> rev-parse --git-dir` AND'
+          ' `rev-parse --verify HEAD^{commit}`, both rc 0); a symbolic link of any kind, a'
+          ' directory that cannot be read and anything that is not a regular file are REFUSED by'
+          ' name rather than digested, followed or skipped')
 
 
 def _unnameable(rel):
@@ -74,17 +77,69 @@ def _unnameable(rel):
     return None
 
 
-def classify_dirs(root, dirs, gitq):
-    """-> (kept, excluded, refusals). gitq(path) answers True / False / None."""
+def _link_refusal(rel, ap, kind):
+    # CHALLENGE R28-P1-01, a FAIL-OPEN, and the coordinator's ruling: round 27
+    # wrote "A link is neither the file it points at nor content of its own ...
+    # so it is refused by name rather than followed, digested or skipped" and
+    # then refused links only where `walk` iterates FILES. `os.walk` does not
+    # descend into a symlink to a DIRECTORY and does not list it among files, so
+    # that one shape was skipped in SILENCE -- measured by the challenger and
+    # reproduced here before the fix: `zz-link -> <an existing directory>` left
+    # `manifest-digests.py --check` at rc 0 printing "every file has a row",
+    # `81 file(s) at the top level` unchanged, `0 directory(ies) ... excluded`,
+    # and the string `zz-link` absent from all three instruments' output; inside
+    # `proofs/` it left `55 file(s) under 2 declared subtree(s)` and that row's
+    # digest unmoved. It defeats an ENFORCEMENT and not only a pin: a document
+    # behind the link carrying a claim from `RETRACTED-CLAIMS.tsv` gave
+    # `retracted-claims.py --check` rc 0, where the same bytes at the top level
+    # give rc 1 `RETRACTED CLAIM PRESENT`. Two arms covering the two shapes a
+    # reviewer named were read as covering the variants of the shape they name:
+    # this pack's own lesson, and it cost a round. The refusal is now ONE
+    # sentence reached from BOTH branches of the walk, and it says which kind of
+    # link it found so the two branches cannot drift apart again.
+    try:
+        tgt = os.readlink(ap)
+    except OSError as exc:
+        tgt = '<unreadable: %s>' % exc
+    return ('SYMBOLIC LINK IN THE PACK: %s names %s (a link to a %s). A link is neither the thing'
+            ' it points at nor content of its own, a dangling one cannot be read at all, and a'
+            ' link to a directory is not descended into — so it is refused by name rather than'
+            ' followed, digested or skipped.' % (rel, tgt, kind))
+
+
+def classify_dirs(root, dirs, gitq, relof=None):
+    """-> (kept, excluded, refusals). gitq(path) answers True / False / None.
+
+    `relof(path)` names a path the way the caller's refusals name one; without it
+    the absolute path is used."""
     kept, excluded, refusals = [], [], []
     for d in sorted(dirs):
         p = os.path.join(root, d)
+        nm = relof(p) if relof else p
+        # BEFORE git is asked anything: a link is refused by name, whatever it
+        # points at. Asking git first would let a link to a repository be
+        # EXCLUDED rather than refused, which is the same hole one step along.
+        if os.path.islink(p):
+            refusals.append(_link_refusal(nm, p, 'directory'))
+            continue
+        # The ruling's sweep for "any other shape the walk does not descend
+        # into": a directory whose entries cannot be listed. `os.walk` reports
+        # the error to its `onerror` handler, which this pack did not set, and
+        # then yields NOTHING for it -- invisible exactly as the link was.
+        try:
+            os.listdir(p)
+        except OSError as exc:
+            refusals.append('UNREADABLE DIRECTORY IN THE PACK: %s cannot be listed (%s: %s), so'
+                            ' what it holds is UNDECIDED and nothing here is a verdict about it.'
+                            ' It is refused by name rather than walked past.'
+                            % (nm, type(exc).__name__, exc))
+            continue
         verdict = gitq(p)
         if verdict is None:
             refusals.append('UNCLASSIFIED DIRECTORY: %s — git could not be asked whether this is a'
                             ' repository, so whether its files are inside this pack\'s domain is'
                             ' UNDECIDED and nothing here is a verdict about them. The directory'
-                            ' stays in the domain and this refusal stands.' % p)
+                            ' stays in the domain and this refusal stands.' % nm)
             kept.append(d)
         elif verdict:
             excluded.append(p)
@@ -98,8 +153,18 @@ def walk(root, gitq):
 
     entries are (relpath-with-forward-slashes, absolute path)."""
     entries, excluded, refusals = [], [], []
-    for r, dirs, files in os.walk(root):
-        kept, exc, ref = classify_dirs(r, dirs, gitq)
+    def _rel(ap):
+        return os.path.relpath(ap, root).replace(os.sep, '/')
+    # `os.walk` swallows a listing error unless a handler is given, and a
+    # swallowed error is a directory that reports nothing -- the shape of
+    # R28-P1-01. The top of the walk is also covered here; the handler is the
+    # only place an error on `root` itself can be seen.
+    def _onerror(exc):
+        refusals.append('DIRECTORY COULD NOT BE WALKED: %s (%s: %s), so what it holds is UNDECIDED'
+                        ' and nothing here is a verdict about it.'
+                        % (getattr(exc, 'filename', '<unknown>'), type(exc).__name__, exc))
+    for r, dirs, files in os.walk(root, onerror=_onerror):
+        kept, exc, ref = classify_dirs(r, dirs, gitq, _rel)
         dirs[:] = kept
         excluded += exc
         refusals += ref
@@ -120,14 +185,21 @@ def walk(root, gitq):
             # own, so it is refused BY NAME, dangling or not, and the pack holds
             # none.
             if os.path.islink(ap):
-                try:
-                    tgt = os.readlink(ap)
-                except OSError as exc:
-                    tgt = '<unreadable: %s>' % exc
-                refusals.append('SYMBOLIC LINK IN THE PACK: %s names %s. A link is neither the'
-                                ' file it points at nor content of its own, and a dangling one'
-                                ' cannot be read at all, so it is refused by name rather than'
-                                ' followed, digested or skipped.' % (rel, tgt))
+                refusals.append(_link_refusal(rel, ap, 'file or dangling path'))
+                continue
+            # The rest of the ruling's sweep: `os.walk` lists a FIFO, a socket
+            # and a device among `files`, and `open(ap,'rb').read()` on a FIFO
+            # does not return. Anything that is not a regular file is content of
+            # no kind this pack can digest, and it is refused by name rather
+            # than read.
+            try:
+                _regular = os.path.isfile(ap) and not os.path.isdir(ap)
+            except OSError:
+                _regular = False
+            if not _regular:
+                refusals.append('NOT A REGULAR FILE IN THE PACK: %s is not a regular file (a FIFO,'
+                                ' a socket, a device or something else that cannot be read as'
+                                ' bytes), so it is refused by name rather than opened.' % rel)
                 continue
             entries.append((rel, ap))
     entries.sort()
