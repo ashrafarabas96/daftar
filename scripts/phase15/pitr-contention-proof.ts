@@ -75,17 +75,17 @@ const FORCE_FAIL = {
 /** The verdict's order, put back the way F-R12-03 found it. */
 const OLD_ORDER: readonly { readonly from: string; readonly to: string }[] = [
   {
-    from: `        failed.length > 0
+    from: `        failed.length > 0 || (PROVE && redsNotRed.length > 0)
         ? 'FAIL'
         : contentionDetail !== null
           ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'`,
     to: `        contentionDetail !== null
         ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
-        : failed.length > 0
+        : failed.length > 0 || (PROVE && redsNotRed.length > 0)
           ? 'FAIL'`,
   },
   {
-    from: `  if (failed.length > 0) process.exitCode = 1;
+    from: `  if (failed.length > 0 || (PROVE && redsNotRed.length > 0)) process.exitCode = 1;
   else if (contentionDetail !== null) process.exitCode = 3;
   else if (!ok) process.exitCode = 1;`,
     to: `  if (contentionDetail !== null) process.exitCode = 3;
