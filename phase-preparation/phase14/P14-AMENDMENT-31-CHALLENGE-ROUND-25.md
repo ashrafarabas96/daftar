@@ -120,10 +120,10 @@ file in the copy and the lane stayed **rc 0**: `--check` enumerates files it end
 `.yaml` only, so a file of any other extension dropped into a pack directory has no row and reds
 nothing. The run is published because it is the honest history of this measurement, and the shape
 it exposes — pre-existing, not introduced here, and about `manifest-digests.py` rather than about
-the separation — is named in §6. Run 2 above plants a `.md`, and it reds.
+the separation — is named in §7. Run 2 above plants a `.md`, and it reds.
 
 **No permanent arm asserts this separation** — the proof above is two runs of the whole sweep,
-published with their commands, not an arm inside it; that is named as a residual in §6 rather
+published with their commands, not an arm inside it; that is named as a residual in §7 rather
 than claimed as covered.
 
 ## 4. What the reviewer measured that this pack had not, recorded as theirs
@@ -175,16 +175,24 @@ from it.
   than to fold into a commit's figure. The re-read after the mirror is written is reported to the
   reviewers with its own timestamp and is **not** part of this head's figure.
 
-  *Which run these two bullets are, exactly.* The lines above are from the run at **09:45:45
-  UTC**. A further run **after the last document write of this round** answered identically —
-  **78 ok**, `0 gate(s)/proof(s) not as required`, the same off-repository difference with the
-  same first line, rc 1 — at **09:48:14 UTC**; only the instant differs, which is the point of
-  printing it. The only writes after that run are this paragraph and the manifest-row refresh it
-  forces, and both `--check` lanes below were re-run after them.
+  *Which run these bullets are, exactly, and the two figures §6 changed.* The lines above were
+  first taken at **09:45:45 UTC** and reproduced at **09:48:14 UTC**, both before §6 existed. They
+  are re-taken here **after §6's document and its manifest row**, at **09:53:38 UTC**: still
+  **78 ok**, still `0 gate(s)/proof(s) not as required`, still one off-repository difference and
+  rc 1, and the read line now `/mnt/project-files/phase14 — 77 file(s), newest
+  2026-10-19T09:51:17Z, read at 2026-10-19T09:53:38Z`, first line `STALE:
+  P14-MIGRATION-PATCH-REQUEST.md: row says 946d2052d111/114,156 bytes, file is
+  14f06a749e02/114156 bytes` — the folder holding the mirror of `dac688d` while the tree has moved
+  past it, which is the state this lane exists to report. Only the instant and the folder's
+  contents differ between the three runs; the figure quoted for the commit did not move. The only
+  writes after the 09:53:38 run are this paragraph and the manifest refresh it forces, and every
+  `--check` lane below was re-run after them.
 * `tools/manifest-digests.py --check` — rc 0, byte-identical from the pack directory and the repository root:
-  **75 artifact rows + the manifest itself, 75 files**, and *"reviewer-row history checked over
-  all 32 revisions of this manifest reachable from HEAD — 1 of them found by the marker it
-  carries"*. The revision count is quoted here only as the number this working tree reports; the
+  ~~75 artifact rows + the manifest itself, 75 files~~ **76 artifact rows + the manifest itself,
+  76 files** — corrected in place when §6 added the coordinator's review of `25d945d` as a 76th
+  artifact; the struck pair was true of `dac688d` and is not true of this head — and
+  *"reviewer-row history checked over all ~~32~~ **33** revisions of this manifest reachable from
+  HEAD — 1 of them found by the marker it carries"*, 33 because `dac688d` added one. The revision count is quoted here only as the number this working tree reports; the
   figure for the **pushed** head is re-measured in a fresh clone and reported to the reviewers,
   per round 18's rule.
 * `tools/citation-provenance.py` — rc 0, and `--check P14-MIGRATION-PATCH-REQUEST.md` rc 0 after the
@@ -201,7 +209,53 @@ from it.
   `{"ignored":false,"inferredParser":null}` — so no repository gate reads any file this commit
   changes, and `git diff --stat -- . ':!phase-preparation'` is empty.
 
-## 6. Residuals at this head, signed by neither reviewer
+## 6. Added after `dac688d`: the same omission, one round later, caught by this round's own lane
+
+**Disclosed by me.** `dac688d` — the commit that answers `R25-P2-01` by committing the
+coordinator's review of `32017cf` — **did not commit the coordinator's review of `25d945d`**,
+although that report had been written into the shared pack at **09:30:26 UTC**, nineteen minutes
+before my push. I read it only when I mirrored the pack afterwards and the shared lane came back
+`STALE: P14-COORD-DIFF-REVIEW-25d945d.md: ARTIFACT WITH NO ROW`. So the finding I was answering
+recurred inside the commit that answered it, in the same shape: a reader of `dac688d` could not
+verify the SIGN of its parent from the pack. It is committed here, unedited — 5,353 bytes,
+`68fd206f1b40b6e0574f29fbd2a604957108a07ea28fa897f1ecf92cec8b0eda`, `cmp` against the shared copy
+clean — with a hand-written row, and this section is the reason this commit exists rather than a
+trailing reviewer name riding along.
+
+**What the lane did and did not do for me.** It reported a difference, fail-closed, with the
+directory and the instant printed — which is what §3 built it to do, and it is how I found this.
+It did not stop the commit: nothing in this pack reads *"a reviewer's report sits in the folder
+and not in the tree"* at commit time, and that absence is named in §7 rather than claimed as
+covered.
+
+**The coordinator's actual-diff review of `25d945d`: SIGN** — for that SHA alone, "not a
+promotion; Phase 14 remains PREPARED / NOT PROMOTED; CI has never run a Phase 14 SHA". Recorded as
+theirs, measured by them in their own clone with the tree exported by `git archive`: the five
+pinned digests all matching the challenger's §5; the diff touching nothing outside
+`phase-preparation`, so the repository-gate set is empty and they ran none, *stated and not
+implied*; `cmp` of the committed `P14-CHALLENGE-32017cf.md` against the shared copy identical; and
+**`R24-P3-01` closed by deletion in their own mutant clone** — one line `raise exc` inserted at the
+top of `_refuse_unrunnable_git`, and `sibling-unrunnable-refused` goes from `ok rc=2` to `FAIL rc=1`
+with the traceback, reding on its removal and on nothing else. Their sweep was `--no-db`, **70 ok**,
+and they say plainly that the 78/79 figures include DB lanes they did not take, so those figures
+are not comparable.
+
+**Their ratings of this round's two findings, which are theirs and not mine to adopt or discount:**
+
+* **`R25-P2-01` → P3**, not P2: "nothing in the tree is wrong, the gate fails closed, and the
+  remedy is to commit the review with its row in the next round". They add that amendment 30 §5's
+  sweep figure "was a time-of-measurement figure of a mutable folder, not a false property of the
+  SHA". I have nonetheless struck it in place and enforced it as retracted claim 28, because the
+  sentence is published under *"at this head"* and a reader sent to it would act on a figure that
+  does not reproduce; the stricter treatment costs nothing and I am not entitled to the lighter one
+  for a figure of my own.
+* **`R25-P3-02` → P3, and explicitly NOT fail-open**, which they established by attack rather than
+  by argument: a folder writer cannot make the sweep green over a bad SHA, because the
+  `manifest-digests` lane reads the clone and stays the SHA's verdict, so corrupting the folder can
+  only add or remove red on `manifest-shared` itself. Their recommendation — publish the per-SHA
+  figure with `manifest-shared` reported separately with its read time — is what §3 and §5 do.
+
+## 7. Residuals at this head, signed by neither reviewer
 
 * **`manifest-digests.py --check` enumerates `.md` and `.yaml` only**, measured in §3 while
   building the separation proof: a file of any other extension dropped into a pack directory has
@@ -213,6 +267,9 @@ from it.
   off-repository lane reports the pre-push mirror. A reader who wants rc 0 from this sweep runs it
   after the mirror is written, or points `P14_SHARED` at a directory that describes the commit —
   and the directory it actually read is printed either way.
+* **Nothing in this pack reads, at commit time, whether a reviewer's report that exists in the
+  shared folder is in the tree.** §6 is the second round in a row where that gap produced the same
+  omission, found afterwards by a lane rather than before by an instrument. Named, not fixed here.
 * **No permanent arm asserts the off-repository separation of §3.** It is proved by two published
   runs of the whole sweep, not by an arm inside it. A later round can build one; this one did
   not.
