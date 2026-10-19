@@ -75,5 +75,15 @@ describe("the repository's own format gate, over this package", () => {
       code: 0,
       out: expect.stringContaining('use Prettier code style'),
     });
-  });
+    // ROUND 26. This test spawns the repository's own prettier over every file
+    // of the package, which takes about 2.4s alone and longer when twenty-two
+    // other files are competing for the container's CPU: in the round-26 full
+    // run it exceeded vitest's 5s default and the suite went red while
+    // `npm run format` at the same tree was rc 0. A wall-clock budget is not
+    // part of what this law asserts, and a timing flake in the ONE test that
+    // guards the only repo gate which can see this package is the worst place
+    // to have one — it trains a reader to re-run instead of to look. The
+    // budget is explicit and generous; the assertion above is untouched, so a
+    // genuinely misformatted file still reds it (M98).
+  }, 120_000);
 });

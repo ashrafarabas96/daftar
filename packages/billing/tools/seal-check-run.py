@@ -51,8 +51,20 @@ import datetime
 import io
 import re
 import subprocess
+import os
 import sys
 from pathlib import Path
+
+# ROUND 26, THE CHALLENGER'S F-46. Subprocesses inherit the environment, so a
+# PYTHONPATH that shadows a stdlib module changes what the tools compute: with a
+# twenty-line `hashlib.py` on the path, writing then sealing gave rc 0 over a
+# table of twenty-four all-zero digests. `-I` ignores PYTHONPATH, PYTHONHOME and
+# the user site directory, and the challenger measured that it defeats the plant.
+# This tool re-execs ITSELF isolated rather than trusting its caller to remember,
+# and runs its children with `-I` too. `-I` sets `sys.flags.isolated`, so the
+# re-exec happens at most once and cannot loop.
+if not sys.flags.isolated:  # pragma: no cover - the isolated process runs the rest
+    os.execv(sys.executable, [sys.executable, "-I", os.path.abspath(__file__), *sys.argv[1:]])
 
 ROW = re.compile(r"^\| `([^`]+)` \| (.+) \|$")
 # The digest tool's own summary line, the number this tool must agree with.
@@ -102,6 +114,7 @@ def run_checks(tools: Path, pack: Path, tests: Path) -> dict[str, str]:
     calls = {
         "context-sites.py": [
             sys.executable,
+            "-I",
             str(tools / "context-sites.py"),
             "--dir",
             str(pack),
@@ -111,6 +124,7 @@ def run_checks(tools: Path, pack: Path, tests: Path) -> dict[str, str]:
         ],
         "status-block.py": [
             sys.executable,
+            "-I",
             str(tools / "status-block.py"),
             "--dir",
             str(pack),
@@ -118,6 +132,7 @@ def run_checks(tools: Path, pack: Path, tests: Path) -> dict[str, str]:
         ],
         "manifest-digests.py": [
             sys.executable,
+            "-I",
             str(tools / "manifest-digests.py"),
             "--dir",
             str(pack),
@@ -216,20 +231,31 @@ def block(
         )
     note = (
         "Every string in the table above was produced by THIS TOOL RUNNING the three checks "
-        "itself, in this process: each `rc 0` is the exit code `subprocess.run` reported and a "
-        "nonzero one refuses, each quoted line is that run's own last line of stdout, the run "
-        "time is `datetime.now(timezone.utc)`, the mtime is a `max()` over the pack, and the "
-        "tally is counted from the digest table in this same file and compared with the figure "
-        "the digest tool printed. Round 24 read those strings out of capture FILES and typed the "
-        "times, which the challenger's B-7 showed was three fail-opens wearing the words \"none "
-        "of it is typed\": a red run sealed as green, a stale capture sealed above a freshly "
-        "counted tally, and an ordering claim that was a literal rather than a comparison.\n\n"
-        "**Where the regress stops.** Writing the re-run time is itself a write to this file. "
-        "The second pass re-ran all three checks against the written bytes, refused on any "
-        "difference, and found none; the author ran them once more after that line was written "
-        "and they were rc 0, and that final confirmation is reported in the round-25 handoff "
-        "rather than here, because recording it would need yet another write. Any reader settles "
-        "it in one command: the three tools on these bytes must print exactly the strings above."
+        "itself, in this process, with `-I` so that no inherited `PYTHONPATH` decides what the "
+        "tools import: each `rc 0` is the exit code `subprocess.run` reported and a nonzero one "
+        "refuses, each quoted line is that run's own last line of stdout, the run time is "
+        "`datetime.now(timezone.utc)`, the mtime is a `max()` over the pack taken AFTER the "
+        "checks ran, the tally is counted from the digest table in this same file and compared "
+        "with the figure the digest tool printed, and the ordering is re-tested against the time "
+        "this row actually carries. Round 24 read those strings out of capture FILES and typed "
+        "the times (the challenger's B-7: a red run sealed as green, a stale capture sealed above "
+        "a freshly counted tally, an ordering claim that was a literal). Round 25 fixed the code "
+        "and left this paragraph asserting more than the run established (its B-8): an ordering "
+        "\"verified\" on a time that was never compared, and a sentence about a second pass that "
+        "printed whether or not one had run.\n\n"
+        "**Where the regress stops.** Writing anything here is itself a write to this file, whose "
+        "own row is `this file` because nothing can carry its own digest. "
+        + (
+            "A second pass then re-ran all three checks against these written bytes, compared "
+            "each quoted line against the text BETWEEN the sentinels, and found no difference; "
+            "its time is the last row above. Recording that row was one more write, which no run "
+            "in this file can cover.\n\n"
+            if rerun_utc
+            else "No second pass has run against these bytes: there is no re-run row above, and "
+            "this paragraph does not claim one.\n\n"
+        )
+        + "Any reader settles the whole thing in one command: the three tools, run on these "
+        "bytes, must print exactly the strings above."
     )
     return "\n".join([BEGIN, ""] + rows + ["", note, "", END])
 
@@ -254,15 +280,13 @@ def main() -> int:
     if not tests.is_dir():
         raise SystemExit(f"no test directory at {tests}")
 
-    mtime, mfile = newest_other(pack, name)
+    # B-8(a): the pack is measured AFTER the checks ran, not before. Reading it
+    # first described the directory as it was BEFORE the run, so a document
+    # written while the checks were running was outside the ordering the row
+    # claims.
     out = run_checks(tools, pack, tests)
     run_utc = now()
-    # B-7(c): the ordering the row asserts, established here instead.
-    if run_utc <= iso(mtime):
-        raise SystemExit(
-            f"the check run ({run_utc}) is not after the newest document mtime "
-            f"({iso(mtime)}, {mfile}) — re-run the checks after the last document write"
-        )
+    mtime, mfile = newest_other(pack, name)
     digests, markers, selfrow = tally(manifest)
     agree(out["manifest-digests.py"], digests, markers, selfrow)
 
@@ -273,19 +297,40 @@ def main() -> int:
         # every quoted line must still be exactly what the tools print on the
         # written bytes, and this pass's own clock reading becomes the re-run.
         text = io.open(manifest, encoding="utf-8").read()
+        # B-8(c): `line not in text` searched the WHOLE manifest, so a corrupted
+        # row passed whenever the true line also appeared in the prose — and
+        # this document's history sections do carry such lines. The identity
+        # test must read the block it is confirming and nothing else.
+        if BEGIN not in text or END not in text:
+            raise SystemExit("no P5-SEAL sentinel pair to confirm")
+        sealed_block = text[text.index(BEGIN) : text.index(END) + len(END)]
         for tool, line in out.items():
-            if line not in text:
+            if line not in sealed_block:
                 raise SystemExit(
-                    f"the written record does not carry what {tool} just printed — the first "
+                    f"the sealed block does not carry what {tool} just printed — the first "
                     f"pass's seal is stale; re-seal before verifying.\n  printed: {line}"
                 )
-        sealed = SEALED_RUN.search(text)
+        sealed = SEALED_RUN.search(sealed_block)
         if not sealed:
             raise SystemExit(
                 "no sealed check-run time to confirm — run the first pass before "
                 "--verify-after-write"
             )
         rerun_utc, run_utc = run_utc, sealed.group(1)
+
+    # B-8(a), the half that blocked: the ordering was tested against the FRESH
+    # clock while the row was written from the OLD sealed time. Editing one
+    # reviewer-owned document between the passes — which is what a reviewer
+    # filing a report does — produced a row claiming a run 309 ms BEFORE the
+    # mtime it says it is after, at rc 0, and the three checks cannot catch it
+    # because a reviewer-owned file carries a marker instead of a digest. The
+    # test now runs on `run_utc` as it will be WRITTEN, whichever pass this is.
+    if run_utc <= iso(mtime):
+        raise SystemExit(
+            f"the time this record would claim as its check run ({run_utc}) is not after the "
+            f"newest document mtime ({iso(mtime)}, {mfile}) — a document changed since that "
+            f"run, so re-seal rather than confirming a stale one"
+        )
 
     text = io.open(manifest, encoding="utf-8").read()
     if BEGIN not in text or END not in text:
