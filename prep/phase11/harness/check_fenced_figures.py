@@ -220,6 +220,7 @@ if not sys.flags.isolated:
 
 import ast
 import atexit
+import hashlib
 import inspect
 import os
 import re
@@ -228,6 +229,27 @@ import subprocess
 import tempfile
 import textwrap
 import unicodedata
+
+# `R20-F1`, and it has to sit HERE, immediately after the imports and before any
+# other statement of this file runs. Round 20 rebound `re.fullmatch` at module
+# level to a function of its own: the module object was still `sys.modules["re"]`
+# and its `__name__` was still `"re"`, so round 19's identity check held, the
+# call site still matched its entry inside the guard the matrix measures, and the
+# decision that entry admits was the planter's. Rule 5 pinned the MODULE by
+# identity and the ATTRIBUTE by name.
+#
+# So the namespaces of the modules the frame may call are SNAPSHOTTED at import,
+# and every attribute a listed entry names is compared against this snapshot by
+# IDENTITY before any verdict is read. A rebinding anywhere after this line --
+# which is where a plant lands, since this line is the second thing the file does
+# -- is a named refusal. A plant that moved ABOVE this line would be captured
+# here instead, which is why identity is not the only test: the object must also
+# come from the module's own source and not from this file.
+#
+# The names below must be exactly `FRAME_MODULES`, which is defined far later;
+# the two are compared at run time rather than kept in step by hand.
+_SNAPSHOT_MODULES = ("re", "os", "unicodedata")
+_AT_IMPORT = {m: dict(vars(sys.modules[m])) for m in _SNAPSHOT_MODULES}
 
 PHASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -874,7 +896,13 @@ def haystack(root, skip=()):
     if from_commit:
         top = _subject_top(root, anchored)
         sha = _commit_of(top if anchored else root)
-        rel = os.path.relpath(os.path.abspath(root), top)
+        # `R20-S1`: `realpath`, not `abspath`. The anchor is resolved, so a
+        # subject reached through a SYMLINK kept the link's spelling here while
+        # the repository was found at the resolved path -- git then rejected the
+        # pathspec and told the operator their haystack was "outside
+        # repository", which is not what had happened. Identity and spelling
+        # again, on the path this time.
+        rel = os.path.relpath(os.path.realpath(root), top)
         paths = [n for n in _tracked_paths(top, sha, rel) if keep(n)]
         text = "\n".join(_blobs(top, sha, paths))
         label = "commit %s" % sha
@@ -949,7 +977,10 @@ def frame_admissible():
     `scan` once per arm and the answer cannot change inside one process.
     """
     if not _FRAME_PARSED:
-        msgs = []
+        _ok, msgs = module_call_identity()
+        _ok2, more = frame_function_identity()
+        _ok3, pinned = decision_constants_pinned()
+        msgs = list(msgs) + list(more) + list(pinned)
         for func in (figures_on, tokens_in, _exempted, _is_figure):
             _ok, m, _k = decision_frame(
                 _source_of(func), DECISION_EXCEPTIONS.get(func.__name__, ())
@@ -1474,6 +1505,62 @@ def _anchor_world(where):
     return _ANCHOR[where]
 
 
+_GITFILE = {}
+
+
+def _gitfile_world():
+    """A world where GIT'S toplevel and the CENSUS's answer disagree.
+
+    `R20-S2`. The challenger could reach `GIT-TOPLEVEL-DISAGREES` with neither
+    of the two shapes it tried -- a linked worktree and a `.git` file -- because
+    in both of those git's answer and the walk's agree, and it asked for the
+    refusal to be recorded as UNMEASURED-at-runtime rather than described as
+    armed. There IS a shape: a `.git` FILE whose gitdir carries `core.worktree`
+    pointing somewhere else. Then the directory holding the `.git` is the only
+    repository an ancestor walk can see, and `rev-parse --show-toplevel` names a
+    different directory entirely -- which is the disagreement the refusal exists
+    for, and every answer taken from git after it would come from a repository
+    the census never examined.
+    """
+    if _GITFILE:
+        return _GITFILE["world"]
+    d = tempfile.mkdtemp(prefix="p11-gitfile-")
+    atexit.register(shutil.rmtree, d, True)
+    elsewhere = os.path.join(d, "elsewhere")
+    harness = os.path.join(d, "subject", "prep", "phase11", "harness")
+    os.makedirs(os.path.join(elsewhere, "keep"))
+    os.makedirs(harness)
+    _write(harness, "fake_proofs.py", FAKE_PROOFS)
+    _write(os.path.join(elsewhere, "keep"), "x.txt", "another repository's work tree\n")
+    _git(elsewhere, ["init", "-q"])
+    _git(elsewhere, ["add", "-A", "--", "."])
+    _git(
+        elsewhere,
+        ["-c", "user.name=phase11", "-c", "user.email=phase11@example.invalid",
+         "commit", "-q", "--no-gpg-sign", "-m", "the repository git will name"],
+    )
+    _git(elsewhere, ["config", "core.worktree", os.path.realpath(elsewhere)])
+    with open(os.path.join(d, "subject", ".git"), "w", encoding="utf-8") as fh:
+        fh.write("gitdir: %s\n" % os.path.join(os.path.realpath(elsewhere), ".git"))
+    _GITFILE["world"] = (os.path.join(d, "subject"), harness)
+    return _GITFILE["world"]
+
+
+def _gitfile_arm(skip=()):
+    """The census and git disagree: a named refusal, from the harness seat."""
+    subject, harness = _gitfile_world()
+    was = os.getcwd()
+    with tempfile.TemporaryDirectory() as docs_at:
+        docs = os.path.join(docs_at, "docs")
+        os.makedirs(docs)
+        _write(docs, "a.md", PROBE + "\n")
+        try:
+            os.chdir(harness)
+            return scan(docs, harness, quiet=True, skip=skip)
+        finally:
+            os.chdir(was)
+
+
 def _anchor_arm(where, cwd_kind, skip=()):
     """One anchor world, weighed from one working directory."""
     root, harness, sibling = _anchor_world(where)
@@ -1566,6 +1653,16 @@ def _arms_with(skip=()):
                     (lambda w=where, s=seat: _anchor_arm(w, s, skip)),
                 )
             )
+    # `R20-S2`: the thirteenth registered `GIT-*` refusal, which nobody had
+    # reached. A shape that reaches it is an arm; a shape nobody can reach would
+    # have been recorded as UNMEASURED-at-runtime, which is not the same as dead.
+    arms.append(
+        (
+            "R20-S2 git's toplevel and the census disagree",
+            5,
+            (lambda: _gitfile_arm(skip)),
+        )
+    )
     return arms
 
 
@@ -1910,14 +2007,44 @@ def structure_test():
 #     rule read only tests, and at the call site the test was on a local
 #     function rule 2 admits.
 #
-# WHAT IS STILL OUTSIDE RULE 5, and it is one thing: the HONESTY OF A GUARD'S
-# NAME. The parse can prove that `re.fullmatch` in `_is_figure` sits inside the
-# branch `"key class" not in skip` opens, and that nothing else in the frame
-# calls a module at all; it cannot prove that the branch deserves that name.
-# That is the second exclusion above, and it is what the guard matrix measures
-# by deleting the guard and reading which arms stop giving their verdict. Both
-# of round 19's escapes are arms of their own, each with the rule deleted
-# beside it, so this paragraph is a report rather than a promise.
+# WHAT IS OUTSIDE THE RULES, as a count the parse can defend. Round 19 wrote
+# here that it was ONE thing, the honesty of a guard's name, and round 20
+# measured that sentence false by finding two more: a whitelisted METHOD NAME on
+# an object of the planter's own (rule 3 was a list of names with no constraint
+# on the receiver), and a module-level REBINDING of the listed attribute (the
+# identity check reached the module and stopped one level short of the
+# function). The coordinator's review then found a third, the ARGUMENTS of an
+# admitted call. All three are closed above and armed; what follows is what is
+# left, and each line is a thing the parse does NOT do:
+#
+#   1. THE HONESTY OF A GUARD'S NAME. The parse proves that the admitted call
+#      sits inside the branch `"key class" not in skip` opens and that it is the
+#      only such call; it cannot prove the branch deserves the name. The guard
+#      matrix measures that by deleting the guard and reading which arms stop
+#      giving their verdict.
+#   2. WHAT A TRANSFORMER MAY DO. `_strip` and `_segments` are covered by
+#      `guarded_transformations`, which proves every rebinding sits inside a
+#      named branch -- and a transformation that DROPS a candidate decides, under
+#      another name. Round 20 named this as where it would look next and it is
+#      not closed here.
+#   3. COMPLETENESS OF THE ADMIT-LISTS. Every entry of `DECIDING_MODULE_CALLS`
+#      and every name in `FRAME_METHODS` is checked to be LIVE, and that is a
+#      check for DEAD entries and not for MISSING ones. The coordinator's
+#      standing ruling on this phase: `each entry is live` may never stand in
+#      for `the set is complete`. It does not have to here -- anything the lists
+#      do not admit is refused BY NAME, so the admit-lists are read through a
+#      refusal rather than through their own completeness -- but the documents
+#      say only what is checked, which is that a dead entry reds.
+#   4. THE FILE'S OWN BYTES. Every plant above changes
+#      `check_fenced_figures.py`, and nothing inside a run compares the file
+#      with a stored digest: `HARNESS_SHA256` is printed, not checked. A reader
+#      who recomputes the published digest sees the change; the run does not.
+#      That is the whole of what the published digests are for.
+#
+# Every claim in this paragraph is armed: round 19's two escapes, round 20's
+# three, and the coordinator's three, each with the ONE rule that refuses it
+# deleted beside it (`RULE_KEYS`), or -- for the checks that are about objects
+# rather than shapes -- performed in this process and read by refusal name.
 
 FRAME_NODES = frozenset(
     (
@@ -2020,6 +2147,203 @@ DECISION_EXCEPTIONS = {
 }
 
 
+# `C20-F1`, the coordinator's blocker on this head's predecessor: rule 5 pins
+# WHICH call may decide, in which position, inside which guard, and by the
+# identity of the function it names -- and never looked at the ARGUMENTS. Adding
+# `(?!4242$)` to the pattern inside the admitted `return re.fullmatch(...)`, or
+# editing the guarded `keyre`, gave a green run with a fabricated figure
+# through. The arguments of an admitted call are part of what it decides, so the
+# CONSTANTS the matcher's decisions read are pinned by digest: any edit to any
+# of them reds by name, which is a law over argument edits rather than a list of
+# the ones anyone has thought of.
+#
+# What is in the digest, all of it derived rather than listed: every literal in
+# the six functions the parses cover (their docstrings excluded, because prose
+# decides nothing), and the module-level names those functions READ, by their
+# value in what is RUNNING -- a compiled pattern by its `.pattern`, anything
+# else by `repr`. Regenerate it with `--decision-constants` after a
+# deliberate change, exactly as a generated block is regenerated.
+DECISION_CONSTANTS_SHA256 = "96dde48abdaa78790e558068cd2bf341ada1a45038a4950a8272e62e3d7e6145"
+
+
+def _frame_globals(fn):
+    """The module-level names `fn` reads, as (name, value-text) in what runs."""
+    params = {a.arg for a in fn.args.args}
+    loops = set()
+    bound = set()
+    for node in ast.walk(fn):
+        if isinstance(node, (ast.For, ast.comprehension)):
+            for sub in ast.walk(node.target):
+                if isinstance(sub, ast.Name):
+                    loops.add(sub.id)
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                for sub in ast.walk(t):
+                    if isinstance(sub, ast.Name):
+                        bound.add(sub.id)
+    out = []
+    for g in sorted(_data_loads(fn) - params - loops - bound):
+        obj = globals().get(g, None)
+        text = getattr(obj, "pattern", None)
+        out.append((g, text if isinstance(text, str) else repr(obj)))
+    return out
+
+
+def decision_constants():
+    """The canonical text whose digest `DECISION_CONSTANTS_SHA256` pins."""
+    rows = []
+    for func in (figures_on, tokens_in, _exempted, _is_figure) + TRANSFORMERS:
+        fn = _source_of(func)
+        body = fn.body
+        if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
+            body = body[1:]
+        lits = []
+        for stmt in body:
+            for node in ast.walk(stmt):
+                if isinstance(node, ast.Constant):
+                    lits.append(repr(node.value))
+        rows.append("%s literals: %s" % (fn.name, " | ".join(lits)))
+        for g, text in _frame_globals(fn):
+            rows.append("%s reads %s = %s" % (fn.name, g, text))
+    return "\n".join(rows) + "\n"
+
+
+def decision_constants_pinned():
+    """(ok, refusals) that the matcher's decision constants are the pinned ones."""
+    got = hashlib.sha256(decision_constants().encode("utf-8")).hexdigest()
+    if got == DECISION_CONSTANTS_SHA256:
+        return True, ()
+    return False, (
+        "DECISION-CONSTANTS-MOVED: the constants the matcher's decisions read digest to "
+        "%s and this file pins %s. An ARGUMENT of an admitted call is part of what that "
+        "call decides -- `(?!4242$)` added to a pattern inside the admitted call is a "
+        "narrowing rule 5 cannot see -- so a changed constant is a refusal. If the "
+        "change was deliberate, run `--decision-constants` and commit the digest it "
+        "prints." % (got, DECISION_CONSTANTS_SHA256),
+    )
+
+
+def frame_function_identity():
+    """(ok, refusals) that the functions PARSED are the functions that RUN.
+
+    The coordinator's `C20` review wrapped `_is_figure` in a decorator carrying
+    `__wrapped__`: `inspect.getsource` follows that attribute, so the parse read
+    the original body while the call read the wrapper. `--selftest` noticed by
+    accident -- its compiled-constants tie is not part of the gate the scan runs
+    -- and `--check-blocks` and the scan returned 0. So the tie is here, where
+    both gates read it, and it is three named refusals rather than a side
+    effect:
+
+      1. no `__wrapped__`: that attribute is exactly what makes
+         `inspect.getsource` return a body other than the one that runs;
+      2. the code object comes from THIS file, so a body defined elsewhere
+         cannot stand in for it;
+      3. the qualified name is the plain name, so a closure or a method cannot
+         sit under it.
+    """
+    msgs = []
+    here = os.path.realpath(__file__)
+    for func in (figures_on, tokens_in, _exempted, _is_figure) + TRANSFORMERS:
+        nm = func.__name__
+        if getattr(func, "__wrapped__", None) is not None:
+            msgs.append(
+                "FRAME-FUNCTION-WRAPPED: `%s` carries `__wrapped__`, so the source this "
+                "file parses is not the code that runs -- the parse would report the "
+                "body underneath while the wrapper decides" % nm
+            )
+            continue
+        code = getattr(func, "__code__", None)
+        if code is None or os.path.realpath(code.co_filename) != here:
+            msgs.append(
+                "FRAME-FUNCTION-FOREIGN: `%s` carries code from %r rather than from this "
+                "file, so what the gates parse is not what they run"
+                % (nm, getattr(code, "co_filename", None))
+            )
+            continue
+        if getattr(func, "__qualname__", nm) != nm:
+            msgs.append(
+                "FRAME-FUNCTION-NESTED: `%s` is qualified as %r, so the name this file "
+                "parses is bound to something defined inside something else"
+                % (nm, func.__qualname__)
+            )
+    return not msgs, tuple(msgs)
+
+
+def module_call_identity():
+    """(ok, refusals) for the OBJECTS the deciding-call entries name.
+
+    `R20-F1`. Round 19 tied the spelling `re` to the module object. Round 20
+    rebound `re.fullmatch` at module level and walked a fabricated figure
+    through every exit code: the module was still the module, the entry still
+    matched in its guard, and the function the entry admits was the planter's.
+    **A whitelist of names is not a whitelist of behaviours** -- so each entry's
+    attribute is checked in WHAT IS RUNNING, three ways, each its own refusal:
+
+      1. IDENTITY against the import-time snapshot (`_AT_IMPORT`, taken on the
+         line after the imports). This is what catches a rebinding, because a
+         rebinding is exactly a change of object at an unchanged name.
+      2. PROVENANCE: the object's `__module__` must be the module the entry
+         names. A planter who rebinds BEFORE the snapshot is captured by it, so
+         identity alone would be satisfied; provenance is what refuses there.
+      3. NOT DEFINED IN THIS FILE: a Python-level object must not carry code
+         from `check_fenced_figures.py`. Same reason as 2, read off the code
+         object instead of a settable attribute.
+
+    This is run by `frame_admissible`, so the scan and `--check-blocks` refuse on
+    it too and not only `--selftest`.
+    """
+    msgs = []
+    if tuple(_SNAPSHOT_MODULES) != tuple(FRAME_MODULES):
+        msgs.append(
+            "the import-time snapshot covers %s and the frame may call %s -- the two "
+            "lists are the same list and a module the frame may call with no snapshot "
+            "is an unpinned attribute" % (_SNAPSHOT_MODULES, FRAME_MODULES)
+        )
+        return False, tuple(msgs)
+    here = os.path.realpath(__file__)
+    for fn, mod, attr, position, _guard in DECIDING_MODULE_CALLS:
+        module = sys.modules.get(mod)
+        if globals().get(mod) is not module or getattr(module, "__name__", None) != mod:
+            msgs.append(
+                "`%s` in this module is not the module of that name, so the entry "
+                "`%s.%s` named for `%s` is matched by spelling against something else"
+                % (mod, mod, attr, fn)
+            )
+            continue
+        now = getattr(module, attr, None)
+        before = _AT_IMPORT[mod].get(attr)
+        if now is None:
+            msgs.append(
+                "MODULE-ATTR-ABSENT: `%s.%s`, which the entry for `%s` names, does not "
+                "exist on that module at run time" % (mod, attr, fn)
+            )
+            continue
+        if now is not before:
+            msgs.append(
+                "MODULE-ATTR-REBOUND: `%s.%s` is not the object this file saw when it "
+                "imported `%s` (now %r). The entry for `%s` admits a decision taken by "
+                "whatever that name now holds, so the name is refused rather than "
+                "trusted -- a whitelist of names is not a whitelist of behaviours"
+                % (mod, attr, mod, now, fn)
+            )
+            continue
+        if getattr(now, "__module__", None) != mod:
+            msgs.append(
+                "MODULE-ATTR-FOREIGN: `%s.%s` reports `__module__` %r rather than %r, so "
+                "the object the entry for `%s` admits was not defined by the module the "
+                "entry names" % (mod, attr, getattr(now, "__module__", None), mod, fn)
+            )
+            continue
+        code = getattr(now, "__code__", None)
+        if code is not None and os.path.realpath(code.co_filename) == here:
+            msgs.append(
+                "MODULE-ATTR-IS-OURS: `%s.%s` carries code from this file (%s), so the "
+                "entry for `%s` admits a decision this file took while reporting it as "
+                "the module's" % (mod, attr, code.co_filename, fn)
+            )
+    return not msgs, tuple(msgs)
+
+
 def _guard_test(test):
     """`"<name>" not in skip` or `"<name>" in skip`, or None."""
     if not isinstance(test, ast.Compare) or len(test.ops) != 1:
@@ -2043,6 +2367,14 @@ def _frame_lookup(name):
     """
     if name in FRAME_BUILTINS:
         return ("builtin", None)
+    if getattr(globals().get(name), "__name__", None) == "<lambda>":
+        # `C20` `P3`: a `lambda` has a `__code__` and this module's
+        # `__module__`, so it used to be resolved as a function and then
+        # `inspect.getsource` returned the ASSIGNMENT it sits in, which parses
+        # to an `Assign` and not a `FunctionDef`. The descent died on
+        # `fn.name` with a traceback. A traceback tells a reader the instrument
+        # broke; this phase refuses by name.
+        return ("lambda", None)
     if name in PARSED_AS_TRANSFORMERS:
         return ("transformer", None)
     obj = globals().get(name)
@@ -2053,6 +2385,67 @@ def _frame_lookup(name):
 
 def _source_of(func):
     return ast.parse(textwrap.dedent(inspect.getsource(func))).body[0]
+
+
+# `R20-F1`. Rule 3's method whitelist was a list of method NAMES with no
+# constraint on the RECEIVER, so a module-level object of the planter's own --
+# `_r20_shape.strip(key)` -- was admitted, because `strip` is on the list.
+# Round 20 proved that was the admitting rule by running the same plant with
+# `.match`, which is refused by name. The frame could therefore decide on its
+# input through a predicate of its own with no module call in it anywhere, which
+# is why the old bound ("nothing else in the frame calls a module") was true and
+# bounded nothing. **A whitelist of names is not a whitelist of behaviours.**
+#
+# So a whitelisted method is admitted only on a receiver the frame can ACCOUNT
+# FOR: a parameter, a `for` target, or a name bound in the function from a value
+# that is itself accounted. A module-level name is NOT accounted, and -- round
+# 20's `A4c` -- binding one to a local first does not launder it, because the
+# binding's own right-hand side is read.
+def _data_loads(expr):
+    """Every name whose VALUE this expression reads.
+
+    A callee is not a data load: a called bare name is classified by rule 3's
+    own lookup. A module in `FRAME_MODULES` is not one either: rule 5 and the
+    import-time identity check own those. Everything else that is read --
+    including the RECEIVER of a method call -- is here, which is the point.
+    """
+    callees = {id(n.func) for n in ast.walk(expr) if isinstance(n, ast.Call)}
+    out = set()
+    for n in ast.walk(expr):
+        if not isinstance(n, ast.Name) or not isinstance(n.ctx, ast.Load):
+            continue
+        if id(n) in callees or n.id in FRAME_MODULES:
+            continue
+        out.add(n.id)
+    return out
+
+
+def _accounted_names(fn, params, loop_targets):
+    """The names in `fn` whose value is derived from the function's own inputs.
+
+    A fixed point rather than a walk in source order: monotone, so it does not
+    depend on reading the statements in the order a human would, and rule 4
+    already forbids binding a name twice.
+    """
+    acc = set(params) | set(loop_targets)
+    for _pass in range(8):
+        grew = False
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assign):
+                continue
+            targets = {
+                sub.id
+                for t in node.targets
+                for sub in ast.walk(t)
+                if isinstance(sub, ast.Name)
+            }
+            if targets <= acc or not _data_loads(node.value) <= acc:
+                continue
+            acc |= targets
+            grew = True
+        if not grew:
+            break
+    return acc
 
 
 def _module_call_sites(fn):
@@ -2103,6 +2496,24 @@ def _module_call_sites(fn):
     return sites
 
 
+# The keys of the rules a deletion control may delete ONE AT A TIME. The
+# coordinator's `C20` ruling: a fix is done only when deleting it reds a gate,
+# and `enforce=False` deleted all of them at once, so no single rule was
+# measured. `True` is every key, `False` is none (kept for the arms written
+# before the keys existed), and a set is exactly those keys.
+RULE_KEYS = ("positions", "one-site", "receiver", "data", "shadow")
+
+
+def _enabled(enforce):
+    if enforce is True:
+        return frozenset(RULE_KEYS)
+    if enforce is False:
+        return frozenset()
+    bad = sorted(set(enforce) - set(RULE_KEYS))
+    assert not bad, "no such rule key: %s" % ", ".join(bad)
+    return frozenset(enforce)
+
+
 def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce=True):
     """(ok, messages, guard keys) for one decision function's AST.
 
@@ -2117,6 +2528,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
     the rule deleted rather than merely failing with it present.
     """
     lookup = lookup or _frame_lookup
+    rules = _enabled(enforce)
     # `R18-S2`: the names on the CURRENT descent, copied at each level rather
     # than accumulated. A cumulative set would make two siblings calling one
     # helper look like re-entry; a path makes re-entry mean re-entry.
@@ -2134,6 +2546,8 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
                 if isinstance(sub, ast.Name):
                     loop_targets.add(sub.id)
 
+    accounted = _accounted_names(fn, params, loop_targets)
+
     # Rule 5 matches a module BY SPELLING, so the spelling is nailed down here
     # and its identity is checked in `decision_test`. Round 19 said where it
     # would look next -- shadow `re`, alias it, reach it through `getattr` --
@@ -2144,7 +2558,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
     # named `re` is the one that would be admitted, which is round 18's
     # shadowed-default shape caught by the arms rather than by the parse.
     # Refused by name now.
-    for bad in sorted((params | loop_targets) & set(FRAME_MODULES)) if enforce else ():
+    for bad in sorted((params | loop_targets) & set(FRAME_MODULES)) if "shadow" in rules else ():
         msgs.append(
             "%s: `%s` is a parameter or a loop target here, and it is the name rule 5 "
             "matches a module by -- a listed pair whose module name can be rebound is "
@@ -2214,7 +2628,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
                                 "a parameter" if sub.id in params else "a loop target",
                             )
                         )
-                    if sub.id in FRAME_MODULES and enforce:
+                    if sub.id in FRAME_MODULES and "shadow" in rules:
                         msgs.append(
                             "%s: line %d binds `%s`, which is the name rule 5 matches a "
                             "module by -- see the parameter case above"
@@ -2233,7 +2647,15 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
             func = node.func
             if isinstance(func, ast.Name):
                 what, payload = lookup(func.id)
-                if what is None:
+                if what == "lambda":
+                    msgs.append(
+                        "%s: line %d calls `%s`, which this file binds to a `lambda` "
+                        "rather than to a `def`. The rules descend into a function by "
+                        "parsing its source, and a lambda's source is the statement it "
+                        "sits in -- so it is refused by name rather than followed into a "
+                        "traceback" % (name, node.lineno, func.id)
+                    )
+                elif what is None:
                     msgs.append(
                         "%s: line %d calls `%s`, which this file does not define and "
                         "which is not in the frame's builtin list. A helper nothing "
@@ -2283,10 +2705,56 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
                         "method list -- a transformation of the input that no guard names"
                         % (name, node.lineno, func.attr)
                     )
+                elif not on_module and "receiver" in rules:
+                    # `R20-F1` A4/A4c: the whitelist says which METHOD NAMES may
+                    # be called, and said nothing about WHAT they are called on.
+                    recv = func.value
+                    if not isinstance(recv, ast.Name) or recv.id not in accounted:
+                        msgs.append(
+                            "%s: line %d calls the whitelisted method `.%s` on `%s`, "
+                            "which is not a value this frame can account for -- a "
+                            "parameter, a `for` target, or a name bound from one. A "
+                            "method whitelist is a list of NAMES, so an object of "
+                            "someone else's with a whitelisted method on it decides "
+                            "without calling a module at all"
+                            % (name, node.lineno, func.attr, ast.unparse(recv))
+                        )
             else:
                 msgs.append(
                     "%s: line %d calls something that is neither a name nor an attribute"
                     % (name, node.lineno)
+                )
+
+    # `R20-F1`, the other half of A4: what the frame may READ from outside
+    # itself. The four functions legitimately read three module-level
+    # constants -- the boolean sets and the exempted tokens -- and nothing in
+    # rules 1 to 5 said what such a name may hold. An object with a whitelisted
+    # method on it is exactly this shape, so a name the frame reads from module
+    # level must be DATA in what is RUNNING: a string, or a tuple, set or
+    # frozenset of strings. Anything else is refused by name, which refuses A4
+    # a second and independent time: its predicate is an instance, not data.
+    if "data" in rules:
+        outside = sorted(_data_loads(fn) - accounted - set(bound))
+        for g in outside:
+            if g not in globals():
+                msgs.append(
+                    "%s: reads `%s`, which is neither accounted for in this function nor "
+                    "defined by this file at module level -- a value a decision reads and "
+                    "nothing parses" % (name, g)
+                )
+                continue
+            obj = globals()[g]
+            data = isinstance(obj, str) or (
+                isinstance(obj, (tuple, set, frozenset))
+                and all(isinstance(x, str) for x in obj)
+            )
+            if not data:
+                msgs.append(
+                    "%s: reads the module-level name `%s`, which holds %r. A name the "
+                    "frame reads from outside itself must be DATA -- a string, or a "
+                    "tuple, set or frozenset of strings -- because an OBJECT read from "
+                    "there decides through its own methods without calling a module"
+                    % (name, g, obj)
                 )
 
     # `R19-F1`. The allow-list is ENFORCED here rather than described above:
@@ -2298,7 +2766,7 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
     # parse.
     matched = {}
     for node, module, attr, position, guards in (
-        _module_call_sites(fn) if enforce else ()
+        _module_call_sites(fn) if "positions" in rules else ()
     ):
         if id(node) in exempt:
             continue
@@ -2332,7 +2800,12 @@ def decision_frame(fn, exceptions=(), lookup=None, _seen=None, _depth=0, enforce
             continue
         matched.setdefault(entry, []).append(node.lineno)
     for pair in DECIDING_MODULE_CALLS:
-        if pair[0] != name or not enforce:
+        if pair[0] != name or "one-site" not in rules or "positions" not in rules:
+            # The sites this law counts are the ones the POSITIONS walk
+            # collects, so with that walk deleted the count is zero for a
+            # reason that has nothing to do with this law. Two keys, one
+            # mechanism, stated here rather than left for a reader to infer
+            # from an arm that fails both ways.
             continue
         at = matched.get(pair, [])
         if len(at) != 1:
@@ -2442,16 +2915,83 @@ DECISION_PLANTS = (
 # function, so the arm uses the author's own source.
 _IS_FIGURE_ANCHOR = '    if "=" not in s:'
 
+# `R20-F1` A4's object, at module level where the round put it: a whitelisted
+# METHOD NAME on something that is not a module and not derived from the input.
+# It exists here so the arms can read it in what is RUNNING, which is what the
+# DATA rule reads; a plant that only existed in a string could not be measured
+# against that rule at all.
+class _ArmShape:
+    """Round 20's `A4`: a predicate wearing a whitelisted method's name."""
+
+    def strip(self, text):
+        return text.startswith("qq_r20")
+
+
+_ARM_SHAPE = _ArmShape()
+# `C20` `P3`: a module-level `lambda`, which used to be followed into a
+# traceback instead of refused by name.
+_ARM_LAMBDA = lambda text: text.startswith("qq_r20")  # noqa: E731
+
+# Each plant names the ONE rule key whose deletion must let it through -- the
+# coordinator's `C20` `P2`: a fix is done only when deleting IT reds a gate, and
+# a control that deletes every rule at once measures none of them. A tuple of
+# keys means the shape is refused by that many independent rules, and all of
+# them have to go for it to pass; that is reported rather than hidden.
 IS_FIGURE_PLANTS = (
     (
         "R19-F1 B1 a second test on the listed pair, inside no guard",
         '    if re.fullmatch(r"zz_.*", s):\n        return False',
+        ("positions",),
     ),
     (
         "R19-F1 B2 the listed pair reached through a helper that RETURNS it",
         '    if _r19_shape(s):\n        return False',
+        ("positions",),
+    ),
+    (
+        "R20-F1 A4 a whitelisted method on an object of the planter's own",
+        '    if _ARM_SHAPE.strip(key):\n        return False',
+        ("receiver", "data"),
+    ),
+    (
+        "R20-F1 A4c the same object through a name BOUND in the frame",
+        '    local = _ARM_SHAPE\n    if local.strip(key):\n        return False',
+        ("receiver", "data"),
+    ),
+    (
+        "R20-F1 A4 the receiver rule alone: a whitelisted method on DATA the frame reads",
+        '    if BOOLEANS.strip(key):\n        return False',
+        ("receiver",),
+    ),
+    (
+        "C20 P3 a module-level lambda, refused by name rather than followed",
+        '    if _ARM_LAMBDA(s):\n        return False',
+        (),
     ),
 )
+
+# Planted INSIDE the guard the real call sits in, so rule 5 admits the position
+# and the guard, and only the `exactly one site` law stands between the plant
+# and a green run. The coordinator measured that law unarmed: deleting it while
+# planting a second test gave a clean 0/0/0.
+IS_FIGURE_GUARDED_PLANTS = (
+    (
+        "C20 P2 a SECOND test matching the listed entry, inside its own guard",
+        '        if re.fullmatch(r"qq_r20.*", key):\n            return False',
+        ("one-site",),
+    ),
+)
+_GUARDED_ANCHOR = "        if not re.fullmatch(keyre, key):\n            return False"
+
+
+def _is_figure_guarded(stmt):
+    """`_is_figure`'s own source with one statement planted INSIDE the guard the
+    real deciding call sits in, so position and guard are both satisfied."""
+    src = textwrap.dedent(inspect.getsource(_is_figure))
+    assert src.count(_GUARDED_ANCHOR) == 1
+    return ast.parse(
+        src.replace(_GUARDED_ANCHOR, _GUARDED_ANCHOR + "\n" + stmt, 1)
+    ).body[0]
 
 
 def _is_figure_planted(stmt):
@@ -2475,6 +3015,8 @@ def _plant_lookup(name):
         "_r18_h2": _PLANTED_H2,
         "_r19_shape": _PLANTED_RETURNS,
     }
+    if name in ("_ARM_LAMBDA", "_ARM_SHAPE"):
+        return _frame_lookup(name)
     if name in planted:
         return ("planted", ast.parse(planted[name]).body[0])
     return _frame_lookup(name)
@@ -2499,19 +3041,19 @@ def decision_test():
         for node in ast.walk(_source_of(func)):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
                 seen_methods.add(node.func.attr)
-    # Rule 5's modules, checked to BE the modules they spell. A triple matched
-    # by spelling does not match by identity -- Phase 8 recorded it about path
-    # guards and Phase 15 about `spawnSync` -- so the spelling is tied to the
-    # object once, here, in what is running.
-    for mod in FRAME_MODULES:
-        obj = globals().get(mod)
-        if obj is not sys.modules.get(mod) or getattr(obj, "__name__", None) != mod:
-            print(
-                "  decision **FAILED**: `%s` in this module is %r and not the module of "
-                "that name, so every DECIDING_MODULE_CALLS entry naming it is matched "
-                "by spelling against something else" % (mod, obj)
-            )
-            ok = False
+    # Rule 5's modules AND the attributes its entries name, checked in what is
+    # running. A triple matched by spelling does not match by identity -- Phase 8
+    # recorded it about path guards and Phase 15 about `spawnSync` -- and round
+    # 20 showed round 19's version of this check reached the module and stopped
+    # one level short of the function.
+    ident_ok, ident_msgs = module_call_identity()
+    fn_ok, fn_msgs = frame_function_identity()
+    pin_ok, pin_msgs = decision_constants_pinned()
+    ident_ok = ident_ok and fn_ok and pin_ok
+    ident_msgs = tuple(ident_msgs) + tuple(fn_msgs) + tuple(pin_msgs)
+    for m in ident_msgs:
+        print("  decision **FAILED**: %s" % m)
+    ok = ok and ident_ok
     dead = [m for m in FRAME_METHODS if m not in seen_methods]
     if dead:
         print(
@@ -2568,8 +3110,14 @@ def decision_test():
     # rule restored by value: a plant that the rule refuses and the deleted
     # rule admits measures the hole that was there, and one that fails both
     # ways measures nothing.
-    arms = [(label, _is_figure_planted(stmt.replace("\\n", "\n")), "_is_figure")
-            for label, stmt in IS_FIGURE_PLANTS]
+    arms = [
+        (label, _is_figure_planted(stmt.replace("\\n", "\n")), keys)
+        for label, stmt, keys in IS_FIGURE_PLANTS
+    ]
+    arms += [
+        (label, _is_figure_guarded(stmt.replace("\\n", "\n")), keys)
+        for label, stmt, keys in IS_FIGURE_GUARDED_PLANTS
+    ]
     # Not a round-19 finding: the shape round 19 said it would attack next, and
     # the only one of its four that rule 5 would have admitted as written.
     shadowed = textwrap.dedent(inspect.getsource(_is_figure)).replace(
@@ -2579,25 +3127,46 @@ def decision_test():
         (
             "R19 pre-emptive: a parameter shadowing the module name rule 5 matches",
             ast.parse(shadowed).body[0],
-            "_is_figure",
+            ("shadow",),
         )
     )
-    for label, tree, where in arms:
+    # The DATA rule's own shape: nothing is tested on it and no module is
+    # called, so no other rule has anything to say -- an OBJECT of the
+    # planter's, read by a frame that is allowed to read module-level data.
+    arms.append(
+        (
+            "R20-F1 the data rule alone: an object read where the frame reads its data",
+            ast.parse(_DECISION_TEMPLATE % "        out.append(_ARM_SHAPE)").body[0],
+            ("data",),
+        )
+    )
+    for label, tree, keys in arms:
         excs = DECISION_EXCEPTIONS.get(tree.name, ())
         with_rule, msgs, _k = decision_frame(tree, excs, _plant_lookup)
-        without, _m, _k2 = decision_frame(tree, excs, _plant_lookup, enforce=False)
-        good = (not with_rule) and without
+        if keys:
+            # ONE rule deleted per copy, and only the keys this arm names.
+            left = frozenset(RULE_KEYS) - frozenset(keys)
+            without, _m, _k2 = decision_frame(tree, excs, _plant_lookup, enforce=left)
+            good = (not with_rule) and without
+            how = "with %s DELETED it %s" % (
+                " and ".join("`%s`" % k for k in keys),
+                "passes" if without else "still fails, so the arm measures nothing",
+            )
+        else:
+            # A shape whose fix is not one of the rule keys: the refusal itself
+            # is the measurement, and the direction that used to be a traceback
+            # is measured beside it where the arm can reach it.
+            good = not with_rule
+            how = "no rule key owns this shape; before the fix it was a traceback"
         if not good:
             ok = False
         print(
-            "  decision %s, planted in %s: refused=%s, and with the positions rule "
-            "DELETED it %s -> %s"
+            "  decision %s: refused=%s, %s -> %s"
             % (
                 label,
-                where,
                 "yes" if not with_rule else "NO",
-                "passes" if without else "still fails, so the arm measures nothing",
-                "as required" if good else "FAILED",
+                how,
+                "as required" if good else "**SELFTEST FAILED**",
             )
         )
         if not with_rule:
@@ -2637,6 +3206,10 @@ PROVENANCE = {
         None,
         "round 15's own `__pycache__/check_fenced_figures.cpython-313.pyc`, gitignored, "
         "which the round quoted as the fail-open",
+    ),
+    "R20-S2 git's toplevel and the census disagree": (
+        None,
+        "round 20's `S-2`, which asked for this refusal to be recorded as UNMEASURED-at-runtime because neither of its two shapes reached it: a `.git` FILE whose gitdir carries `core.worktree` pointing elsewhere does reach it -- reported as the shape the census cannot agree with, not as a document line",
     ),
     "R19-S2 a BARE repository planted one level above, run from the repository root": (
         None,
@@ -2765,7 +3338,12 @@ PROVENANCE = {
     "R14-S2 exempt port=55512": ("port=55512", None),
     "R14-S2 exempt migrations=87": ("migrations=87", None),
 }
-CITES = re.compile(r"^R1\d")
+# `^R1\d` until round 20, which is an exemption by SPELLING: the rule that an
+# arm naming a finding must record the plant it measures stopped applying the
+# moment the rounds reached twenty. Exactly this phase's own lesson about an
+# enumerated exemption -- it cannot name what has not been written yet -- found
+# in the instrument that enforces the lesson. Any round number now.
+CITES = re.compile(r"^R\d+")
 
 
 def provenance_test():
@@ -3392,6 +3970,128 @@ def blocks_test():
     return ok
 
 
+def identity_arms_test():
+    """The four checks that are not AST rules, each armed and each read by NAME.
+
+    The coordinator's `C20` `P2`: a fix is done only when deleting it reds a
+    gate. These four cannot be deleted by a rule key, because they are not
+    rules about shapes -- they are statements about the objects that RUN. So
+    each arm performs the round's own move in this process, reads the refusal by
+    name, and restores what it moved; and beside each one the direction that
+    used to pass is measured, so the arm is a measurement and not an assertion.
+    """
+    ok = True
+
+    # 1. `R20-F1` `A1`: the listed ATTRIBUTE rebound at module level.
+    real = re.fullmatch
+
+    def _planted_fullmatch(pattern, string, *a, **k):
+        if isinstance(string, str) and string.startswith("qq_r20"):
+            return None
+        return real(pattern, string, *a, **k)
+
+    cache = list(_FRAME_PARSED)
+    try:
+        re.fullmatch = _planted_fullmatch
+        _with, msgs = module_call_identity()
+        # Round 19's check, by value: the module object and its `__name__`. It
+        # is what this arm deletes, and it sees nothing.
+        old_check = (
+            globals().get("re") is sys.modules.get("re")
+            and getattr(re, "__name__", None) == "re"
+        )
+        _FRAME_PARSED[:] = []
+        scanned = _arm(PROBE, ())
+    finally:
+        re.fullmatch = real
+        _FRAME_PARSED[:] = cache
+    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    good = (not _with) and name == "MODULE-ATTR-REBOUND" and old_check and scanned == 5
+    ok = ok and good
+    print(
+        "  identity R20-F1 A1 `re.fullmatch` rebound at module level: refused as %s, the "
+        "scan rc=%d, and round 19's module-only check saw %s -> %s"
+        % (
+            name,
+            scanned,
+            "nothing wrong" if old_check else "it",
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+
+    # 2. `C20` `P2`: a decorator around a frame function. `inspect.getsource`
+    # follows `__wrapped__`, so the parse reads the body underneath while the
+    # wrapper decides.
+    original = _is_figure
+
+    def _wrapper(*a, **k):
+        return original(*a, **k)
+
+    _wrapper.__name__ = "_is_figure"
+    _wrapper.__qualname__ = "_is_figure"
+    _wrapper.__wrapped__ = original
+    cache = list(_FRAME_PARSED)
+    try:
+        globals()["_is_figure"] = _wrapper
+        _with, msgs = frame_function_identity()
+        parsed_clean, _m, _k = decision_frame(
+            _source_of(_wrapper), DECISION_EXCEPTIONS.get("_is_figure", ())
+        )
+        _FRAME_PARSED[:] = []
+        scanned = _arm(PROBE, ())
+    finally:
+        globals()["_is_figure"] = original
+        _FRAME_PARSED[:] = cache
+    name = msgs[0].split(":")[0] if msgs else "NO REFUSAL"
+    good = (not _with) and name == "FRAME-FUNCTION-WRAPPED" and parsed_clean and scanned == 5
+    ok = ok and good
+    print(
+        "  identity C20 a decorator around `_is_figure`: refused as %s, the scan rc=%d, "
+        "and the AST the parse reads is %s -> %s"
+        % (
+            name,
+            scanned,
+            "clean, which is the hole" if parsed_clean else "not clean",
+            "as required" if good else "**SELFTEST FAILED**",
+        )
+    )
+
+    # 3. `C20-F1`: an ARGUMENT of an admitted call. The pin is measured on the
+    # canonical text rather than by editing the file, because a red proof does
+    # not edit its subject; the end-to-end direction is the published probe.
+    text = decision_constants()
+    edited = text.replace("[0-9][0-9,._]*", "(?!4242$)[0-9][0-9,._]*", 1)
+    live = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    moved = hashlib.sha256(edited.encode("utf-8")).hexdigest()
+    pin_ok, _pin_msgs = decision_constants_pinned()
+    good = pin_ok and edited != text and moved != live and live == DECISION_CONSTANTS_SHA256
+    ok = ok and good
+    print(
+        "  identity C20-F1 `(?!4242$)` added to the pattern INSIDE the admitted call: the "
+        "pinned constants digest %s and the edited ones %s, so the edit reds by name -> %s"
+        % (live[:12], moved[:12], "as required" if good else "**SELFTEST FAILED**")
+    )
+
+    # 4. `C20` `P2`: the frame gate in front of `--check-blocks`, which had none
+    # until round 19 and no arm until now.
+    cache = list(_FRAME_PARSED)
+    with tempfile.TemporaryDirectory() as empty:
+        try:
+            _FRAME_PARSED[:] = [("a refusal planted for this arm only",)]
+            refused = check_blocks(empty, quiet=True)
+        finally:
+            _FRAME_PARSED[:] = cache
+        plain = check_blocks(empty, quiet=True)
+    good = refused == 5 and plain == 2
+    ok = ok and good
+    print(
+        "  identity C20 the frame gate in front of --check-blocks: rc=%d with a refusal to "
+        "report (want 5), rc=%d without one (want 2, nothing enrolled) -> %s"
+        % (refused, plain, "as required" if good else "**SELFTEST FAILED**")
+    )
+    return ok
+
+
 def frame_gate_test():
     """`R19-S3`'s own arm: the scan's refusal branch, measured rather than read.
 
@@ -3487,6 +4187,7 @@ def selftest():
         "  %s -- %s"
         % (emit_arm_counts()[0], "all as required" if ok else "FAILURES ABOVE")
     )
+    ok = identity_arms_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
     ok = guard_matrix() and ok
@@ -3510,6 +4211,17 @@ def surface():
 
 
 def _main(args):
+    if "--decision-constants" in args:
+        # Not a generated block in a document: a digest a reader regenerates
+        # when a constant changes on purpose, printed above the text it is taken
+        # over, so the change itself is readable and not only its hash.
+        text = decision_constants()
+        sys.stdout.write(text)
+        print(
+            "DECISION_CONSTANTS_SHA256 = %r"
+            % hashlib.sha256(text.encode("utf-8")).hexdigest()
+        )
+        return 0
     if "--selftest" in args:
         return selftest()
     if "--surface" in args:
