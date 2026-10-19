@@ -485,25 +485,105 @@ const PLAIN_VALUE = /^[A-Za-z0-9_.:=,+-]+$/;
  *     importable (the env carries no PYTHONPATH and `-I` is not required for
  *     that here), but any stdlib module is.
  *
- * So the value is now allow-listed per flag, not merely per character class.
- * `-W` takes an action with at most a DOTLESS builtin-shaped category; `-X`
- * takes a known-shaped option whose value carries no `.` or `..` segment and
- * never `pycache_prefix`, whose entire purpose is to write files. Everything
+ * So the value is allow-listed per flag, not merely per character class.
+ * `-W` takes an action with at most a category `builtins` actually has; `-X`
+ * takes an option name THIS INTERPRETER lists, minus the writers. Everything
  * else is refused by name, so this stays a false-RED direction.
+ *
+ * ROUND 36 WROTE THAT SENTENCE WHILE THE `-X` ARM WAS A DENY-LIST OF TWO
+ * NAMES, which made it measured-FALSE about the class: `-X perf_jit` passed,
+ * and the probe wrote `/tmp/jit-<pid>.dump`. F-67 below is where the names
+ * come from now. The sentence is kept, in its true form, next to the
+ * instrument that makes it true -- the previous wording is the reason the
+ * discipline sweep exists.
  */
 const DOT_SEGMENT = (value: string): boolean => value.split(/[=,:]/).some((part) => part === '.' || part === '..');
 const W_VALUE = /^[A-Za-z]+(::[A-Za-z]+)?$/;
-// Options whose PURPOSE is to write a file. `pycache_prefix` writes a bytecode
-// tree under its value; `perf` writes `/tmp/perf-<pid>.map`, and that path is a
-// FIXED literal in CPython -- measured here: with TMPDIR pointed at a scratch
-// directory the map still landed in /tmp. So a disposable directory cannot
-// contain this class and the option is refused by name.
-const X_WRITES_FILES = new Set(['pycache_prefix', 'perf']);
 
-const valueIsExecutable = (flag: string, value: string): boolean => {
-  if (!PLAIN_VALUE.test(value) || DOT_SEGMENT(value)) return false;
-  if (flag === '-W') return W_VALUE.test(value);
-  return !X_WRITES_FILES.has(value.split('=')[0] ?? value);
+/**
+ * The warning categories THIS interpreter has in `builtins`, asked of it.
+ *
+ * ROUND 37, R36-02 (P3, the challenger's, and cheap on the coordinator's
+ * ruling): `-W ignore::this` is dotless, so F-64's fix cleared it, and nothing
+ * is imported -- but CPython itself rejects the category at the first filtered
+ * warning, so the gate cleared a command the interpreter would not honour. The
+ * names come from `builtins` rather than a list written here, for F-67's
+ * reason: a list of another program's names, written by hand, is a claim that
+ * ages.
+ */
+const BUILTIN_WARNINGS = ((): ReadonlySet<string> => {
+  if (HARNESS_PYTHON === '') return new Set();
+  const r = spawnSync(HARNESS_PYTHON, ['-I', '-c', "import builtins; print(' '.join(n for n in dir(builtins) if n.endswith('Warning')))"], {
+    encoding: 'utf8',
+    timeout: 10_000,
+    env: { PATH: '/usr/bin:/bin' },
+  });
+  if (r.status !== 0) return new Set();
+  return new Set(
+    (r.stdout ?? '')
+      .trim()
+      .split(/\s+/)
+      .filter((n) => n !== ''),
+  );
+})();
+
+const REFUSED_W_CATEGORY = 'REFUSED-UNKNOWN-WARNING-CATEGORY';
+/**
+ * Options whose PURPOSE is to write a file. `pycache_prefix` writes a bytecode
+ * tree under its value; `perf` and `perf_jit` write `/tmp/perf-<pid>.map` and
+ * `/tmp/jit-<pid>.dump`, and those paths are FIXED literals in CPython --
+ * measured here: with TMPDIR pointed at a scratch directory both still landed
+ * in /tmp. So a disposable directory cannot contain this class and the options
+ * are refused by name.
+ */
+const X_WRITES_FILES = new Set(['pycache_prefix', 'perf', 'perf_jit']);
+
+/**
+ * The `-X` option names THIS interpreter has, asked of it rather than listed.
+ *
+ * ROUND 37, THE CHALLENGER'S F-67 (P1). Round 36 called the value
+ * "allow-listed per flag" and the `-X` arm was a DENY-LIST of two literal
+ * names. Measured: `--help-xoptions` has 14 options in CPython 3.13.16 and
+ * exactly two of them write files, `perf` and `perf_jit`. I had named one, so
+ * `python3 -I -X perf_jit <tool>` passed the live scan at rc 0 while the
+ * gate's own probe wrote `/tmp/jit-<pid>.dump` -- outside the owned cwd AND
+ * outside the TMPDIR, because that path is the same fixed literal. The leak
+ * alone is small; the fail-open is that a deny-list cannot name an option
+ * CPython has not shipped yet, and that my sentence about it measured FALSE.
+ *
+ * So the names come from the interpreter, the way round 34 moved the isolation
+ * verdict to execution. If the list cannot be read, every `-X` is refused:
+ * fail closed, and a future CPython option is a false RED rather than a silent
+ * pass.
+ */
+const X_OPTION_NAMES = ((): ReadonlySet<string> => {
+  if (HARNESS_PYTHON === '') return new Set();
+  const r = spawnSync(HARNESS_PYTHON, ['-I', '--help-xoptions'], { encoding: 'utf8', timeout: 10_000, env: { PATH: '/usr/bin:/bin' } });
+  if (r.status !== 0) return new Set();
+  const names = [...(r.stdout ?? '').matchAll(/^\s*-X ([a-z_0-9]+)/gm)].map((m) => m[1] ?? '');
+  return new Set(names.filter((n) => n !== '' && !X_WRITES_FILES.has(n)));
+})();
+
+const REFUSED_X_OPTION = 'REFUSED-UNLISTED-X-OPTION';
+const REFUSED_X_WRITER = 'REFUSED-FILE-WRITING-X-OPTION';
+const REFUSED_NO_X_LIST = 'REFUSED-NO-X-OPTION-LIST';
+
+const valueRefusal = (flag: string, value: string): string | undefined => {
+  if (!PLAIN_VALUE.test(value) || DOT_SEGMENT(value)) return REFUSED_TOKEN;
+  if (flag === '-W') {
+    if (!W_VALUE.test(value)) return REFUSED_TOKEN;
+    const category = value.split('::')[1];
+    if (category === undefined) return undefined;
+    if (BUILTIN_WARNINGS.size === 0) return REFUSED_W_CATEGORY;
+    return BUILTIN_WARNINGS.has(category) ? undefined : REFUSED_W_CATEGORY;
+  }
+  const name = value.split('=')[0] ?? value;
+  if (X_WRITES_FILES.has(name)) return REFUSED_X_WRITER;
+  if (X_OPTION_NAMES.size === 0) return REFUSED_NO_X_LIST;
+  // An `-X` option is accepted only if the INTERPRETER lists it and it is not
+  // one of the writers. Everything else is refused BY ITS OWN NAME, including
+  // an option a later CPython adds.
+  return X_OPTION_NAMES.has(name) ? undefined : REFUSED_X_OPTION;
 };
 
 const REFUSED_TOKEN = 'REFUSED-UNEXECUTABLE-TOKEN';
@@ -524,7 +604,9 @@ const executableArgv = (flags: string): { argv: string[] } | { refusal: string; 
     const t = tokens[i] ?? '';
     if (VALUE_FLAGS.has(t)) {
       const value = tokens[i + 1];
-      if (value === undefined || !valueIsExecutable(t, value)) return { refusal: REFUSED_TOKEN, token: `${t} ${value ?? '(nothing)'}` };
+      if (value === undefined) return { refusal: REFUSED_TOKEN, token: `${t} (nothing)` };
+      const why = valueRefusal(t, value);
+      if (why !== undefined) return { refusal: why, token: `${t} ${value}` };
       argv.push(t, value);
       i += 1;
       continue;
@@ -689,7 +771,25 @@ const matchCount = (text: string, re: RegExp = INVOCATION): number => {
  * the copied text, and `quoted` below reds if the exemption ever stops being
  * used, so it cannot outlive its reason.
  */
-const scanDocument = (label: string, text: string, honourDeclaration: boolean): [string[], number] => {
+const REFUSED_OPEN_QUOTE = 'REFUSED-UNTERMINATED-QUOTE-BLOCK';
+
+/**
+ * ROUND 37, THE CHALLENGER'S F-66 (P1). The exemption was released only by the
+ * NEXT fence line, so a declared opener that is never closed left
+ * `inFence && exempt` true to end of input and every later invocation was
+ * skipped IN SILENCE. Measured by the challenger on a pack copy: an offence
+ * after an UNTERMINATED declared block gives rc 0, 22 passed, hidden, while
+ * the same offence after a CLOSED declared block reds, and after an
+ * unterminated NON-declared block reds -- so the hole belongs to the
+ * declaration, not to the fence. 0 of 56 live pack documents have an odd fence
+ * count, so there is no live instance: the shape arrives from a forgotten
+ * closing fence, or from a quoted transcript whose own fences leave the
+ * declared opener unmatched.
+ *
+ * `refuseUnterminated` is how the arm deletes this check: with it false, the
+ * tail is silently exempt again and fixture (d) goes green.
+ */
+const scanDocument = (label: string, text: string, honourDeclaration: boolean, refuseUnterminated: boolean): [string[], number] => {
   const found: string[] = [];
   let exemptBlocks = 0;
   let inFence = false;
@@ -717,11 +817,14 @@ const scanDocument = (label: string, text: string, honourDeclaration: boolean): 
       if (!v.isolated) found.push(`${label}:${n}:${v.refusal === undefined ? '' : ` ${v.refusal}:`} ${line.trim()}`);
     }
   }
+  if (refuseUnterminated && inFence && exempt) {
+    found.push(`${label}: ${REFUSED_OPEN_QUOTE}: a declared quotation block is never closed, so the rest of this document was NOT scanned`);
+  }
   return [found, exemptBlocks];
 };
 
-/** The live scan: the declaration is honoured. The ONLY caller that honours it. */
-const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true);
+/** The live scan: the declaration is honoured, an open one refused. The ONLY caller of both. */
+const offencesOutsideQuotedBlocks = (label: string, text: string): [string[], number] => scanDocument(label, text, true, true);
 
 /**
  * Files that may contain a NUL byte and still not be read by this law, by
@@ -909,27 +1012,56 @@ describe('every written invocation of the pack tools is isolated', () => {
     // (P3): a DOTTED `-W` category is resolved by IMPORTING its module, so
     // `-W ignore::this.X` ran stdlib `this` inside the probe.
     //
-    // Three guards, because one would close one instance: the `pycache_prefix`
-    // option is refused by name (writing files is its whole purpose), any
-    // value carrying a `.` or `..` SEGMENT is refused (that is what escapes a
-    // directory), a `-W` value must be an action with at most a DOTLESS
-    // category -- and the probe still runs in a directory this law owns, now
+    // Four guards, because each closes a different door: an option that
+    // WRITES FILES is refused by name (`pycache_prefix`, `perf`, `perf_jit`,
+    // the last of them F-67's), every other `-X` name must be one THIS
+    // INTERPRETER lists, any value carrying a `.` or `..` SEGMENT is refused
+    // (that is what escapes a directory), a `-W` category must be one
+    // `builtins` has -- and the probe still runs in a directory this law owns,
+    // now
     // as TMPDIR as well, which is what contains everything else.
-    const refusals: [string, string][] = [
-      ['-X pycache_prefix=p5pyc', 'the option whose purpose is writing files'],
-      ['-X pycache_prefix=..', 'the escape the coordinator measured into packages/usr/'],
-      ['-X pycache_prefix=../..', 'two levels of it'],
-      ['-X somewhere=..', 'a dot segment under any other option name'],
-      ['-W ignore::this.X', 'a dotted warning category, which CPython imports'],
-      ['-W ignore::evilmod.Boom', "the challenger's planted module"],
+    const refusals: [string, string, string][] = [
+      ['-X pycache_prefix=p5pyc', REFUSED_X_WRITER, 'the option whose purpose is writing files'],
+      ['-X pycache_prefix=..', REFUSED_TOKEN, 'the escape the coordinator measured into packages/usr/'],
+      ['-X pycache_prefix=../..', REFUSED_TOKEN, 'two levels of it'],
+      ['-X somewhere=..', REFUSED_TOKEN, 'a dot segment under any other option name'],
+      ['-W ignore::this.X', REFUSED_TOKEN, 'a dotted warning category, which CPython imports'],
+      ['-W ignore::evilmod.Boom', REFUSED_TOKEN, "the challenger's planted module"],
+      // ROUND 37: F-67's own instance, and the names that were never listed.
+      ['-X perf_jit', REFUSED_X_WRITER, 'the writer I had not named, which wrote /tmp/jit-<pid>.dump'],
+      ['-X perf_jit=1', REFUSED_X_WRITER, 'the same hole with a value'],
+      ['-X perf', REFUSED_X_WRITER, 'the writer the coordinator named'],
+      ['-X presite=evilmod', REFUSED_X_OPTION, 'R36-01: an import-before-site vector this build ignores and a debug build does not'],
+      ['-X no_such_option_here', REFUSED_X_OPTION, 'an option this interpreter does not list'],
+      ['-W ignore::this', REFUSED_W_CATEGORY, 'R36-02: dotless, imports nothing, and CPython itself rejects the category'],
     ];
-    for (const [flags, why] of refusals) {
+    for (const [flags, name, why] of refusals) {
       const parsed = executableArgv(` ${flags}`);
       expect('refusal' in parsed, `${flags} reaches CPython: ${why}`).toBe(true);
       const v = verdictFor('python3', ` -I ${flags}`);
       expect(v.isolated, `${flags} was cleared as isolated`).toBe(false);
-      expect(v.refusal, `${flags} is refused without a name`).toContain(REFUSED_TOKEN);
+      expect(v.refusal, `${flags} is refused, but not by the name that says why`).toContain(name);
     }
+
+    // F-67's leak, measured by SIDE EFFECT and not by the refusal: no dump
+    // appears in /tmp, which is where that option writes whatever TMPDIR says.
+    const dumpsBefore = new Set(readdirSync('/tmp').filter((n) => n.startsWith('jit-')));
+    for (const flags of [' -I -X perf_jit', ' -I -X perf_jit=1']) {
+      verdicts.clear();
+      verdictFor('python3', flags);
+    }
+    expect(
+      readdirSync('/tmp').filter((n) => n.startsWith('jit-') && !dumpsBefore.has(n)),
+      'THE GATE RAN A FILE-WRITING OPTION: a jit dump landed in /tmp',
+    ).toStrictEqual([]);
+
+    // The `-X` names are DERIVED, not written: the set must come from this
+    // interpreter's own help, and the writers must not be in it.
+    expect(X_OPTION_NAMES.size, 'the -X option names were not read from the interpreter, so the allow-list is a literal again').toBeGreaterThan(5);
+    for (const writer of X_WRITES_FILES) {
+      expect(X_OPTION_NAMES.has(writer), `${writer} is in the derived allow-list, so a writer is accepted`).toBe(false);
+    }
+    expect(BUILTIN_WARNINGS.has('DeprecationWarning'), 'the warning categories were not read from builtins').toBe(true);
 
     // And the forms that have no side effect outside the probe still pass, or
     // this is a gate rather than a filter.
@@ -997,6 +1129,66 @@ describe('every written invocation of the pack tools is isolated', () => {
     }
   });
 
+  it('F-66: a declared quotation block left OPEN refuses, instead of hiding the tail', () => {
+    // ROUND 37, THE CHALLENGER'S F-66 (P1). The exemption was released only by
+    // the next fence line, so a declared opener that is never closed hid every
+    // later invocation in silence. Its four fixtures, rebuilt here with a
+    // genuine offence -- an unclassifiable interpreter spelling -- so each one
+    // reds for a reason this law names.
+    const attack = 'Example: `shimdir/python3 tools/manifest-digests.py --dir d --check`';
+    const a = attack;
+    const c = ['```text f-50-quote', '$ shimdir/python3 tools/manifest-digests.py --check', '```', '', attack].join('\n');
+    const d = ['```text f-50-quote', '$ shimdir/python3 tools/manifest-digests.py --check', '', attack].join('\n');
+    const e = ['```text', '$ echo not declared', '', attack].join('\n');
+
+    // (a) an offence outside any block reds by name.
+    expect(offencesOutsideQuotedBlocks('A', a)[0], '(a) a bare offence is not reported').toHaveLength(1);
+    expect(offencesOutsideQuotedBlocks('A', a)[0][0]).toContain(REFUSED_INTERPRETER);
+    // (c) a CLOSED declared block exempts itself and the offence after it reds.
+    const closed = offencesOutsideQuotedBlocks('C', c);
+    expect(closed[1], '(c) the declared block was not counted as exempt').toBe(1);
+    expect(closed[0], '(c) the offence after a closed block is not reported').toHaveLength(1);
+    expect(closed[0][0]).toContain(REFUSED_INTERPRETER);
+    // (d) an UNTERMINATED declared block refuses BY NAME and says the tail was
+    // not scanned. Before this round it was SILENT: rc 0, nothing reported.
+    const open = offencesOutsideQuotedBlocks('D', d);
+    expect(open[0].length, '(d) an unterminated declared block reports nothing, so the tail is hidden').toBeGreaterThan(0);
+    expect(open[0].join('\n'), '(d) the unterminated block is not refused by name').toContain(REFUSED_OPEN_QUOTE);
+    expect(open[0].join('\n'), '(d) the refusal does not say the tail went unscanned').toContain('NOT scanned');
+    // (e) an unterminated NON-declared block still reds on the offence, so the
+    // hole belonged to the DECLARATION and not to the fence.
+    const undeclaredOpen = offencesOutsideQuotedBlocks('E', e);
+    expect(undeclaredOpen[1], '(e) a non-declared block was counted as exempt').toBe(0);
+    expect(undeclaredOpen[0], '(e) the offence inside an undeclared block is not reported').toHaveLength(1);
+
+    // GUARD DELETION, one deletion: without the end-of-input refusal, (d) goes
+    // green again -- the control -- while (c) stays red.
+    const withoutCheck = scanDocument('D', d, true, false);
+    expect(withoutCheck[0], 'with the end-of-input refusal deleted (d) still reports, so the check is not what reports it').toStrictEqual([]);
+    expect(scanDocument('C', c, true, false)[0], 'the deletion also changed (c), so it is not a pure deletion').toHaveLength(1);
+
+    // Reachability, measured rather than assumed: no live pack document has an
+    // odd fence count today, so this shape has no live instance -- it arrives
+    // from a forgotten closing fence or a quoted transcript.
+    if (existsSync(PACK)) {
+      const odd: string[] = [];
+      for (const name of readdirSync(PACK).filter((n) => n.endsWith('.md'))) {
+        const text = readable(join(PACK, name));
+        // A binary is not a document; the law refuses one elsewhere, and this
+        // census only counts fences.
+        if (typeof text !== 'string') continue;
+        const fences = [...text.split('\n')].filter((l) => /^\s*```/.test(l)).length;
+        if (fences % 2 === 1) odd.push(name);
+      }
+      expect(odd, 'a pack document has an odd number of fence lines, so the tail of it may be unscanned').toStrictEqual([]);
+    }
+
+    // And the two knobs are each reachable from one arm only.
+    const here = readFileSync(join(__dirname, 'tool-commands-are-isolated.test.ts'), 'utf8');
+    const openDeleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*true,\s*false\)/g) ?? []).length;
+    expect(openDeleting, 'a second caller deletes the end-of-input refusal: it must be an arm, counted here').toBe(2);
+  });
+
   it('the declared quotation block is an exemption, and is armed like one', () => {
     // ROUND 35, THE COORDINATOR, after this law reddened on the round-35
     // records themselves and the fix was to declare the block: an exemption
@@ -1029,7 +1221,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // THREE: delete the recognition and the very same block reds, by name.
     // One deletion, in the one place the recognition lives.
     verdicts.clear();
-    const deleted = scanDocument('doc', quotedLive, false);
+    const deleted = scanDocument('doc', quotedLive, false, true);
     expect(deleted[1], 'the deletion still counted an exempt block').toBe(0);
     expect(deleted[0], 'with the declaration no longer recognised the block is still exempt, so the exemption is not what makes it exempt').toHaveLength(1);
     expect(deleted[0][0], 'the deletion reds without naming the refusal').toContain('REFUSED-UNCLASSIFIABLE-INTERPRETER');
@@ -1048,12 +1240,12 @@ describe('every written invocation of the pack tools is isolated', () => {
     // The needles are ASSEMBLED, or each one counts its own literal and the
     // arm reports one caller too many -- B-10's self-counting shape, for the
     // third time in this file.
-    const honourNeedle = ['scanDocument(label,', 'text,', 'true)'].join(' ');
+    const honourNeedle = ['scanDocument(label,', 'text,', 'true,', 'true)'].join(' ');
     const honouring = here.split(honourNeedle).length - 1;
     // Counted by SHAPE rather than by one spelling, so a differently written
     // deleting caller is counted too: any `scanDocument(...)` whose last
     // argument is `false`.
-    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false\)/g) ?? []).length;
+    const deleting = (here.match(/scanDocument\((?:[^()]|\([^()]*\))*false,\s*true\)/g) ?? []).length;
     expect(honouring, 'the live wrapper that honours the declaration is no longer the only one').toBe(1);
     expect(deleting, 'a second caller deletes the declaration recognition: it must be an arm, counted here').toBe(1);
   });
