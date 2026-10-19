@@ -21,6 +21,17 @@
  *      classification removed, against the same held port, must go back to
  *      printing a FAILED validator. If it does not, something else produces the
  *      difference and arm 1 credits the behaviour to the wrong code.
+ *   3. A MEASURED FAILURE MUST SURVIVE THE CONTENTION (round 12, F-R12-03).
+ *      The fix for 1 bought a second way to lose a finding: the verdict read
+ *      contention BEFORE the failure list, so a validator that decided and
+ *      FAILED before the recovery was ever attempted printed «the drill did not
+ *      run» and exited 3. A copy with P1 forced to fail — through the drill's
+ *      own `fail()` path, against the same held port — must print `P1 FAIL`,
+ *      say FAIL, and exit **1**.
+ *   4. ITS OWN GUARD-DELETION HALF: the same forced failure, in a copy where
+ *      the verdict is put back in its old order, must return to exit 3 and
+ *      CONTENTION. Without this arm, arm 3 would pass on any build that
+ *      happened to fail-closed for another reason.
  *
  *   The port is held by a listener in THIS process, released in a `finally`, and
  *   no cluster, data directory or document is written by this file.
@@ -48,6 +59,38 @@ const GUARDS: readonly { readonly from: string; readonly to: string }[] = [
     to: '    const bind = false;',
   },
   { from: '      contention: true,', to: '      contention: false,' },
+];
+
+/**
+ * The plant for arms 3 and 4: P1's verdict is decided from `pg_stat_archiver`
+ * BEFORE any recovery is attempted, so forcing its condition false produces a
+ * genuine measured failure through the drill's own `fail()` — not an injected
+ * string — in the window where contention also happens.
+ */
+const FORCE_FAIL = {
+  from: '    if (Number(archiver.archived) > 0 && archiver.last && Number(archiver.failed) === 0 && segments.length > 0) {',
+  to: '    if (false && Number(archiver.archived) > 0 && archiver.last && Number(archiver.failed) === 0 && segments.length > 0) {',
+} as const;
+
+/** The verdict's order, put back the way F-R12-03 found it. */
+const OLD_ORDER: readonly { readonly from: string; readonly to: string }[] = [
+  {
+    from: `        failed.length > 0
+        ? 'FAIL'
+        : contentionDetail !== null
+          ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'`,
+    to: `        contentionDetail !== null
+        ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
+        : failed.length > 0
+          ? 'FAIL'`,
+  },
+  {
+    from: `  if (failed.length > 0) process.exitCode = 1;
+  else if (contentionDetail !== null) process.exitCode = 3;
+  else if (!ok) process.exitCode = 1;`,
+    to: `  if (contentionDetail !== null) process.exitCode = 3;
+  else if (!ok) process.exitCode = 1;`,
+  },
 ];
 
 interface Arm {
@@ -102,9 +145,12 @@ async function main(): Promise<number> {
   // nothing in either direction, so the copy goes here, under a name nothing
   // else matches, and is removed in the `finally` below and on exit.
   const tmp = mkdtempSync(join(tmpdir(), 'p15-contention-'));
-  const blind = join(ROOT, 'scripts/phase15', `.pitr-proof-blinded-${String(process.pid)}.tmp.ts`);
+  const beside = (tag: string): string => join(ROOT, 'scripts/phase15', `.pitr-proof-${tag}-${String(process.pid)}.tmp.ts`);
+  const blind = beside('blinded');
+  const planted = beside('planted');
+  const plantedOld = beside('planted-oldorder');
   const sweep = (): void => {
-    rmSync(blind, { force: true });
+    for (const f of [blind, planted, plantedOld]) rmSync(f, { force: true });
   };
   process.on('exit', sweep);
   try {
@@ -114,6 +160,31 @@ async function main(): Promise<number> {
       GUARDS.reduce((text, g) => text.replace(g.from, g.to), source),
     );
     const stripped = runDrill(blind);
+
+    // Arms 3 and 4: a MEASURED failure, in the same held-port window.
+    const haveFail = source.includes(FORCE_FAIL.from);
+    const haveOrder = OLD_ORDER.every((g) => source.includes(g.from));
+    // Each drill result is BOUND and its status read where it is bound, which
+    // is what this pack's own exit-code sweep requires of every command: an
+    // assignment to an outer `let`, read later through a cast, is a shape the
+    // sweep cannot follow — and it is right not to, since nothing in that
+    // shape says the code was ever looked at.
+    const plants = ((): { readonly forced: Arm; readonly forcedOld: Arm } | null => {
+      if (!haveFail || !haveOrder) return null;
+      const withFail = source.replace(FORCE_FAIL.from, FORCE_FAIL.to);
+      writeFileSync(planted, withFail);
+      const a = runDrill(planted);
+      if (a.status === null) return { forced: a, forcedOld: a };
+      writeFileSync(
+        plantedOld,
+        OLD_ORDER.reduce((text, g) => text.replace(g.from, g.to), withFail),
+      );
+      const b = runDrill(plantedOld);
+      if (b.status === null) return { forced: a, forcedOld: b };
+      return { forced: a, forcedOld: b };
+    })();
+    const forced = plants?.forced ?? null;
+    const forcedOld = plants?.forcedOld ?? null;
 
     const problems: string[] = [];
     const named = real.out.includes('INVALID MEASUREMENT — RESOURCE CONTENTION');
@@ -137,8 +208,40 @@ async function main(): Promise<number> {
     console.log(
       `  with the classification    exit ${String(real.status)}  ${named ? 'named it CONTENTION' : 'did NOT name contention'}, ${failed ? 'and failed a validator' : 'no validator failed'}`,
     );
+    // ── arms 3 and 4 ──────────────────────────────────────────────────────
+    const ranIt = (a: Arm | null): boolean => a !== null && /^VALIDATORS$/m.test(a.out);
+    if (!haveFail || !haveOrder) {
+      problems.push(
+        'the drill no longer carries P1\u2019s verdict condition or the verdict order this proof plants into, so the MEASURED-FAILURE arms are UNMEASURED — not passed',
+      );
+    } else if (!ranIt(forced) || !ranIt(forcedOld)) {
+      problems.push(
+        `a planted copy did not run the drill (exit ${String(forced?.status)} / ${String(forcedOld?.status)}), so arms 3 and 4 are UNMEASURED — a copy that cannot start must never read as a result`,
+      );
+    } else {
+      const f = forced as Arm;
+      const fo = forcedOld as Arm;
+      if (!/^\s+P1 FAIL\b/m.test(f.out)) problems.push('the forced P1 failure did not appear as `P1 FAIL`, so arm 3 did not plant what it claims to plant');
+      if (f.status !== 1)
+        problems.push(
+          `with a validator FAILED and the port held, the drill exited ${String(f.status)}; a measured failure is a fact the port cannot undo, so the code must be 1 and the verdict FAIL`,
+        );
+      if (!/PHASE 15 PITR PROOF: FAIL\b/.test(f.out))
+        problems.push('with a validator FAILED and the port held, the verdict line did not say FAIL — a real finding was reported as a drill that did not run');
+      if (fo.status !== 3 || !fo.out.includes('INVALID MEASUREMENT — RESOURCE CONTENTION'))
+        problems.push(
+          `with the verdict order put back, the same forced failure exited ${String(fo.status)} instead of 3/CONTENTION — so the ORDER is not what makes arm 3 pass, and arm 3 credits the behaviour to the wrong code`,
+        );
+    }
+
     console.log(
       `  with both lines blinded    exit ${String(stripped.status)}  ${/^\s+P\d FAIL\b/m.test(stripped.out) ? 'failed a validator, as the defect did' : 'did not fail a validator'}`,
+    );
+    console.log(
+      `  a validator FORCED to fail exit ${String(forced?.status)}  ${forced !== null && /PHASE 15 PITR PROOF: FAIL\b/.test(forced.out) ? 'said FAIL — the finding survived the contention' : 'did NOT say FAIL'}`,
+    );
+    console.log(
+      `  the same, old verdict order exit ${String(forcedOld?.status)}  ${forcedOld !== null && forcedOld.out.includes('INVALID MEASUREMENT — RESOURCE CONTENTION') ? 'swallowed it as CONTENTION, as the defect did' : 'did not swallow it'}`,
     );
     console.log('');
     if (problems.length > 0) {
@@ -148,8 +251,10 @@ async function main(): Promise<number> {
       return 1;
     }
     console.log('A busy port is reported as a measurement that did not happen, and the code that says so');
-    console.log('  is load-bearing: blinding it brings the false FAIL back. The port was held by this');
-    console.log('  process and released; no cluster or document was written.');
+    console.log('  is load-bearing: blinding it brings the false FAIL back. A validator that DID fail');
+    console.log('  before the contention still reads FAIL and exits 1, and putting the verdict order');
+    console.log('  back makes that finding disappear again. The port was held by this process and');
+    console.log('  released; no cluster or document was written.');
     return 0;
   } finally {
     held.close();

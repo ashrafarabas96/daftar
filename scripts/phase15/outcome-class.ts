@@ -84,7 +84,26 @@ export const LOADER_MARKERS =
 export const RUNTIME_MARKERS =
   /(?:^|\n)\s*(?:Uncaught )?(?:TypeError|RangeError|ReferenceError|AssertionError|Error):|\n\s+at [^\n]*\(?[^\n]*:\d+:\d+\)?|UnhandledPromiseRejection|FATAL ERROR:|Segmentation fault/;
 
-export const VERDICT_LINE = /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT)|P15[A-Z0-9_ ]*:\s*\{)/m;
+export const VERDICT_LINE =
+  /^(?:EXIT\s+\d+\s+[—-]|PHASE\s+15\s+[A-Z0-9 /-]+:\s*(?:PASS|FAIL|VERIFIED|UNMEASURED|REJECT|INVALID MEASUREMENT)|P15[A-Z0-9_ ]*:\s*\{)/m;
+
+/**
+ * «I COULD NOT MEASURE» IS NOT A VERDICT ABOUT THE SUBJECT (round 12, F-R12-02a).
+ *
+ * `pitr:proof` grew a distinct exit 3 for a drill that never ran because a
+ * fixed port was held. This classifier did not know the headline, so a real
+ * exit-3 transcript was labelled «MEASURED, THEN EXITED NON-ZERO … so the code
+ * is its verdict» — the exact confusion the exit code was added to end, moved
+ * one layer out into the record that quotes it.
+ *
+ * It is matched on the instrument's own HEADLINE, not on the number 3: a code
+ * means whatever an instrument decides it means, and this record reads evidence
+ * in the log rather than a convention it hopes holds. Note that a drill which
+ * measured a FAILURE before the contention says FAIL and exits 1 — that is a
+ * verdict, and it is classified as one; only a run whose verdict line IS the
+ * contention headline did not measure.
+ */
+export const CONTENTION_VERDICT = /^(?:PHASE\s+15\s+[A-Z0-9 /-]+:\s*)?INVALID MEASUREMENT\b/m;
 
 export function reachedVerdict(r: Classifiable): string | null {
   const line = r.output
@@ -106,6 +125,8 @@ export function outcomeClass(r: Classifiable): string {
     return 'CRASHED BEFORE MEASURING — an uncaught runtime error with no summary line, so this exit code is NOT a verdict about the subject';
   if (loader || threw)
     return 'MEASURED, THEN THREW — it reached its own summary AND died on an uncaught error, so its totals describe an INCOMPLETE run and the exit code is not a verdict either';
+  if (CONTENTION_VERDICT.test(r.output))
+    return 'DID NOT MEASURE — the instrument declared INVALID MEASUREMENT (a resource it needed was held), so this exit code is a statement about the RUN and not a verdict about the subject. Re-run it alone; nothing here is evidence either way';
   if (r.counts.readFrom !== null) return 'MEASURED, THEN EXITED NON-ZERO — the instrument reached its own summary line, so the code is its verdict';
   const verdict = reachedVerdict(r);
   if (verdict !== null) return `MEASURED, THEN EXITED NON-ZERO — it printed its own verdict line (“${verdict}”), so the code is its verdict`;

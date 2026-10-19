@@ -107,6 +107,47 @@ const CASES: readonly Case[] = [
     why: 'a classifier that called every non-zero a crash would pass O1 and O2 and be worthless; an adverse verdict must still read as a verdict',
   },
   {
+    id: 'O3b',
+    what: 'round 12 — an instrument that declares it could not measure at all, in the shape `pitr:proof` prints it',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('VALIDATORS');",
+          "console.log('PHASE 15 PITR PROOF: INVALID MEASUREMENT — RESOURCE CONTENTION');",
+          "console.log('  port 55474 was still held 30s after this drill asked for it');",
+          'process.exitCode = 3;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /DID NOT MEASURE/,
+    why: '«the drill did not run» read as «the code is its verdict» — the same confusion the distinct exit code was added to end, one layer out in the record that quotes it. A reader of this table would have taken a held port for a failed disaster-recovery drill',
+  },
+  {
+    id: 'O3c',
+    what: 'CONTROL — the same drill, with a validator that DID fail before the contention',
+    build: (dir) => {
+      const entry = join(dir, 'subject.ts');
+      writeFileSync(
+        entry,
+        [
+          "console.log('VALIDATORS');",
+          "console.log('  P1 FAIL — archiving never started');",
+          "console.log('PHASE 15 PITR PROOF: FAIL');",
+          "console.log('  port 55474 was still held 30s after this drill asked for it');",
+          'process.exitCode = 1;',
+          '',
+        ].join('\n'),
+      );
+      return entry;
+    },
+    expect: /MEASURED, THEN EXITED NON-ZERO/,
+    why: 'contention in the body must NOT downgrade a run that reached a verdict: a measured failure is a fact the busy port cannot undo, and a classifier keyed on the mere presence of the word would lose it',
+  },
+  {
     id: 'O4',
     what: 'CONTROL — a clean run',
     build: (dir) => {

@@ -1222,10 +1222,19 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
       ? partialResults.length > 0
         ? 'PASS WITH PARTIAL COVERAGE'
         : 'PASS'
-      : contentionDetail !== null
-        ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
-        : failed.length > 0
-          ? 'FAIL'
+      : // A MEASURED FAILURE OUTRANKS CONTENTION (round 12, F-R12-03).
+        //
+        // This read contention FIRST, and that made the busy-port fix a way to
+        // lose a real finding: a validator that decided BEFORE `recoverTo` and
+        // failed, in a drill that then could not take its port, printed
+        // «INVALID MEASUREMENT — RESOURCE CONTENTION» and exited 3 — "the drill
+        // did not run" — with its failure nowhere in the verdict. Contention
+        // says some things were NOT measured. It says nothing about the things
+        // that WERE, and a failure among those is a fact the port cannot undo.
+        failed.length > 0
+        ? 'FAIL'
+        : contentionDetail !== null
+          ? 'INVALID MEASUREMENT — RESOURCE CONTENTION'
           : unmeasured.length > 0
             ? 'UNMEASURED'
             : 'FAIL',
@@ -1258,12 +1267,22 @@ function report(sha: string, dirty: boolean, t: Timeline | undefined, ms: number
   // not a verdict about recoverability at all, and a reader of exit codes alone
   // — which is what V3 §9 makes the handoff carry — would otherwise read a busy
   // port as a failed disaster-recovery drill. Exit 3 says: re-run it alone.
+  // The note is printed whenever contention happened, because it is true of the
+  // validators that never ran either way. The CODE follows the verdict: exit 3
+  // only when nothing was measured as failing, so that "the drill did not run"
+  // can never swallow a drill that ran and failed (F-R12-03).
   if (contentionDetail !== null) {
     console.log(`  ${contentionDetail}`);
     console.log('  Re-run this instrument ALONE. The fixed ports it and `pitr:proof:prove` share are a');
     console.log('  named residual, not a result: nothing here is evidence about recovery either way.');
-    process.exitCode = 3;
-  } else if (!ok) process.exitCode = 1;
+    if (failed.length > 0)
+      console.log(
+        `  ${failed.length} validator(s) FAILED BEFORE the contention, and that is a measurement: the verdict above is FAIL and the exit code is 1, not 3.`,
+      );
+  }
+  if (failed.length > 0) process.exitCode = 1;
+  else if (contentionDetail !== null) process.exitCode = 3;
+  else if (!ok) process.exitCode = 1;
 }
 
 main().catch((e) => {
