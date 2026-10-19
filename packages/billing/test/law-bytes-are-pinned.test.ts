@@ -42,7 +42,10 @@
  *
  * THE DECLARED LIMIT, and it is one sentence: an edit to the law AND to its
  * external pin together passes, and is bounded only by review of the diff,
- * where it is a changed digest sitting beside the change it licenses. That is
+ * where it is a changed digest sitting beside the change it licenses -- EXCEPT
+ * where the same edit also stops this reader from being collected, which one
+ * edit to `package.json`'s test script does: then no digest changes and the
+ * diff shows that one file alone (R51-F1, measured). That is
  * the whole of it. There is no further instrument to add, and the next round
  * of this class is a reviewer reading two lines rather than a seventh audit.
  *

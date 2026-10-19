@@ -2852,15 +2852,29 @@ describe('every written invocation of the pack tools is isolated', () => {
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: the \`test\` script is not the pinned command. It must be exactly \`${PINNED_TEST_SCRIPT}\` -- \`&&\` so a red first leg stops the second, and nothing after the gate to discard its exit code. If this command must change, change it HERE in the same commit and say why in the message`,
     ).toBe(PINNED_TEST_SCRIPT);
     //
-    // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED WHERE IT IS MEASURED. An
-    // exit code DISCARDED by the command that ran this suite cannot be
-    // recovered by anything this suite or the gate does: `; true` and
-    // `|| true` throw away vitest's verdict and the gate's alike, and every
-    // instrument in this package is reached through the very file that edit
-    // changes. What this arm and the gate's twin of it buy is that the attack
-    // must now change a PINNED LITERAL that two programs declare, so it sits
-    // in the diff beside a digest line, and the gate -- which still runs --
-    // names the defect in the output rather than going quiet. The terminus is
+    // THE RESIDUAL THIS ARM DOES NOT CLOSE, STATED AS MEASURED -- AND THE
+    // PREVIOUS WORDING OF THIS PARAGRAPH WAS FALSE, which R51-F1 measured and
+    // which is corrected here rather than softened. It said the attack "must
+    // change bytes two programs declare, so it appears in the diff beside a
+    // digest line". It does not. With
+    // `vitest run --exclude=<both law files>; python3 -I tools/law-ran.py; true`
+    // in `scripts.test`, the whole working tree is ` M packages/billing/
+    // package.json` -- `tools/law-bytes.json` UNTOUCHED, no digest line at all
+    // -- because the file that reads the pin is excluded from collection by the
+    // same edit. The second false clause: that paragraph sent a reader OUTWARD
+    // for the discarding caller, while the caller is `scripts.test` itself,
+    // INSIDE this package and inside the set this pin covers.
+    //
+    // What is true. An exit code DISCARDED by the command that ran this suite
+    // cannot be recovered by anything this suite does: `; true` and `|| true`
+    // throw away vitest's verdict and the gate's alike. The residual is
+    // therefore ONE EDIT TO ONE FILE, `package.json`, visible in the diff as
+    // that file alone and nothing else. What this arm and the gate's twin of it
+    // buy is not a bound on the diff but a VOICE: `tools/law-ran.py` is never
+    // excluded by a vitest filter, it reads `scripts.test` itself, and under
+    // that attack it refuses by name -- "the `test` script is '…; true', not
+    // the pinned …" -- at rc 1 of its own, printed into the output npm then
+    // discards. The terminus is
     // a check that does not pass through this package's own files at all: a CI
     // step that runs `python3 -I tools/law-ran.py` DIRECTLY and reads its exit
     // code -- not `npm test` and not `npm run gate:law`, because npm

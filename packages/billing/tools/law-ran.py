@@ -108,15 +108,26 @@ LAW_NOT_RUN = "LAW-NOT-RUN"
 # exited 0 with a plant present. So the command is pinned as a LITERAL in two
 # programs that share no code: the law's own arm and this one.
 #
-# WHAT THIS CANNOT DO, said plainly: an exit code thrown away by the command that
-# started this step cannot be recovered by this step. `;` and `|| true` discard
-# vitest's verdict and this one alike, and every instrument in this package is
-# reached through the file that edit changes. What the pinned literal buys is
-# that the attack must change bytes two programs declare, so it appears in the
-# diff beside a digest line, and this step still RUNS and names the defect in the
-# output instead of going quiet. The closure is a check that does not pass
-# through `package.json` -- a CI step that runs this gate and reads its exit code
-# -- which is PATCH-REQ-P5-001 with the Repo/CI owner.
+# WHAT THIS CANNOT DO, said plainly -- and the previous wording here was FALSE,
+# which the challenger's R51-F1 measured and which is corrected rather than
+# softened. It claimed the attack "must change bytes two programs declare, so it
+# appears in the diff beside a digest line". It does not: with
+# `vitest run --exclude=<both law files>; python3 -I tools/law-ran.py; true` in
+# `scripts.test`, the whole working tree is ` M packages/billing/package.json`,
+# `tools/law-bytes.json` untouched and no digest line anywhere, because the file
+# that reads the pin is excluded from collection by the same edit.
+#
+# What is true: an exit code thrown away by the command that started this step
+# cannot be recovered by this step. The residual is ONE EDIT TO ONE FILE,
+# `package.json`, which is inside this package rather than out in some caller,
+# and it shows in the diff as that file alone. What this step buys is a VOICE:
+# no vitest filter can exclude it, it reads `scripts.test` itself, and it refuses
+# BY NAME at rc 1 into the output that npm then discards. The closure is a check
+# that does not pass through this package's own files at all -- a CI step that
+# runs `python3 -I packages/billing/tools/law-ran.py` DIRECTLY and reads its exit
+# code, never phrased as an npm script, because npm configuration can silence npm
+# and npx alike (see CD-52-01 below) -- which is PATCH-REQ-P5-001 with the
+# Repo/CI owner.
 PINNED_TEST_SCRIPT = "vitest run && python3 -I tools/law-ran.py"
 
 # ROUND 53, THE COORDINATOR'S CD-52-01 (P1, a committed one-file fail-open).
