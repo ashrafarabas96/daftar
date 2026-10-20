@@ -813,6 +813,50 @@ class QueueModelCheckTest {
             "the helper that counts and judges in one statement did not refuse a judgment known " +
                 "to be false, so it has stopped judging and every count below counts nothing",
         )
+        // The coordinator's F-E, one layer in, and the reason a count was never
+        // going to be enough. Deleting a judgment now takes its count with it,
+        // but REPLACING a judgment's predicate with `true` leaves every row
+        // arriving and every total holding: a count sees REACH and never
+        // CONTENT. Measured at the head before this one, with the transmission
+        // predicate hollowed to `true` and nothing else touched: the suite is
+        // 99 of 99 GREEN, and the harness exits 1 only because F-2 refuses a
+        // substitution — the kernel plant written for that judgment moves the
+        // WAIT counter to 1077 and the wait anchor reds first, so the declared
+        // refusal never prints. That is an incidental catch by an unrelated
+        // anchor, in a program that is a step in no gate, and it is the third
+        // time this round that an incidental catch has been mistaken for an
+        // instrument.
+        //
+        // So each judgment's predicate is NAMED and put a case it must refuse
+        // and a case it must accept, on every run. The loop and the arm read
+        // the SAME function, so a predicate replaced by `true` reds here by
+        // name rather than somewhere else by luck. Two cases each, because a
+        // predicate stuck at `false` is as wrong as one stuck at `true` and
+        // would otherwise pass the refusal case alone.
+        fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending
+        fun aTransmissionIsHonest(attempts: Int) = attempts > 0
+        assertFalse(
+            aWaitIsHonest(OperationState.CAPTURED),
+            "the WAIT judgment's own predicate accepts a CAPTURED row, a row with nothing pending " +
+                "on the device, so it would pass a till that tells a cashier to wait for a " +
+                "transmission that was never started",
+        )
+        assertTrue(
+            aWaitIsHonest(OperationState.IN_FLIGHT),
+            "the WAIT judgment's own predicate refuses an IN_FLIGHT row, so it is stuck at false " +
+                "and judges nothing it is written to judge",
+        )
+        assertFalse(
+            aTransmissionIsHonest(0),
+            "the TRANSMISSION judgment's own predicate accepts a row with no attempt, so a refusal " +
+                "with nothing sent could be shown to a cashier as something that left the " +
+                "device, which is the promise this phase exists to keep",
+        )
+        assertTrue(
+            aTransmissionIsHonest(1),
+            "the TRANSMISSION judgment's own predicate refuses a row with one attempt, so it is " +
+                "stuck at false and judges nothing it is written to judge",
+        )
         val eventsThatMoved = mutableSetOf<String>()
         val effectsSeen = mutableSetOf<String>()
         val codesSeen = mutableSetOf<String>()
@@ -1002,7 +1046,7 @@ class QueueModelCheckTest {
                             if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
                                 view.message in assertsSomethingLeftTheDevice
                             ) {
-                                judged("waits", op.state, op.state in somethingIsGenuinelyPending) {
+                                judged("waits", op.state, aWaitIsHonest(op.state)) {
                                     "a ${op.state} row refused ${step.code}, which tells the merchant to " +
                                         "wait (${view.message} / ${view.action}) while nothing is pending: " +
                                         "$op on $event"
@@ -1014,7 +1058,7 @@ class QueueModelCheckTest {
                                 // counter at all, so narrowing its condition
                                 // removed it in silence. It is counted now, and
                                 // the count is pinned with the others below.
-                                judged("transmissions", op.state, op.attempts > 0) {
+                                judged("transmissions", op.state, aTransmissionIsHonest(op.attempts)) {
                                     "a refusal with nothing sent (${step.code}) is shown as " +
                                         "${view.message}, which asserts a transmission: $op on $event"
                                 }

@@ -1221,7 +1221,7 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-DELETING-THE-WAIT-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find='                                judged("waits", op.state, op.state in somethingIsGenuinelyPending) {\n                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +\n                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +\n                                        "$op on $event"\n                                }\n',
+        find='                                judged("waits", op.state, aWaitIsHonest(op.state)) {\n                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +\n                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +\n                                        "$op on $event"\n                                }\n',
         replace="",
         expect_red="every reachable configuration honours every invariant",
         why=(
@@ -1236,7 +1236,7 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-DELETING-THE-TRANSMISSION-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find='                                judged("transmissions", op.state, op.attempts > 0) {\n                                    "a refusal with nothing sent (${step.code}) is shown as " +\n                                        "${view.message}, which asserts a transmission: $op on $event"\n                                }\n',
+        find='                                judged("transmissions", op.state, aTransmissionIsHonest(op.attempts)) {\n                                    "a refusal with nothing sent (${step.code}) is shown as " +\n                                        "${view.message}, which asserts a transmission: $op on $event"\n                                }\n',
         replace="",
         expect_red="every reachable configuration honours every invariant",
         why=(
@@ -1258,6 +1258,39 @@ PROOFS: list[Proof] = [
             "judges anything. So a judgment known FALSE is put to the helper on every run, under "
             "a name of its own, and the helper must refuse it. This plant deletes the line and "
             "the arm reds by name"
+        ),
+    ),
+    Proof(
+        law="U-01-THE-TRANSMISSION-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        fun aTransmissionIsHonest(attempts: Int) = attempts > 0\n",
+        replace="        fun aTransmissionIsHonest(attempts: Int) = true\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the coordinator's F-E one layer in, after the measurement it asked for came back "
+            "the wrong way. Deleting a judgment now takes its count with it, but REPLACING its "
+            "predicate with `true` leaves every row arriving and every total holding: a count "
+            "sees reach, never content. Measured at the previous head with this exact hollowing "
+            "and nothing else: suite 99 of 99 GREEN, and the harness exited 1 only because F-2 "
+            "refused a substitution \u2014 the kernel plant for that judgment moved the WAIT "
+            "counter to 1077 and the wait anchor red first, so the declared refusal never "
+            "printed. An incidental catch by an unrelated anchor is not an instrument, which is "
+            "the third time in this round that distinction has decided a finding. So the "
+            "predicate is NAMED and the loop and its arm read the same function, with a case it "
+            "must refuse and a case it must accept, both on every run"
+        ),
+    ),
+    Proof(
+        law="U-01-THE-WAIT-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="        fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending\n",
+        replace="        fun aWaitIsHonest(state: OperationState) = true\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the same, on the judgment that keeps a till from telling a cashier to wait while "
+            "nothing is pending. Two cases per predicate rather than one, because a predicate "
+            "stuck at FALSE is as wrong as one stuck at `true` and would pass a refusal case "
+            "offered alone"
         ),
     ),
     Proof(
@@ -1551,6 +1584,7 @@ def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
             "NOTHING DECLARED",
         )
     tree = tempfile.mkdtemp(prefix="p7-omission-arm-")
+    TREES_THIS_RUN.append(tree)
     for part in ("src", "test"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
     target = os.path.join(tree, COVER_MAP_FILE)
@@ -1657,6 +1691,12 @@ def cover_failures(
 # reason was right on the day it was harvested. A law with no entry here is a
 # FAILED proof, not an unchecked one.
 EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
+    'U-01-THE-TRANSMISSION-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE': (
+        "org.opentest4j.AssertionFailedError: the TRANSMISSION judgment's own predicate accepts a row with no attempt, so a refusal with nothing sent could be shown to a cashier as something that left the device, which is the promise this phase exists to keep"
+    ),
+    'U-01-THE-WAIT-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE': (
+        "org.opentest4j.AssertionFailedError: the WAIT judgment's own predicate accepts a CAPTURED row, a row with nothing pending on the device, so it would pass a till that tells a cashier to wait for a transmission that was never started"
+    ),
     'U-01-THE-TRANSMISSION-JUDGMENTS-CONTENT-IS-NOT-ARMED-BY-ITS-COUNT': (
         'org.opentest4j.AssertionFailedError: a refusal with nothing sent (offline.payload_changed_after_capture) is shown as ALREADY_SENDING, which asserts a transmission: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:deadbeef, actingScope=tenant-1/business-1/member-1)'
     ),
@@ -2448,6 +2488,45 @@ def _refuses_to_read() -> bool:
     return True
 
 
+# The coordinator's housekeeping finding, measured before it was fixed: this
+# harness made one copied tree per proof and removed none of them. 2,613 trees
+# and 2.5 GB were sitting in the temp directory, from a handful of rounds, and a
+# container whose disk fills stops being able to run the thing that measures it.
+# Every tree this run creates is recorded here, removed in a `finally` so an
+# early return cannot skip it, and then CONFIRMED gone by looking: a cleanup
+# that reports success without checking is the shape this lane keeps refusing.
+TREES_THIS_RUN: list[str] = []
+
+
+def scrub(tree: str) -> None:
+    """Remove a tree. Never raises: a failed cleanup must not eat a verdict."""
+    shutil.rmtree(tree, ignore_errors=True)
+
+
+def scrub_all() -> list[str]:
+    """Remove every tree this run made and RETURN the ones still there."""
+    left = []
+    for tree in TREES_THIS_RUN:
+        scrub(tree)
+        if os.path.exists(tree):
+            left.append(tree)
+    return left
+
+
+def strays_from_earlier_runs() -> list[str]:
+    """Trees matching this harness's prefixes that THIS run did not create."""
+    tmp = tempfile.gettempdir()
+    mine = set(TREES_THIS_RUN)
+    found = []
+    for name in sorted(os.listdir(tmp)):
+        path = os.path.join(tmp, name)
+        if path in mine or not os.path.isdir(path):
+            continue
+        if name.startswith(("p7-proof-", "p7-baseline-", "p7-omission-arm-")):
+            found.append(path)
+    return found
+
+
 def run_suite(tree: str) -> tuple[int, set[str], dict[str, str], str]:
     """Compile and run the suite in `tree`.
 
@@ -2502,6 +2581,7 @@ def main() -> int:
     print()
 
     baseline_tree = tempfile.mkdtemp(prefix="p7-baseline-")
+    TREES_THIS_RUN.append(baseline_tree)
     for part in ("src", "test"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(baseline_tree, part))
     rc, failing, _details, log = run_suite(baseline_tree)
@@ -2543,9 +2623,22 @@ def main() -> int:
     workers = max(1, min(len(PROOFS), (os.cpu_count() or 2)))
 
     def run_one(indexed: tuple[int, Proof]) -> tuple[int, Proof, str | None, str]:
+        """Make this proof's tree, run it, and remove the tree WHATEVER happens.
+
+        The body has eight early returns, which is why the removal is a
+        `finally` and not a line at the end of it.
+        """
+        i, _ = indexed
+        tree = tempfile.mkdtemp(prefix=f"p7-proof-{i}-")
+        TREES_THIS_RUN.append(tree)
+        try:
+            return run_one_in(indexed, tree)
+        finally:
+            scrub(tree)
+
+    def run_one_in(indexed: tuple[int, Proof], tree: str) -> tuple[int, Proof, str | None, str]:
         """Returns (index, proof, failure or None, verdict line)."""
         i, proof = indexed
-        tree = tempfile.mkdtemp(prefix=f"p7-proof-{i}-")
         for part in ("src", "test"):
             shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
         for n, edit in enumerate(((proof.find, proof.replace),) + proof.edits, start=1):
@@ -2719,9 +2812,15 @@ def main() -> int:
     print(f"     them ({', '.join(bare)}), and {len(HARM_IS_NONDETERMINISTIC)} (P7-L8) is exempted")
     print("     from freezing its values because its own plant draws them \u2014 an exemption this")
     print("     harness measures against the plants, in both directions.")
-    print(f"     {len(fragments)} are frozen as FRAGMENTS rather than whole, because a coordinate")
-    print("     moves when a line is added above it; the whole-message form is refused wherever")
-    print(f"     it reappears ({', '.join(fragments)}).")
+    if fragments:
+        print(f"     {len(fragments)} are frozen as FRAGMENTS rather than whole, around a")
+        print("     coordinate that moves when a line is added above it:")
+        print(f"     {', '.join(fragments)}.")
+    else:
+        print("     NONE is frozen as fragments. U-03 retired that form: fragments pinned the")
+        print("     prose on either side of a coordinate and stopped pinning the SET between")
+        print("     them, so a refusal listing a second offender matched. The coordinate is")
+        print("     normalised on both sides now and the message is frozen WHOLE.")
     print("  9. The omission arm deletes the print loop on a copy and requires a refusal, so")
     print("     that line is load-bearing twice over \u2014 but the ARM's own removal is bounded")
     print("     by review and not by measurement. The regress stops here, and is named here")
@@ -2730,4 +2829,24 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(self_test() if "--self-test" in sys.argv else main())
+    _code = self_test() if "--self-test" in sys.argv else main()
+    _earlier = strays_from_earlier_runs()
+    _left = scrub_all()
+    if _left:
+        print(
+            f"REFUSED-P7-TREES-LEFT-BEHIND: {len(_left)} copied tree(s) this run made are still "
+            f"in the temp directory after cleanup, so this harness is filling the disk it runs "
+            f"on: {_left[:5]}"
+        )
+        _code = _code or 1
+    else:
+        print(
+            f"TREES: {len(TREES_THIS_RUN)} made, {len(TREES_THIS_RUN)} removed, 0 left \u2014 "
+            f"confirmed by looking, not by assuming the call worked."
+        )
+    if _earlier:
+        print(
+            f"NOTE: {len(_earlier)} tree(s) matching this harness's prefixes were already in "
+            f"{tempfile.gettempdir()} before this run and are NOT this run's to delete."
+        )
+    sys.exit(_code)
