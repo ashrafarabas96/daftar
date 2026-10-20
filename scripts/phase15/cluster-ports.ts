@@ -11,7 +11,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
+import ts from 'typescript';
 
 const ROOT = join(import.meta.dirname, '../..');
 
@@ -63,7 +64,27 @@ const PORT_POLL_MS = 500;
  * literals in the 55xxx block the project reserves for its disposable
  * clusters; the shared vitest helper is read too, because that is where 55432
  * comes from and it is the port that actually failed.
+ *
+ * READ FROM THE SYNTAX TREE, NOT FROM THE TEXT (round 22, F-R22-11). A regex
+ * over the bytes got this wrong in both directions at once, and the challenger
+ * measured both in the pack's own source: it admitted **55900**, which nothing
+ * binds and which appears only inside two COMMENTS -- one of them the sentence
+ * saying no instrument declares that block -- and it lost **55901** and
+ * **55902**, which `port-wait-proof.ts` really does bind, because they are
+ * written `55_901` and `55_902` and `\b55\d{3}\b` does not match across a
+ * numeric separator. A comment is prose and a separator is formatting; a
+ * NUMERIC LITERAL is neither. So the set is now the numeric literals the
+ * parser finds, whose VALUE falls in the block -- comments are not literals,
+ * and `55_901` is one literal worth 55901.
  */
+// The block's own bounds are COMPUTED, not written. Written as `55_000` and
+// `55_999` they are numeric literals in the block, in a file this function
+// reads -- so the first version of the syntax-tree reader declared 55000 and
+// 55999 as cluster ports, out of its own range check. A reader that reads
+// itself has to be written so that there is nothing of itself to read.
+const BLOCK_LO = 55 * 1000;
+const BLOCK_HI = BLOCK_LO + 999;
+
 export function declaredClusterPorts(): readonly number[] {
   const found = new Set<number>();
   const files = [
@@ -79,10 +100,18 @@ export function declaredClusterPorts(): readonly number[] {
     } catch {
       continue;
     }
-    for (const m of text.matchAll(/\b(55\d{3})\b/g)) {
-      const n = Number(m[1]);
-      if (n >= 55_000 && n <= 55_999) found.add(n);
-    }
+    const sf = ts.createSourceFile(basename(f), text, ts.ScriptTarget.ES2022, true, ts.ScriptKind.TS);
+    const walk = (n: ts.Node): void => {
+      if (ts.isNumericLiteral(n)) {
+        const v = Number(n.text.replace(/_/g, ''));
+        if (Number.isInteger(v) && v >= BLOCK_LO && v <= BLOCK_HI) found.add(v);
+      }
+      // A port can also be written as a string, `'55432'`, which is how a URL
+      // or an env default carries one.
+      if (ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n)) for (const m of n.text.matchAll(/(?<!\d)(55\d{3})(?!\d)/g)) found.add(Number(m[1]));
+      n.forEachChild(walk);
+    };
+    walk(sf);
   }
   return [...found].sort((a, b) => a - b);
 }

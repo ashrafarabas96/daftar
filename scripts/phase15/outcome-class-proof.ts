@@ -54,6 +54,15 @@ interface Case {
   readonly env?: Readonly<Record<string, string>>;
   readonly expect: RegExp;
   readonly why: string;
+  /**
+   * A CONTROL holds a boundary: the rule under test must NOT fire here. Round
+   * 22's F-R22-18 found this carried in the `what` string -- «THE CONTROL for
+   * …» -- while the manifest's «ten of them controls» was hand-kept beside it,
+   * and `outcome-class.ts` called `O11d` and `O11e` controls although neither
+   * said so. A count read off prose is a count nobody measured, so the role is
+   * a FIELD now and the summary prints what it counted.
+   */
+  readonly control?: true;
 }
 
 /**
@@ -139,6 +148,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O3',
     what: 'CONTROL — an instrument that finishes and exits non-zero for its own reason',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(entry, "console.log('23 rules: 23 measured, 0 unmeasured');\nconsole.log('EXIT 1 — A CONTROL, NOT A CRASH');\nprocess.exitCode = 1;\n");
@@ -174,6 +184,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O3c',
     what: 'CONTROL — the same drill, with a validator that DID fail before the contention',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -237,6 +248,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O3f',
     what: 'CONTROL — the headline outranks the record: a machine record saying contention under a headline saying FAIL',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -276,6 +288,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O3h',
     what: 'CONTROL — the same load harness shape with a MEASURED failure in it',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -325,6 +338,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O7',
     what: 'CONTROL — `backup-restore-proof.ts`\u2019s headline, which opens with VERDICT: and no speaker',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -344,6 +358,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O8',
     what: 'CONTROL — the `EXIT n:` headline, with a colon, which three instruments in this pack print',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -471,6 +486,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O10b',
     what: 'THE CONTROL for O10 — a run that refuses ONE subject and then reaches a verdict has reached a verdict',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -515,6 +531,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O11b',
     what: 'THE CONTROL for O11 — the same bind failure, and then a verdict of the instrument\u2019s own',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -536,6 +553,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O11c',
     what: 'THE SECOND CONTROL for O11 — the English phrase in PROSE the subject writes itself, with no postmaster line format',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -558,6 +576,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O11d',
     what: "round 21's F-R21-05 — a HEALTHY postmaster's per-address-family WARNING, which every start logs when listen_addresses names a family the kernel lacks",
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -582,6 +601,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O11e',
     what: "round 21's F-R21-04 — the postmaster's shape QUOTED by the subject, behind a diff marker",
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(
@@ -604,6 +624,7 @@ const CASES: readonly Case[] = [
   {
     id: 'O4',
     what: 'CONTROL — a clean run',
+    control: true,
     build: (dir) => {
       const entry = join(dir, 'subject.ts');
       writeFileSync(entry, "console.log('23 rules: 23 measured, 0 unmeasured');\n");
@@ -715,7 +736,10 @@ function main(): number {
     console.log('  is then a label rather than a reading, and B-21 is not established.');
     return 1;
   }
-  console.log(`All ${CASES.length} arms classify as required, from real process output.`);
+  const controls = CASES.filter((c) => c.control === true).length;
+  console.log(
+    `All ${CASES.length} arms classify as required, from real process output — ${controls} of them controls, counted from the arms and not from this sentence.`,
+  );
   console.log('  What this does NOT show: that any instrument is correct. Only that the record can');
   console.log('  tell a crash from a verdict — including a crash that happens after the totals print,');
   console.log('  which is the half a reader assumes is covered.');

@@ -954,7 +954,25 @@ const OUTSIDE_MAX_DEPTH = 8;
 function resolveOutside(fromDir: string, spec: string): string | null {
   if (!spec.startsWith('.')) return null;
   const base = resolvePath(fromDir, spec);
-  for (const cand of [base, `${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) if (existsSync(cand) && statSync(cand).isFile()) return cand;
+  // A specifier may name the EMITTED file -- `'./helper.js'` is what NodeNext
+  // requires -- so the TypeScript source it stands for is tried too. The
+  // challenger built `import { sh } from '../d1-helper.js'` and it resolved to
+  // nothing, silently (round 22, F-R22-06). This repository is on `bundler`
+  // resolution, where that spelling is not idiomatic, but a reader that
+  // returns `null` on a form it does not know fails OPEN, and the fix is three
+  // more candidates rather than a note saying it cannot happen here.
+  const mapped = base.replace(/\.(js|mjs|cjs)$/, '');
+  const cands = [
+    base,
+    `${base}.ts`,
+    `${base}.tsx`,
+    `${base}.mts`,
+    `${base}.cts`,
+    join(base, 'index.ts'),
+    join(base, 'index.tsx'),
+    ...(mapped === base ? [] : [`${mapped}.ts`, `${mapped}.tsx`, `${mapped}.mts`, `${mapped}.cts`]),
+  ];
+  for (const cand of cands) if (existsSync(cand) && statSync(cand).isFile()) return cand;
   return null;
 }
 
@@ -3273,6 +3291,30 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x54.ts')
         ? null
         : 'a module read while its import cycle was cut was cached with the EMPTY surface that cut produced, so every later reader of it saw a module that exports nothing',
+  },
+  {
+    id: 'X55',
+    what: "round 22's F-R22-06 — the specifier names the EMITTED file, `'../x.js'`, and the source it stands for is `.ts`",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, '..', 'planted-x55-helper.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'export const shX55 = spawnSync;', ''].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x55.ts'),
+        [
+          "import { shX55 } from '../planted-x55-helper.js';",
+          'export function go(): void {',
+          "  shX55('git', ['status'], { encoding: 'utf8' });",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x55.ts')
+        ? null
+        : 'a `.js` specifier standing for a `.ts` source resolved to nothing and the import contributed nothing: a reader that returns null on a spelling it does not know fails OPEN',
   },
   {
     id: 'X45',

@@ -234,10 +234,23 @@ export const BARE_REFUSAL = new RegExp('^(?:INVALID MEASUREMENT|UNMEASURED|NOT M
  *   on the line — quoted, indented, or behind a diff marker — which is the
  *   «value appearing anywhere in text the subject writes» family all over
  *   again, in the rule written to close it. The anchor is now the server's own
- *   line BEGINNING: its timestamp, then the pid, then the severity. A subject
- *   that quotes a postmaster log no longer speaks for the server.
+ *   line BEGINNING: its timestamp, then the pid, then the severity, so an
+ *   INDENTED or diff-marked quote no longer speaks for the server.
  *
- * Controls `O11c`, `O11d` and `O11e` hold all three boundaries.
+ * WHAT THAT ANCHOR DOES NOT BUY, stated because round 22 measured the
+ * overclaim (F-R22-14): the sentence here used to read «a subject that quotes
+ * a postmaster log no longer speaks for the server», and a quote reproduced
+ * VERBATIM AT COLUMN 0 is byte-identical to the server's own line, so nothing
+ * in this file can tell them apart. O11's own plant is such a subject. It is
+ * a NAMED RESIDUAL, not a closed hole. No in-pack route reaches it: the two
+ * instruments that echo a server-log tail, `pitr-proof.ts` and
+ * `pg-version-matrix.ts`, embed it in a thrown `Error`, and MEASURED-THEN-THREW
+ * is decided before this rule is read. Closing it would need provenance --
+ * the server's log read from the file the server wrote, not from the
+ * instrument's transcript -- which the runner does not have.
+ *
+ * Controls `O11c` and `O11e` hold the boundaries this anchor DOES hold, and
+ * `O11d` holds the phrase boundary.
  */
 export const SERVER_BIND_FAILURE = new RegExp(
   String.raw`^\d{4}-\d{2}-\d{2} [\d:.]+ \S+ \[\d+\]\s+(?:LOG|FATAL):\s+(?:could not bind \S+ address[^\n]*Address already in use|could not create any TCP/IP sockets)`,
