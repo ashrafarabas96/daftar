@@ -2176,9 +2176,6 @@ wl_ctl(){          # wl_ctl <arm> <probe-file> <needle-in-helpers> <sentence>
     FAILED=1
   fi
 }
-wl_ctl "WITNESS-BIND-CTL" bind.sql \
-  "  IF position('@REL@' in bare) = 0 THEN" \
-  "the statement is a free text again and the witness can be true of something it does not touch, which is U-3"
 wl_ctl "WITNESS-KEY-CTL" key.sql \
   "  IF bad IS NOT NULL THEN" \
   "a row case can be declared as a relation case once more, with its key pointed at nothing, which is N-2"
@@ -2329,6 +2326,26 @@ wl_ctl "WITNESS-SHAPE-CTL" shape.sql \
 # because it is the cheaper message, and the construction behind it, because
 # it is the one no mechanism can be re-spelled around. The same shape as
 # ROW-ASTRAL-CLASS-CTL above, and said the same way.
+# ROUND 34. This control is HERE and not beside WITNESS-BIND, where it used
+# to stand, because `wl_sub_ctl` is defined below `wl_ctl` and bash resolves
+# a function at the point of CALL: converted in place it printed nothing at
+# all and `command not found` went to stderr, where no law reads. The arm
+# census is what caught it — the seal named a DEPARTURE — which is the whole
+# reason a census pins its set rather than counting what it finds.
+#
+# This control used to expect the fail-open back, and it no longer
+# comes back. `FB-a` declares `notifications` and reads
+# `notification_provider_quarantine`, so with the bind condition deleted the
+# attribution law this round added names it instead: the server's refusal is
+# about a relation the case did not declare. The attribution of U-3's closure
+# to this one condition is WITHDRAWN rather than tuned, and two independent
+# laws now cover the class — one reads the statement's TEXT before it runs,
+# the other reads WHAT THE SERVER SAID it refused. The same shape as
+# WITNESS-RELCLASS-CTL and ROW-ASTRAL-CLASS-CTL, and said the same way.
+wl_sub_ctl "WITNESS-BIND-CTL" bind.sql \
+  "  IF position('@REL@' in bare) = 0 THEN" "  IF false THEN" \
+  refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "with the text test deleted ALONE a statement about another relation is caught by the arrival term behind it, which cannot be spelled around because it reads the server's own words (U-3, and the coordinator's section 4)"
 wl_sub_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
   "    IF kind = 'relation' AND rowlevel THEN" "    IF false THEN" \
   refuse "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
@@ -2470,6 +2487,55 @@ wl_sub_ctl "WITNESS-BLOCK-CTL" block.sql \
 # outputs must be byte-identical. The corpus leads with every attack the two
 # reviews measured on this head's parent; input and output are hex, so no
 # escaping convention sits between the two readings being compared.
+# ROUND 34, the coordinator's 6.3. The literal totals this gate commits catch
+# a payload that DEPARTS and not one that is SWAPPED: the coordinator removed
+# the astral payload, added an innocuous one under a fresh label, and every
+# declared figure still matched. A count sees reach, never content. So both
+# corpora are pinned BY DIGEST as well, which is this phase's rule that a
+# census pins its SET — an arrival, a departure and a replacement all red.
+CORPUS_PIN_SCAN=3ba3b56a8139d9935b037d455eafc6db578fe2edae5720694f2c26d61ac6c8d9
+CORPUS_PIN_ORC=260a8781bd31fc12f93801dd9914d11cd93cf66be0bc90fde65203c37b839431
+_pin_scan=$(sha256sum "$HERE/p8-scanner-corpus.txt" | cut -d' ' -f1)
+_pin_orc=$(sha256sum "$HERE/p8-scanner-oracle.txt" | cut -d' ' -f1)
+if [ "$_pin_scan" = "$CORPUS_PIN_SCAN" ] && [ "$_pin_orc" = "$CORPUS_PIN_ORC" ]; then
+  say "CORPUS-PIN: both corpora are the declared BYTES — comparison $_pin_scan, oracle $_pin_orc"
+else
+  say "CORPUS-PIN: FAIL — a corpus is not the one this gate declares: comparison $_pin_scan (declared $CORPUS_PIN_SCAN), oracle $_pin_orc (declared $CORPUS_PIN_ORC)"
+  FAILED=1
+fi
+# The swap the counts cannot see, built here so the pin's value is measured
+# and not asserted: one payload out, one in under a fresh label.
+SWAP=$OUT/corpus-swap; mkdir -p "$SWAP"
+if python3 -I - "$HERE/p8-scanner-oracle.txt" "$SWAP/oracle.txt" >"$SWAP/swap.log" 2>&1 <<'PY'
+import sys
+src, dst = sys.argv[1], sys.argv[2]
+lines = open(src, encoding="utf-8").read().split("\n")
+out, done = [], False
+for ln in lines:
+    if not done and ln.strip() and not ln.startswith("#") and ln.split("\t")[0].strip():
+        out.append("r34-swap-innocuous\t205748455245206b203d20275827\t"
+                   "an innocuous payload swapped in for one that was taken out, "
+                   "under a fresh label, so every declared count stays as it was")
+        done = True
+    else:
+        out.append(ln)
+if not done:
+    sys.exit("no payload line found to swap")
+open(dst, "w", encoding="utf-8").write("\n".join(out))
+PY
+then
+  _swap_pin=$(sha256sum "$SWAP/oracle.txt" | cut -d' ' -f1)
+  _swap_n=$(python3 -I "$HERE/p8-case-net.py" --oracle-scan "$SWAP/oracle.txt" "UPDATE p8oracle SET v = v + 1" 2>/dev/null | wc -l)
+  if [ "$_swap_pin" != "$CORPUS_PIN_ORC" ] && [ "$_swap_n" = "15" ]; then
+    say "CORPUS-SWAP: a swapped oracle corpus still yields $_swap_n payloads, which is the figure this gate declares, and its digest $_swap_pin is NOT the declared one — the count cannot see a replacement and the digest can"
+  else
+    say "CORPUS-SWAP: FAIL — the swap did not land where this arm says: $_swap_n payloads, digest $_swap_pin"
+    FAILED=1
+  fi
+else
+  say "CORPUS-SWAP: PLANT NOT ESTABLISHED — the swapped corpus could not be written: $(tail -1 "$SWAP/swap.log")"
+  FAILED=1
+fi
 SCAN=$OUT/scan; mkdir -p "$SCAN"
 SCAN_EXPECT=78       # 26 payloads x 3 modes, the readings p8-scanner-corpus.txt is declared to hold
 if python3 -I "$HERE/p8-case-net.py" --scan "$HERE/p8-scanner-corpus.txt" >"$SCAN/py.txt" 2>"$SCAN/py.err"; then
@@ -2929,9 +2995,9 @@ fi
 SCS=$("$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -tAc \
         "SELECT p8.lex_session() || ' | ' || p8.lex_session_expected()" 2>&1)
 if [ "${SCS%% | *}" = "${SCS##* | }" ]; then
-  say "LEX-SETTINGS: the cluster's default session lexes the way both scanners do — standard_conforming_strings/backslash_quote/client_encoding = ${SCS%% | *}, read in ONE comparison so no fourth setting is defined as not mattering. This is a statement about the DEFAULT and not a closure: a case file can still move all three, and what refuses that is p8.assert_lex_session at the top of p8.sql_scan (R-4, the coordinator's b7c0933 section 3)"
+  say "LEX-SETTINGS: the cluster's default session lexes the way both scanners do — backslash-in-literal/escaped-quote-in-E-string/encoding-identity/null-equals = ${SCS%% | *}, four MEASUREMENTS read in ONE comparison and not four setting names, so no fifth setting is defined as not mattering. This is a statement about the DEFAULT and not a closure: a case file can still move every one of them, and what refuses that is p8.assert_lex_session at the top of p8.sql_scan (the coordinator's b7c0933 section 3, and sections 5 and 6.4 of the review of 2e6b0e9)"
 else
-  say "LEX-SETTINGS: ABORT — this cluster's default session lexes differently from what both scanners implement: got ${SCS%% | *}, both scanners implement ${SCS##* | }"
+  say "LEX-SETTINGS: ABORT — this cluster's default session lexes differently from what both scanners implement: measured ${SCS%% | *}, both scanners implement ${SCS##* | }"
   FAILED=1
 fi
 
@@ -3197,14 +3263,143 @@ wb_probe rb-trigrow.sql "RELATION-ROWTRAP" "THE REFUSAL DID NOT ARRIVE BEFORE AN
   "a relation case whose 42501 was decided by one row's content, through a trigger reaching a forbidden object — the server raised it, so no frame and no phrase gives it away, and the form now asks the server to PLAN the same statement instead (D-1)"
 wb_probe rb-scsoff.sql  "LEX-SESSION"      "UNLEXABLE SESSION" \
   "a case file that flips standard_conforming_strings in its own session and hides a semicolon behind a backslash-escaped quote, which both reviewers measured passing end to end with the whole gate FAILED=0 (the coordinator's section 3)"
+# ROUND 34, and the same withdrawal. With the EXPLAIN construction deleted the
+# row-decided refusal no longer comes back as a PASS: the attribution law names
+# it first, because the 42501 the trigger provoked is about `p8bench_forbidden`
+# and the case declares `p8bench_rel`. Round 33's sentence attributing this
+# class to the construction ALONE is withdrawn; the construction is still what
+# answers "did a row decide it" for a refusal about the right relation, which
+# is what RELATION-ATTRIB-CTL and the arms above measure separately.
 wl_sub_ctl "RELATION-ROWTRAP-CTL" rb-trigrow.sql \
   "    IF kind = 'relation' THEN" "    IF false THEN" \
-  pass "PASS refused by permission denied for table p8bench_forbidden" \
+  refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "with the EXPLAIN construction deleted ALONE the relation case passes on a refusal one row's content decided, with the relation witness attesting only that the relation exists — the state the twenty-third challenge measured at this head's parent (D-1)"
 wl_sub_ctl "LEX-SESSION-CTL" rb-scsoff.sql \
   "  PERFORM p8.assert_lex_session();" "  PERFORM 1;" \
   pass "PASS refused by DENIED-BY-THE-OTHER-ROW" \
   "with the session's lexing settings unread at scan time the semicolon is invisible to every law, the appended predicate joins the second statement, the mutation runs against every row and the case reports the refusal the OTHER row decided — the fail-open both reviews measured on this head's parent (the coordinator's section 3)"
+
+# ---------------------------------------------------------------------
+# ROUND 34. The two BLOCKING findings of the reviews of `2e6b0e9`.
+# ---------------------------------------------------------------------
+# The third bench: a relation the worker may touch, a relation it may not, a
+# function it may not execute, and a function that WEARS A RELATION'S NAME.
+# The coordinator's section 4 measured a case passing on a refusal about a
+# relation it did not declare; T1 to T4 are its attacks, and T4 is this
+# gate's own, built to make the second term of the attribution law speak.
+"$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 >"$WB/abench.log" 2>&1 <<'SQL'
+CREATE OR REPLACE FUNCTION public.p8bench_secret() RETURNS INT LANGUAGE sql AS 'SELECT 1';
+REVOKE ALL ON FUNCTION public.p8bench_secret() FROM PUBLIC;
+CREATE TABLE IF NOT EXISTS public.p8bench_own(k TEXT PRIMARY KEY);
+-- A FUNCTION with the same name as the table, so the server's refusal names
+-- the declared relation while being about something else entirely.
+CREATE OR REPLACE FUNCTION public.p8bench_own() RETURNS INT LANGUAGE sql AS 'SELECT 1';
+REVOKE ALL ON FUNCTION public.p8bench_own() FROM PUBLIC;
+GRANT ALL PRIVILEGES ON public.p8bench_own TO daftar_worker;
+SQL
+if [ -s "$WB/abench.log" ] && grep -qi "^ERROR" "$WB/abench.log"; then
+  say "ATTRIB-BENCH: PLANT NOT ESTABLISHED — the attribution bench could not be built: $(tail -1 "$WB/abench.log")"
+  FAILED=1
+else
+  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, and a function wearing a granted relation's own name — so a case can declare one subject while the refusal it reads is about another (the coordinator's section 4)"
+fi
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('T1 a relation case refused about a SECOND relation',
+  $q$SELECT 1 FROM @REL@, p8bench_forbidden$q$, 'permission denied', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/t1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('T2 a row case refused about a SECOND relation',
+  $q$SELECT 1 FROM @REL@, p8bench_forbidden$q$, 'permission denied',
+  'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/t2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('T3 a relation case refused about a FUNCTION',
+  $q$SELECT public.p8bench_secret() FROM @REL@$q$, 'permission denied', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/t3.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('T4 a refusal that NAMES the declared relation and is not about it',
+  $q$SELECT public.p8bench_own() FROM @REL@$q$, 'permission denied', 'p8bench_own');
+ROLLBACK;
+SQL
+} > "$WB/t4.sql"
+wb_probe t1.sql "RELATION-ATTRIB-REL" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "a relation case whose statement names a second relation the role may not touch, so the 42501 the server takes is relation-level and about the OTHER one, while the role may do the very thing the case says it may not (the coordinator's section 4.1)"
+wb_probe t2.sql "ROW-ATTRIB-REL" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "the same substitution in the row form, which the coordinator's 4.2 measured passing with no second table needed beyond the one the statement reaches"
+wb_probe t3.sql "RELATION-ATTRIB-FN" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "a relation case refused because the role may not EXECUTE a function the statement calls — the class is not two tables, it is any plan-time 42501 the statement can provoke about anything (the coordinator's 4.2)"
+wb_probe t4.sql "RELATION-ATTRIB-HOLDS" "THE ROLE HOLDS EVERY PRIVILEGE ON THE DECLARED RELATION" \
+  "a refusal that satisfies the arrival term by NAMING the declared relation — a function with the relation's own name — and is caught by the catalogue term instead, which is why the law has two and not one"
+wl_sub_ctl "RELATION-ATTRIB-CTL" t1.sql \
+  "      IF servergrant THEN" "      IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the attribution law deleted ALONE the relation case passes on a refusal about another relation, with every other law satisfied — the state the coordinator measured at this head's parent and at the head before it (section 4.3)"
+wl_sub_ctl "RELATION-HOLDSALL-CTL" t4.sql \
+  "        IF holdsall THEN" "        IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the catalogue term deleted ALONE a refusal that merely NAMES the declared relation passes, which is what the arrival term on its own cannot see (section 4.4)"
+
+# The lexing guard, now four MEASUREMENTS and no setting name.
+{ wb_head; cat <<'SQL'
+SET client_encoding = 'UNICODE';
+SET backslash_quote = on;
+SELECT p8.case_refuses_row('LA an ordinary row case under two setting ALIASES',
+  $q$UPDATE @REL@ SET v = 2$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'X');
+ROLLBACK;
+SQL
+} > "$WB/lex-alias.sql"
+if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
+             -f "$WB/lex-alias.sql" >"$WB/lex-alias.log" 2>&1 \
+   && grep -qF "PASS refused by DENIED-BY-THE-OTHER-ROW" "$WB/lex-alias.log"; then
+  say "LEX-ALIAS: a session spelling the same encoding UNICODE and the same quote rule 'on' is NOT refused — the guard reads what the settings DO (pg_char_to_encoding, and whether a backslash-escaped quote lexes), so the one alias the server does not fold no longer reds a cluster where nothing can be converted (the coordinator's section 5, the twenty-fourth challenge's residual 1)"
+else
+  say "LEX-ALIAS: FAIL — a session that lexes IDENTICALLY to the scanner was refused, which is a false red: $(grep -m1 ERROR "$WB/lex-alias.log")"
+  FAILED=1
+fi
+wl_sub_ctl "LEX-ALIAS-CTL" lex-alias.sql \
+  "  SELECT pg_char_to_encoding(current_setting('client_encoding')) = pg_char_to_encoding(current_setting('server_encoding')) INTO b;" \
+  "  SELECT current_setting('client_encoding') = current_setting('server_encoding') INTO b;" \
+  refuse "UNLEXABLE SESSION" \
+  "with the encoding compared by NAME again the same session is refused although pg_char_to_encoding answers 6 on both sides — the false red the coordinator measured, and the reason an encoding's name is a projection of the encoding (section 5)"
+wl_sub_ctl "LEX-BQ-CTL" lex-alias.sql \
+  "    EXECUTE 'SELECT length(E' || chr(39) || chr(92) || chr(39) || chr(39) || ')' INTO n;" \
+  "    n := CASE WHEN current_setting('backslash_quote') = 'safe_encoding' THEN 1 ELSE 9 END;" \
+  refuse "UNLEXABLE SESSION" \
+  "with backslash_quote compared to its exact default again, a session where a backslash-escaped quote lexes exactly as the scanner reads it is refused — the over-strictness the twenty-fourth challenge named, attributed here to that one term"
+{ wb_head; cat <<'SQL'
+SET transform_null_equals = on;
+SELECT p8.case_refuses_row('LT an ordinary row case with = NULL rewritten',
+  $q$UPDATE @REL@ SET v = 2$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'X');
+ROLLBACK;
+SQL
+} > "$WB/lex-tne.sql"
+wb_probe lex-tne.sql "LEX-TNE" "UNLEXABLE SESSION" \
+  "a session where = NULL is rewritten to IS NULL, which changes a statement's MEANING rather than its tokens — named UNMEASURED by the coordinator's 6.4 and measured here: (1 = NULL) IS NULL answers true with it off and false with it on"
+wl_sub_ctl "LEX-TNE-CTL" lex-tne.sql \
+  "  EXECUTE 'SELECT (1 = NULL) IS NULL' INTO b;" "  b := true;" \
+  pass "PASS refused by DENIED-BY-THE-OTHER-ROW" \
+  "with that one probe answering a constant the rewritten session is admitted again, so the arm above is attributed to the measurement and not to the three beside it"
+# The flip that arrives BEFORE the first scan of the session (6.1).
+{ wb_head; cat <<'SQL'
+SET standard_conforming_strings = off;
+SELECT p8.case_refuses_row('LC the first scan of the session happens under the flip',
+  $q$UPDATE @REL@ SET v = 2$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/lex-compile.sql"
+wb_probe lex-compile.sql "LEX-COMPILE" "UNLEXABLE SESSION" \
+  "the flip in a session where p8.sql_scan has not been called yet, with no warm-up case in front of it: the guard is what fires, by name"
+wl_sub_ctl "LEX-COMPILE-CTL" lex-compile.sql \
+  "          IF esc AND substr(t, j, 1) = chr(92) THEN j := j + 2; CONTINUE; END IF;" \
+  "          IF esc AND substr(t, j, 1) = '\' THEN j := j + 2; CONTINUE; END IF;" \
+  refuse "syntax error" \
+  "with that one literal spelled as a backslash again plpgsql cannot COMPILE the scanner under the flip, so the session reds with a syntax error pointing into the helper file instead of with the guard's name — fail-closed either way, and the refusal is BY NAME only after the change (the coordinator's 6.1)"
 
 # ---------------------------------------------------------------------
 # ROUND 30, F-4: the net over every SQL file the run LOADS, and its byte pin

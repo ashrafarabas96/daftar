@@ -95,7 +95,7 @@ SELECT p8.case_refuses_relation('W-3 nor create an obligation — that is not th
           'low_stock', 'operational', 'cccccccc-0000-4000-8000-000000000001',
           'ar', '{}'::jsonb, 'B1|event:w-insert|low_stock|customer:1',
           '0eeeeeee-0000-4000-8000-0000000000a9')
-$q$, 'permission denied',
+$q$, 'permission denied for table notifications',
    -- ROUND 29: a RELATION case — an INSERT has no pre-existing row, so the
    -- subject is the relation it is refused on, and the form says so.
    'notifications');
@@ -174,9 +174,13 @@ SELECT p8.case_permits('H-3 an unattributable landing goes to the quarantine, wh
   INSERT INTO notification_provider_quarantine (provider, provider_event_id, status_token, verification)
   VALUES ('meta_cloud', 'evt-unmatched-w1', 'delivered', 'signature_missing')
 $q$);
+-- ROUND 34, the coordinator's section 4: `expect` is spelled with the
+-- relation in it, as `A10` and `P4c` already spelled it. The attribution law
+-- in the core is what makes a misdirected refusal red; this binds the
+-- expectation the case itself states, so the two agree.
 SELECT p8.case_refuses_relation('H-3b and the worker cannot read the quarantine back', $q$
   SELECT count(*) FROM @REL@
-$q$, 'permission denied',
+$q$, 'permission denied for table notification_provider_quarantine',
    'notification_provider_quarantine');
 SELECT p8.case_refuses('H-3c a VERIFIED event may not be quarantined — it belongs in the attributed relation', $q$
   INSERT INTO notification_provider_quarantine (provider, provider_event_id, status_token, verification)

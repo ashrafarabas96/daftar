@@ -66,6 +66,12 @@ DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, BOOLEAN);
 -- refusal can be checked against what that form claims. The four-argument
 -- signature goes with the same DROP the earlier ones got.
 DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, TEXT);
+-- ROUND 34, the coordinator's section 4: the core now also takes the RELATION
+-- the case declared, because for a row case the `subject` is the key value and
+-- the law below is about the relation. The five-argument signature goes with
+-- the same DROP, and the new one has no DEFAULT: a caller that does not say
+-- which relation its refusal is about cannot reach this function at all.
+DROP FUNCTION IF EXISTS p8.case_refuses_core(TEXT, TEXT, TEXT, TEXT, TEXT);
 DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 -- ROUND 29. THE WITNESS IS NO LONGER SUPPLIED BY THE CASE.
 --
@@ -317,11 +323,47 @@ END $fn$;
 -- then a silence rather than a refusal.
 --
 -- `client_encoding` is in it because it sits between the bytes a case file
--- declares and the bytes the server lexes, and it is compared to
--- `server_encoding` rather than to a literal: equal encodings mean no
--- conversion happens, whatever the two are, so this cannot red a cluster
--- that is internally consistent. Both are GUCs, so the comparison costs no
--- catalogue read.
+-- declares and the bytes the server lexes.
+--
+-- ROUND 34, the coordinator's section 5 (P1). The sentence that used to
+-- stand here said the encoding term "cannot red a cluster that is internally
+-- consistent", and it was FALSE as written, because the term compared the
+-- two settings' NAMES. `UNICODE` is a documented alias of `UTF8` and the
+-- server keeps the spelling it was given, so on a cluster where nothing can
+-- possibly be converted the guard refused:
+--
+--   SET client_encoding='UNICODE';
+--   → current_setting: UNICODE | UTF8, pg_char_to_encoding: 6 | 6
+--   → ERROR: p8: UNLEXABLE SESSION … = on/safe_encoding/UNICODE
+--
+-- Reproduced here before it was changed. A hardening that causes a false red
+-- is not hardening, and this phase's own lesson says why it happened: a
+-- whitelist of NAMES is not a whitelist of BEHAVIOURS, and an encoding's name
+-- is a projection of the encoding.
+--
+-- So no term of this guard reads a setting's name any more. ROUND 34 reads
+-- what the settings DO, in the session that will lex, through the server:
+--
+--   * a backslash inside an ordinary literal — `length('\\')` is 2 where the
+--     server is standard-conforming and 1 where it is not;
+--   * a backslash-escaped quote inside an E-string — `length(E'\'')` is 1
+--     where `\'` is accepted and a 42601 where it is not. This also closes
+--     the twenty-fourth challenge's residual 1: the old term required the
+--     exact spelling `safe_encoding` and refused `on`, and with a safe client
+--     encoding the two lex IDENTICALLY (both measured here: 1). The name test
+--     was over-strict; the behaviour test is not;
+--   * the two encodings' IDENTITY, `pg_char_to_encoding(client) =
+--     pg_char_to_encoding(server)` — the server's own answer about what the
+--     name stands for, which is 6 = 6 for `UNICODE` against `UTF8`;
+--   * `transform_null_equals`, named UNMEASURED by the coordinator's 6.4 and
+--     measured here: with it on, `1 = NULL` is rewritten to `1 IS NULL`, so
+--     `(1 = NULL) IS NULL` answers `true` with it off and `false` with it on.
+--     It changes a statement's MEANING rather than its tokens, which is the
+--     question the coordinator asked should decide membership, so it is in.
+--
+-- Each probe's text is built from `chr(92)` and `chr(39)` so that THIS
+-- function compiles under any setting — a literal backslash in its own body
+-- would make the guard the thing that cannot be loaded (section 6.1).
 --
 -- The refusal is NOT spelled `p8.sql_scan: UNLEXABLE`, which is this file's
 -- prefix for an unterminated construct: `p8.sql_scan_value` catches exactly
@@ -335,15 +377,34 @@ END $fn$;
 -- setting, and a declaration that lies to the planner is the kind of sentence
 -- this phase keeps measuring false.
 CREATE OR REPLACE FUNCTION p8.lex_session() RETURNS TEXT
-LANGUAGE sql STABLE AS $fn$
-  SELECT current_setting('standard_conforming_strings') || '/'
-      || current_setting('backslash_quote') || '/'
-      || current_setting('client_encoding')
-$fn$;
+LANGUAGE plpgsql STABLE AS $fn$
+DECLARE bs TEXT; eq TEXT; enc TEXT; tne TEXT; n INT; b BOOLEAN;
+BEGIN
+  -- `SELECT length('\\')`, assembled so that no backslash appears in this body.
+  EXECUTE 'SELECT length(' || chr(39) || chr(92) || chr(92) || chr(39) || ')' INTO n;
+  bs := n::text;
+  -- `SELECT length(E'\'')`. A 42601 here IS the measurement.
+  BEGIN
+    EXECUTE 'SELECT length(E' || chr(39) || chr(92) || chr(39) || chr(39) || ')' INTO n;
+    eq := n::text;
+  EXCEPTION WHEN others THEN
+    eq := 'refused';
+  END;
+  SELECT pg_char_to_encoding(current_setting('client_encoding')) = pg_char_to_encoding(current_setting('server_encoding')) INTO b;
+  enc := CASE WHEN b THEN 'same' ELSE 'differs' END;
+  EXECUTE 'SELECT (1 = NULL) IS NULL' INTO b;
+  tne := CASE WHEN b THEN 'null-is-unknown' ELSE 'null-is-rewritten' END;
+  RETURN bs || '/' || eq || '/' || enc || '/' || tne;
+END $fn$;
 
+-- What the two scanners in this pack implement, as four measurements and not
+-- as four setting names: a backslash in an ordinary literal is an ordinary
+-- character (so `length` is 2), a backslash-escaped quote in an E-string is
+-- one character, the client and the server agree on the encoding, and
+-- `= NULL` is an ordinary comparison that answers unknown.
 CREATE OR REPLACE FUNCTION p8.lex_session_expected() RETURNS TEXT
-LANGUAGE sql STABLE AS $fn$
-  SELECT 'on/safe_encoding/' || current_setting('server_encoding')
+LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT '2/1/same/null-is-unknown'
 $fn$;
 
 CREATE OR REPLACE FUNCTION p8.assert_lex_session() RETURNS void
@@ -351,12 +412,20 @@ LANGUAGE plpgsql STABLE AS $fn$
 BEGIN
   IF p8.lex_session() <> p8.lex_session_expected() THEN
     RAISE EXCEPTION 'p8: UNLEXABLE SESSION — THIS SESSION LEXES DIFFERENTLY FROM THE SCANNER: '
-                    'standard_conforming_strings/backslash_quote/client_encoding = %, and both '
-                    'scanners implement %. A backslash, a quote or a byte means something else '
-                    'here than it does to the reading every law in this pack is about to make, '
-                    'so no refusal derived from that reading would be evidence about the '
-                    'statement the server will run (the coordinator''s b7c0933 section 3)',
-                    p8.lex_session(), p8.lex_session_expected()
+                    'measured backslash-in-literal/escaped-quote-in-E-string/encoding-identity/'
+                    'null-equals = %, and both scanners implement %. The settings behind it are '
+                    'standard_conforming_strings=%, backslash_quote=%, client_encoding=%, '
+                    'server_encoding=%, transform_null_equals=%. A backslash, a quote, a byte or '
+                    'an equals sign means something else here than it does to the reading every '
+                    'law in this pack is about to make, so no refusal derived from that reading '
+                    'would be evidence about the statement the server will run (the '
+                    'coordinator''s b7c0933 section 3, and section 5 of the review of 2e6b0e9)',
+                    p8.lex_session(), p8.lex_session_expected(),
+                    current_setting('standard_conforming_strings'),
+                    current_setting('backslash_quote'),
+                    current_setting('client_encoding'),
+                    current_setting('server_encoding'),
+                    current_setting('transform_null_equals')
       USING ERRCODE = 'P0001';
   END IF;
 END $fn$;
@@ -446,7 +515,15 @@ BEGIN
         j := CASE WHEN esc THEN i + 2 ELSE i + 1 END;
         closed := FALSE;
         WHILE j <= n LOOP
-          IF esc AND substr(t, j, 1) = '\' THEN j := j + 2; CONTINUE; END IF;
+          -- ROUND 34, the coordinator's 6.1. This used to be the literal
+          -- '\', and under standard_conforming_strings = off plpgsql cannot
+          -- COMPILE it, so a flip in a session that had not yet called
+          -- `p8.sql_scan` reds with a syntax error pointing into this file
+          -- instead of with the guard's own name. chr(92) compiles either
+          -- way, after which `assert_lex_session` is the first thing that
+          -- can fire. Fail-closed before and after; what changes is that the
+          -- refusal is BY NAME.
+          IF esc AND substr(t, j, 1) = chr(92) THEN j := j + 2; CONTINUE; END IF;
           IF substr(t, j, 1) = '''' THEN
             IF substr(t, j, 2) = '''''' THEN j := j + 2; CONTINUE; END IF;
             j := j + 1; closed := TRUE; EXIT;
@@ -698,7 +775,7 @@ BEGIN
   stmt2 := replace(p8.sql_scan(stmt, 'exec'), '@REL@', p8.quoted_ident(relation))
            || ' WHERE ' || p8.quoted_ident(key_column) || '::text = '
            || quote_literal(key_value);
-  PERFORM p8.case_refuses_core(label, stmt2, expect, key_value, 'row');
+  PERFORM p8.case_refuses_core(label, stmt2, expect, key_value, 'row', relation);
 END $$;
 
 CREATE OR REPLACE FUNCTION p8.case_refuses_relation(label TEXT, stmt TEXT, expect TEXT,
@@ -721,7 +798,7 @@ BEGIN
   sq := 'SELECT 1 FROM pg_class WHERE relname = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, 'relation ' || relation, wq, sq);
   stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation));
-  PERFORM p8.case_refuses_core(label, stmt2, expect, relation, 'relation');
+  PERFORM p8.case_refuses_core(label, stmt2, expect, relation, 'relation', relation);
 END $$;
 
 CREATE OR REPLACE FUNCTION p8.case_refuses_role(label TEXT, stmt TEXT, expect TEXT, role_name TEXT)
@@ -742,7 +819,7 @@ BEGIN
   sq := 'SELECT 1 FROM pg_roles WHERE rolname = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, 'role ' || role_name, wq, sq);
   stmt2 := replace(stmt, '@REL@', p8.quoted_ident(role_name));
-  PERFORM p8.case_refuses_core(label, stmt2, expect, role_name, 'role');
+  PERFORM p8.case_refuses_core(label, stmt2, expect, role_name, 'role', NULL);
 END $$;
 
 -- ROUND 28, T-2. The paragraph above said the obligation is DERIVED from the
@@ -776,7 +853,7 @@ BEGIN
                     'set. Call the four-argument form with a boolean naming the subject this '
                     'refusal is about (S-5)', label, expect;
   END IF;
-  PERFORM p8.case_refuses_core(label, stmt, expect, NULL, 'unwitnessed');
+  PERFORM p8.case_refuses_core(label, stmt, expect, NULL, 'unwitnessed', NULL);
 END $$;
 
 -- `case_refuses_unwitnessed` is DELETED, not kept and forbidden (round 28,
@@ -900,10 +977,12 @@ BEGIN
   END IF;
 END $$;
 
-CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT, kind TEXT) RETURNS void
+CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT,
+                                                kind TEXT, relation TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
-        eplan BOOLEAN; esst TEXT; emsg TEXT;
+        eplan BOOLEAN; esst TEXT; emsg TEXT; servergrant BOOLEAN; named BOOLEAN;
+        relid OID; holdsall BOOLEAN;
 BEGIN
   witnessed := subject IS NOT NULL;
   -- ROUND 29, N-3. Every path into this function passes through here, including
@@ -1054,6 +1133,28 @@ BEGIN
     -- enumerate mechanisms: anything that needs a row to happen is invisible
     -- to the planner, whatever raises it.
     --
+    -- ROUND 34, the coordinator's 3.2 and the twenty-fourth challenge's
+    -- residual 3, both measured and both in the SAME direction. The sentence
+    -- above — anything that needs a row is invisible to the planner — is true,
+    -- and the inference this code draws is its CONVERSE: from "it did not
+    -- reproduce under the plan" it concludes "a row decided it". That converse
+    -- is false, and there are two measured counterexamples:
+    --
+    --   * a STATEMENT-level trigger refuses every statement, with no row
+    --     processed and nothing row-decided about it, and the planner never
+    --     fires it:
+    --       CREATE TRIGGER … AFTER INSERT ON t FOR EACH STATEMENT …
+    --       INSERT INTO t VALUES ('x')          → 42501
+    --       EXPLAIN INSERT INTO t VALUES ('x')  → a PLAN
+    --   * a sequence USAGE denial on `INSERT … DEFAULT VALUES` is reached at
+    --     run time and does not arrive from the plan either.
+    --
+    -- Both would be refused here as "needing a row". That is the fail-CLOSED
+    -- direction — this form sends such a case to the row form or to another
+    -- shape, it never passes one — so it is a NAMED BOUND of the construction
+    -- and not a hole, and it is written here rather than left to a reader to
+    -- discover. No case in this pack is of either shape.
+    --
     -- A statement the server will not PLAN is refused by name rather than
     -- waved through. `EXPLAIN TRUNCATE t` is a syntax error (42601), so a
     -- TRUNCATE relation case cannot be verified this way and this form says
@@ -1090,6 +1191,96 @@ BEGIN
                         'statement gave [%] % and planning it gave [%] %, so the refusal this '
                         'case reads is not the relation-level one the plan meets (D-1)',
           label, sst, msg, esst, emsg;
+      END IF;
+    END IF;
+    -- ROUND 34, the coordinator's section 4 (P1). Every law above says
+    -- something true about the refusal and NONE of them says what it is
+    -- ABOUT. Measured on PostgreSQL 16.15 as an unprivileged role that HAS
+    -- `SELECT` on `rela` and nothing at all on `relb`:
+    --
+    --   case_refuses_relation('T1 …', 'SELECT 1 FROM @REL@, relb', …, 'rela')
+    --     → PASS refused by permission denied [42501], rc 0
+    --   SELECT count(*) FROM rela   → 1, so the claim is FALSE of the subject
+    --   case_refuses_row(… same statement …, 'rela', 'id', '1')     → PASS
+    --   case_refuses_relation(… 'SELECT public.secret_fn() FROM @REL@' …) → PASS
+    --
+    -- `assert_shape` passes because the keywords are declared ones;
+    -- `assert_statement_built` passes because `@REL@` is textually there; the
+    -- witness passes because `rela` exists in `pg_class`; the arriving class
+    -- is a grant class; and the EXPLAIN construction passes BECAUSE the
+    -- refusal genuinely is relation-level — about another relation. So the
+    -- class is not "two tables": it is any plan-time 42501 the statement can
+    -- provoke about anything, while the case names the subject it likes.
+    --
+    -- Two terms, neither of them a text test on prose the CASE controls, and
+    -- both only where the SERVER itself took a grant decision — a refusal a
+    -- trigger raised, an RLS WITH CHECK violation or a constraint is decided
+    -- somewhere else and the rules above are what bound those.
+    --
+    --   (a) BY ARRIVAL: the server's own message must name the declared
+    --       relation. The comparison is token equality after splitting the
+    --       message on everything that cannot be in an identifier, so `relb`
+    --       does not satisfy a case that declared `rela`, and no substring
+    --       accident does. It reads the SERVER's words, not the author's.
+    --   (b) BY CONSTRUCTION, from the catalogue: a role that holds EVERY
+    --       table privilege on the declared relation cannot have been refused
+    --       BY A GRANT on it. This is a term and not the whole law because
+    --       the converse does not hold — a role may lack a privilege it never
+    --       needed — and because an RLS refusal arrives while the role holds
+    --       everything, which is why the branch excludes it.
+    --
+    -- Neither term alone bounds both directions: (a) is the server's wording
+    -- and (b) is the server's catalogue, and a refusal has to satisfy both.
+    IF relation IS NOT NULL AND kind IN ('relation', 'row') THEN
+      servergrant := (sst = '42501'
+                      AND position('row-level security policy' in lower(coalesce(msg,''))) = 0
+                      AND split_part(coalesce(ctx,''), E'\n', 1) !~ 'PL/pgSQL function .* at RAISE');
+      IF servergrant THEN
+        IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
+                          'relation "%" is not a plain lower-case identifier, so neither the token '
+                          'test on the server''s message nor the catalogue lookup can be evaluated '
+                          'for it, and this form will not pass a refusal it cannot attribute '
+                          '(the coordinator''s section 4)', label, relation;
+        END IF;
+        SELECT EXISTS (SELECT 1 FROM regexp_split_to_table(lower(coalesce(msg,'')), '[^a-z0-9_]+') w
+                        WHERE w = lower(relation)) INTO named;
+        IF NOT named THEN
+          RAISE EXCEPTION '% FAIL: THE REFUSAL IS NOT ABOUT THE DECLARED RELATION — this case '
+                          'declares "%" and the server refused with [%] %, which does not name it. '
+                          'A grant decision the server takes says what it is about, and this one '
+                          'is about something else the statement reached — another relation, or a '
+                          'function the role may not execute — so the case is evidence about that '
+                          'and not about "%" (the coordinator''s section 4)',
+            label, relation, sst, msg, relation;
+        END IF;
+        relid := to_regclass(p8.quoted_ident(relation));
+        IF relid IS NULL THEN
+          RAISE EXCEPTION '% FAIL: THE DECLARED RELATION DOES NOT RESOLVE — "%" is not visible as '
+                          'a relation in this session''s search_path, so the catalogue cannot be '
+                          'asked what privileges the role holds on it (the coordinator''s '
+                          'section 4)', label, relation;
+        END IF;
+        BEGIN
+          SELECT bool_and(has_table_privilege(current_user, relid, pr)) INTO holdsall
+            FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'])
+                 AS pr;
+        EXCEPTION WHEN others THEN
+          GET STACKED DIAGNOSTICS emsg = MESSAGE_TEXT;
+          RAISE EXCEPTION '% FAIL: THE CATALOGUE COULD NOT BE ASKED ABOUT THE DECLARED RELATION — '
+                          'has_table_privilege on "%" answered %, so the second term of the '
+                          'attribution law cannot be evaluated and this form will not pass a '
+                          'refusal it cannot attribute (the coordinator''s section 4)',
+            label, relation, emsg;
+        END;
+        IF holdsall THEN
+          RAISE EXCEPTION '% FAIL: THE ROLE HOLDS EVERY PRIVILEGE ON THE DECLARED RELATION — this '
+                          'case says a grant refuses % on "%", and the catalogue says the role '
+                          'holds SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER '
+                          'on it, so whatever [%] % was about, it was not a grant on this relation '
+                          '(the coordinator''s section 4)',
+            label, current_user, relation, sst, msg;
+        END IF;
       END IF;
     END IF;
     -- ROUND 31, C-2, and it runs HERE rather than at the top of the handler:
@@ -1170,6 +1361,20 @@ BEGIN
   RAISE NOTICE '% PASS permitted, % row(s) as declared', label, n;
 END $$;
 
+-- ROUND 34, the coordinator's 6.2, recorded here where the forms are rather
+-- than in a review nobody reads beside the code. `p8.case_permits`,
+-- `p8.case_permits_rows` and `p8.case_equals` call neither
+-- `assert_single_statement` nor `assert_no_handler`, so they reach neither
+-- scanner nor `assert_lex_session`: a permits-case goes straight to
+-- `EXECUTE stmt` and reads `ROW_COUNT`. A permits-case may therefore carry
+-- two statements behind a plain visible semicolon, under any lexing settings,
+-- and `ROW_COUNT` is the LAST statement's. What that buys is bounded — both
+-- statements run as the case role, so a PERMITTED claim stays true of the
+-- role's authority, which is the whole of what a permits-case asserts — and
+-- no attack past that has been built, by the coordinator's review or here. It
+-- is the same observation round 31 made about `W-1`/`W-1b`. Named, not rated
+-- higher, and not closed: closing it means putting the permits forms through
+-- the scanner too, which changes what every permits-case is allowed to say.
 CREATE OR REPLACE FUNCTION p8.case_permits(label TEXT, stmt TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 BEGIN

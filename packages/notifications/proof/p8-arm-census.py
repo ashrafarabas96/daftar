@@ -239,6 +239,30 @@ ARM_LABELS = (
     "LEX-SESSION-CTL",
     "EXEC-EQUIV",
     "EXEC-EQUIV-CTL",
+    # Round 34, the coordinator's section 4: the attribution law's bench, its
+    # four attacks and the two one-deletion controls, one for each term.
+    "ATTRIB-BENCH",
+    "RELATION-ATTRIB-REL",
+    "ROW-ATTRIB-REL",
+    "RELATION-ATTRIB-FN",
+    "RELATION-ATTRIB-HOLDS",
+    "RELATION-ATTRIB-CTL",
+    "RELATION-HOLDSALL-CTL",
+    # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
+    # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
+    # each term has an arm that measures what the behaviour test admits or
+    # refuses and a control that puts the name test back.
+    "LEX-ALIAS",
+    "LEX-ALIAS-CTL",
+    "LEX-BQ-CTL",
+    "LEX-TNE",
+    "LEX-TNE-CTL",
+    "LEX-COMPILE",
+    "LEX-COMPILE-CTL",
+    # Round 34, the coordinator's 6.3: the corpora pinned by digest, and the
+    # swap that keeps every count.
+    "CORPUS-PIN",
+    "CORPUS-SWAP",
 )
 
 # The labels that are deliberately NOT arms. This list is the price of the
@@ -377,6 +401,7 @@ EXPECTED_ARMS = (
     ("ARGSHAPE x", 1),
     ("ARGSHAPE y", 1),
     ("ARGSHAPE z", 1),
+    ("ATTRIB-BENCH", 1),
     ("BASELINE CASE", 1),
     ("CENSUS-BASE", 1),
     ("CENSUS-LOSS", 1),
@@ -407,6 +432,8 @@ EXPECTED_ARMS = (
     ("CORE-NET-STRAY", 1),
     ("CORE-PIN", 1),
     ("CORE-PIN-CTL", 1),
+    ("CORPUS-PIN", 1),
+    ("CORPUS-SWAP", 1),
     ("EXEC-EQUIV", 1),
     ("EXEC-EQUIV-CTL", 1),
     ("GRAFTS g5", 1),
@@ -460,9 +487,16 @@ EXPECTED_ARMS = (
     ("ISOLATION i12", 1),
     ("ISOLATION i4", 1),
     ("ISOLATION i7", 1),
+    ("LEX-ALIAS", 1),
+    ("LEX-ALIAS-CTL", 1),
+    ("LEX-BQ-CTL", 1),
+    ("LEX-COMPILE", 1),
+    ("LEX-COMPILE-CTL", 1),
     ("LEX-SESSION", 1),
     ("LEX-SESSION-CTL", 1),
     ("LEX-SETTINGS", 1),
+    ("LEX-TNE", 1),
+    ("LEX-TNE-CTL", 1),
     ("LINEAGE a5", 1),
     ("LINEAGE a7", 1),
     ("MUT 1", 1),
@@ -487,6 +521,11 @@ EXPECTED_ARMS = (
     ("MUT 9", 1),
     ("MUT 9b", 1),
     ("REACH-BENCH", 1),
+    ("RELATION-ATTRIB-CTL", 1),
+    ("RELATION-ATTRIB-FN", 1),
+    ("RELATION-ATTRIB-HOLDS", 1),
+    ("RELATION-ATTRIB-REL", 1),
+    ("RELATION-HOLDSALL-CTL", 1),
     ("RELATION-ROWTRAP", 1),
     ("RELATION-ROWTRAP-CTL", 1),
     ("RETIREMENT n1", 1),
@@ -497,6 +536,7 @@ EXPECTED_ARMS = (
     ("ROW-ASTRAL-CLASS-CTL", 1),
     ("ROW-ASTRAL-CTL", 1),
     ("ROW-ASTRAL-WHERE", 1),
+    ("ROW-ATTRIB-REL", 1),
     ("ROW-CLASS", 1),
     ("ROW-CLASS-CTL", 1),
     ("ROW-PACK", 1),
@@ -562,7 +602,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "9cb7dc0d18582083f1a64455c0a5ad1b08087455bee8b3b7a551c8c07730a26d"
+EXPECTED_SEAL = "1540517b08dac72827140ce20b4f799fae252d9ecc27098f19f7083487c82a69"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
