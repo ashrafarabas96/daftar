@@ -104,6 +104,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import stat
 import subprocess
 import tempfile
@@ -297,37 +298,88 @@ REFUSED_NONCE_NOT_AS_SPECIFIED = "REFUSED-NONCE-NOT-AS-SPECIFIED"
 # The SET of test files this suite collects, pinned by value. A file arriving
 # or leaving is refused by name; change this list in the same commit that adds
 # or removes the file, with the reason in the message.
-EXPECTED_TEST_FILES: tuple[str, ...] = (
-    "test/addon-meters.test.ts",
-    "test/addons.test.ts",
-    "test/collection.test.ts",
-    "test/coverage-truth.test.ts",
-    "test/credit-application.test.ts",
-    "test/credit.test.ts",
-    "test/currency-is-canonical.test.ts",
-    "test/db-refusals-name-their-defence.test.ts",
-    "test/dunning.test.ts",
-    "test/error-codes-are-live.test.ts",
-    "test/errors-carry-no-money.test.ts",
-    "test/fake-provider.test.ts",
-    "test/invoice-states.test.ts",
-    "test/invoice.test.ts",
-    "test/law-bytes-are-pinned.test.ts",
-    "test/lexer.test.ts",
-    "test/no-hardcoded-pricing.test.ts",
-    "test/no-merchant-posting.test.ts",
-    "test/period.test.ts",
-    "test/plan-change.test.ts",
-    "test/platform-authority-law.test.ts",
-    "test/proration.test.ts",
-    "test/repo-format-gate.test.ts",
-    "test/subscription-states.test.ts",
-    "test/tool-commands-are-isolated.test.ts",
-)
+# ROUND 62, THE CHALLENGER'S S-3 ON `a7d22fe`. The SET was pinned and the
+# CONTENTS were not: it cut `test/lexer.test.ts` from 53 lines to one case and
+# the printed total moved 306 -> 300 at rc 0, because no name had arrived and
+# none had left. A census pins its set AND what each member contributes, so the
+# count is per FILE and the total is a LITERAL -- a sum computed from the same
+# dict would move with it and prove nothing.
+#
+# These are the whole package's test files, not the law's. That is deliberate
+# and it is the scope this gate already has: it reads the runner's exit code,
+# which is the whole package's verdict. Change a count here in the same commit
+# that changes that file's cases, with the reason in the message.
+EXPECTED_TEST_FILES: dict[str, int] = {
+    "test/addon-meters.test.ts": 15,
+    "test/addons.test.ts": 11,
+    "test/collection.test.ts": 20,
+    "test/coverage-truth.test.ts": 9,
+    "test/credit-application.test.ts": 18,
+    "test/credit.test.ts": 24,
+    "test/currency-is-canonical.test.ts": 5,
+    "test/db-refusals-name-their-defence.test.ts": 7,
+    "test/dunning.test.ts": 26,
+    "test/error-codes-are-live.test.ts": 8,
+    "test/errors-carry-no-money.test.ts": 6,
+    "test/fake-provider.test.ts": 12,
+    "test/invoice-states.test.ts": 10,
+    "test/invoice.test.ts": 13,
+    "test/law-bytes-are-pinned.test.ts": 1,
+    "test/lexer.test.ts": 7,
+    "test/no-hardcoded-pricing.test.ts": 9,
+    "test/no-merchant-posting.test.ts": 10,
+    "test/period.test.ts": 19,
+    "test/plan-change.test.ts": 11,
+    "test/platform-authority-law.test.ts": 9,
+    "test/proration.test.ts": 21,
+    "test/repo-format-gate.test.ts": 2,
+    "test/subscription-states.test.ts": 5,
+    "test/tool-commands-are-isolated.test.ts": 28,
+}
+EXPECTED_TOTAL_CASES = 306
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
 REFUSED_REPORT_DIR_IMPOSSIBLE = "REFUSED-REPORT-DIRECTORY-NOT-POSSIBLE"
+
+
+# ROUND 62, THE CHALLENGER'S F-2 (P1), first half, and it MEASURED it: every
+# temporary directory this step makes was removed in a `finally`, which a
+# signal does not reach. `kill -TERM` left `/tmp/law-ran-nonce-*` (mode 600,
+# holding its value), `/tmp/law-ran-pack-*` (all 94 documents) and the report
+# directory behind, and that leaked set is what a replay needs. So the paths
+# are registered as they are created and a handler removes them on SIGTERM,
+# SIGINT and SIGHUP before re-raising with the default disposition, which keeps
+# the exit status the signal's own (143 for TERM) rather than inventing one.
+#
+# What this does NOT reach, said plainly: SIGKILL cannot be handled by any
+# program, so a `kill -9` still leaks. That is why the nonce also carries the
+# writer's PID -- the leak is made harmless as well as rarer, and neither half
+# is offered as the whole answer.
+_TEMPORARY: list[Path] = []
+
+
+def _forget_temporary(path: Path | None) -> None:
+    if path is not None and path in _TEMPORARY:
+        _TEMPORARY.remove(path)
+
+
+def _clean_temporary() -> None:
+    while _TEMPORARY:
+        shutil.rmtree(_TEMPORARY.pop(), ignore_errors=True)
+
+
+def _on_signal(signum: int, _frame: object) -> None:
+    _clean_temporary()
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
+def _install_signal_cleanup() -> None:
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        handled = getattr(signal, name, None)
+        if handled is not None:
+            signal.signal(handled, _on_signal)
 
 
 def pack_digest(directory: Path) -> str:
@@ -417,6 +469,9 @@ def refuse(why: str) -> "None":
 
 
 def main() -> int:
+    # Before anything is created, so a signal arriving between the first
+    # mkdtemp and the handler's installation is not a window of its own.
+    _install_signal_cleanup()
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--package",
@@ -682,6 +737,7 @@ def main() -> int:
         source_before = pack_digest(pack_dir)
         try:
             pack_snapshot = Path(tempfile.mkdtemp(prefix="law-ran-pack-")).resolve()
+            _TEMPORARY.append(pack_snapshot)
             # The challenger's question about the sentence above: can the
             # environment steer where this copy lands? Measured -- TMPDIR, TMP
             # and TEMP all fall back, and the candidate list `tempfile` consults
@@ -779,9 +835,18 @@ def main() -> int:
     nonce_value = ""
     try:
         nonce_dir = Path(tempfile.mkdtemp(prefix="law-ran-nonce-")).resolve()
+        _TEMPORARY.append(nonce_dir)
         nonce_value = secrets.token_hex(16)
         nonce_file = nonce_dir / "nonce"
-        nonce_file.write_text(nonce_value)
+        # ROUND 62, THE CHALLENGER'S F-2 (P1), second half. A value on disk
+        # cannot tell a live run from a dead one, and its measurement showed a
+        # killed run leaving this file behind at mode 600 with its value intact.
+        # The PID of the writer goes in beside the value, and the law requires
+        # it to be the very ancestor its own /proc walk found -- so a replayed
+        # environment pointing at a leaked file is refused by name instead of
+        # passing privacy, ancestry, the nonce and the digest check and only
+        # being caught, four gates later, by the census.
+        nonce_file.write_text(f"{os.getpid()} {nonce_value}")
         nonce_file.chmod(0o600)
     except OSError as exc:
         if nonce_dir is not None:
@@ -793,6 +858,7 @@ def main() -> int:
         )
     try:
         out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
+        _TEMPORARY.append(out.parent)
     except OSError as exc:
         # R57-C-01: a traceback here left the private pack copy behind as well.
         shutil.rmtree(pack_snapshot, ignore_errors=True) if pack_snapshot is not None else None
@@ -900,10 +966,13 @@ def main() -> int:
         if out.is_file():
             out.unlink()
         out.parent.rmdir()
+        _forget_temporary(out.parent)
         if pack_snapshot is not None:
             shutil.rmtree(pack_snapshot, ignore_errors=True)
+            _forget_temporary(pack_snapshot)
         if nonce_dir is not None:
             shutil.rmtree(nonce_dir, ignore_errors=True)
+            _forget_temporary(nonce_dir)
 
     if not isinstance(report, dict) or not isinstance(report.get("testResults"), list):
         refuse("the report has no testResults list, so nothing in it says what ran")
@@ -1020,6 +1089,30 @@ def main() -> int:
     )
     missing = [name for name in EXPECTED_TEST_FILES if name not in collected]
     arrived = [name for name in collected if name not in EXPECTED_TEST_FILES]
+    ran_cases = {
+        str(Path(str(result.get("name", ""))).relative_to(package)): len(result.get("assertionResults") or [])
+        for result in report["testResults"]
+        if str(result.get("name", "")).startswith(str(package))
+    }
+    moved = [
+        f"{name}: {ran_cases.get(name)} cases, not the {pinned} this step pins"
+        for name, pinned in EXPECTED_TEST_FILES.items()
+        if name in ran_cases and ran_cases[name] != pinned
+    ]
+    if moved:
+        refuse(
+            f"{REFUSED_TEST_FILE_SET_MOVED}: every file this step pins ran, and one of them does not hold the "
+            f"cases this step pins: {moved}. The challenger cut one file from 53 lines to one case at round 58 "
+            "and the printed total moved 306 -> 300 with nothing refusing, because a set that pins only NAMES "
+            "says nothing about what each name contributes"
+        )
+    total_ran = report.get("numTotalTests")
+    if total_ran != EXPECTED_TOTAL_CASES:
+        refuse(
+            f"{REFUSED_TEST_FILE_SET_MOVED}: the suite ran {total_ran} cases and this step pins "
+            f"{EXPECTED_TOTAL_CASES}. The figure is a LITERAL here on purpose: a total summed from the per-file "
+            "counts would move with them and could never disagree with them"
+        )
     if missing or arrived:
         refuse(
             f"{REFUSED_TEST_FILE_SET_MOVED}: the suite this step started did not run the set of test files this "

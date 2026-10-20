@@ -283,6 +283,10 @@ const REFUSED_PACK_NOT_PRIVATE = 'REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE
 // supplies a value it chose, and the census and the content scan remain what
 // stop such a run from producing a false GREEN.
 const REFUSED_NONCE_NOT_AS_SPECIFIED = 'REFUSED-NONCE-NOT-AS-SPECIFIED';
+// ROUND 62, the challenger's F-1: a run that descends from the gate and was
+// handed no digest has had its environment edited between the two, and that is
+// a refusal of its own rather than the shared-pack path.
+const REFUSED_GATE_HANDED_DOWN_NOTHING = 'REFUSED-GATE-HANDED-DOWN-NOTHING';
 const GATE_NONCE_PREFIX = 'law-ran-nonce-';
 
 /**
@@ -411,7 +415,7 @@ const notTheGatesPrivateCopy = (dir: string): string => {
  * the gate always writes the nonce before it starts the suite, so an absent or
  * unreadable nonce is a run whose environment did not come from this gate run.
  */
-const nonceNotAsSpecified = (): string => {
+const nonceNotAsSpecified = (writerPid: number | undefined): string => {
   const value = (process.env.P5_PACK_NONCE ?? '').trim();
   const where = (process.env.P5_PACK_NONCE_FILE ?? '').trim();
   if (value === '') return 'P5_PACK_NONCE is empty or unset, and the gate sets it beside every pack digest it hands down';
@@ -455,8 +459,25 @@ const nonceNotAsSpecified = (): string => {
   } catch (error) {
     return `the nonce file cannot be read (${String(error)})`;
   }
-  if (written !== value) {
-    return `the nonce file holds ${JSON.stringify(written)} and P5_PACK_NONCE is ${JSON.stringify(value)}, so the value this run was handed is not the value the gate wrote for it`;
+  // ROUND 62, THE CHALLENGER'S F-2 (P1). The file holds `<pid> <value>`, and
+  // the pid must be the ancestor this run's own /proc walk found. A VALUE ON
+  // DISK CANNOT TELL A LIVE RUN FROM A DEAD ONE: the challenger killed the
+  // gate with SIGTERM, the nonce file survived at mode 600 holding its value,
+  // and replaying that environment under a forged ancestor passed privacy,
+  // ancestry, the nonce and the digest check, to be caught four gates later by
+  // the census. Bound to the living ancestor, a leaked file is a refusal here.
+  const [writtenPid, writtenValue] = written.split(' ');
+  if (writtenValue === undefined) {
+    return `the nonce file holds ${JSON.stringify(written)}, which is not the \`<pid> <value>\` the gate writes`;
+  }
+  if (writtenValue !== value) {
+    return `the nonce file holds the value ${JSON.stringify(writtenValue)} and P5_PACK_NONCE is ${JSON.stringify(value)}, so the value this run was handed is not the value the gate wrote for it`;
+  }
+  if (writerPid === undefined) {
+    return "this run found no gate ancestor to compare the nonce file's writer with, so the nonce cannot be bound to a live run";
+  }
+  if (writtenPid !== String(writerPid)) {
+    return `the nonce file was written by pid ${writtenPid} and the gate ancestor of THIS run is pid ${writerPid}, so the file belongs to another run of the gate -- a leaked one, which a signal leaves behind, is exactly this`;
   }
   return '';
 };
@@ -510,7 +531,15 @@ const GATE_PROGRAM = 'tools/law-ran.py';
 // that dropped it, a run from a tree where it was deleted), and the rule for
 // it is the rule for everything here: refuse BY NAME on ABSENCE.
 const REFUSED_GATE_PROGRAM_ABSENT = 'REFUSED-GATE-PROGRAM-ABSENT';
-const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid, gatePath = join(__dirname, '..', GATE_PROGRAM)): string => {
+const notStartedByTheGate = (
+  procRoot = '/proc',
+  startPid = process.pid,
+  gatePath = join(__dirname, '..', GATE_PROGRAM),
+  // ROUND 62: the ancestor's own pid, written out for the caller. The nonce
+  // below must belong to THAT process and not merely to some run of the gate,
+  // which is what the challenger's leaked-file replay turned on.
+  found: { pid?: number } = {},
+): string => {
   // THE COORDINATOR'S ADDITION TO R58: this is a claim about a PROCESS, so it
   // needs an arm that reds when the check is ABSENT or CANNOT RUN -- not only
   // when it fails. A claim about an instrument is verified by running it, so
@@ -603,7 +632,10 @@ const notStartedByTheGate = (procRoot = '/proc', startPid = process.pid, gatePat
       }
       return false;
     });
-    if (basename(program).startsWith('python') && runsTheGate) return '';
+    if (basename(program).startsWith('python') && runsTheGate) {
+      found.pid = pid;
+      return '';
+    }
   }
   return `no ancestor of this process is ${GATE_PROGRAM}; the chain is ${JSON.stringify(seen.slice(0, 8))}`;
 };
@@ -3484,6 +3516,49 @@ describe('every written invocation of the pack tools is isolated', () => {
       { fileParallelism: fromModule.fileParallelism, dangerouslyIgnoreUnhandledErrors: fromModule.dangerouslyIgnoreUnhandledErrors },
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts does not ask for fileParallelism: false and dangerouslyIgnoreUnhandledErrors: false. The second one decides whether an unhandled rejection is rc 1 or rc 0, which is the whole of round 60c`,
     ).toStrictEqual({ fileParallelism: false, dangerouslyIgnoreUnhandledErrors: false });
+    // ROUND 62, THE CHALLENGER'S F-1 (P1), THE CLASS AND NOT THE INSTANCE.
+    // Thirteen settings were pinned BY VALUE and every one of their NAMES was
+    // checked for a duplicate, and the attack used none of them: it added a
+    // key this law had never heard of. `setupFiles: ['./test-neuter.ts']`,
+    // with a setup file deleting P5_PACK_DIGEST, P5_PACK_NONCE and
+    // P5_PACK_NONCE_FILE, ran at gate rc 0 with all 306 cases green.
+    //
+    // A pin on the VALUES of the keys you thought of is not a pin on the
+    // config. The SHAPE is pinned here: the test section holds exactly these
+    // keys, so a key nobody listed is a refusal by name rather than a silent
+    // new instrument. Adding a setting to this config is a one-line change to
+    // the list below, in the same commit, with its reason -- which is the
+    // point, because that line is what a reviewer reads.
+    expect(
+      Object.keys(fromModule).sort(),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts's \`test\` section does not hold exactly the keys this law pins. A key this law has never heard of is a runner instrument nobody reviewed: at round 58 one added \`setupFiles\` whose setup file deleted P5_PACK_DIGEST, P5_PACK_NONCE and P5_PACK_NONCE_FILE, which switched off privacy, ancestry, the nonce and the movement check in one line at rc 0`,
+    ).toStrictEqual([
+      'allowOnly',
+      'bail',
+      'dangerouslyIgnoreUnhandledErrors',
+      'exclude',
+      'fileParallelism',
+      'hookTimeout',
+      'include',
+      'isolate',
+      'maxConcurrency',
+      'passWithNoTests',
+      'pool',
+      'retry',
+      'sequence',
+      'testTimeout',
+    ]);
+    expect(
+      { include: fromModule.include, exclude: fromModule.exclude, sequence: Object.keys(moduleSequence).sort() },
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: the config's two collection settings and the shape of its \`sequence\` are not what this law pins. \`include\` and \`exclude\` decide which files are collected at all, which is the rung above every value pinned here`,
+    ).toStrictEqual({ include: ['test/**/*.test.ts'], exclude: ['test/db/**'], sequence: ['concurrent', 'shuffle'] });
+    // And the same key by the OTHER route: a config shape nobody can edit is
+    // no help if the command line carries the file instead. `setupFiles` is
+    // absent from the pinned shape above, so the run must not have any.
+    expect(
+      (resolved.setupFiles ?? []) as unknown[],
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: this RUN has setup files, which the pinned config shape does not allow. A setup file runs before every test file and can edit the environment this law reads`,
+    ).toStrictEqual([]);
     // The two readers must not disagree where both can see. A flag, an
     // environment key or a duplicate that moves one and not the other is a run
     // whose settings nobody can state, and that is refused rather than averaged.
@@ -3526,7 +3601,16 @@ describe('every written invocation of the pack tools is isolated', () => {
         'shuffle',
         'concurrent',
       ] as const
-    ).filter((key) => (runnerConfigText.match(new RegExp(`\\b${key}:`, 'g')) ?? []).length > 1);
+    )
+      // ROUND 62, THE CHALLENGER'S S-1. The pattern was `\bkey:`, which reads
+      // the bare form only: `'isolate': false` and `"isolate": false` are the
+      // same key to JavaScript and were invisible here, so a duplicate written
+      // in quotes left the count at 1. All three spellings are counted now.
+      // What remains OUT of reach is a COMPUTED key (`['iso' + 'late']: false`),
+      // which no regex over the text can resolve -- and the pinned SHAPE above
+      // is what catches that one, because a computed key still appears in
+      // `Object.keys` of the imported module.
+      .filter((key) => (runnerConfigText.match(new RegExp(`(\\b|['"])${key}['"]?:`, 'g')) ?? []).length > 1);
     expect(
       duplicated,
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts writes a setting TWICE. JavaScript takes the last occurrence and a reader takes the first, which is exactly how a duplicate dangerouslyIgnoreUnhandledErrors passed this arm at round 57. Write each setting once, where its reason is`,
@@ -3885,9 +3969,37 @@ describe('every written invocation of the pack tools is isolated', () => {
       return procRoot;
     };
     // A copy of the gate: same bytes, same name, different inode.
+    //
+    // ROUND 62, THE CHALLENGER'S S-2. This fixture read the REAL gate, so in
+    // the one state this arm's last mode is about -- the gate genuinely absent
+    // -- the arm died with a bare ENOENT from this line and printed no refusal
+    // name at all. An arm that measures a refusal must not be the thing that
+    // throws instead of it. The read is guarded, the copy falls back to a
+    // stand-in with the same name and a different inode (which is all the
+    // `a-copy` mode needs), and the absence is REPORTED here rather than
+    // crashing the case.
     const copyDir = join(root, 'a-copy-of-the-gate', 'tools');
     mkdirSync(copyDir, { recursive: true });
-    writeFileSync(join(copyDir, 'law-ran.py'), readFileSync(gate));
+    let gateBytes: Buffer | undefined;
+    try {
+      gateBytes = readFileSync(gate);
+    } catch {
+      // Measured below as its own mode; nothing here depends on the contents.
+    }
+    writeFileSync(join(copyDir, 'law-ran.py'), gateBytes ?? Buffer.from('# the real gate is absent from this package\n'));
+    if (gateBytes === undefined) {
+      expect(
+        notStartedByTheGate(
+          tree('the-gate-is-absent', [
+            { pid: 10, ppid: 20 },
+            { pid: 20, ppid: 1, argv: ['python3', '-I', 'tools/law-ran.py'], cwd: pkg },
+          ]),
+          10,
+          gate,
+        ),
+        `${REFUSED_GATE_PROGRAM_ABSENT}: the gate is genuinely absent from this package, which is the one state this arm's last mode is about, and the check must still answer with a NAME rather than throwing`,
+      ).toContain(REFUSED_GATE_PROGRAM_ABSENT);
+    }
 
     const admitted = tree('admits-the-real-gate', [
       { pid: 10, ppid: 20 },
@@ -4335,6 +4447,28 @@ describe('every written invocation of the pack tools is isolated', () => {
     // `mkdtemp` produces, so the wrong thing to export is refused BY ITS OWN
     // NAME and the movement refusal below is only ever said about a directory
     // that really is private.
+    // ROUND 62, THE CHALLENGER'S F-1 (P1, A FAIL-OPEN), AND IT TURNED THE WHOLE
+    // OF ROUND 61 OFF WITHOUT A WORD. Everything below used to hang on
+    // `handedDown !== ''` -- a value the ENVIRONMENT carries -- so a config
+    // with `setupFiles: ['./test-neuter.ts']` deleting P5_PACK_DIGEST,
+    // P5_PACK_NONCE and P5_PACK_NONCE_FILE left `handedDown` empty, skipped
+    // privacy, ancestry, the nonce and the movement check together, and the
+    // gate exited 0 printing its usual figures. Nothing said a check had been
+    // skipped, which is the signature of a fail-open.
+    //
+    // The fix does not live in the environment, because the environment is
+    // what the attack edits. Provenance is read UNCONDITIONALLY now, from
+    // /proc, and a run that DESCENDS FROM THE GATE and was handed NO digest is
+    // refused by name: the gate always hands one down when the pack exists, so
+    // the absence is the edit itself. A run nobody started from the gate still
+    // takes the shared-pack path, which is what a reviewer running `npx vitest`
+    // by hand needs.
+    const gateAncestor: { pid?: number } = {};
+    const notDescended = notStartedByTheGate('/proc', process.pid, undefined, gateAncestor);
+    expect(
+      handedDown === '' && notDescended === '',
+      `${REFUSED_GATE_HANDED_DOWN_NOTHING}: an ancestor of this run IS tools/law-ran.py and yet no P5_PACK_DIGEST reached this case, so something between the gate and here removed it -- a setupFile, a wrapper, an environment filter. The gate hands a digest down whenever the pack exists, and the checks that digest switches on are privacy, ancestry, the per-run nonce and REFUSED-PACK-MOVED-DURING-MEASUREMENT. All four were silently skipped when this read the environment alone`,
+    ).toBe(false);
     if (handedDown !== '') {
       const why = notTheGatesPrivateCopy(PACK);
       expect(
@@ -4343,7 +4477,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       ).toBe('');
       // Properties are not provenance: the four above can be built by hand, so
       // the claim is also checked against something the caller cannot supply.
-      const notDescended = notStartedByTheGate();
+      // The walk is the one above, run once, with its ancestor pid kept.
       expect(
         notDescended,
         `${REFUSED_PACK_NOT_PRIVATE}: this run was handed a pack digest in P5_PACK_DIGEST, so it claims to have been started by tools/law-ran.py, and ${notDescended}. What this says is that no ancestor PRESENTS ITSELF as a python interpreter running this exact file: argv is self-reported, so a program that only spawns the suite while naming the gate in its own argv passes this check (measured by the challenger at round 57). What stops a forged run from producing a false GREEN is the census and the content scan, which refuse a planted document and a planted invocation`,
@@ -4351,7 +4485,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       // And provenance down to THIS run rather than to any run of the gate:
       // the value is fresh for every run and the file it is read back from is
       // the gate's own, mode 600, in its own temporary directory.
-      const nonceWhy = nonceNotAsSpecified();
+      const nonceWhy = nonceNotAsSpecified(gateAncestor.pid);
       expect(
         nonceWhy,
         `${REFUSED_NONCE_NOT_AS_SPECIFIED}: this run was handed a pack digest in P5_PACK_DIGEST, so tools/law-ran.py started it and wrote a per-run nonce for it to read, and ${nonceWhy}. A captured environment from an earlier gate run satisfies the ancestry check above and fails here`,

@@ -3,10 +3,10 @@
   "pinned": {
     "package.json": "9286ab6fd2bc7e90ad5bae1e966cb78a0e9f4464698c5008ef5cffe937229c03",
     "test/law-bytes-are-pinned.test.ts": "319eec4eac78982d01af2bc367e1c9d1bf0a41b1f336dc37dbd960c1ce090df6",
-    "test/tool-commands-are-isolated.test.ts": "10645ecb0448cba61ae09e13a5f570cf76bcec8210f50da6bdbc1be87e110dac",
+    "test/tool-commands-are-isolated.test.ts": "b76d66d3e33b10d60eeac2b0e89dbcad71385bc834ec53a307485ab4eea88f2a",
     "tools/arms/pinned-now-arm.py": "c87a679de0970c8472035d7e49d5dd5da4270cacd3945584376ad9fe8e559af4",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
-    "tools/law-ran.py": "b462a0d270e2c9ac8a1732ef5d9d43ac4e24e06bc38a5f56e7b8e2823de51dba",
+    "tools/law-ran.py": "91829c9c483000f6e49355c8510d87ca04692baf2729800955ead0e6755a5961",
     "tools/manifest-digests.py": "352d91ee7469ae6d578c6594022fdf92233066131309652ee42c4f9805f75ff4",
     "tools/pack-set.json": "59f51ef3022eb81d1548202af85a97a43a2d044faf1a7d42eaef3dd0e1586506",
     "tools/reviewer-reports.json": "6af4506940e72fb579154b9ac408ed880e86c6d74d0867b9046e4352a326ea69",
