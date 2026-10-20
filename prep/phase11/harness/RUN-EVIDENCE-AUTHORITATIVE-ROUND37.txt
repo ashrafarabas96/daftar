@@ -1512,6 +1512,18 @@ That prints the tree digest above, and `$blob` is f8922b8abd7b78b16ba27661ee08be
 (`git read-tree` writes the clone's index; do not run it in a tree you are
 working in.)
 
+RE-POINTED BY ROUND 38, which is the re-pointing the paragraph above says a
+later round owes this record: the commit this record MEASURES is
+
+    519015994c34a4fd835b57628fe78350d686957c
+
+which is on the remote branch, is FULLY SIGNED, and is the commit to check out
+in the reproduction above. This correction is placed HERE, after the 1478 lines
+this record pins, and not in the header -- editing a line inside the pinned
+prefix would move the blob this record names and the recipe would stop
+reproducing. Re-run at that SHA by round 38: the recipe prints the tree digest
+above and the blob f8922b8abd7b78b16ba27661ee08becec2482517, unchanged.
+
 "the commit this record MEASURES", not "the commit this file is in", is the
 coordinator's `C35-S3`: this file is in every commit after the one it measures,
 because each re-pointing edits it, so a reader asking git which commit the file

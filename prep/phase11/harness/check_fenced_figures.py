@@ -7914,8 +7914,12 @@ def printed_block_sentences():
 # is DERIVED from the committed bytes of the verdicts, and every one of them
 # must have been REACHED while the census ran. A site is not something an
 # author remembers to list -- it is something `ast` finds and the recorder
-# either saw executed or did not. A twelfth site added later, armed by nobody,
-# is named by LINE here before anyone notices it is missing from a list.
+# either saw executed or did not. A site added later, armed by nobody, is named
+# by LINE here before anyone notices it is missing from a list. `C36-S2`: the
+# ordinal this sentence used to carry said `twelfth` while the literal below is
+# TEN, because another section counted a different set -- `scan`'s own emission
+# points, eleven of them. The law pins direct print sites in the three
+# functions named below, and nothing here counts anything else.
 #
 # The declared reach, stated because every law in this file states one: the
 # three functions below, which are the two VERDICTS a reader acts on and the
@@ -7924,10 +7928,51 @@ def printed_block_sentences():
 # are the measurement rather than the thing measured.
 EMITTING_VERDICTS = ("scan", "check_blocks", "_finding")
 
+# `C36-S3`: the counts this census pins, as LITERALS, because a census pins its
+# SET and a count armed from one side only is the `C32-S1` shape. `SITE_COUNT`
+# is every emission site `emission_sites` derives from the commit;
+# `BLIND_COUNT` is how many of them the branch family alone reaches -- the
+# control that keeps the law from passing while those branches are unprovoked.
+# Both are re-counted by the run that prints them, never edited to match it.
+SITE_COUNT = 10
+BLIND_COUNT = 4
+DOOR_COUNT = 16
+
+
+def _verdict_spans():
+    """{function: the line span} for each verdict, from the COMMITTED bytes."""
+    out = {}
+    for name in EMITTING_VERDICTS:
+        body = _COMMITTED_AST.get(name) if _COMMITTED_AST else None
+        if body is None:
+            body = _source_of(globals()[name])
+        last = getattr(body, "end_lineno", body.lineno) or body.lineno
+        out[name] = (body.lineno, last)
+    return out
+
 
 def emission_sites():
-    """{(function, first line): the line span} for every emission site of the
-    verdicts, read from the COMMITTED bytes of this file.
+    """{(function, first line): (the line span, how it emits)} for every
+    emission site of the verdicts, read from the COMMITTED bytes of this file.
+
+    `C36-S1`: three kinds of door, because a test of the call's SPELLING is
+    not a test of what emits.
+
+      * `direct` -- `print`, or `.print`/`.write` on anything. These are the
+        sites the census requires to have RUN: a direct print no arm provokes
+        is the defect `C33-F1`, `C34-S1` and `C35-F1` each were.
+      * a name BOUND from an emission, in the function or at the commit's
+        module level (`out = sys.stdout.write`, then `out(...)`). The
+        `R20-F1` doctrine, with the sides swapped.
+      * a call to a module-level helper that can reach a print
+        (`_can_reach_a_print`, written for `C33-F1`).
+
+    The last two are DOORS, not lines that must run: a helper that prints only
+    when it refuses is reached on no clean run, so requiring it would red every
+    green run. What they bound is the CONVERSE law -- an emission that passed
+    through a line of a verdict must have passed through a door derived here,
+    or it is named. So a new emitter is caught whether it RUNS (the converse)
+    or does not (the literal count moves).
 
     The spans, rather than single lines, because a frame's `f_lineno` during a
     multi-line call is not required to be the line `ast` gives the `Call`
@@ -7940,48 +7985,170 @@ def emission_sites():
     the two differ -- and `emission_site_census` asserts that rather than
     assuming it.
     """
-    out = {}
+    bodies = {}
     for name in EMITTING_VERDICTS:
         body = _COMMITTED_AST.get(name) if _COMMITTED_AST else None
         if body is None:
             body = _source_of(globals()[name])
+        bodies[name] = body
+    if not _COMMITTED_AST:                                     # pragma: no cover
+        _source_of(globals()[EMITTING_VERDICTS[0]])
+    helpers = _emitting_helpers(dict(_COMMITTED_AST))
+    _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+    if text is None:
+        raise Refusal(
+            "FRAME-SOURCE-NOT-IN-COMMIT: the committed bytes of this file could not be "
+            "read, so the MODULE-LEVEL bindings a call in a verdict may emit through "
+            "are unknown. `C36-S1` is refused by name rather than measured over the "
+            "function bodies alone, because an alias bound at import is exactly the "
+            "form that escapes a test of the call's spelling."
+        )
+    at_module = _emission_aliases(ast.parse(text), module_only=True)
+    out = {}
+    for name, body in bodies.items():
+        aliases = dict(at_module)
+        aliases.update(_emission_aliases(body))
         for node in ast.walk(body):
+            if not isinstance(node, ast.Call):
+                continue
+            f = node.func
+            how = None
             if _is_an_emission(node):
-                last = getattr(node, "end_lineno", node.lineno) or node.lineno
-                out[(name, node.lineno)] = (node.lineno, last)
+                how = "direct"
+            elif isinstance(f, ast.Name) and f.id in aliases:
+                how = "the name `%s`, bound from %s" % (f.id, aliases[f.id])
+            elif isinstance(f, ast.Name) and f.id in helpers:
+                how = "a call to `%s`, which reaches a print" % f.id
+            if how is None:
+                continue
+            last = getattr(node, "end_lineno", node.lineno) or node.lineno
+            out[(name, node.lineno)] = ((node.lineno, last), how)
+    return out
+
+
+def _emission_aliases(body, module_only=False):
+    """{name: what it was bound from} for names in `body` bound to an emission.
+
+    `C36-S1`, and it is the `R20-F1` doctrine with the sides swapped. There,
+    a whitelist of method NAMES said nothing about the OBJECT the method was
+    called on; here, a test of the call's SPELLING says nothing about a name
+    that HOLDS the emission -- `out = sys.stdout.write` and then `out(...)` is
+    a print this file's `ast` test does not classify as one. So an assignment
+    whose value is an emission attribute, or the Name `print` itself, binds an
+    alias, and a call through that name is a site.
+
+    Read over the function's own body, and over the commit's MODULE level with
+    `module_only`, because an alias bound at import is the form that escapes
+    both sides of the law: the spelling test does not classify the call, and
+    the recorder's wrapper is installed after the binding already holds the
+    real `write`. A site derived here and never recorded is UNREACHED, which
+    reds -- the conservative direction.
+    """
+    out = {}
+    nodes = body.body if module_only else ast.walk(body)
+    for node in nodes:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = node.value
+        if value is None:                                      # pragma: no cover
+            continue
+        held = None
+        if isinstance(value, ast.Attribute) and value.attr in ("print", "write"):
+            held = "`%s`" % ast.unparse(value)
+        elif isinstance(value, ast.Name) and value.id == "print":
+            held = "`print`"
+        if held is None:
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name):
+                    out[sub.id] = held
     return out
 
 
 def _record_emissions(run):
-    """Run `run()` and return the set of lines of THIS file at which something
-    was printed.
+    """Run `run()` and return the set of lines of THIS file that an emission
+    passed THROUGH -- the printing line and every line of this file waiting
+    below it on the stack.
 
     `print` is wrapped for the length of the call and put back, which is the
     plant idiom this file already uses for `_FRAME_PARSED` and for the
     import-time snapshots. `builtins` is reached through `sys.modules` rather
-    than imported, so the import list of the commit is unchanged; and the
-    wrapper records the CALLER's line only when the caller is this file, so a
-    print from anywhere else is passed through untouched and uncounted.
+    than imported, so the import list of the commit is unchanged.
+
+    Two things here answer `C36-S1`:
+
+      * `sys.stdout.write` is wrapped beside `print`, through a proxy, because
+        `sys.stdout` is a stream whose `write` cannot be assigned. An alias
+        resolved at call time -- `out = sys.stdout.write` inside the run --
+        then records like any other emission. One bound at IMPORT holds the
+        real `write` and records nothing, and that is why the derivation reads
+        the commit's module level too: the site is derived, never recorded,
+        and reds as UNREACHED.
+
+        THE REACH OF THAT WRAPPER, measured and not assumed: an arm captures
+        by `contextlib.redirect_stdout`, which REPLACES the stream, so a
+        direct `write` executed inside an arm reaches the capture without
+        passing this proxy. `print` is wrapped on `builtins` and is recorded
+        wherever it runs. What bounds the unrecorded form is not this
+        recorder: it is the DOOR census, which counts the alias
+        syntactically -- a planted `out = sys.stdout.write` moves 16 doors to
+        17 -- and ARRIVAL, which names the paragraph however it was printed. A
+        committed plant emitting through a SUBSCRIPT (`{"w": sys.stdout.write}
+        ["w"](...)`), which `ast` cannot classify and this proxy does not see,
+        reds SEVEN arrival arms, among them "every printed paragraph is a
+        finding or a declared one". Three laws, and the round states which one
+        holds which form rather than crediting this one with all three.
+      * the whole CHAIN of this file's frames is recorded, not the printing
+        frame alone. A call to a helper that prints is an emission site of the
+        caller -- that is what `_can_reach_a_print` says -- so the line that
+        CALLS it has to be recordable, or the law would red every derived
+        helper call as unreached. A line of this file that is in no derived
+        site is then a finding of its own: `emission_site_census` compares the
+        two sets BOTH ways.
     """
     mod = sys.modules["builtins"]
     real = mod.print
+    real_stdout = sys.stdout
     here = os.path.realpath(__file__)
     seen = set()
 
-    def recording(*args, **kw):
-        frame = sys._getframe(1)
+    def record(frame):
         try:
-            if os.path.realpath(frame.f_code.co_filename) == here:
-                seen.add(frame.f_lineno)
+            while frame is not None:
+                if os.path.realpath(frame.f_code.co_filename) == here:
+                    seen.add(frame.f_lineno)
+                frame = frame.f_back
         except (OSError, AttributeError):                      # pragma: no cover
             pass
+
+    def recording(*args, **kw):
+        record(sys._getframe(1))
         return real(*args, **kw)
+
+    class _recording_stdout(object):
+        """`sys.stdout` with a recording `write`, delegating everything else.
+
+        Not a subclass and not a copy: whatever the real stream does, this
+        does, because a gate that changes what its own output IS would be
+        measuring a different program.
+        """
+
+        def write(self, text):
+            record(sys._getframe(1))
+            return real_stdout.write(text)
+
+        def __getattr__(self, name):
+            return getattr(real_stdout, name)
 
     try:
         mod.print = recording
+        sys.stdout = _recording_stdout()
         run()
     finally:
         mod.print = real
+        sys.stdout = real_stdout
     return seen
 
 
@@ -7994,15 +8161,27 @@ def emission_site_census():
     `print` while the whole census runs. A site in the first and not the second
     is named by function and line.
 
-    Four lines, and the third and fourth are what keep it from being
-    decorative:
+    Six lines, and `C36-S1` added the second and the fourth:
 
-      1. every derived site was reached;
-      2. the count of sites is pinned as a LITERAL, so a site DELETED reds as
-         loudly as one added -- a census pins its set;
-      3. the recorder is not blind: with one family of arms left out, the sites
-         only that family reaches are NAMED, measured here rather than assumed;
-      4. the premise is asserted, not assumed: the committed bytes and the
+      1. every DIRECT emission site was reached;
+      2. the CONVERSE -- every line of a verdict an emission passed through is
+         a door this law derived. One direction alone leaves an emitter that
+         RUNS through a form `ast` does not classify simply absent from the
+         comparison, which is how `out = sys.stdout.write` walked past the
+         round that introduced this census. Its reach is what the recorder
+         sees, which `_record_emissions` states: `print` wherever it runs, and
+         a `write` on the real stream. A `write` inside an arm's redirected
+         capture is bounded by the door count and by arrival instead, both
+         measured;
+      3. the count of direct sites is pinned as a LITERAL, so a site DELETED
+         reds as loudly as one added -- a census pins its set;
+      4. the count of DOORS likewise, so a new way out of a verdict moves a
+         figure even when no arm ever provokes it;
+      5. the recorder is not blind: with one family of arms left out, the
+         sites only that family reaches are NAMED, and `C36-S3`: their number
+         is pinned too, because `bool(blind)` would pass with one of the four
+         left blind;
+      6. the premise is asserted, not assumed: the committed bytes and the
          bytes on disk are the same file, so the commit's line numbers are the
          running file's.
     """
@@ -8012,11 +8191,27 @@ def emission_site_census():
         _ok, bytes_msgs = self_bytes_committed()
     except Refusal as why:                                     # pragma: no cover
         bytes_msgs = [str(why)]
-    sites = emission_sites()
+    doors = emission_sites()
+    sites = {at: span for at, (span, how) in doors.items() if how == "direct"}
     reached = _record_emissions(printed_paragraphs)
     missed = sorted(
         (name, span) for (name, _at), span in sites.items()
         if not any(span[0] <= line <= span[1] for line in reached)
+    )
+    # The CONVERSE, `C36-S1`: every line an emission passed through INSIDE a
+    # verdict is a derived site. Without it the two sets are compared one way
+    # only, and an emitter that is provoked but undeclared -- a call this
+    # file's derivation does not classify -- is simply absent from the
+    # comparison instead of being named. Scoped to the verdicts' own spans
+    # because the arms that drive the census print too, and they are not what
+    # this law is about.
+    spans = _verdict_spans()
+    undeclared = sorted(
+        (name, line) for name, (first, last) in spans.items()
+        for line in reached
+        if first <= line <= last
+        and not any(at[0] == name and span[0] <= line <= span[1]
+                    for at, (span, _how) in doors.items())
     )
     # The blindness control: the branch family left out, which is the family
     # `C35-F1` is about. The sites only it reaches must then be named -- if
@@ -8033,10 +8228,17 @@ def emission_site_census():
     for label, good, shown in (
         ("every emission site of the verdicts was reached", not missed,
          "%d site(s) unreached of %d" % (len(missed), len(sites))),
-        ("the census of emission sites", len(sites) == 10,
-         "%d site(s), want 10" % len(sites)),
-        ("with the branch family left out, its sites are NAMED", bool(blind),
-         "%d site(s) unreached without it" % len(blind)),
+        ("every line an emission passed through is a derived site",
+         not undeclared,
+         "%d line(s) in a verdict, emitting, undeclared" % len(undeclared)),
+        ("the census of emission sites", len(sites) == SITE_COUNT,
+         "%d site(s), want %d" % (len(sites), SITE_COUNT)),
+        ("the census of doors an emission may leave by",
+         len(doors) == DOOR_COUNT,
+         "%d door(s), want %d" % (len(doors), DOOR_COUNT)),
+        ("with the branch family left out, its sites are NAMED",
+         len(blind) == BLIND_COUNT,
+         "%d site(s) unreached without it, want %d" % (len(blind), BLIND_COUNT)),
         ("the commit's line numbers are this file's", not bytes_msgs,
          "committed bytes: %s"
          % ("the same" if not bytes_msgs else bytes_msgs[0].split(":")[0])),
@@ -8046,6 +8248,8 @@ def emission_site_census():
               % (label, shown, "as required" if good else "**SELFTEST FAILED**"))
     for name, span in missed:
         print("    UNREACHED: %s, lines %d-%d" % (name, span[0], span[1]))
+    for name, line in undeclared:
+        print("    EMITTED FROM AN UNDECLARED SITE: %s, line %d" % (name, line))
     for name, span in blind:
         print("    reached only by the branch family: %s, lines %d-%d"
               % (name, span[0], span[1]))
@@ -8254,7 +8458,18 @@ def _can_reach_a_print(tree):
     now resolved transitively -- `_coord_emit` calling `print` is an emitter,
     and so is anything calling `_coord_emit`.
     """
-    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    return _emitting_helpers(
+        {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    )
+
+
+def _emitting_helpers(funcs):
+    """The same fixed point over a DICT of module-level `FunctionDef`s.
+
+    `C36-S1`: `emission_sites` needs this over the COMMITTED functions, which
+    is the form `_COMMITTED_AST` already holds, and two callers computing the
+    same closure two ways is how one of them drifts.
+    """
     emits = {name for name, node in funcs.items()
              if any(_is_an_emission(x) for x in ast.walk(node))}
     moved = True

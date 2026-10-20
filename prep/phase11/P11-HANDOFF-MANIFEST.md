@@ -3305,8 +3305,8 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     85
-of them recordings of past runs              61
+files the commit holds under the harness     86
+of them recordings of past runs              62
 skip keys the committed source reads         25
 arms the selftest runs                       152
 ```
@@ -4885,8 +4885,11 @@ their agreement is worth anything:
 The residual is the shape of the closure itself, and it is the same class as
 `R34-S1` one step out: **arrival only ever sees what an arm PROVOKES.** All
 eleven of the current emission sites are covered, which is what makes it an
-edge rather than a hole — a twelfth site added later is held by nothing until
-an arm reaches it. Nothing is actionable to unblock it; what would answer it is
+edge rather than a hole — a further site added later is held by nothing until
+an arm reaches it. **`C36-S2`: eleven counts `scan`'s emission POINTS** — six
+`_finding` calls and five direct prints, the set §7.34 counted — and not the
+ten direct print sites the law of §7.38 pins across three functions. Two sets,
+and this section and the next used one pair of ordinals for both. Nothing is actionable to unblock it; what would answer it is
 a law that derives the SET of emission sites from execution and requires an arm
 per site, which is the direction `C33-F1` and `C34-S1` have been walking one
 step at a time.
@@ -4962,9 +4965,12 @@ and records the CALLER's line whenever the caller is this file, reaching
 `emission_site_census` then requires every derived site to have been REACHED.
 
 A site is no longer something an author remembers to list. It is something
-`ast` finds and the recorder either saw run or did not, and a twelfth site
-added later with no arm is **named by function and line** before anyone notices
-a list is short. Four lines, and the last two are what keep it from being
+`ast` finds and the recorder either saw run or did not, and a site added later
+with no arm is **named by function and line** before anyone notices a list is
+short. (§7.40 corrects the ordinal this paragraph carried: the literal here is
+ten direct print sites in three functions, so the next one is the **eleventh**
+of THAT set, and the eleven of §7.37 counts a different set — `scan`'s own
+emission points.) Four lines, and the last two are what keep it from being
 decorative:
 
 | line | what it reads |
@@ -5051,9 +5057,173 @@ migration number exists anywhere in it, `OD-P11-07` is the owner's alone, and
 `READY_TO_PROMOTE` = NO. **This head is UNSIGNED**: `493d135` is the last fully
 signed head, and both reviews are owed on this one.
 
+## 7.39 ROUND 37's INDEPENDENT CHALLENGE (`NO BLOCKING DEFECT` at `5190159`) — the derivation rebuilt by a second party, and the forward edge moved one step out
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-519015994c34a4fd835b57628fe78350d686957c.md`, sha256 `130a324cd404df97ce6c6ca8d6221d15162173a7e05f04951ba91717c066370c` |
+| Arabic | the same name with `-AR.md`, sha256 `49922d538239625fd7a4fc31c9c759ad820174f7a66a2f6881208c0e817582c7` |
+| verdict | **NO BLOCKING DEFECT** at that SHA; `C35-F1` and `C35-S1`–`C35-S4` verified closed; `R37-S1` named; `READY_TO_PROMOTE` = NO |
+
+Both digests were re-computed against the published files before this section
+was written, and the English one reproduced the figure the challenger stated.
+They rebuilt the derivation at the pinned SHA and ran the coordinator's five
+attacks rather than reading §7.38's account of them:
+
+* **`C35-F1`** — `emission_site_census` sound in situ: 0 unreached of 10 sites,
+  the count a literal, the blindness control naming the four branch-only sites,
+  committed bytes equal to disk. They then did what this round did not: they
+  **enumerated every emitting function in the file** and established that the
+  ones outside `EMITTING_VERDICTS` are selftest, arm and harness functions and
+  none of them a verdict — so the tuple is the complete set of the file's
+  CURRENT verdict emitters, which is a claim §7.38 asserted and did not
+  measure. They also measured the failure direction: drop a name or a site and
+  the `== 10` literal reds, and a `.write` verdict site would be in `sites` and
+  unrecorded, so **unreached, so red** — conservative, because
+  `_is_an_emission` names `write` on anything while `_record_emissions` wraps
+  `print` alone.
+* **`C35-S1`** — `_memo_key` keyed on the capture, like `_haystack_key`, closes
+  the `A-35-F2` class; the snapshot and restore stands as a second mechanism;
+  the union is 40 with a capture and 40 with none.
+* **`C35-S2`, `C35-S3`, `C35-S4`** — attribution corrected and the plants still
+  red four and six arms; the record corrections read where they were made, in
+  the appended blocks, and both earlier recipes reproduce their digests
+  (round 33 `f5a2b238…` / `6bd3bd8d…`, round 36 `96bba169…` / `d85838e8…`).
+* The clean suite at `EXIT_SCRIPT 0` — `HARNESS_BYTES` included, which is also
+  what bounds a co-edit of the literal and the census — eleven published
+  digests MATCH, and the three-world gates byte-identical to `e3a2df4`.
+
+### `R37-S1` (named, not a blocker) — the edge one step further out
+
+`R36-S1` asked for a law deriving the SET of emission sites and requiring an
+arm per site; this commit built it, and the edge moved rather than vanished.
+What the census does not hold is a FOURTH verdict emitter added later OUTSIDE
+`EMITTING_VERDICTS`: the set is derived from the commit, but the tuple naming
+which functions emit a verdict is still written by hand. The claim this round
+makes is scoped to that — the three functions that print a verdict — which is
+why the challenger recorded it as a residual and not an overclaim. Nothing is
+actionable to unblock it. What would answer it is deriving the tuple itself,
+from the functions a verdict path reaches, rather than naming them.
+
+**This head is still UNSIGNED.** One of its two links exists: an independent
+challenger found no blocking defect at `5190159`, and **the coordinator diff
+review of `5190159` is OWED**. An author does not sign their own work and
+nothing in this section is a signature. This section is also not its own
+commit: a commit that records nothing but a reviewer is the review loop this
+pack forbids, so the enrolment is held locally and rides the next commit, with
+its own reason. `R33-S1`, `A-35-F1`, `C28-F1` and `R27-S1` stand unchanged, no
+CI has ever run this pack, no migration number exists anywhere in it,
+`OD-P11-07` is the owner's alone, and `READY_TO_PROMOTE` = NO.
+
+## 7.40 ROUND 38 (coordinator diff review of `5190159`: **`SIGN`**, `C36-S1` at `P1`) — what `ast` finds is three spellings, so the law reads DOORS and reads them both ways
+
+| | |
+|---|---|
+| review | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-5190159.md`, sha256 `577abb617ab6da393c876a2001385551660dddfd81f51f0d255ebdff8b1141b6`, re-computed here before this section was written |
+| verdict | **`SIGN`** — with the round-37 challenger (§7.39), **`5190159` is FULLY SIGNED**. It is **NOT PROMOTED**, and no signature here covers this commit |
+| residuals | `C36-S1` (`P1`), `C36-S2` (`P3`), `C36-S3` (`P3`) — all three closed below |
+
+### `C36-S1` (`P1`) — the derivation was a test of the call's SPELLING
+
+`emission_sites` classified a call by how it was written: the Name `print`, or
+an attribute named `print` or `write`. The review planted two ordinary
+alternatives at a site no arm provokes, each one edit committed on a clean tree
+in a throwaway clone, and both walked past the law in BOTH directions — no site
+derived, because `ast` does not classify the call, and nothing recorded, because
+the recorder wrapped `print` alone:
+
+| a new site no arm provokes, emitting through | at `5190159` | at this commit |
+|---|---|---|
+| `print(...)` — the control | 11 sites, 1 unreached, **rc 1**, 2 arms red | **rc 1**, **4 arms red** |
+| `out = sys.stdout.write` then `out(...)` | 10 sites, 0 unreached, **rc 0**, nothing red | **rc 1**, `17 door(s), want 16` |
+| a new module-level helper that prints | 10 sites, 0 unreached, **rc 0**, nothing red | **rc 1**, `17 door(s), want 16` |
+
+The three pieces the review named were already in this file and are what close
+it. A call is now a site when it is a DIRECT emission, when its function name
+was BOUND from an emission (`out = sys.stdout.write`, in the function or at the
+commit's module level — the `R20-F1` doctrine with the sides swapped), or when
+it calls a module-level helper that can reach a print (`_can_reach_a_print`,
+written for `C33-F1`). The fixed point is factored into `_emitting_helpers` so
+the two callers cannot compute it two ways.
+
+**Direct sites and doors are not the same law, and the round says why.** Ten
+DIRECT print sites must have RUN: a direct print no arm provokes is the defect
+`C33-F1`, `C34-S1` and `C35-F1` each were. Sixteen DOORS — the ten plus
+`scan`'s six `_finding` calls — are ways out of a verdict, and requiring each
+to run would red every clean run, because a helper that prints only when it
+refuses is reached on no clean run. So the doors bound the CONVERSE instead:
+
+* **every DIRECT site was reached** — `0 site(s) unreached of 10`;
+* **every line of a verdict an emission passed THROUGH is a derived door** —
+  `0 line(s) in a verdict, emitting, undeclared`. This is the line the review
+  asked for, and it is the direction the old law had no opinion about: an
+  emitter that RUNS through a form `ast` cannot classify was simply absent from
+  the comparison. The recorder now records the whole CHAIN of this file's
+  frames, not the printing frame alone, which is what makes a helper call
+  recordable at the line that CALLS it;
+* both counts pinned as LITERALS, and `C36-S3`'s `len(blind) == 4` beside them.
+
+**The reach of the recorder, stated because a law in this file states one.**
+`print` is wrapped on `builtins` and recorded wherever it runs; `sys.stdout` is
+proxied, so a `write` on the real stream records too. An arm captures by
+`contextlib.redirect_stdout`, which REPLACES the stream — so a direct `write`
+executed inside an arm reaches the capture without passing the proxy. That form
+is bounded by the other two laws, and both are measured rather than claimed: a
+fourth committed plant emitting through a SUBSCRIPT, which `ast` cannot
+classify and the proxy does not see, reds **seven arrival arms**, among them
+*every printed paragraph is a finding or a declared one* and the labelled-pin
+arm. Three laws hold three forms, and no one of them is credited with all
+three.
+
+### `C36-S2` (`P3`) — two sets, one pair of ordinals
+
+§7.37 says *eleven* emission sites and a *twelfth* added later; §7.38 and the
+gate kept those words while the law's literal is **ten**. The numbers count
+different sets: eleven is `scan`'s own emission POINTS — six `_finding` calls
+and five direct prints, §7.34's count — and ten is DIRECT print sites across
+three functions. Both sentences now name the set they count, and the gate's
+comment drops the ordinal it had no basis for. The law's literal was right and
+the review verified it; what was wrong was the prose, and this pack's rule is
+that a count of a set is a figure.
+
+### `C36-S3` (`P3`) — a control armed from one side
+
+The blindness control read `bool(blind)`: with the branch family left out, at
+least one site had to be unreached. Four are, and a later change that left one
+blind would have passed it unchanged — the `C32-S1` shape, in the line added to
+answer a blocker. It now reads `len(blind) == BLIND_COUNT`, measured at **four**
+by the run that prints it.
+
+### The round-37 challenge, enrolled here because its own commit was held
+
+§7.39 records it: **NO BLOCKING DEFECT** at `5190159`, both report digests
+re-computed, `R37-S1` named. That enrolment was the local commit `729dfc4`,
+measured on its own by the authoritative run at `EXIT_SCRIPT 0`, and it rides
+this commit because a commit that records nothing but a reviewer is the review
+loop this pack forbids.
+
+### The authoritative run and the confirming run
+
+| | |
+|---|---|
+| authoritative | subject `bcb70598306c39f3d42f61bf165c2fd33dc9e927`, `EXIT_SCRIPT 0`, 1433 lines, transcript `harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND38.txt` |
+| confirming | the FINAL tree `90a37269e5e7f9115f307d78c03cb7f811b849fc`, committed in a throwaway clone as `aa0357ea0fc747f8ada69a4dfaf85c545bfd7621`, `EXIT_SCRIPT 0` **on the first pass** |
+| the law's own lines | `0 site(s) unreached of 10`; `0 line(s) in a verdict, emitting, undeclared`; `10 site(s), want 10`; `16 door(s), want 16`; `4 site(s) unreached without it, want 4`; `committed bytes: the same` |
+| `pack-counts` | 86 files under the harness and 62 recordings, set from the generator's arithmetic BEFORE the confirming run, so `EXIT_GENERATED_BLOCKS` was 0 first time |
+| round 37's record | re-pointed at `519015994c34a4fd835b57628fe78350d686957c`, INSIDE its appended block, and its recipe re-run at that SHA: tree `7dc2cae7…`, blob `f8922b8a…`, both unchanged |
+
+### What is still not done
+
+`R37-S1` stands as a stated limit and the review ruled it one: the SET of
+emission sites is derived from the commit, and the TUPLE naming which functions
+print a verdict is still written by hand. `R33-S1`'s shared `check_blocks`
+door, `A-35-F1` (`P3`), `C28-F1` (`P1`) and `R27-S1` stand unchanged. **No CI
+has ever run this pack**, no migration number exists anywhere in it,
+`OD-P11-07` is the owner's alone, and `READY_TO_PROMOTE` = **NO**.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **No one has signed this head**, and both reviews are owed on it.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**, and both reviews are owed on it.
 
 ---
 
