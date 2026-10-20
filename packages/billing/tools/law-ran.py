@@ -108,6 +108,7 @@ import signal
 import stat
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 LAW_NOT_RUN = "LAW-NOT-RUN"
@@ -308,6 +309,15 @@ REFUSED_NONCE_NOT_AS_SPECIFIED = "REFUSED-NONCE-NOT-AS-SPECIFIED"
 # the run (a setup file is exactly that) can write a receipt of its own from
 # the same environment, so a forger who runs code still forges it. That is the
 # bound already declared for the nonce and it has not moved.
+#
+# The coordinator's R62-C-02, so nobody reads that width as an open door: the
+# routes to running code inside the run were each measured, and each refuses
+# through this gate -- setupFiles, globalSetup, environment, alias, define,
+# plugins, --config naming a setup file, a workspace file (never read), a test
+# file of one's own (REFUSED-TEST-FILE-SET-MOVED), and NODE_OPTIONS' code-loading
+# forms (refused in the law from round 64; never reaching this gate's child,
+# which runs with a closed environment dict). No route anybody has built puts
+# code inside THIS gate's run.
 REFUSED_LAW_WROTE_NO_RECEIPT = "REFUSED-LAW-WROTE-NO-RECEIPT"
 # ROUND 63, the challenger's R59 F-1: the program that runs the suite decides
 # what the report says, so it is pinned by its REAL path and not by what PATH
@@ -501,8 +511,21 @@ def main() -> int:
     # and destroy another agent's evidence. The disclosure is bounded by the
     # pid binding on the nonce, which already refuses a replay of a leaked
     # environment; what is left is a note an operator can act on.
+    # ROUND 64, the challenger's R63 reply: a name alone is noise a reader has to
+    # guess at, so each leftover is reported with its owner and its last
+    # modification, which is what distinguishes a live run from a corpse without
+    # anyone having to pick an age bound (there is no upper bound on how long a
+    # gate run may take, so any such bound would be a wager).
+    def _described(d: Path) -> str:
+        try:
+            st = d.stat()
+        except OSError as why:
+            return f"{d} (cannot stat: {why})"
+        when = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime))
+        return f"{d} (uid {st.st_uid}, mtime {when})"
+
     stale = sorted(
-        str(d)
+        _described(d)
         for pattern in ("law-ran-*", "law-ran-nonce-*", "law-ran-pack-*", "law-ran-receipt-*")
         for d in Path(tempfile.gettempdir()).glob(pattern)
         if d.is_dir()
@@ -732,8 +755,19 @@ def main() -> int:
     # the challenger used -- one PATH entry, no privileged write, nothing a
     # reviewer would see -- and what it leaves costs a write into a system
     # directory, which `npm ci` and a container rebuild both undo. It is a cost,
-    # not a barrier, and the law's own default-deny marker is the half that
-    # reds when the chain is broken rather than when the program is wrong.
+    # not a barrier. The law's command-line marker reds when the chain is broken
+    # rather than when the program is wrong -- but, narrowed on the challenger's
+    # R63 reply, it is not independent of this actor: whatever runs the suite
+    # holds the runner's command line too, and can rewrite --outputFile= so the
+    # marker is simply absent. This pin is what holds that door, at the cost
+    # above; the marker covers an actor that edits the environment and not the
+    # command line.
+    #
+    # And a scope sentence, on the challenger's own point: this pins WHERE the
+    # runner is, not WHICH version it is. The interpreter is printed on the
+    # runner line below and nothing gates it, so no figure of this phase --
+    # case durations, timeouts, the 306 -- is a property of the code rather than
+    # of the interpreter that produced it.
     RUNNER_PREFIXES: tuple[str, ...] = ("/usr/bin", "/usr/local/bin", "/bin", "/opt")
 
     def _inside_a_pinned_prefix(where: Path) -> bool:

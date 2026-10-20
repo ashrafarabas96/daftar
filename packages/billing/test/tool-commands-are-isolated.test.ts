@@ -314,6 +314,21 @@ const UNDEFENDED_FLAGS = ['--dangerously-ignore-unhandled-errors', '--file-paral
  * missing is refused by name instead of falling through to the shared-pack
  * path.
  *
+ * WHAT THIS IS WORTH, narrowed on the challenger's R63 reply and against my own
+ * earlier sentence, which claimed more: the marker is a word on the RUNNER's
+ * command line, and whatever runs the suite holds that command line exactly as
+ * it holds the environment. So an intermediary that rewrites `--outputFile=` to
+ * a path of its own, runs the real vitest and copies the report back where the
+ * gate expects it makes the marker ABSENT, and this arm then reads "not started
+ * by the gate". It is therefore NOT a layer independent of the actor the runner
+ * pin exists to exclude. What it does close is a real and different class: an
+ * actor that edits the ENVIRONMENT but not the command line -- an env filter, a
+ * wrapper that scrubs P5_* and execs through, a sanitised CI runner. The door
+ * against the rewriting intermediary is held by the gate's runner pin, and that
+ * is a COST and not a wall (this run is root; the pinned prefixes are writable
+ * by it). The challenger predicted the rewrite and will measure it on the
+ * pushed head; the sentence above is written before that measurement, not after.
+ *
  * Returns true when the marker is there, false when it is not, and a reason
  * when it cannot say.
  */
@@ -889,6 +904,18 @@ const REFUSED_NPM_CONFIG = 'REFUSED-NPM-CONFIG-PRESENT';
  * guard failed with ENOENT when the pack was absent -- a stack trace, not a
  * verdict, and indistinguishable from a broken test. Absence is named.
  */
+/**
+ * ROUND 64, THE COORDINATOR'S R62-C-01 (P4). `NODE_OPTIONS` runs a module of
+ * someone else's choosing inside the node that runs this suite, once per
+ * process, before this file is reached -- and until this arm nothing read it.
+ * The gate's closed environment dict stops it reaching the GATE's child, which
+ * is why the finding is bounded to invocations that are not the gate's,
+ * `npm test`'s first leg among them. Measured by the coordinator at `82e810c`:
+ * `NODE_OPTIONS=--import=...` on a bare run of the law file ran the module, rc
+ * 0, no refusal.
+ */
+const REFUSED_NODE_OPTIONS_LOADS_CODE = 'REFUSED-NODE-OPTIONS-LOADS-CODE';
+
 const REFUSED_REPO_HEAD_NOT_READABLE = 'REFUSED-REPO-HEAD-NOT-READABLE';
 
 /**
@@ -3936,6 +3963,29 @@ describe('every written invocation of the pack tools is isolated', () => {
         `${REFUSED_NPM_CONFIG}: ${what} at ${file} sets ${sets.join(', ')}. npm reads that file with no variable naming it, so the pinned command would be handed to a program of someone else's choosing on every run`,
       ).toStrictEqual([]);
     }
+    // The coordinator's R62-C-01. The VARIABLE is not refused: CI legitimately
+    // sets `--max-old-space-size`, and a hardening that causes a false red is
+    // not hardening. Its code-loading FORMS are, in every spelling node accepts
+    // them -- measured on node v24.12.0 in this container, each running a
+    // module before `main`: `-r`, `--require`, `--import`, `--loader`,
+    // `--experimental-loader`, taken with a space or with `=`. (`-r./file`,
+    // concatenated, node rejects outright.)
+    //
+    // DECLARED LIMIT, so no later round reads this as default-deny: it is a
+    // list of FORMS, not an allowlist of everything else. A code-loading flag
+    // node adds after today is unrefused until it is written here. What does
+    // not depend on this list is the gate's own leg, where the variable never
+    // reaches the child at all -- two mechanisms, neither the other's only
+    // reader.
+    const CODE_LOADING_NODE_OPTIONS = ['-r', '--require', '--import', '--loader', '--experimental-loader'];
+    const loaders = (process.env.NODE_OPTIONS ?? '')
+      .split(/\s+/)
+      .filter((token) => token.length > 0)
+      .filter((token) => CODE_LOADING_NODE_OPTIONS.includes(token.split('=', 1)[0] ?? token));
+    expect(
+      loaders,
+      `${REFUSED_NODE_OPTIONS_LOADS_CODE}: NODE_OPTIONS in this run's environment carries ${loaders.join(', ')}, which node executes inside this very process before this file runs -- so an instrument this law reads could be replaced before the law reads it. The variable is allowed; these forms are not`,
+    ).toStrictEqual([]);
   });
 
   it("R54-S1/R55-S3: the two digest readers agree over the pack's own names and over names built to break them", () => {
@@ -4668,6 +4718,16 @@ describe('every written invocation of the pack tools is isolated', () => {
     // executing inside the run -- a setup file is exactly that -- has this same
     // environment and can write a receipt of its own. A forger who runs code
     // still forges it. What moves is ABSENCE: it now reds on every platform.
+    //
+    // The coordinator's R62-C-02: the bound is stated at the width of "if code
+    // runs inside the run", and the routes TO that position were each measured
+    // and each refuses through the gate -- `setupFiles`, `globalSetup`,
+    // `environment`, `alias`, `define`, `plugins`, `--config` naming a setup
+    // file, a workspace file (never read), a test file of one's own
+    // (`REFUSED-TEST-FILE-SET-MOVED`), and now `NODE_OPTIONS`' code-loading
+    // forms. A sibling test file cannot do it either: each file runs in its own
+    // process, so it cannot strip this one's environment. So the bound errs
+    // wide on purpose; it is not a door anybody has had to keep shut.
     const receiptPath = (process.env.P5_LAW_RECEIPT ?? '').trim();
     if (handedDown !== '') {
       expect(
