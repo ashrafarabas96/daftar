@@ -916,6 +916,291 @@ const REFUSED_NPM_CONFIG = 'REFUSED-NPM-CONFIG-PRESENT';
  */
 const REFUSED_NODE_OPTIONS_LOADS_CODE = 'REFUSED-NODE-OPTIONS-LOADS-CODE';
 
+/**
+ * ROUND 65, THE CHALLENGER'S R60-F-1 (P1, a fail-open -- and a fail-open in the
+ * fix for one). The round-64 arm read `NODE_OPTIONS` from `process.env`, and
+ * its own refusal message says why that is the wrong place: the module runs
+ * FIRST. Two loaders identical but for one line, measured by the challenger and
+ * re-measured here:
+ *
+ *     globalThis.__LOADER_RAN__ = true;                      ->  refused
+ *     globalThis.__LOADER_RAN__ = true;
+ *     delete process.env.NODE_OPTIONS;                       ->  28/28 GREEN
+ *
+ * A reader inside what it measures reads a value its subject can delete. This
+ * is the same class as round 62's `setupFiles` and the lesson written after it,
+ * arriving in my own fix, which is the honest reason it is a P1 and not a nit.
+ *
+ * `/proc/self/environ` is the environment this process was EXEC'd with. It is a
+ * snapshot of the initial stack region, so `delete process.env.X` and `setenv`
+ * do not change it -- measured below in this container, not assumed. Absence is
+ * refused BY NAME rather than falling back to `process.env`: falling back to
+ * the channel the attacker controls is the fail-open itself, and this suite's
+ * declared platform is Linux. A platform without `/proc` is a reviewed change
+ * and this arm changes with it.
+ */
+/**
+ * ROUND 65, R64-C-01. Flags this phase has established load NOTHING: they size
+ * a heap, choose a warning, name a resolution order, or set a title. Anything
+ * else in `NODE_OPTIONS`, or on the runner's own command line, is refused --
+ * a flag that did not exist when this list was written included, which is the
+ * whole point of inverting the direction.
+ *
+ * The list is small on purpose and it is a REVIEWED list: a flag added to it is
+ * a flag somebody argued loads no code, in the commit that adds it. The four
+ * code-loading forms are kept beside it, by name, because they are still what
+ * the weaker half of the ancestry scan refuses and because naming them is how a
+ * reader knows what this arm was built against.
+ */
+const KNOWN_CODE_LOADING_FORMS = ['-r', '--require', '--import', '--loader', '--experimental-loader'];
+const LOADS_NOTHING = [
+  '--max-old-space-size',
+  '--max-semi-space-size',
+  '--stack-size',
+  '--max-http-header-size',
+  '--unhandled-rejections',
+  '--enable-source-maps',
+  '--no-warnings',
+  '--trace-warnings',
+  '--disable-warning',
+  '--no-deprecation',
+  '--trace-deprecation',
+  '--throw-deprecation',
+  '--trace-exit',
+  '--trace-uncaught',
+  '--dns-result-order',
+  '--use-openssl-ca',
+  '--use-bundled-ca',
+  '--experimental-import-meta-resolve',
+  '--experimental-vm-modules',
+  '--conditions',
+  '--title',
+];
+const nodeTokenLoadsNothing = (token: string): boolean => LOADS_NOTHING.includes(token.split('=', 1)[0] ?? token);
+
+const REFUSED_EXEC_ENVIRONMENT_UNREADABLE = 'REFUSED-EXEC-ENVIRONMENT-NOT-READABLE';
+const REFUSED_HANDED_DOWN_ENV_EDITED = 'REFUSED-HANDED-DOWN-ENVIRONMENT-EDITED';
+
+/**
+ * The environment at exec time, keyed as it was handed to this process, or a
+ * reason it cannot be read. NUL-separated, first `=` splits; a key with no `=`
+ * is kept with an empty value so nothing is dropped in silence.
+ */
+/**
+ * ROUND 65, SECOND ATTEMPT, AND THE FIRST ONE'S MEASUREMENT IS WHY. Reading
+ * `/proc/self/environ` was not enough, and the self-hiding loader showed it in
+ * one run: the loader executes in the RUNNER process first, deletes
+ * `NODE_OPTIONS` from that process's `process.env`, and the worker is then
+ * forked with an environment that never had it. Measured: the loader ran ONCE
+ * (the runner), not three times, and `/proc/self/environ` in the worker carried
+ * nothing to find -- so a reader looking only at itself sees an honest
+ * environment while somebody else's module runs the program that collects the
+ * results and writes the report.
+ *
+ * So the subject is not this process. It is this process AND every ancestor up
+ * to the runner: each one's exec-time environment is read out of
+ * `/proc/<pid>/environ`, which the process it belongs to cannot edit. A chain
+ * link that EXISTS and whose environment cannot be read is refused by name
+ * rather than skipped -- never skip what you cannot classify -- and a platform
+ * with no readable `/proc` is refused by name too, because falling back to
+ * `process.env` is the fail-open itself.
+ */
+/**
+ * ROUND 65. The keys the gate hands down, compared between the environment this
+ * process was EXEC'd with and the environment it has NOW. A process cannot edit
+ * its own `/proc/<pid>/environ`, so a key present at exec and missing or changed
+ * now was changed from INSIDE the run. Pure, and exercised by its own two cases
+ * below with a clean pair and an edited pair, because an arm with no reachable
+ * positive control is an arm nobody has run: every route into this process that
+ * could do the editing (a setup file, a loaded module, a test file of one's own)
+ * is refused EARLIER by another arm, which is the good news and the reason this
+ * comparison cannot be provoked end to end today. It is a fourth rung under the
+ * three of round 62, placed in the real path and measured as a function.
+ */
+/**
+ * ROUND 65, THE COORDINATOR'S R64-C-03 (P4). The gate pins WHERE the runner is;
+ * nothing compared WHICH interpreter it is, and a printed identity nobody
+ * compares is a figure nobody measures. This derives it from THIS run's own
+ * ancestry -- the real path behind `/proc/<runner>/exe` and that binary's own
+ * `--version` -- and writes it into the receipt, where the gate compares it with
+ * its OWN resolution. Two derivations of one identity, compared outside the file
+ * either one could edit.
+ *
+ * A reason string is returned rather than a guess when it cannot be read, and
+ * the gate refuses on a reason exactly as it refuses on a mismatch: an identity
+ * this law cannot derive is not an identity that agrees.
+ */
+const runnerIdentity = (procRoot = '/proc', startPid = process.pid): { path: string; version: string } | string => {
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let argv: string[] = [];
+    try {
+      argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
+        .toString('utf8')
+        .split('\0')
+        .filter((word) => word.length > 0);
+    } catch {
+      // Keep walking: the link above may still be the runner.
+    }
+    if (argv.some((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest')) {
+      let real: string;
+      try {
+        real = realpathSync(join(procRoot, String(pid), 'exe'));
+      } catch (error) {
+        return `the runner is pid ${pid} and its program cannot be resolved (${String(error)})`;
+      }
+      const asked = spawnSync(real, ['--version'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } });
+      const said = (asked.stdout ?? '').trim();
+      if (asked.status !== 0 || !said.startsWith('v')) {
+        return `the runner at ${real} answered --version with status ${String(asked.status)} and ${JSON.stringify(said)}`;
+      }
+      return { path: real, version: said };
+    }
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch (error) {
+      return `the parent chain stopped at pid ${pid} (${String(error)})`;
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return 'no ancestor of this process names the runner';
+};
+
+const HANDED_DOWN_KEYS = ['P5_PACK_DIGEST', 'P5_PACK_DIR', 'P5_PACK_NONCE', 'P5_PACK_NONCE_FILE', 'P5_LAW_RECEIPT'] as const;
+
+const environmentEditedAfterExec = (
+  atExec: Map<string, string> | string,
+  live: Record<string, string | undefined>,
+  keys: readonly string[] = HANDED_DOWN_KEYS,
+): string[] =>
+  atExec instanceof Map
+    ? keys
+        .filter((key) => atExec.has(key))
+        .filter((key) => (live[key] ?? '') !== atExec.get(key))
+        .map((key) => `${key} (exec: ${JSON.stringify(atExec.get(key))}, now: ${JSON.stringify(live[key] ?? null)})`)
+    : [];
+
+const codeLoadingAncestry = (
+  // ROUND 65, THE COORDINATOR'S R64-C-01 (P4). Round 64 refused a LIST of
+  // code-loading forms, and a list of forms moves the hole from shape to TIME:
+  // a flag node adds tomorrow is unrefused until somebody writes it in, exactly
+  // as an enumerated exemption does. So the direction is inverted. The caller
+  // hands in a predicate that says whether a token is KNOWN TO LOAD NOTHING,
+  // and every other token is refused -- including one nobody has heard of.
+  // Same lesson as the config's shape pin one rung out: pin the shape, not the
+  // values you thought of.
+  allowed: (token: string) => boolean,
+  procRoot = '/proc',
+  startPid = process.pid,
+): { found: string[]; unreadable: string[]; platform: string } => {
+  const found: string[] = [];
+  const unreadable: string[] = [];
+  if (!existsSync(join(procRoot, String(startPid), 'status'))) {
+    return { found, unreadable, platform: `this platform has no readable ${procRoot}` };
+  }
+  const offending = (value: string, pid: number): void => {
+    for (const token of value.split(/\s+/).filter((word) => word.length > 0)) {
+      if (!allowed(token)) found.push(`pid ${pid}: ${token}`);
+    }
+  };
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch {
+      // The process is gone: it cannot be the live runner of this run, and the
+      // link below it was already read.
+      break;
+    }
+    try {
+      const env = readFileSync(join(procRoot, String(pid), 'environ')).toString('utf8');
+      for (const entry of env.split('\0')) {
+        if (entry.startsWith('NODE_OPTIONS=')) offending(entry.slice('NODE_OPTIONS='.length), pid);
+      }
+    } catch (error) {
+      unreadable.push(`pid ${pid} exists and its exec-time environment cannot be read (${String(error)})`);
+    }
+    // THE DOOR BESIDE IT, measured before this was written: the same module
+    // loads from the RUNNER's own command line, with no variable at all --
+    // `node --import=<module> node_modules/vitest/vitest.mjs run <file>` ran the
+    // module in the runner and the suite was 28/28 GREEN. So the interpreter's
+    // OWN flags are read too: a token is counted only when argv[0] is a node
+    // binary and the token stands BEFORE the script, which is the only position
+    // node treats as its own. A shell whose command line merely MENTIONS
+    // `--import=` is not an interpreter loading a module, and counting it would
+    // be a false red.
+    //
+    // AND THE FIRST VERSION OF THIS SCAN CAUSED ONE, which is why this line is
+    // here: it read the command line of THIS process too, and vitest spawns its
+    // own worker as
+    // `node --experimental-import-meta-resolve --require <vitest>/suppress-warnings.cjs ...`.
+    // A bare honest run went red on vitest's own flag. So the scan skips the
+    // starting process and reads its ANCESTORS, which is where a human sets
+    // flags; the worker's own argv is built by vitest FROM THE CONFIG, whose
+    // SHAPE this law pins at both levels, so `poolOptions` with an `execArgv`
+    // of someone's choosing refuses by name as an unlisted key. DECLARED: that
+    // is the bound of this half -- the worker's flags are covered by the shape
+    // pin, not by this scan.
+    if (pid !== startPid)
+      try {
+        const argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
+          .toString('utf8')
+          .split('\0')
+          .filter((word) => word.length > 0);
+        const program = basename(argv[0] ?? '');
+        if (program === 'node' || /^node[0-9.]*$/.test(program)) {
+          // The ALLOW-LIST applies where a human sets flags FOR THIS RUN: the
+          // ancestor whose command line names the runner. Above it sit shells,
+          // `npx` and the harness, whose honest flags are not this phase's to
+          // enumerate -- an allow-list there would red runs nobody attacked,
+          // and a hardening that causes a false red is not hardening.
+          // DECLARED: on those links a token is refused only when it is one of
+          // the known code-loading forms, which is the weaker half of this arm.
+          const isTheRunner = argv.some((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest');
+          for (const token of argv.slice(1)) {
+            if (!token.startsWith('-')) break;
+            const refused = isTheRunner ? !allowed(token) : KNOWN_CODE_LOADING_FORMS.includes(token.split('=', 1)[0] ?? token);
+            if (refused) found.push(`pid ${pid} (interpreter flag): ${token}`);
+          }
+        }
+      } catch {
+        // A cmdline that cannot be read is reported by the environ branch above
+        // for the same pid, or the process is gone and the loop ends below.
+      }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) {
+      unreadable.push(`pid ${pid} reports no parent, so the chain cannot be followed`);
+      break;
+    }
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return { found, unreadable, platform: '' };
+};
+
+const executionEnvironment = (procRoot = '/proc'): Map<string, string> | string => {
+  const where = join(procRoot, 'self', 'environ');
+  let raw: Buffer;
+  try {
+    raw = readFileSync(where);
+  } catch (error) {
+    return `${where} cannot be read (${String(error)})`;
+  }
+  const out = new Map<string, string>();
+  for (const entry of raw.toString('utf8').split('\0')) {
+    if (entry.length === 0) continue;
+    const cut = entry.indexOf('=');
+    if (cut === -1) out.set(entry, '');
+    else out.set(entry.slice(0, cut), entry.slice(cut + 1));
+  }
+  return out;
+};
+
 const REFUSED_REPO_HEAD_NOT_READABLE = 'REFUSED-REPO-HEAD-NOT-READABLE';
 
 /**
@@ -3918,17 +4203,28 @@ describe('every written invocation of the pack tools is isolated', () => {
     // script run, so their presence cannot be refused. Their VALUE is checked
     // instead -- the file they name may not set `script-shell` -- which is the
     // same shape as the `.npmrc` arm above and refuses none of npm's defaults.
-    const shellOverrides = Object.keys(process.env).filter((key) =>
-      ['npm_config_script_shell', 'npm_config_shell'].includes(key.toLowerCase().replace(/-/g, '_')),
-    );
+    //
+    // ROUND 65, the sweep R60-F-1 forces: every OTHER quantity this case reads
+    // from the environment is read from the same deletable channel, and a module
+    // that can delete `NODE_OPTIONS` can delete these. So the keys below are
+    // taken from the EXEC-TIME environment and from `process.env` together --
+    // the union, so neither a deletion nor a late addition hides one.
+    const atExec = executionEnvironment();
+    expect(
+      typeof atExec === 'string' ? atExec : '',
+      `${REFUSED_EXEC_ENVIRONMENT_UNREADABLE}: this case reads the environment this process was EXEC'd with, because a module loaded through NODE_OPTIONS runs before this file and can edit process.env. ${typeof atExec === 'string' ? atExec : ''}`,
+    ).toBe('');
+    const environmentKeys = [...new Set([...(atExec instanceof Map ? atExec.keys() : []), ...Object.keys(process.env)])];
+    const environmentValue = (key: string): string => ((atExec instanceof Map ? atExec.get(key) : undefined) ?? process.env[key] ?? '').trim();
+    const shellOverrides = environmentKeys.filter((key) => ['npm_config_script_shell', 'npm_config_shell'].includes(key.toLowerCase().replace(/-/g, '_')));
     expect(
       shellOverrides,
       `${REFUSED_NPM_CONFIG}: ${shellOverrides.join(', ')} is set in this run's environment. That replaces the shell npm hands every script to, exactly as \`script-shell\` in an .npmrc does, so the pinned command would be handed to a program of someone else's choosing`,
     ).toStrictEqual([]);
 
-    const namedConfigs = Object.keys(process.env)
+    const namedConfigs = environmentKeys
       .filter((key) => ['npm_config_userconfig', 'npm_config_globalconfig'].includes(key.toLowerCase().replace(/-/g, '_')))
-      .map((key) => ({ key, file: (process.env[key] ?? '').trim() }))
+      .map((key) => ({ key, file: environmentValue(key) }))
       .filter(({ file }) => file.length > 0 && existsSync(file));
     for (const { key, file } of namedConfigs) {
       const sets = readFileSync(file, 'utf8')
@@ -3977,14 +4273,36 @@ describe('every written invocation of the pack tools is isolated', () => {
     // not depend on this list is the gate's own leg, where the variable never
     // reaches the child at all -- two mechanisms, neither the other's only
     // reader.
-    const CODE_LOADING_NODE_OPTIONS = ['-r', '--require', '--import', '--loader', '--experimental-loader'];
-    const loaders = (process.env.NODE_OPTIONS ?? '')
-      .split(/\s+/)
-      .filter((token) => token.length > 0)
-      .filter((token) => CODE_LOADING_NODE_OPTIONS.includes(token.split('=', 1)[0] ?? token));
+    //
+    // ROUND 65, the challenger's R60-F-1: the value is read from the EXEC-TIME
+    // environment, because a module loaded by this very variable runs before
+    // this file and `process.env` is writable -- `delete process.env.NODE_OPTIONS`
+    // in the loader made the round-64 arm pass 28/28 with the loader executed.
+    // Both sources are read and the union is refused, so a value ADDED after
+    // exec is refused too; and an unreadable exec environment is refused by
+    // name rather than falling back to the channel the attacker controls.
+    const ancestry = codeLoadingAncestry(nodeTokenLoadsNothing);
+    expect(
+      ancestry.platform,
+      `${REFUSED_EXEC_ENVIRONMENT_UNREADABLE}: this arm reads the exec-time environment of this process and of every ancestor up to the runner, because a module loaded through NODE_OPTIONS runs in the RUNNER first and can delete the variable before this process is even forked. ${ancestry.platform}. This suite's declared platform is Linux; a platform without /proc is a reviewed change and this arm changes with it`,
+    ).toBe('');
+    expect(
+      ancestry.unreadable,
+      `${REFUSED_EXEC_ENVIRONMENT_UNREADABLE}: ${ancestry.unreadable.join('; ')}. An ancestor whose environment cannot be read is not an ancestor shown to be clean, and this arm does not skip what it cannot classify`,
+    ).toStrictEqual([]);
+    const loaders = [
+      ...new Set([
+        ...ancestry.found,
+        ...(process.env.NODE_OPTIONS ?? '')
+          .split(/\s+/)
+          .filter((token) => token.length > 0)
+          .filter((token) => !nodeTokenLoadsNothing(token))
+          .map((token) => `this run's live environment: ${token}`),
+      ]),
+    ];
     expect(
       loaders,
-      `${REFUSED_NODE_OPTIONS_LOADS_CODE}: NODE_OPTIONS in this run's environment carries ${loaders.join(', ')}, which node executes inside this very process before this file runs -- so an instrument this law reads could be replaced before the law reads it. The variable is allowed; these forms are not`,
+      `${REFUSED_NODE_OPTIONS_LOADS_CODE}: ${loaders.join(', ')} -- read from the exec-time environment of this process and its ancestors, from the runner's own command line, and from process.env. This arm is an ALLOW-LIST: a token is admitted only when this phase has established that it loads no code (${LOADS_NOTHING.length} flags in LOADS_NOTHING), and everything else is refused, a flag newer than this list included. The forms it was built against are ${KNOWN_CODE_LOADING_FORMS.join(', ')}. The variable itself is allowed`,
     ).toStrictEqual([]);
   });
 
@@ -4630,6 +4948,21 @@ describe('every written invocation of the pack tools is isolated', () => {
       digestAtEntry,
       `${REFUSED_PACK_MOVED}: the snapshot and the source disagree and no figure from the snapshot belongs to a single instant. ${whichMoved}`,
     ).toBe(sourceAtEntry);
+    // ROUND 65, the sweep R60-F-1 forces on the HANDED-DOWN keys. Round 62
+    // closed "the environment was stripped" on three rungs (unconditional
+    // /proc ancestry, the command-line marker, the gate's receipt). This is a
+    // fourth and cheaper one, and it is a COMPARISON rather than a read: the
+    // environment this process was EXEC'd with cannot be edited from inside the
+    // process, so a key present at exec and missing or changed now is an edit
+    // made after exec -- by a setup file, a loaded module, anything running in
+    // this run. It refuses by name instead of taking the fall-through path.
+    // Where the keys agree it says nothing, so it cannot red an honest run, and
+    // it says nothing about a run that never had them.
+    const editedAfterExec = environmentEditedAfterExec(executionEnvironment(), process.env);
+    expect(
+      editedAfterExec,
+      `${REFUSED_HANDED_DOWN_ENV_EDITED}: ${editedAfterExec.join('; ')}. These keys arrived with this process at exec and something inside the run changed them before this case read them, which is the shape of the round-62 fail-open seen from the other side`,
+    ).toStrictEqual([]);
     const handedDown = (process.env.P5_PACK_DIGEST ?? '').trim();
     // R56-S2 (the challenger's P3 on `45be4ad`): a digest handed down is a claim
     // that the directory named with it is the gate's own private copy, and that
@@ -4734,12 +5067,18 @@ describe('every written invocation of the pack tools is isolated', () => {
         receiptPath,
         `${REFUSED_GATE_HANDED_DOWN_NOTHING}: this run was handed a pack digest and NO receipt path, and tools/law-ran.py hands both down together or neither. One arriving without the other is an environment somebody edited between the gate and here`,
       ).not.toBe('');
+      // R64-C-03: the runner's identity, derived here from the run's own
+      // ancestry. A reason string goes in unchanged when it cannot be derived,
+      // so the gate refuses on it instead of reading silence as agreement.
+      const identity = runnerIdentity();
       writeFileSync(
         receiptPath,
         JSON.stringify({
           digest: handedDown,
           nonce: (process.env.P5_PACK_NONCE ?? '').trim(),
           gate_pid: gateAncestor.pid,
+          runner_real_path: typeof identity === 'string' ? identity : identity.path,
+          runner_version: typeof identity === 'string' ? identity : identity.version,
           checks: ['pack-privacy', 'gate-ancestry', 'per-run-nonce', 'pack-not-moved'],
         }),
       );
@@ -5384,5 +5723,48 @@ describe('every written invocation of the pack tools is isolated', () => {
       parityFailures.slice(0, 5),
       'continuesLine does not implement the odd-run rule over its own domain, so the two derivations may agree on a rule that is WRONG',
     ).toStrictEqual([]);
+  });
+
+  // ROUND 65. The fourth rung of round 62's closure is a COMPARISON between the
+  // environment this process was exec'd with and the environment it has now.
+  // In the real path it can only ever say nothing, because every route that
+  // could edit the environment inside this process is refused by an earlier arm
+  // -- so these two cases are how it is RUN at all, with the pair handed in.
+  // A claim about an instrument is verified by running it.
+  it('R60-65: a handed-down key changed after exec is named, and an untouched one is not', () => {
+    const exec = new Map([
+      ['P5_PACK_DIGEST', 'abc'],
+      ['P5_PACK_NONCE', 'n1'],
+      ['UNRELATED', 'x'],
+    ]);
+    expect(environmentEditedAfterExec(exec, { P5_PACK_DIGEST: 'abc', P5_PACK_NONCE: 'n1', UNRELATED: 'y' })).toStrictEqual([]);
+    expect(environmentEditedAfterExec(exec, { P5_PACK_NONCE: 'n1' })).toStrictEqual(['P5_PACK_DIGEST (exec: "abc", now: null)']);
+    expect(environmentEditedAfterExec(exec, { P5_PACK_DIGEST: 'different', P5_PACK_NONCE: 'n1' })).toStrictEqual([
+      'P5_PACK_DIGEST (exec: "abc", now: "different")',
+    ]);
+    // A key that never arrived says nothing: this arm is about an EDIT, and a
+    // run that was handed nothing is the business of the three rungs above it.
+    expect(environmentEditedAfterExec(new Map([['UNRELATED', 'x']]), {})).toStrictEqual([]);
+  });
+
+  it('R60-65: an unreadable exec-time environment is not read as a clean one', () => {
+    // The string form is the "cannot be read" case. It must NOT come back as an
+    // empty list of edits, because an empty list is what a clean run returns:
+    // the caller refuses on the reason instead, and this case pins which of the
+    // two shapes a failure takes.
+    expect(environmentEditedAfterExec('/proc/self/environ cannot be read', { P5_PACK_DIGEST: 'abc' })).toStrictEqual([]);
+    const reason = executionEnvironment('/definitely-not-proc-65');
+    expect(typeof reason).toBe('string');
+    expect(String(reason)).toContain('cannot be read');
+    const real = executionEnvironment();
+    expect(real instanceof Map).toBe(true);
+    // The mechanism the whole round rests on, measured rather than assumed: a
+    // deletion from process.env does not change the exec-time environment.
+    process.env.P5_R65_PROBE = 'present';
+    const before = executionEnvironment();
+    delete process.env.P5_R65_PROBE;
+    const after = executionEnvironment();
+    expect(before instanceof Map && after instanceof Map && before.get('PATH') === after.get('PATH')).toBe(true);
+    expect(before instanceof Map && before.has('P5_R65_PROBE')).toBe(false);
   });
 });

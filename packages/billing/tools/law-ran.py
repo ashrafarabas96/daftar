@@ -363,9 +363,15 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 28,
+    "test/tool-commands-are-isolated.test.ts": 30,
 }
-EXPECTED_TOTAL_CASES = 306
+# 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
+# environment comparison -- the fourth rung of round 62's closure -- with a
+# clean pair and an edited pair handed in, because in the real path every route
+# that could edit the environment is refused by an earlier arm and the
+# comparison can only say nothing. An arm with no reachable positive control is
+# an arm nobody has run.
+EXPECTED_TOTAL_CASES = 308
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -482,13 +488,16 @@ EXPECTED: dict[str, int] = {
     # ADMITTED so the arm is not vacuous. A "cannot say" that returned the empty
     # string would make REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE
     # unreachable.
+    # 28 -> 30 at round 65: the two cases that RUN the exec-time environment
+    # comparison (R60-F-1's fourth rung), measured as a function because no
+    # route in the real path can provoke it.
     # 26 -> 27 at round 56: the law gains the R54-S1 case, which RUNS both
     # digest implementations over a directory built to make them disagree and
     # compares the values. 25 -> 26 at round 54: the law gains the CD-53-01/R53-03 case, which
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 28,
+    "test/tool-commands-are-isolated.test.ts": 30,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -817,6 +826,36 @@ def main() -> int:
             f"{REFUSED_RUNNER_NOT_PINNED}: the node this step resolved has its real path at {real_node}, "
             "inside the package under measurement or inside the temporary directory. Either one is writable by "
             "the run it would be judging"
+        )
+
+    # ROUND 65, THE COORDINATOR'S R64-C-03 (P4). The pin fixes WHERE the runner
+    # is and not WHICH version it is, so every figure this step prints is a
+    # figure of the code AND of the interpreter that produced it. Until now that
+    # identity was PRINTED and nothing compared it -- which is the shape of a
+    # figure nobody measures. The real path and the version go into the RECEIPT
+    # the law writes and this step judges, derived HERE from this step's own
+    # resolution and THERE from the run's own ancestry, so a disagreement is a
+    # refusal rather than a line in a log.
+    runner_version = ""
+    try:
+        asked = subprocess.run(  # noqa: S603 -- a pinned real path, no shell, one fixed argument
+            [str(real_node), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={"PATH": "/usr/bin:/bin"},
+        )
+        runner_version = asked.stdout.strip()
+    except (OSError, subprocess.SubprocessError) as why:
+        refuse(
+            f"{REFUSED_RUNNER_NOT_PINNED}: the node this step resolved at {real_node} would not answer "
+            f"--version ({why}). A program that cannot say what it is cannot be the one the receipt names"
+        )
+    if not runner_version.startswith("v"):
+        refuse(
+            f"{REFUSED_RUNNER_NOT_PINNED}: the node this step resolved at {real_node} answered --version with "
+            f"{runner_version!r}, which is not a node version string. This step will not record an identity it "
+            "cannot read"
         )
 
     # R53-S1, the other default: npm's global config lives beside the node that
@@ -1174,7 +1213,19 @@ def main() -> int:
     # hole this closes, and a receipt that disagrees with what this step knows
     # is worse than an absent one.
     if pinned_pack and receipt_file is not None:
-        want = {"digest": pinned_pack, "nonce": nonce_value, "gate_pid": os.getpid()}
+        want = {
+            "digest": pinned_pack,
+            "nonce": nonce_value,
+            "gate_pid": os.getpid(),
+            # R64-C-03: the law derives these from the run's OWN ancestry (the
+            # real path behind /proc/<runner>/exe, and that binary's --version),
+            # and this step derives them from its own resolution. Two
+            # derivations of one identity, compared where the config cannot
+            # reach, so "which interpreter produced these figures" is refused
+            # rather than printed.
+            "runner_real_path": str(real_node),
+            "runner_version": runner_version,
+        }
         if receipt_text is None:
             problems.append(
                 f"{REFUSED_LAW_WROTE_NO_RECEIPT}: the law wrote no receipt at all. This step handed "
