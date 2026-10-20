@@ -26,8 +26,15 @@ import kotlin.test.fail
  * boolean and no predicate reference left at the call site to hollow: choosing
  * which predicate runs, and reading the field it runs on, both happen inside
  * the helper, on the one path the arms below also travel. What a one-line edit
- * at a call site can still change is the KIND, and that moves the per-state
- * counts to another key, where the anchors are.
+ * at a call site can still change is the KIND or the ROW — the coordinator's S-2
+ * on `9809db1`, which measured both. Where they land was measured too, by the
+ * nineteenth challenge, and it is NOT where I first wrote: a swapped kind reds
+ * inside the walk, at the helper, because the two predicates disagree about a
+ * concrete QUEUED row — one site swapped or both, the same message either way.
+ * The per-state anchor below is the second line and not the first, and its
+ * residual power is what the guard at the end of the walk now asserts rather
+ * than assumes. Detection of a swap never depended on the two distributions
+ * differing; what depends on that is only the anchor's own ability to see one.
  */
 private enum class JudgmentKind(val label: String) {
     WAIT("waits"),

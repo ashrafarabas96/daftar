@@ -61,10 +61,25 @@ import os
 # three watched the probe answer normally and measured nothing. The isolation
 # refusal above still runs first, so `-I` is guaranteed here and `os` cannot be
 # a file dropped beside this one. Nothing between them spawns anything.
-if int(os.environ.get("P7_HARNESS_SPAWN_DEPTH", "0") or 0) > 2:
+_DEPTH_READ = (os.environ.get("P7_HARNESS_SPAWN_DEPTH", "0") or "0").strip()
+if not _DEPTH_READ.lstrip("+").isdigit():
+    # R19-03, the nineteenth challenge. This was `int(...)` unguarded, so a
+    # value like `abc` or `3.0` ended the harness in a TRACEBACK. Fail-closed,
+    # so it hid nothing — but this lane refuses BY NAME, and a traceback is not
+    # a name. Refusing rather than defaulting to 0: a depth nobody can read is
+    # not a depth of zero, and treating it as one is the fail-open shape.
+    print(
+        f"REFUSED-P7-SPAWN-DEPTH-UNREADABLE: P7_HARNESS_SPAWN_DEPTH is "
+        f"{_DEPTH_READ!r}, which is not a whole number, so how deep this process is cannot "
+        f"be read. This harness will not run at an unknown depth: it has twice exhausted "
+        f"this container's memory by spawning itself."
+    )
+    raise SystemExit(2)
+
+if int(_DEPTH_READ) > 2:
     print(
         f"REFUSED-P7-HARNESS-SPAWNED-ITSELF: this process is "
-        f"{os.environ.get('P7_HARNESS_SPAWN_DEPTH')} spawns deep and the deepest legitimate "
+        f"{_DEPTH_READ} spawns deep and the deepest legitimate "
         f"chain is 2 (harness, self-test child, isolation probe). A deeper one is this file "
         f"spawning itself, which has twice exhausted this container's memory, so it refuses "
         f"rather than forking again."
@@ -88,6 +103,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
@@ -520,7 +536,7 @@ PROOFS: list[Proof] = [
         find="                    PriorOutcome.NEVER_SENT -> PriorOutcome.UNDETERMINED",
         replace="                    PriorOutcome.NEVER_SENT -> PriorOutcome.NEVER_SENT",
         expect_red="a stale counter from a store that cannot vouch for itself is not a report that nothing was sent",
-        why="challenger finding G-01, restored: the fix for F-01 distinguished presence from absence and not presence from CURRENCY. A row restored from a backup reads attempts == 0, which is the one held value that permits, and attempts only ever increases \u2014 so the sale released, sent and committed after the backup was taken is re-entered under a new key and the customer pays twice, from a store that has already declared it cannot vouch for itself",
+        why="challenger finding G-01, restored: the fix for F-01 distinguished presence from absence and not presence from CURRENCY. A row restored from a backup reads attempts == 0, which is the one held value that permits, and attempts only ever increases — so the sale released, sent and committed after the backup was taken is re-entered under a new key and the customer pays twice, from a store that has already declared it cannot vouch for itself",
     ),
     Proof(
         law="P7-L13-AN-UNRELEASED-CAPTURE-HAS-AN-EXIT",
@@ -534,7 +550,7 @@ PROOFS: list[Proof] = [
             "            is QueueEvent.CancelByMerchant,\n"
         ),
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
-        why="challenger finding G-02, restored: the one open exit closes, so a sale Alice captured while the till was offline and never released is unsendable (CAPTURED is not a sendable state), unreleasable, uncancellable, unresolvable and unminimizable once her session is revoked \u2014 seven refusals and a material row that can never settle, which L4 and L5 forbid dropping",
+        why="challenger finding G-02, restored: the one open exit closes, so a sale Alice captured while the till was offline and never released is unsendable (CAPTURED is not a sendable state), unreleasable, uncancellable, unresolvable and unminimizable once her session is revoked — seven refusals and a material row that can never settle, which L4 and L5 forbid dropping",
     ),
     Proof(
         law="INV-13-A-RELEASE-ONLY-EVER-MOVES-AN-UNSENT-ROW",
@@ -550,7 +566,7 @@ PROOFS: list[Proof] = [
         find='        "offline.absence_not_fenced" ->',
         replace='        "offline.absence_not_fenced_typo" ->',
         expect_red="every refusal code the kernel can produce has a stated merchant view",
-        why="challenger finding G-03's practical risk: a real refusal loses its view and falls through to the generic device-software message. The named allow-list must not be able to swallow it \u2014 the merchant would be told the till is broken instead of that the original sale is still being confirmed, and would key the sale in again",
+        why="challenger finding G-03's practical risk: a real refusal loses its view and falls through to the generic device-software message. The named allow-list must not be able to swallow it — the merchant would be told the till is broken instead of that the original sale is still being confirmed, and would key the sale in again",
     ),
     Proof(
         law="P7-L13-ONLY-THE-CAPTURER-CONFIRMS-A-CAPTURE",
@@ -565,7 +581,7 @@ PROOFS: list[Proof] = [
             "        ) {"
         ),
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
-        why="challenger finding H-01, restored exactly: the release moves back into the ungated arm, so any member of the business may CONFIRM a capture they cannot be shown to have witnessed. A release is the step that turns a capture into a ledger entry, and an unconfirmed capture may equally be a basket the customer walked away from \u2014 so this is the one unlock of the two that can invent a sale, which is why the cancel is the one that is open",
+        why="challenger finding H-01, restored exactly: the release moves back into the ungated arm, so any member of the business may CONFIRM a capture they cannot be shown to have witnessed. A release is the step that turns a capture into a ledger entry, and an unconfirmed capture may equally be a basket the customer walked away from — so this is the one unlock of the two that can invent a sale, which is why the cancel is the one that is open",
     ),
     Proof(
         law="INV-14-A-FOREIGN-SESSION-NEVER-ACTS-UNRECORDED",
@@ -589,7 +605,7 @@ PROOFS: list[Proof] = [
         find='            Step.Refused("offline.already_abandoned", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
         replace='            Step.Refused("offline.cancel_after_send", P7Laws.NO_LOCAL_DELETE_BEFORE_CONFIRMED.id)',
         expect_red="every reachable configuration honours every invariant",
-        why="challenger finding I-01, restored exactly: the second cancel of a row that was abandoned before anything was sent is answered with the code whose merchant view says an attempt is out and to wait for it. The cashier \u2014 who may be the colleague of whoever abandoned it seconds earlier \u2014 is told to wait for a sale that will never arrive, which is the re-key harm the merchant-view work exists to prevent. G-03 proved every code HAS a view; this is the next clause, that a code can have a view and still be the wrong code",
+        why="challenger finding I-01, restored exactly: the second cancel of a row that was abandoned before anything was sent is answered with the code whose merchant view says an attempt is out and to wait for it. The cashier — who may be the colleague of whoever abandoned it seconds earlier — is told to wait for a sale that will never arrive, which is the re-key harm the merchant-view work exists to prevent. G-03 proved every code HAS a view; this is the next clause, that a code can have a view and still be the wrong code",
     ),
     Proof(
         law="INV-14-THE-RECORD-SAYS-WHAT-WAS-DONE",
@@ -597,7 +613,7 @@ PROOFS: list[Proof] = [
         find='                id, scope, event.actingScope, event::class.simpleName.orEmpty(),',
         replace='                id, scope, event.actingScope, "CancelByMerchant",',
         expect_red="every reachable configuration honours every invariant",
-        why="challenger finding I-02: three of the record\u2019s fields were asserted and the fourth \u2014 the one that says what was done \u2014 was not, so a constant label passed the whole suite and recorded a foreign SEND as a cancel. The expectation now comes from a literal per event rather than from the kernel\u2019s own expression, because a check that re-derives its answer the way the subject does agrees with any edit to it",
+        why="challenger finding I-02: three of the record\u2019s fields were asserted and the fourth — the one that says what was done — was not, so a constant label passed the whole suite and recorded a foreign SEND as a cancel. The expectation now comes from a literal per event rather than from the kernel\u2019s own expression, because a check that re-derives its answer the way the subject does agrees with any edit to it",
     ),
     Proof(
         law="P7-L20-THE-RECORD-SAYS-WHAT-WAS-LOST",
@@ -613,7 +629,7 @@ PROOFS: list[Proof] = [
         find="            if (attempts == 0 && !isTerminal) {",
         replace="            if (attempts == 0) {",
         expect_red="a capture the previous shift never released can be abandoned by the next one, never confirmed",
-        why="challenger finding I-03, which was a missing proof rather than a defect: `attempts == 0` masks `!isTerminal` on the path a reviewer checks (SYNCED is unreachable with no attempt), so the only state the second condition defends is DISCARDED \u2014 and nothing covered it. Mutated, a second cancel moves again and emits a second clear and a second custody record for one key, which an audit with no sequence on the record cannot tell from one cancel",
+        why="challenger finding I-03, which was a missing proof rather than a defect: `attempts == 0` masks `!isTerminal` on the path a reviewer checks (SYNCED is unreachable with no attempt), so the only state the second condition defends is DISCARDED — and nothing covered it. Mutated, a second cancel moves again and emits a second clear and a second custody record for one key, which an audit with no sequence on the record cannot tell from one cancel",
     ),
     Proof(
         law="P7-L20-A-FINISHED-ROW-DOES-NOT-SAY-WAIT",
@@ -625,7 +641,7 @@ PROOFS: list[Proof] = [
         ),
         replace='                Step.Refused("offline.already_released", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
         expect_red="a refusal never tells the merchant to wait for a device that has finished",
-        why="challenger finding J-01, restored exactly: a release of a row that was abandoned, or that the server has already recorded, or that is waiting on a person, is answered \u201calready confirmed, wait for it\u201d. On the shared till H-01 opened, that is I-01 one button over \u2014 Bob abandons Alice\u2019s capture, somebody presses confirm, and the till says the sale exists and to wait for it, both halves false, same row, same double tap",
+        why="challenger finding J-01, restored exactly: a release of a row that was abandoned, or that the server has already recorded, or that is waiting on a person, is answered \u201calready confirmed, wait for it\u201d. On the shared till H-01 opened, that is I-01 one button over — Bob abandons Alice\u2019s capture, somebody presses confirm, and the till says the sale exists and to wait for it, both halves false, same row, same double tap",
     ),
     Proof(
         law="INV-9B-THE-ACTION-IS-WHAT-INSTRUCTS-THE-MERCHANT",
@@ -641,7 +657,7 @@ PROOFS: list[Proof] = [
         find="            if (effect == EffectClass.FINANCIAL) {",
         replace="            if (effect.isMaterial) {",
         expect_red="a sale states what it is worth, a stocktake has nothing to state, and neither value is judged",
-        why="challenger finding J-02, restored exactly: `isMaterial` is FINANCIAL or INVENTORY, and an inventory capture is a movement or a stocktake count \u2014 a quantity and a unit, with no minor units and no currency. Requiring them makes fabricating a currency a precondition of storing a stocktake, which is what my own fixtures did: seven units of stock denominated in riyals in one file and lira in another, in the field the record exists to add",
+        why="challenger finding J-02, restored exactly: `isMaterial` is FINANCIAL or INVENTORY, and an inventory capture is a movement or a stocktake count — a quantity and a unit, with no minor units and no currency. Requiring them makes fabricating a currency a precondition of storing a stocktake, which is what my own fixtures did: seven units of stock denominated in riyals in one file and lira in another, in the field the record exists to add",
     ),
     Proof(
         law="P7-L20-THE-KERNEL-DOES-NOT-JUDGE-A-TOTAL",
@@ -681,7 +697,7 @@ PROOFS: list[Proof] = [
             "RecoveryAction.WAIT_IT_IS_IN_PROGRESS, blocks = true)"
         ),
         expect_red="no re-entry refusal instructs a wait, because the row it is about is gone",
-        why="coordinator finding D-01, restored exactly: the merchant is told to wait for a fenced absence, and the fence is a server capability the merchant API does not have, so the wait is for something nobody is building and no device is doing. L20\u2019s clause was widened to every refusal while its only guard watched Operation.step, and re-entry refuses from somewhere else \u2014 which is why this proof plants in the layer the invariant could not see",
+        why="coordinator finding D-01, restored exactly: the merchant is told to wait for a fenced absence, and the fence is a server capability the merchant API does not have, so the wait is for something nobody is building and no device is doing. L20\u2019s clause was widened to every refusal while its only guard watched Operation.step, and re-entry refuses from somewhere else — which is why this proof plants in the layer the invariant could not see",
     ),
     Proof(
         law="INV-9B-A-NEW-CODE-MAY-NOT-SAY-WAIT-BY-DEFAULT",
@@ -697,7 +713,7 @@ PROOFS: list[Proof] = [
             "RecoveryAction.WAIT_IT_IS_IN_PROGRESS)"
         ),
         expect_red="no refusal in any layer tells the merchant to wait for a device with nothing pending",
-        why="D-01\u2019s other half: a refusal that is not a wait starts telling the merchant to wait. The sweep takes its subjects from the kernel\u2019s own source and compares the set of waiting refusals for EQUALITY against the ones the model check proved are reachable only while something is pending, so a code added anywhere \u2014 in a layer written after this round \u2014 is judged by absence rather than by a list someone has to remember to extend. What this plant does NOT show, and the round-seven review was right to say so, is the one direction only that sweep can cover: `offline.another_members_capture` is returned by `Operation.step`, so the per-layer invariant over the reachable space sees it too and either guard would have caught this plant. It is kept because it measures the sweep end to end \u2014 source literal, view, instruction, equality \u2014 and the direction no per-layer guard reaches is measured separately by E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES",
+        why="D-01\u2019s other half: a refusal that is not a wait starts telling the merchant to wait. The sweep takes its subjects from the kernel\u2019s own source and compares the set of waiting refusals for EQUALITY against the ones the model check proved are reachable only while something is pending, so a code added anywhere — in a layer written after this round — is judged by absence rather than by a list someone has to remember to extend. What this plant does NOT show, and the round-seven review was right to say so, is the one direction only that sweep can cover: `offline.another_members_capture` is returned by `Operation.step`, so the per-layer invariant over the reachable space sees it too and either guard would have caught this plant. It is kept because it measures the sweep end to end — source literal, view, instruction, equality — and the direction no per-layer guard reaches is measured separately by E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES",
     ),
     Proof(
         law="INV-15-A-FINISHED-ROW-ANSWERS-IN-ITS-OWN-TERMS",
@@ -711,7 +727,7 @@ PROOFS: list[Proof] = [
         ),
         replace='                Step.Refused("offline.not_sendable", P7Laws.KEY_MINTED_AT_CAPTURE.id)',
         expect_red="every reachable configuration honours every invariant",
-        why="coordinator finding C-02\u2032: the Send arm goes back to answering every non-sendable state with one code, so a row the server has already recorded, and one a colleague abandoned, are both answered NOT_READY_TO_SEND / CONFIRM_THE_CAPTURE \u2014 the till offers a cashier the button for a sale that is finished. The doc sentence on refusalForAFinishedRow said \u2018whatever was asked of it\u2019 while three arms out of six consulted it, so the invariant is asserted over the whole reachable space rather than arm by arm",
+        why="coordinator finding C-02\u2032: the Send arm goes back to answering every non-sendable state with one code, so a row the server has already recorded, and one a colleague abandoned, are both answered NOT_READY_TO_SEND / CONFIRM_THE_CAPTURE — the till offers a cashier the button for a sale that is finished. The doc sentence on refusalForAFinishedRow said \u2018whatever was asked of it\u2019 while three arms out of six consulted it, so the invariant is asserted over the whole reachable space rather than arm by arm",
     ),
     Proof(
         law="J-03-AN-OVERLOAD-IS-A-DEFAULT-WITH-A-DIFFERENT-SHAPE",
@@ -725,7 +741,7 @@ PROOFS: list[Proof] = [
             "        fun capture(\n"
         ),
         expect_red="the facts a capture must state cannot be omitted by a caller",
-        why="coordinator finding D-02, measured by the coordinator as green before this round: the textual guard watched for a PARAMETER DEFAULT, and an overload omits the same facts without one. With this plant a pre-round four-argument FINANCIAL call site compiles again and throws at the till, which is J-03\u2019s exact harm through the one door the guard did not watch \u2014 so the guard now counts the ways in rather than checking the shape of one of them",
+        why="coordinator finding D-02, measured by the coordinator as green before this round: the textual guard watched for a PARAMETER DEFAULT, and an overload omits the same facts without one. With this plant a pre-round four-argument FINANCIAL call site compiles again and throws at the till, which is J-03\u2019s exact harm through the one door the guard did not watch — so the guard now counts the ways in rather than checking the shape of one of them",
     ),
     Proof(
         law="L13-TWO-DIFFERENT-REFUSALS-MAY-NOT-SHARE-ONE-VIEW",
@@ -736,7 +752,7 @@ PROOFS: list[Proof] = [
         ),
         replace='            val code = "offline.scope_switched"',
         expect_red="another member on the same till cannot confirm or settle another member's capture",
-        why="coordinator finding C-02\u2032: the gate refuses on two grounds \u2014 a business that is not the row\u2019s, which is never relaxed, and a colleague\u2019s capture inside one business, which is gated only for the three committing events \u2014 and with one code the second is told SIGNED_IN_TO_ANOTHER_BUSINESS and to switch back to the owning account. It is the same business, and the account named is a colleague\u2019s; a cashier who follows that instruction is being sent to sign in as someone else",
+        why="coordinator finding C-02\u2032: the gate refuses on two grounds — a business that is not the row\u2019s, which is never relaxed, and a colleague\u2019s capture inside one business, which is gated only for the three committing events — and with one code the second is told SIGNED_IN_TO_ANOTHER_BUSINESS and to switch back to the owning account. It is the same business, and the account named is a colleague\u2019s; a cashier who follows that instruction is being sent to sign in as someone else",
     ),
     Proof(
         law="K-02-A-CODE-NEED-NOT-BE-A-LITERAL-TO-REACH-A-MERCHANT",
@@ -752,7 +768,7 @@ PROOFS: list[Proof] = [
             "P7Laws.NO_SILENT_MATERIAL_RESOLUTION.id)"
         ),
         expect_red="no code this classifier produces tells the merchant to wait",
-        why="challenger finding K-02, in one file instead of two: the classifier answers an expired session with a code that is ASSEMBLED rather than written, and the code it assembles is one whose view tells the merchant an attempt is out and to wait for it. The literal sweep in RecoveryTest cannot see a code that is not a literal, and the challenger measured exactly this shape staying green \u2014 so the subjects of this layer\u2019s judge are the codes `classify` actually returns over its own exhaustive input space, not the strings its source contains",
+        why="challenger finding K-02, in one file instead of two: the classifier answers an expired session with a code that is ASSEMBLED rather than written, and the code it assembles is one whose view tells the merchant an attempt is out and to wait for it. The literal sweep in RecoveryTest cannot see a code that is not a literal, and the challenger measured exactly this shape staying green — so the subjects of this layer\u2019s judge are the codes `classify` actually returns over its own exhaustive input space, not the strings its source contains",
     ),
     Proof(
         law="K-03-A-SECOND-WAY-IN-NEED-NOT-BE-IN-THE-SAME-FILE",
@@ -773,7 +789,7 @@ PROOFS: list[Proof] = [
             "    Operation.capture(key, scope, effect, payloadDigest, null, null)"
         ),
         expect_red="the facts a capture must state cannot be omitted by a caller",
-        why="challenger finding K-03: the declaration counter read `Queue.kt` alone, and a second way to capture without stating what the operation is worth does not have to live in that file. This plant puts a four-argument `capture` in another kernel source, in the same package, where it resolves for any caller in the module and passes null for both facts \u2014 D-02\u2019s harm one file over. The guard\u2019s subject is now the whole source set, the way the refusal-vocabulary sweep already takes it",
+        why="challenger finding K-03: the declaration counter read `Queue.kt` alone, and a second way to capture without stating what the operation is worth does not have to live in that file. This plant puts a four-argument `capture` in another kernel source, in the same package, where it resolves for any caller in the module and passes null for both facts — D-02\u2019s harm one file over. The guard\u2019s subject is now the whole source set, the way the refusal-vocabulary sweep already takes it",
     ),
     Proof(
         law="E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES",
@@ -787,7 +803,7 @@ PROOFS: list[Proof] = [
             "view(MerchantMessage.SESSION_ENDED, RecoveryAction.WAIT_IT_IS_IN_PROGRESS)"
         ),
         expect_red="no refusal in any layer tells the merchant to wait for a device with nothing pending",
-        why="coordinator finding E-03, the direction proof 57 did not reach. `offline.session_expired` is not a queue state: no `Operation.step` returns it, so the model check\u2019s reachable space cannot contain it \u2014 it arrives from the server\u2019s answer, through the outcome classifier, and the merchant meets it only as a view. Planted here, a till whose session has ended is told its sale is in progress and to wait, while nothing is pending and nothing will be until somebody signs in. Every per-layer guard stays green, because the code never passes through the layer they watch; only a sweep whose subjects are the kernel\u2019s own literals can see it, and this is the measurement that it does",
+        why="coordinator finding E-03, the direction proof 57 did not reach. `offline.session_expired` is not a queue state: no `Operation.step` returns it, so the model check\u2019s reachable space cannot contain it — it arrives from the server\u2019s answer, through the outcome classifier, and the merchant meets it only as a view. Planted here, a till whose session has ended is told its sale is in progress and to wait, while nothing is pending and nothing will be until somebody signs in. Every per-layer guard stays green, because the code never passes through the layer they watch; only a sweep whose subjects are the kernel\u2019s own literals can see it, and this is the measurement that it does",
     ),
     Proof(
         law="E-04-A-REFUSAL-MAY-NOT-OFFER-A-BUTTON-ITS-READER-CANNOT-PRESS",
@@ -795,7 +811,7 @@ PROOFS: list[Proof] = [
         find="                    ?: refusalForACaptureSomebodyElseMustConfirm(event.actingScope)\n",
         replace="",
         expect_red="every reachable configuration honours every invariant",
-        why="coordinator finding E-04. Without this arm the next shift\u2019s send of a colleague\u2019s CAPTURED row falls through to `offline.not_sendable`, whose view tells the merchant to confirm the capture \u2014 the one thing L13 forbids that session from doing, so the till shows a button that refuses when pressed. The invariant now asks of every `not_sendable` in the reachable space whether its reader could act on it, computing the answer from the acting scope with the test\u2019s own permission function rather than reading it back from the kernel",
+        why="coordinator finding E-04. Without this arm the next shift\u2019s send of a colleague\u2019s CAPTURED row falls through to `offline.not_sendable`, whose view tells the merchant to confirm the capture — the one thing L13 forbids that session from doing, so the till shows a button that refuses when pressed. The invariant now asks of every `not_sendable` in the reachable space whether its reader could act on it, computing the answer from the acting scope with the test\u2019s own permission function rather than reading it back from the kernel",
     ),
     Proof(
         law="L-01-A-CLAIM-ABOUT-A-CODE-NOTHING-PRODUCES-IS-A-CLAIM-ABOUT-NOTHING",
@@ -803,7 +819,7 @@ PROOFS: list[Proof] = [
         find="        if (state == OperationState.CAPTURED && !acting.mayAct(scope, QueueEvent.Release(acting))) {",
         replace="        if (state == OperationState.CAPTURED) {",
         expect_red="every reachable configuration honours every invariant",
-        why="challenger finding L-01, the hole inside E-04\u2019s own fix. E-04\u2019s assertion is an implication \u2014 if the code is `offline.not_sendable`, then the row is CAPTURED and its actor may confirm it \u2014 and `Queue.kt` has exactly one producer of that code, in the arm this helper sits above. A helper that fires for EVERY CAPTURED row therefore leaves the implication true of nothing: the suite stayed green while the cashier who captured the sale was told another member must confirm it, on their own row, on their own till. The review\u2019s own bound is why this plant is this shape: the plain inversion, keeping the conjunction, is already red on the invariant, so the hole was exactly one shape wide. The observability loop now covers every code this check makes a conditional claim about, not only the four honest-wait codes",
+        why="challenger finding L-01, the hole inside E-04\u2019s own fix. E-04\u2019s assertion is an implication — if the code is `offline.not_sendable`, then the row is CAPTURED and its actor may confirm it — and `Queue.kt` has exactly one producer of that code, in the arm this helper sits above. A helper that fires for EVERY CAPTURED row therefore leaves the implication true of nothing: the suite stayed green while the cashier who captured the sale was told another member must confirm it, on their own row, on their own till. The review\u2019s own bound is why this plant is this shape: the plain inversion, keeping the conjunction, is already red on the invariant, so the hole was exactly one shape wide. The observability loop now covers every code this check makes a conditional claim about, not only the four honest-wait codes",
     ),
     Proof(
         law="M-01-O-01-A-CLAIM-IS-ENROLLED-BY-BEING-EVALUATED",
@@ -811,7 +827,7 @@ PROOFS: list[Proof] = [
         find=CLAIM_SITE,
         replace=A_CLAIM_ABOUT_AN_UNPRODUCED_CODE,
         expect_red="every reachable configuration honours every invariant",
-        why="challenger finding M-01, and the review\u2019s own plant: one more conditional claim, about `offline.permission_revoked`, which reaches a row only as `lastCode` and never as `step.code`. The review measured it green at 98 of 98 against a hand-written five \u2014 L-01 again, inside the guard L-01 produced. Three heads enrolled it by SWEEPING THIS FILE\u2019S TEXT, and the eleventh review then defeated the sweep four ways. The site is enrolled by being EVALUATED now: `claimAbout` registers the code before deciding whether the claim applies, so the plant registers `offline.permission_revoked`, the registry no longer equals its literal total, and the check says which code arrived and which went missing",
+        why="challenger finding M-01, and the review\u2019s own plant: one more conditional claim, about `offline.permission_revoked`, which reaches a row only as `lastCode` and never as `step.code`. The review measured it green at 98 of 98 against a hand-written five — L-01 again, inside the guard L-01 produced. Three heads enrolled it by SWEEPING THIS FILE\u2019S TEXT, and the eleventh review then defeated the sweep four ways. The site is enrolled by being EVALUATED now: `claimAbout` registers the code before deciding whether the claim applies, so the plant registers `offline.permission_revoked`, the registry no longer equals its literal total, and the check says which code arrived and which went missing",
     ),
     Proof(
         law="O-01-AN-ASSEMBLED-CODE-REGISTERS-THE-VALUE-IT-TESTS",
@@ -819,7 +835,7 @@ PROOFS: list[Proof] = [
         find=CLAIM_SITE,
         replace=a_claim_about('"offline." + "permission_revoked"'),
         expect_red="every reachable configuration honours every invariant",
-        why="challenger findings qA and qE of the eleventh review, and the sharpest of them, because the file USED this escape itself: the literal sweep matched a code written as one string, so a code assembled (`\u201coffline.\u201d + \u201cpermission_revoked\u201d`) or interpolated was not enrolled \u2014 and the sweep\u2019s own prose sentinel was assembled three lines above it precisely so the sweep would not see it. A technique a file relies on to hide a string from its own guard is available to whoever writes the next claim. Execution registers the VALUE, so the assembled code is enrolled exactly as the written one is, and the review would not report its green until a control showed the construct live",
+        why="challenger findings qA and qE of the eleventh review, and the sharpest of them, because the file USED this escape itself: the literal sweep matched a code written as one string, so a code assembled (`\u201coffline.\u201d + \u201cpermission_revoked\u201d`) or interpolated was not enrolled — and the sweep\u2019s own prose sentinel was assembled three lines above it precisely so the sweep would not see it. A technique a file relies on to hide a string from its own guard is available to whoever writes the next claim. Execution registers the VALUE, so the assembled code is enrolled exactly as the written one is, and the review would not report its green until a control showed the construct live",
     ),
     Proof(
         law="O-01-A-CLAIM-WHOSE-REGISTRATION-IS-REMOVED-IS-A-CLAIM-NOTHING-BOUNDS",
@@ -827,7 +843,7 @@ PROOFS: list[Proof] = [
         find=CLAIM_SITE,
         replace='                            if (step.code == "offline.not_sendable") {',
         expect_red="every reachable configuration honours every invariant",
-        why="the first proof the coordinator required of the registry, and the one that makes it a derivation rather than a convention. A claim written the old way \u2014 the bare equality, no helper \u2014 asserts everything it asserted before and registers nothing, so `claimsMade` loses `offline.not_sendable` and the literal total is not met. The previous four anchors asked whether the derivation still found something and this asks whether it lost anything, which is the ruling: an anchor must BOUND THE LOSS, because a set that survives is not a set that was not reduced",
+        why="the first proof the coordinator required of the registry, and the one that makes it a derivation rather than a convention. A claim written the old way — the bare equality, no helper — asserts everything it asserted before and registers nothing, so `claimsMade` loses `offline.not_sendable` and the literal total is not met. The previous four anchors asked whether the derivation still found something and this asks whether it lost anything, which is the ruling: an anchor must BOUND THE LOSS, because a set that survives is not a set that was not reduced",
     ),
     Proof(
         law="O-01-THE-COMPANION-S-SPELLING-IS-NOT-PART-OF-THE-GUARD",
@@ -835,7 +851,7 @@ PROOFS: list[Proof] = [
         find="    private companion object {",
         replace="    companion object {",
         expect_red="every reachable configuration honours every invariant",
-        why="plant qC of the eleventh review, paired with the harm. The old sweep cut the companion object out of the text before reading it, by `indexOf(\u201cprivate companion object {\u201d)`; dropping `private` \u2014 a widening nobody would read as a weakening \u2014 made the needle miss, the brace walk excised 728 lines, and the enrolled set fell to two codes with the suite green at 98 of 98. Nothing reads the file now, so the respelling is a no-op and the harm it used to admit reds by name. The edit alone would measure nothing, which is why this proof carries two",
+        why="plant qC of the eleventh review, paired with the harm. The old sweep cut the companion object out of the text before reading it, by `indexOf(\u201cprivate companion object {\u201d)`; dropping `private` — a widening nobody would read as a weakening — made the needle miss, the brace walk excised 728 lines, and the enrolled set fell to two codes with the suite green at 98 of 98. Nothing reads the file now, so the respelling is a no-op and the harm it used to admit reds by name. The edit alone would measure nothing, which is why this proof carries two",
         edits=(THE_HARM,),
     ),
     Proof(
@@ -847,7 +863,7 @@ PROOFS: list[Proof] = [
             '    private val key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"'
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="plant qG of the eleventh review in its mechanism, paired with the harm. qG moved the companion object to the end of the class \u2014 instruments after the thing they serve, a normal ordering, the declaration spelled character for character \u2014 and `indexOf` then matched ITS OWN SOURCE LINE, excising 739 lines, more than half the file, with the enrolled set down to the two codes the anchor happened to check. The defect is that a text in the file which LOOKS like the declaration is indistinguishable from it, which this plant states directly and in two lines rather than by relocating fifty. The relocation itself was measured separately at this head and is recorded in the evidence; here the point is that no line of this file decides what is enrolled",
+        why="plant qG of the eleventh review in its mechanism, paired with the harm. qG moved the companion object to the end of the class — instruments after the thing they serve, a normal ordering, the declaration spelled character for character — and `indexOf` then matched ITS OWN SOURCE LINE, excising 739 lines, more than half the file, with the enrolled set down to the two codes the anchor happened to check. The defect is that a text in the file which LOOKS like the declaration is indistinguishable from it, which this plant states directly and in two lines rather than by relocating fifty. The relocation itself was measured separately at this head and is recorded in the evidence; here the point is that no line of this file decides what is enrolled",
         edits=(THE_HARM,),
     ),
     Proof(
@@ -859,7 +875,7 @@ PROOFS: list[Proof] = [
             '    private val key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"'
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="plant qD of the eleventh review, paired with the harm. The sweep stripped comments before reading the file so that prose could not be load-bearing (N-03), and a STRING holding a comment-opening sequence is not a comment: the block regex ran from that literal to the next closing sequence and deleted 596 lines, with three codes left enrolled and the suite green. The review predicted the two-code anchor would catch this and wrote that prediction down before the run; it did not, because both anchored codes also occur outside the swallowed region \u2014 containment is not survival. The stripper is deleted at this head, along with the sweep it served, so the literal is inert and the harm reds",
+        why="plant qD of the eleventh review, paired with the harm. The sweep stripped comments before reading the file so that prose could not be load-bearing (N-03), and a STRING holding a comment-opening sequence is not a comment: the block regex ran from that literal to the next closing sequence and deleted 596 lines, with three codes left enrolled and the suite green. The review predicted the two-code anchor would catch this and wrote that prediction down before the run; it did not, because both anchored codes also occur outside the swallowed region — containment is not survival. The stripper is deleted at this head, along with the sweep it served, so the literal is inert and the harm reds",
         edits=(THE_HARM,),
     ),
     Proof(
@@ -878,7 +894,7 @@ PROOFS: list[Proof] = [
             '                                foreignScopeRefusals++',
         ),),
         expect_red="every reachable configuration honours every invariant",
-        why="the twelfth review's blocker, and the only FAIL-OPEN this phase has had since L-01. The site is wrapped in a condition that is REACHED \u2014 UNKNOWN_OUTCOME rows do reach that arm and do produce refusals, so the registration fires and the registry's equality is satisfied \u2014 while `offline.not_sendable` is produced only on CAPTURED rows, so the body runs ZERO times. The review then planted proof 64's own harm underneath it, E-04's refusal arm deleted, and measured the pair GREEN at 98 of 98 against rc 1 red by name on a clean subject: a cashier's own capture refused with \u201canother member must confirm this\u201d, with every assertion in the file passing. The observability loop cannot see it either, because the code IS produced \u2014 by the rows the conditioned site no longer looks at. `claimsExercised` records the branch that actually runs the claim, so this plant now reds by name on the site that never exercised. **A registration certifies that a site ran; only the branch inside it certifies that anything was tested.**",
+        why="the twelfth review's blocker, and the only FAIL-OPEN this phase has had since L-01. The site is wrapped in a condition that is REACHED — UNKNOWN_OUTCOME rows do reach that arm and do produce refusals, so the registration fires and the registry's equality is satisfied — while `offline.not_sendable` is produced only on CAPTURED rows, so the body runs ZERO times. The review then planted proof 64's own harm underneath it, E-04's refusal arm deleted, and measured the pair GREEN at 98 of 98 against rc 1 red by name on a clean subject: a cashier's own capture refused with \u201canother member must confirm this\u201d, with every assertion in the file passing. The observability loop cannot see it either, because the code IS produced — by the rows the conditioned site no longer looks at. `claimsExercised` records the branch that actually runs the claim, so this plant now reds by name on the site that never exercised. **A registration certifies that a site ran; only the branch inside it certifies that anything was tested.**",
     ),
     Proof(
         law="Q-01-A-CLAIM-EXERCISED-ONCE-IS-NOT-A-CLAIM-EXERCISED-OVER-ITS-DOMAIN",
@@ -906,7 +922,7 @@ PROOFS: list[Proof] = [
             ),
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="the thirteenth review's blocker, a FAIL-OPEN inside the remedy that review had itself specified one round earlier. The site is wrapped in its OWN PRECONDITION rather than in an excluding state \u2014 `event !is ByScope || permittedToAct(\u2026, Release(\u2026))`, the very condition its second assertion exists to judge. Rows whose actor may release still produce the code, so the site runs, the body runs, and BOTH the made and the exercised equalities are satisfied; the only rows excluded are the ones the assertion is for. With E-04's refusal arm deleted underneath (the third edit, which is why this plant spans two files) the review measured **99 of 99 GREEN**, against rc 1 red by name on a clean subject \u2014 reproduced here on a `git archive 00cf44f` export before the fix was written. A registration of exercise says the claim ran once SOMEWHERE. The count equality reads it as a RATIO against the domain declared for the claim, so the wrapper leaves the body running 6 times against a domain reached 12 times \u2014 measured, not reasoned \u2014 and the shortfall is named with the site, the code and the domain. The wrapper ALONE is green, here as there, and that is correct rather than a miss: without the harm the only productions of the code are rows the wrapper keeps",
+        why="the thirteenth review's blocker, a FAIL-OPEN inside the remedy that review had itself specified one round earlier. The site is wrapped in its OWN PRECONDITION rather than in an excluding state — `event !is ByScope || permittedToAct(\u2026, Release(\u2026))`, the very condition its second assertion exists to judge. Rows whose actor may release still produce the code, so the site runs, the body runs, and BOTH the made and the exercised equalities are satisfied; the only rows excluded are the ones the assertion is for. With E-04's refusal arm deleted underneath (the third edit, which is why this plant spans two files) the review measured **99 of 99 GREEN**, against rc 1 red by name on a clean subject — reproduced here on a `git archive 00cf44f` export before the fix was written. A registration of exercise says the claim ran once SOMEWHERE. The count equality reads it as a RATIO against the domain declared for the claim, so the wrapper leaves the body running 6 times against a domain reached 12 times — measured, not reasoned — and the shortfall is named with the site, the code and the domain. The wrapper ALONE is green, here as there, and that is correct rather than a miss: without the harm the only productions of the code are rows the wrapper keeps",
     ),
     Proof(
         law="Q-02-TWO-SITES-UNDER-ONE-LABEL-RUN-TWICE-THEIR-DOMAIN",
@@ -945,7 +961,7 @@ PROOFS: list[Proof] = [
             + CLAIM_SITE
         ),
         expect_red="a claim about a refusal code is written through the registering helper",
-        why="the half of Q-02 the count cannot see, and the reason the convention check also counts LABELS. A second site under an existing label, in a branch the search never reaches, changes no pair and no count: 6 of 6 still holds and the registry is satisfied. Only the text says there are two sites where the declaration names one. It reds through the CONVENTION CHECK, which is where a text check belongs \u2014 it derives nothing and carries that check's stated fail-open. What it cannot catch is a DECOY that replaces a claim's body in place while keeping its label and its count: measured green at 99 of 99 on this tree, and caught instead by THIS HARNESS, which reports proof 64 as `STAYED GREEN \u2014 the law is undefended` and exits 1. Bounding the loss of a site's CONTENT is what the harness is for; bounding the loss of a SITE is what the registry is for",
+        why="the half of Q-02 the count cannot see, and the reason the convention check also counts LABELS. A second site under an existing label, in a branch the search never reaches, changes no pair and no count: 6 of 6 still holds and the registry is satisfied. Only the text says there are two sites where the declaration names one. It reds through the CONVENTION CHECK, which is where a text check belongs — it derives nothing and carries that check's stated fail-open. What it cannot catch is a DECOY that replaces a claim's body in place while keeping its label and its count: measured green at 99 of 99 on this tree, and caught instead by THIS HARNESS, which reports proof 64 as `STAYED GREEN — the law is undefended` and exits 1. Bounding the loss of a site's CONTENT is what the harness is for; bounding the loss of a SITE is what the registry is for",
     ),
     Proof(
         law="Q-03-A-LOCAL-VARIABLE-IS-NOT-A-SPELLING",
@@ -964,7 +980,7 @@ PROOFS: list[Proof] = [
             + CLAIM_SITE
         ),
         expect_red="a claim about a refusal code is written through the registering helper",
-        why="the thirteenth review's Q-03, and the correction it asked for in the DISCLOSURE as much as in the code. The convention check said its fail-open was that \u201ca steered spelling escapes it\u201d, and the review measured two escapes that are not spellings: a local variable assigned from `step.code` and then compared, and the same comparison broken across two lines \u2014 each green at 99 of 99 with its control red. An assignment is a pattern now, so this plant reds; the line break is NOT reachable by a line-wise check and the disclosure says so in those words instead. A fail-open stated too kindly is worse than one stated plainly, because a reader believes the kind version",
+        why="the thirteenth review's Q-03, and the correction it asked for in the DISCLOSURE as much as in the code. The convention check said its fail-open was that \u201ca steered spelling escapes it\u201d, and the review measured two escapes that are not spellings: a local variable assigned from `step.code` and then compared, and the same comparison broken across two lines — each green at 99 of 99 with its control red. An assignment is a pattern now, so this plant reds; the line break is NOT reachable by a line-wise check and the disclosure says so in those words instead. A fail-open stated too kindly is worse than one stated plainly, because a reader believes the kind version",
     ),
     Proof(
         law="P-03-AN-ANCHOR-BOUNDS-THE-LOSS-OF-A-SITE-NOT-OF-A-CODE",
@@ -984,7 +1000,7 @@ PROOFS: list[Proof] = [
             '                            if (step.code == "offline.not_sendable") {'
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="the twelfth review's P-03, filed latent and fixed as filed. A second LAWFUL claim about `offline.not_sendable` is added and the original site's registration is removed, its claim left as a bare equality. Keyed on CODES the two sites collapsed into one member, so the set was unchanged and the removal was invisible \u2014 green at 98 of 98 \u2014 while this check's own KDoc promised that a removed registration reddens. No code has two sites today; the promise is what made that latent rather than harmless. The registry is keyed on (site, code) PAIRS now, which is the coordinator's amendment that an anchor bounds the loss of the thing that can be LOST, and what can be lost is a site",
+        why="the twelfth review's P-03, filed latent and fixed as filed. A second LAWFUL claim about `offline.not_sendable` is added and the original site's registration is removed, its claim left as a bare equality. Keyed on CODES the two sites collapsed into one member, so the set was unchanged and the removal was invisible — green at 98 of 98 — while this check's own KDoc promised that a removed registration reddens. No code has two sites today; the promise is what made that latent rather than harmless. The registry is keyed on (site, code) PAIRS now, which is the coordinator's amendment that an anchor bounds the loss of the thing that can be LOST, and what can be lost is a site",
     ),
     Proof(
         law="P-02-A-CLAIM-WRITTEN-AROUND-THE-HELPER-IS-ENROLLED-BY-NOTHING",
@@ -1002,7 +1018,7 @@ PROOFS: list[Proof] = [
             + CLAIM_SITE
         ),
         expect_red="a claim about a refusal code is written through the registering helper",
-        why="the residual this session disclosed and the twelfth review measured: a conditional claim written AROUND the helper is enrolled by neither registry, so this exact plant \u2014 the tenth review's \u2014 was green at 98 of 98 on the head before this one, with its control (the same construct, a produced code, a false assertion) rc 1 red by name, so the green was genuine vacuity. This is the proof that was RETIRED one round ago because it could no longer redden, and it is restored here reddening through the CONVENTION CHECK the coordinator ruled in: that check derives nothing, states its own fail-open in its message, and can only ADD reds \u2014 a subject set steered by text yields a false green, a prohibition steered by text yields nothing, so its worst case is the residual it replaces. Note which test it reds: the convention check, not the registry",
+        why="the residual this session disclosed and the twelfth review measured: a conditional claim written AROUND the helper is enrolled by neither registry, so this exact plant — the tenth review's — was green at 98 of 98 on the head before this one, with its control (the same construct, a produced code, a false assertion) rc 1 red by name, so the green was genuine vacuity. This is the proof that was RETIRED one round ago because it could no longer redden, and it is restored here reddening through the CONVENTION CHECK the coordinator ruled in: that check derives nothing, states its own fail-open in its message, and can only ADD reds — a subject set steered by text yields a false green, a prohibition steered by text yields nothing, so its worst case is the residual it replaces. Note which test it reds: the convention check, not the registry",
     ),
     Proof(
         law="O-02-A-STALE-EXEMPTION-REDDENS-WHEREVER-THE-MAP-IS-DECLARED",
@@ -1014,7 +1030,7 @@ PROOFS: list[Proof] = [
             '    private val key = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"'
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="plant qB of the eleventh review, and the one that showed the previous head\u2019s governance was keyed to a LOCATION. The three assertions that make an exemption a claim of its own were sound; what carried them was a sweep of this file with the companion cut out, so declaring the map in the class body instead \u2014 legal, and what anyone does consolidating a test\u2019s data \u2014 swept the key into the set the key was then checked against, `key in claimed` true of its own input, and the hole N-02 was written to close was one `private val` away from open. The exemption is read as a VALUE from wherever it is declared now, and this plant reds by name with the stale key named",
+        why="plant qB of the eleventh review, and the one that showed the previous head\u2019s governance was keyed to a LOCATION. The three assertions that make an exemption a claim of its own were sound; what carried them was a sweep of this file with the companion cut out, so declaring the map in the class body instead — legal, and what anyone does consolidating a test\u2019s data — swept the key into the set the key was then checked against, `key in claimed` true of its own input, and the hole N-02 was written to close was one `private val` away from open. The exemption is read as a VALUE from wherever it is declared now, and this plant reds by name with the stale key named",
     ),
     Proof(
         law="O-03-A-CLAIM-SITE-NOTHING-EVALUATES-REGISTERS-NOTHING",
@@ -1022,7 +1038,7 @@ PROOFS: list[Proof] = [
         find="                            if (aFinishedRowAnsweringAPerson) {",
         replace="                            if (false && aFinishedRowAnsweringAPerson) {",
         expect_red="every reachable configuration honours every invariant",
-        why="the honest cost of deriving the subject set from EXECUTION, measured here rather than left for the next review to find \u2014 and the review said it would attack exactly this. A claim site in a branch nothing reaches registers nothing, so INV-15\u2019s two codes would vanish from `claimsMade` as quietly as a missed spelling once did. That is what the literal total is for: the registry is asserted for EQUALITY, so the two codes go missing by name. The site\u2019s own non-vacuity assertion (`terminalRefusals > 0`) is the second net, and the registry equality is asserted first so the message a reader sees names the codes",
+        why="the honest cost of deriving the subject set from EXECUTION, measured here rather than left for the next review to find — and the review said it would attack exactly this. A claim site in a branch nothing reaches registers nothing, so INV-15\u2019s two codes would vanish from `claimsMade` as quietly as a missed spelling once did. That is what the literal total is for: the registry is asserted for EQUALITY, so the two codes go missing by name. The site\u2019s own non-vacuity assertion (`terminalRefusals > 0`) is the second net, and the registry equality is asserted first so the message a reader sees names the codes",
     ),
     Proof(
         law="N-02-AN-EXEMPTION-MAY-NOT-HIDE-A-LIVE-OBLIGATION",
@@ -1129,7 +1145,7 @@ PROOFS: list[Proof] = [
             ),
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="the fourteenth review's R-01, and the hole it measured was in the ACCOUNTING rather than in any site. The denominator was chosen by an exhaustive `when`, so a new `ClaimDomain` value was forced to supply one \u2014 fail-closed. The partition that makes a narrow domain honest was guarded by `if (domain == ON_A_FOREIGN_SCOPE_REFUSAL)`, so a THIRD value got a denominator and no accounting at all, with the compiler silent. This is the review's own plant, seven edits across two files, each one a shape the file already contained and none of them inside the branch the site sits in: the value, a counter beside the others incremented at the TOP of the refusal arm, the `when` branch, E-04's claim redeclared over it, the site wrapped in that same condition, and E-04's refusal arm deleted underneath. **It measured 99 of 99 GREEN at `fe41d84`**, a cashier again told a colleague must confirm their own capture. What reds it now is that the gap is found by MEASURING it \u2014 any denominator below every production of the code is a gap, whatever its domain is called \u2014 and that a gap must be covered by something NAMED, which for this plant does not exist",
+        why="the fourteenth review's R-01, and the hole it measured was in the ACCOUNTING rather than in any site. The denominator was chosen by an exhaustive `when`, so a new `ClaimDomain` value was forced to supply one — fail-closed. The partition that makes a narrow domain honest was guarded by `if (domain == ON_A_FOREIGN_SCOPE_REFUSAL)`, so a THIRD value got a denominator and no accounting at all, with the compiler silent. This is the review's own plant, seven edits across two files, each one a shape the file already contained and none of them inside the branch the site sits in: the value, a counter beside the others incremented at the TOP of the refusal arm, the `when` branch, E-04's claim redeclared over it, the site wrapped in that same condition, and E-04's refusal arm deleted underneath. **It measured 99 of 99 GREEN at `fe41d84`**, a cashier again told a colleague must confirm their own capture. What reds it now is that the gap is found by MEASURING it — any denominator below every production of the code is a gap, whatever its domain is called — and that a gap must be covered by something NAMED, which for this plant does not exist",
     ),
     Proof(
         law="R-01-A-COVER-THAT-NAMES-A-CLAIM-THAT-IS-NOT-THERE-COVERS-NOTHING",
@@ -1145,7 +1161,7 @@ PROOFS: list[Proof] = [
             "                ),"
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="a cover is a NAME, so the name has to resolve. The narrow claim's gap is declared to be covered by another claim about the same code over every production, and this plant points that declaration at a site nothing declares \u2014 a rename of the covering claim does the same thing by accident. Without this assertion the cover would be a comment with a type: the author writes a plausible site, the partition is never read, and the productions in the gap are judged by nothing while the file says they are covered",
+        why="a cover is a NAME, so the name has to resolve. The narrow claim's gap is declared to be covered by another claim about the same code over every production, and this plant points that declaration at a site nothing declares — a rename of the covering claim does the same thing by accident. Without this assertion the cover would be a comment with a type: the author writes a plausible site, the partition is never read, and the productions in the gap are judged by nothing while the file says they are covered",
     ),
     Proof(
         law="R-01-A-GAP-DECLARED-EMPTY-IS-MEASURED-EMPTY-OR-IT-REDS",
@@ -1161,7 +1177,7 @@ PROOFS: list[Proof] = [
             "                ),"
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="the other half of the same requirement, and the one the review warned about: a reason is not a measurement. The second way to cover a gap is to say there is no gap, and an author who says so is believed only to the extent that the gap is then measured at ZERO. Here the sentence is false \u2014 the code has a second producer, E-04's own arm on a CAPTURED row \u2014 and the plant reds with the measured count beside the claim. If the reason alone were enough, this is the edit that would make any narrow domain honest by assertion",
+        why="the other half of the same requirement, and the one the review warned about: a reason is not a measurement. The second way to cover a gap is to say there is no gap, and an author who says so is believed only to the extent that the gap is then measured at ZERO. Here the sentence is false — the code has a second producer, E-04's own arm on a CAPTURED row — and the plant reds with the measured count beside the claim. If the reason alone were enough, this is the edit that would make any narrow domain honest by assertion",
     ),
     Proof(
         law="INV-9C-A-COLLEAGUES-CAPTURE-IS-REFUSED-ONLY-WHERE-THE-ACTOR-MAY-NOT-RELEASE-IT",
@@ -1169,7 +1185,7 @@ PROOFS: list[Proof] = [
         find="        if (state == OperationState.CAPTURED && !acting.mayAct(scope, QueueEvent.Release(acting))) {",
         replace="        if (state == OperationState.CAPTURED) {",
         expect_red="every reachable configuration honours every invariant",
-        why="the claim added for R-01 is a claim, so it is defended like one rather than taken on trust. Drop the permission half of this arm and a CAPTURED row is refused `offline.another_members_capture` \u2014 whose view tells the merchant that a colleague must confirm it \u2014 to the very session that captured it and may release it itself. The new claim asks of EVERY production of that code whether this acting session may release the row, computing the answer from the acting scope with this file's own permission function, and reds by name here. Without it the cover for INV-9a's narrow domain would be a name pointing at an assertion that could not fail",
+        why="the claim added for R-01 is a claim, so it is defended like one rather than taken on trust. Drop the permission half of this arm and a CAPTURED row is refused `offline.another_members_capture` — whose view tells the merchant that a colleague must confirm it — to the very session that captured it and may release it itself. The new claim asks of EVERY production of that code whether this acting session may release the row, computing the answer from the acting scope with this file's own permission function, and reds by name here. Without it the cover for INV-9a's narrow domain would be a name pointing at an assertion that could not fail",
     ),
     Proof(
         law="R-01-A-NARROW-DOMAIN-WITH-NO-DECLARED-COVER-IS-A-FAILURE-BEFORE-IT-IS-MEASURED",
@@ -1188,7 +1204,7 @@ PROOFS: list[Proof] = [
             "            Map<Pair<String, String>, WhatCoversTheRest> = emptyMap()"
         ),
         expect_red="a claim about a refusal code is written through the registering helper",
-        why="the coordinator's condition on R-01: the accounting must be FAIL-CLOSED, so a new domain is a failure until its accounting exists rather than a hole waiting for a search to reach it. Three things stand between a domain and silence, and this plant is the one that tests the first: the denominator's `when` is exhaustive with no `else`, so the compiler refuses a value with no denominator; a DECLARED narrow domain with no entry in this map reds here, before any count is read; and a MEASURED gap with no cover reds in the model check. Emptying the map leaves every count true \u2014 the search is unchanged \u2014 and reds on the declaration alone, which is what makes the rule independent of what this particular search happens to reach",
+        why="the coordinator's condition on R-01: the accounting must be FAIL-CLOSED, so a new domain is a failure until its accounting exists rather than a hole waiting for a search to reach it. Three things stand between a domain and silence, and this plant is the one that tests the first: the denominator's `when` is exhaustive with no `else`, so the compiler refuses a value with no denominator; a DECLARED narrow domain with no entry in this map reds here, before any count is read; and a MEASURED gap with no cover reds in the model check. Emptying the map leaves every count true — the search is unchanged — and reds on the declaration alone, which is what makes the rule independent of what this particular search happens to reach",
     ),
     Proof(
         law="T-02-NARROWING-THE-WAIT-JUDGMENT-DROPS-A-CLASS-TOTAL",
@@ -1259,7 +1275,7 @@ PROOFS: list[Proof] = [
         replace="",
         expect_red="every reachable configuration honours every invariant",
         why=(
-            "the same, on the judgment the round before this one exists to protect \u2014 that a "
+            "the same, on the judgment the round before this one exists to protect — that a "
             "refusal is never shown as something that left the device when nothing was sent. Its "
             "brand-new anchor did not notice its deletion: 99 of 99 GREEN with 312 passing"
         ),
@@ -1291,7 +1307,7 @@ PROOFS: list[Proof] = [
             "predicate with `true` leaves every row arriving and every total holding: a count "
             "sees reach, never content. Measured at the previous head with this exact hollowing "
             "and nothing else: suite 99 of 99 GREEN, and the harness exited 1 only because F-2 "
-            "refused a substitution \u2014 the kernel plant for that judgment moved the WAIT "
+            "refused a substitution — the kernel plant for that judgment moved the WAIT "
             "counter to 1077 and the wait anchor red first, so the declared refusal never "
             "printed. An incidental catch by an unrelated anchor is not an instrument, which is "
             "the third time in this round that distinction has decided a finding. So the "
@@ -1352,7 +1368,7 @@ PROOFS: list[Proof] = [
             "two cases per branch rather than one, for the same reason there are two per "
             "predicate: a dispatch stuck at FALSE judges nothing it exists to judge and would "
             "pass a refusal arm offered alone. It reds inside the walk itself, on the first "
-            "honest wait it meets, before the accept arm below is reached \u2014 which is the "
+            "honest wait it meets, before the accept arm below is reached — which is the "
             "right order and is why both arms exist"
         ),
     ),
@@ -1365,9 +1381,27 @@ PROOFS: list[Proof] = [
         why=(
             "what a one-line edit at a call site CAN still change, now that it passes no "
             "predicate: which judgment the row is put to. It is not silent, because the kind is "
-            "also the counter's key \u2014 the swap moves 312 rows onto the wait total and the "
+            "also the counter's key — the swap moves 312 rows onto the wait total and the "
             "per-state anchors red. Measured: 98 of 99. This is the pair to the two above: the "
             "dispatch is armed from inside, the kind from the counts"
+        ),
+    ),
+    Proof(
+        law="S-1-THE-SHAPE-TRIPWIRE-CANNOT-BE-LEFT-UNARMED",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="""            judgmentsByState.entries.filter { it.key.first == "transmissions" }\n""",
+        replace="""            judgmentsByState.entries.filter { it.key.first == "waits" }\n""",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the coordinator's S-1 on `9809db1`: the guard that announces when the per-state "
+            "anchor stops being able to see a kind swap was armed by nothing, and deleting it "
+            "left the suite at 99 of 99. This plant makes the guard's precondition false in the "
+            "only way one edit can — it points the second reading at the first, so the two "
+            "shapes coincide — and the guard must refuse. The bound, said rather than "
+            "hidden: no single edit makes the two DISTRIBUTIONS coincide without a nearer guard "
+            "firing first, because a row judged under the wrong kind trips the helper or the "
+            "per-state anchor before this line is reached. So this arms the tripwire, not the "
+            "convergence it warns about"
         ),
     ),
     Proof(
@@ -1384,8 +1418,8 @@ PROOFS: list[Proof] = [
             "the arms are put rows the WALK produced, not rows written beside them, because a row "
             "built next to its own arm is a row chosen to pass it. The cost is that a witness can "
             "be absent, and an arm that skips because its witness is null measures nothing. So "
-            "each witness is REQUIRED to exist, by name, before its arm runs \u2014 fail on "
-            "absence, never skip \u2014 and this plant removes one and reds on that refusal"
+            "each witness is REQUIRED to exist, by name, before its arm runs — fail on "
+            "absence, never skip — and this plant removes one and reds on that refusal"
         ),
     ),
     Proof(
@@ -1407,13 +1441,13 @@ PROOFS: list[Proof] = [
             "by nothing here. `184f7d7` added `transmissionsJudged` and pinned it at 312, and none "
             "of the frozen refusals was that judgment's message, so hollowing the assertion to "
             "`true` left the suite at 99 of 99 with the counter and every literal total untouched "
-            "\u2014 one changed line, invisible to both instruments. A count bounds the gate's "
+            "— one changed line, invisible to both instruments. A count bounds the gate's "
             "REACH and never what the judgment says, which is U-01 one layer down. The review "
             "built the severity rather than asserting it: this code is produced 6 times with "
             "`attempts == 0`, all on QUEUED rows, measured, so pointing it at a message that "
             "asserts a transmission is a refusal shown to a cashier as something that left the "
-            "device when nothing was sent. It is caught twice over \u2014 here, and by "
-            "`RecoveryTest` reading the same mapping independently in another file \u2014 which is "
+            "device when nothing was sent. It is caught twice over — here, and by "
+            "`RecoveryTest` reading the same mapping independently in another file — which is "
             "why the review rated the gap P3 and recorded that its attack did not escape"
         ),
     ),
@@ -1429,8 +1463,8 @@ PROOFS: list[Proof] = [
         expect_red="no answer outside 2xx can ever produce Synced",
         why=(
             "R-03, found while recording the sixteenth review's withdrawal of T-02 and measured "
-            "before it was written down. This is THE load-bearing sweep \u2014 the one that says no "
-            "answer outside 2xx can ever report a sale as committed \u2014 and its exhaustiveness was "
+            "before it was written down. This is THE load-bearing sweep — the one that says no "
+            "answer outside 2xx can ever report a sale as committed — and its exhaustiveness was "
             "anchored at `700 * codes.size * 3 * retryAfters.size`, two of whose four factors are "
             "read from the very lists the sweep walks. So a narrowing moved BOTH terms: deleting "
             "ONE server code from the list left the whole suite at 99 of 99 GREEN, rc 0, with "
@@ -1438,7 +1472,7 @@ PROOFS: list[Proof] = [
             "of 184,800 with no name saying so. The existing sweep proof attacked the STATUS "
             "range, the one factor written as a literal, which is why fourteen rounds never "
             "reached this. What reds it now is the DOMAIN pinned by value and the total written "
-            "as a literal 184,800 \u2014 the same answer S-02 and T-02 got, in the sweep neither "
+            "as a literal 184,800 — the same answer S-02 and T-02 got, in the sweep neither "
             "review looked at"
         ),
     ),
@@ -1485,7 +1519,7 @@ PROOFS: list[Proof] = [
             "                                    )"
         ),
         expect_red="every reachable configuration honours every invariant",
-        why="the fifteenth review's S-02, and it is the cost of the design that answered the attack announced before it. The predicate that defines the narrow domain is hoisted ONCE and read by both the counter and the branch \u2014 deliberately, because two copies of a predicate drift apart \u2014 so NARROWING it moves the numerator and the denominator together: `ran == denominator` holds by construction, the complement counter's own `!aForeignScopeRefusal && state == CAPTURED` absorbs exactly what the narrowing expelled, the measured gap still has its declared cover, and every R-01 instrument stays green. Five lines inside an existing `&&`, no new value, claim or map entry, **99 of 99 at `ae18b10`** \u2014 and the model check silently stopped judging which CODE and which LAW a colleague's captured row is refused with, which the review then showed by an A/B on a law-id harm: red in both trees from a hand-written unit test, red in the model check only on the unnarrowed one. A ratio cannot see a narrowing that moves both of its terms, so what reds this plant is a LITERAL TOTAL PER CLASS: an anchor that bounds the LOSS instead of one the narrowing preserves. 1,125 foreign-scope productions of the code become 1,110 and the anchor names the class",
+        why="the fifteenth review's S-02, and it is the cost of the design that answered the attack announced before it. The predicate that defines the narrow domain is hoisted ONCE and read by both the counter and the branch — deliberately, because two copies of a predicate drift apart — so NARROWING it moves the numerator and the denominator together: `ran == denominator` holds by construction, the complement counter's own `!aForeignScopeRefusal && state == CAPTURED` absorbs exactly what the narrowing expelled, the measured gap still has its declared cover, and every R-01 instrument stays green. Five lines inside an existing `&&`, no new value, claim or map entry, **99 of 99 at `ae18b10`** — and the model check silently stopped judging which CODE and which LAW a colleague's captured row is refused with, which the review then showed by an A/B on a law-id harm: red in both trees from a hand-written unit test, red in the model check only on the unnarrowed one. A ratio cannot see a narrowing that moves both of its terms, so what reds this plant is a LITERAL TOTAL PER CLASS: an anchor that bounds the LOSS instead of one the narrowing preserves. 1,125 foreign-scope productions of the code become 1,110 and the anchor names the class",
     ),
 ]
 
@@ -1678,8 +1712,7 @@ def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
             ],
             "NOTHING DECLARED",
         )
-    tree = tempfile.mkdtemp(prefix="p7-omission-arm-")
-    TREES_THIS_RUN.append(tree)
+    tree = a_tree("p7-omission-arm-")
     for part in ("src", "test"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(tree, part))
     target = os.path.join(tree, COVER_MAP_FILE)
@@ -1689,7 +1722,7 @@ def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
         return (
             [
                 f"the omission arm's edit matched {hits} times in {COVER_MAP_FILE} (must be "
-                f"exactly 1) \u2014 THE ARM DID NOT LAND, so the one line the cover obligation "
+                f"exactly 1) — THE ARM DID NOT LAND, so the one line the cover obligation "
                 f"rests on is unmeasured again, which is T-01"
             ],
             f"ARM DID NOT LAND ({hits} matches)",
@@ -1709,7 +1742,7 @@ def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
         return (
             [
                 "the omission arm deleted the loop that prints the covers and the run printed "
-                f"covers anyway: {sorted(printed)} \u2014 something else prints them, so this arm "
+                f"covers anyway: {sorted(printed)} — something else prints them, so this arm "
                 f"is not measuring what it claims to"
             ],
             "ARM MEASURED NOTHING",
@@ -1719,7 +1752,7 @@ def omission_arm(declared: set[tuple[str, str]]) -> tuple[list[str], str]:
         return (
             [
                 "the omission arm removed every printed cover and the comparison did not refuse: "
-                f"{refusals or 'no refusal at all'} \u2014 the obligation fails OPEN on absence, "
+                f"{refusals or 'no refusal at all'} — the obligation fails OPEN on absence, "
                 f"which is T-01"
             ],
             "NO REFUSAL ON ABSENCE",
@@ -1743,14 +1776,14 @@ def cover_failures(
     for cover in sorted(declared - printed):
         failures.append(
             f"the cover naming {cover[0]} for a narrow domain about {cover[1]} is DECLARED in "
-            f"{COVER_MAP_FILE} and was never PRINTED by the run \u2014 the loop that prints the "
+            f"{COVER_MAP_FILE} and was never PRINTED by the run — the loop that prints the "
             f"declared covers is how this harness learns what to check, so a cover missing from "
             f"the run is an unbounded cover, not an absent one (F-1: omission)"
         )
     for cover in sorted(printed - declared):
         failures.append(
             f"the run PRINTED a cover naming {cover[0]} for a narrow domain about {cover[1]} "
-            f"that no declaration in {COVER_MAP_FILE} contains \u2014 the two derivations of "
+            f"that no declaration in {COVER_MAP_FILE} contains — the two derivations of "
             f"this set disagree, and a disagreement is a refusal (F-1: forgery)"
         )
     for cover in sorted(printed):
@@ -1758,7 +1791,7 @@ def cover_failures(
         if law is None:
             failures.append(
                 f"the claim at {cover[0]} is named as the cover for a narrow domain about "
-                f"{cover[1]}, and no proof in this file is declared to defend it \u2014 a cover "
+                f"{cover[1]}, and no proof in this file is declared to defend it — a cover "
                 f"checked for its domain and its ratio but never for what it asserts is a name, "
                 f"and a claim whose body cannot fail satisfies both of those checks"
             )
@@ -2120,6 +2153,14 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
     'R18-01-THE-WAIT-DISPATCH-CANNOT-BE-REPLACED-BY-TRUE': (
         'org.opentest4j.AssertionFailedError: put a CAPTURED row with nothing pending, the helper did not refuse the WAIT judgment, so either its dispatch no longer reads that predicate or it no longer fails on a false judgment, and every wait judged in the walk above judged nothing'
     ),
+    # R18-01, the eighteenth challenger's P1. Naming the predicate closed hollowing
+    # of its BODY and opened hollowing of the ARGUMENT, so these five proofs arm the
+    # call itself: the two dispatch branches, a branch stuck at false, a call site
+    # that names the other kind, and a witness that goes missing. Their expectations
+    # are the messages a harvest run printed, not sentences written here.
+    'S-1-THE-SHAPE-TRIPWIRE-CANNOT-BE-LEFT-UNARMED': (
+        'org.opentest4j.AssertionFailedError: the two judgments now have the SAME per-state distribution, so the anchor above can no longer see a call site that names the other kind: swapping both sites would move every figure onto an identical one. Add a discriminator the swap cannot preserve before trusting that anchor again ==> expected: not equal but was: <{QUEUED=400, IN_FLIGHT=210, UNKNOWN_OUTCOME=330, CAPTURED=1}>'
+    ),
 }
 
 # A refusal whose text a plant makes nondeterministic cannot be frozen whole,
@@ -2149,13 +2190,13 @@ def exemption_failures(proofs: tuple[Proof, ...] | list[Proof]) -> list[str]:
     for law in sorted(HARM_IS_NONDETERMINISTIC - draws):
         failures.append(
             f"{law} is exempted from freezing the VALUES in its refusal because its plant draws "
-            f"them, and this run's plant for it draws nothing \u2014 a stale exemption is a "
+            f"them, and this run's plant for it draws nothing — a stale exemption is a "
             f"refusal nobody is binding"
         )
     for law in sorted(draws - HARM_IS_NONDETERMINISTIC):
         failures.append(
             f"{law}'s plant draws a value rather than deriving it, so the numbers in its refusal "
-            f"differ every run, and it is not in HARM_IS_NONDETERMINISTIC \u2014 a frozen "
+            f"differ every run, and it is not in HARM_IS_NONDETERMINISTIC — a frozen "
             f"expectation holding those numbers would pass once and rot"
         )
     return failures
@@ -2224,7 +2265,7 @@ def coordinate_failures() -> list[str]:
     """No frozen expectation may hold a coordinate the subject's edits move.
 
     The second thing this round learned by being caught: a line NUMBER inside a
-    refusal is as volatile as a drawn value, and for a worse reason \u2014 it moves
+    refusal is as volatile as a drawn value, and for a worse reason — it moves
     when an unrelated line is added above it, so the expectation rots on the
     next commit rather than on the next run. Such a refusal is frozen as
     FRAGMENTS around the coordinate instead, and this refuses the whole-message
@@ -2236,7 +2277,7 @@ def coordinate_failures() -> list[str]:
             if LINE_COORDINATE.search(fragment):
                 failures.append(
                     f"{law}'s expected refusal holds a line number ({fragment[-60:]!r}), which "
-                    f"this file's own edits move \u2014 freeze the prose and the spelling as "
+                    f"this file's own edits move — freeze the prose and the spelling as "
                     f"separate fragments and leave the coordinate out"
                 )
     return failures
@@ -2267,7 +2308,7 @@ def refusal_mismatch(law: str, expect_red: str, details: dict[str, str]) -> str 
     return (
         f"{law}: '{expect_red}' failed, but not with the refusal this proof declares. "
         f"expected to contain: {expected!r}; printed: {printed or 'no refusal line at all'} "
-        f"\u2014 a proof that reddens for an unrelated reason measures the test's existence, "
+        f"— a proof that reddens for an unrelated reason measures the test's existence, "
         f"not the law (F-2)"
     )
 
@@ -2290,13 +2331,57 @@ LAWS_THE_KERNEL_DECLARES = 20
 LAWS_KT = os.path.join("src", "app", "daftar", "offline", "Laws.kt")
 
 
+def kotlin_code_only(text: str) -> str:
+    """`Laws.kt` with its comments removed, so a comment declares nothing.
+
+    R19-05, the nineteenth challenge: the census matched any QUOTED id anywhere
+    in the file, a comment included, and the challenger built the withdrawal an
+    author would actually write — delete the law, keep its id in a comment so
+    the history reads. Both files read as twenty ids with `P7-L14` present. The
+    census's own sentence is about what the kernel DECLARES, and a comment
+    declares nothing, so the comments go before the regex runs. Line comments
+    and block comments both, and a `//` inside a string literal is left alone,
+    because removing one would make the census blind to a real declaration.
+    """
+    out, i, n = [], 0, len(text)
+    in_string = False
+    while i < n:
+        c = text[i]
+        if in_string:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                in_string = False
+            i += 1
+            continue
+        if c == '"':
+            in_string = True
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            i = n if j == -1 else j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j == -1 else j + 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def law_ids_the_kernel_declares(root: str) -> set[str]:
     path = os.path.join(root, LAWS_KT)
     try:
         text = open(path, encoding="utf-8").read()
     except OSError as exc:
         raise CannotRead(f"{LAWS_KT} could not be read ({exc}), so the law set is unknown")
-    ids = set(LAW_ID_IN_THE_KERNEL.findall(text))
+    ids = set(LAW_ID_IN_THE_KERNEL.findall(kotlin_code_only(text)))
     if len(ids) != LAWS_THE_KERNEL_DECLARES:
         raise CannotRead(
             f"{LAWS_KT} declares {len(ids)} law ids and this census is pinned to "
@@ -2382,7 +2467,7 @@ def self_test() -> int:
     DELETING it, and recorded that no plant reaches it. A plant cannot: the
     guards live in this file, and this file is the instrument rather than the
     subject. So they are armed here, and `main` runs this as its own first step
-    through a separate interpreter \u2014 never by importing it, because a gate
+    through a separate interpreter — never by importing it, because a gate
     inside the set it measures has to run as a subprocess.
     """
     cover = ("INV-9c/x", "offline.c")
@@ -2591,8 +2676,7 @@ def self_test() -> int:
     # `Laws.kt` and required to refuse BY the CannotRead they raise, because a
     # pin nothing exercises is a sentence — which is the finding.
     def laws_kt_holding(ids: list[str]) -> str:
-        tree = tempfile.mkdtemp(prefix="p7-census-arm-")
-        TREES_THIS_RUN.append(tree)
+        tree = a_tree("p7-census-arm-")
         path = os.path.join(tree, LAWS_KT)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         body = "\n".join(f'    val L{i} = Law("{law}")' for i, law in enumerate(ids))
@@ -2688,6 +2772,36 @@ def self_test() -> int:
         not the_wrapper_pin_holds(wrapper_text + "\n  export PY=/tmp/not-the-pinned-interpreter\n")
         and not the_wrapper_pin_holds(wrapper_text + "\nreadonly PY=/tmp/not-the-pinned-interpreter\n"),
     )
+    # R19-01's arms: the three shapes the challenger walked past the old
+    # SHAPE LIST with, each a single added line that `.strip()` leaves starting
+    # with something the regex did not recognise. Under byte equality each is
+    # simply a line the pinned code does not have.
+    for _shape, _line in (
+        ("a compound command on one line", 'true; PY=/tmp/not-the-pinned-interpreter'),
+        ("an `if` wrapper", 'if true; then PY=/tmp/not-the-pinned-interpreter; fi'),
+        ("a brace group", '{ PY=/tmp/not-the-pinned-interpreter; }'),
+    ):
+        expect(
+            f"a second assignment hidden behind {_shape} is a refusal (R19-01)",
+            not the_wrapper_pin_holds(
+                wrapper_text.replace(
+                    "PY=/usr/bin/python3", "PY=/usr/bin/python3\n" + _line, 1
+                )
+            ),
+        )
+    # And the other direction, because a pin that reds on prose is a false red
+    # and a hardening causing one is not hardening: a comment added or changed
+    # is NOT a difference, which is the whole reason the pin reads code lines.
+    expect(
+        "a comment added to the wrapper is not a refusal (R19-01)",
+        the_wrapper_pin_holds(
+            wrapper_text.replace(
+                "PY=/usr/bin/python3",
+                "# a comment that even quotes PY=/tmp/not-the-pinned-interpreter\nPY=/usr/bin/python3",
+                1,
+            )
+        ),
+    )
     expect(
         "the pinned assignment REMOVED is a refusal, so the pin is not vacuous (R18-02)",
         not the_wrapper_pin_holds(wrapper_text.replace("PY=/usr/bin/python3\n", "", 1)),
@@ -2698,6 +2812,201 @@ def self_test() -> int:
         == "[self-test] SELF-TEST: 1 of 1 guard branches armed.\n[self-test] TREES: 0 made\n"
         and marked_as_the_childs("") == ""
         and "\n" not in marked_as_the_childs("one line").rstrip("\n"),
+    )
+    # F-I's arms. The first is the "derive the set from the other side" shape
+    # that closed F-G: one tree is planted under EVERY prefix the tuple
+    # declares, and the census must return all of them. A prefix the census
+    # cannot see therefore reds here, rather than on a disk nobody is watching.
+    # These are planted with `mkdtemp` directly and not through `a_tree`,
+    # because `a_tree` registers a tree as THIS run's and the census excludes
+    # this run's trees by design; what is measured here is which PREFIXES the
+    # census recognises. They are scrubbed immediately, and never registered,
+    # so they cannot be counted as either made or left.
+    planted_one_each = [tempfile.mkdtemp(prefix=prefix) for prefix in TREE_PREFIXES]
+    censused = set(strays_from_earlier_runs())
+    for stray in planted_one_each:
+        scrub(stray)
+    expect(
+        "the stray census returns a tree under EVERY prefix this harness creates under (F-I)",
+        censused >= set(planted_one_each),
+    )
+
+    def a_tree_outside_the_tuple() -> str:
+        try:
+            a_tree("p7-not-in-the-tuple-")
+        except CannotRead as exc:
+            return str(exc)
+        return ""
+
+    expect(
+        "a tree asked for under a prefix the census does not know is REFUSED by name (F-I)",
+        "REFUSED-P7-TREE-PREFIX-NOT-CENSUSED" in a_tree_outside_the_tuple(),
+    )
+    # S-4's arms. These three verdicts used to be inline branches in
+    # `__main__`, outside this census; the coordinator's point was that being
+    # reachable is not being counted, which is F-G one layer out. Every branch
+    # of each is armed here, including the ones that must stay SILENT, because a
+    # verdict that refuses when nothing is wrong is a false red and this
+    # harness's own rule is that a hardening causing one is not hardening.
+    _one_run = one_runs_worth_of_trees()
+    _some = [f"/tmp/p7-proof-{i}-x" for i in range(_one_run)]
+    expect(
+        "a clean run says nothing about leftovers (S-4)",
+        the_leftover_verdict([]) is None,
+    )
+    expect(
+        "a tree this run made and failed to remove is a refusal BY NAME (S-4)",
+        (lambda v: v is not None and v[1] and "REFUSED-P7-TREES-LEFT-BEHIND" in v[0])(
+            the_leftover_verdict(["/tmp/p7-proof-0-left"])
+        ),
+    )
+    expect(
+        "a tree count equal to the derived figure says nothing (S-4 / F-I)",
+        the_prediction_verdict(_one_run, False, 0) is None,
+    )
+    expect(
+        "a tree count unequal to the derived figure is a refusal BY NAME (S-4 / F-I)",
+        (lambda v: v is not None and v[1]
+         and "REFUSED-P7-TREE-COUNT-PREDICTION-STALE" in v[0])(
+            the_prediction_verdict(_one_run - 1, False, 0)
+        ),
+    )
+    expect(
+        "the self-test child is not compared against a main run's tree count (S-4 / F-I)",
+        the_prediction_verdict(5, True, 0) is None,
+    )
+    expect(
+        "a run that already failed is not compared either, its counter predicting nothing (S-4)",
+        the_prediction_verdict(_one_run - 1, False, 1) is None,
+    )
+    expect(
+        "no strays on disk means no sentence about strays (S-4)",
+        the_strays_verdict([]) is None,
+    )
+    expect(
+        "strays below one run's worth are a NOTE and do NOT block (S-4)",
+        (lambda v: v is not None and not v[1] and v[0].startswith("NOTE:"))(
+            the_strays_verdict(_some[: _one_run - 1])
+        ),
+    )
+    expect(
+        "strays at one whole run's worth REFUSE by name and block (S-4)",
+        (lambda v: v is not None and v[1]
+         and "REFUSED-P7-TEMP-DIRECTORY-FILLING" in v[0])(the_strays_verdict(_some)),
+    )
+    # R19-02's arms. The mid-run signal itself cannot be a branch here — a
+    # handler that re-raises the signal with its default disposition ends the
+    # process — so it is measured as a control outside the self-test and
+    # recorded in the evidence. What IS armed here is each mechanism the fix
+    # rests on: the stop flag, and a listing that sees a tree whoever made it.
+    _not_this_runs = tempfile.mkdtemp(prefix="p7-proof-not-this-runs-")
+    expect(
+        "the directory listing sees a tree this run never registered (R19-02)",
+        _not_this_runs in trees_on_disk() and _not_this_runs not in TREES_THIS_RUN,
+    )
+    scrub(_not_this_runs)
+    expect(
+        "and stops seeing it once it is gone, so the listing is a listing (R19-02)",
+        _not_this_runs not in trees_on_disk(),
+    )
+
+    def a_tree_after_the_end() -> str:
+        _NO_MORE_TREES.set()
+        try:
+            a_tree("p7-census-arm-")
+        except CannotRead as exc:
+            return str(exc)
+        finally:
+            _NO_MORE_TREES.clear()
+        return ""
+
+    expect(
+        "once a signal has ended the run, a further tree is REFUSED by name (R19-02)",
+        "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED" in a_tree_after_the_end(),
+    )
+    expect(
+        "and with the flag clear a tree is made again, so the flag is not a one-way door "
+        "that would make this arm vacuous (R19-02)",
+        (lambda tree: (tree.startswith(tempfile.gettempdir()), scrub(tree))[0])(
+            a_tree("p7-census-arm-")
+        ),
+    )
+
+    # R19-03's arms, run as children because the refusal is at module level and
+    # ends the process. The pair matters: a value that cannot be read refuses by
+    # name, and the values that CAN be read are still read, or the refusal is a
+    # false red and this harness's rule is that such a hardening is not
+    # hardening.
+    def depth_run(value: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-I", me, "--isolation-probe"],
+            capture_output=True, text=True,
+            env=dict(os.environ, **{SPAWN_DEPTH_ENV: value}),
+        )
+
+    expect(
+        "a spawn depth that is not a whole number is REFUSED by name, not a traceback (R19-03)",
+        all(
+            "REFUSED-P7-SPAWN-DEPTH-UNREADABLE" in depth_run(bad).stdout
+            and "Traceback" not in depth_run(bad).stderr
+            # An EMPTY variable is not an unreadable one: `or "0"` reads it as
+            # not set, which is what an unset variable means, and refusing it
+            # would be a false red. Measured: the probe answers normally.
+            for bad in ("abc", "3.0", "1e2", "0x3", "three")
+        ),
+    )
+    expect(
+        "an EMPTY depth variable is read as not set, not refused (R19-03)",
+        "P7-ISOLATION-PROBE: isolated" in depth_run("").stdout,
+    )
+    expect(
+        "the readable forms of a legitimate depth are still read, not refused (R19-03)",
+        all(
+            "P7-ISOLATION-PROBE: isolated" in depth_run(good).stdout
+            for good in ("2", "+2", "02", " 2 ")
+        ),
+    )
+
+    # R19-05's arm. The id is in a comment, where nothing is declared, so the
+    # census must read nineteen and refuse — and the control beside it is the
+    # same file with the comment removed entirely, which must also read
+    # nineteen, so the arm is measuring the comment and not the deletion.
+    def laws_kt_text(body: str) -> str:
+        tree = a_tree("p7-census-arm-")
+        path = os.path.join(tree, LAWS_KT)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        open(path, "w", encoding="utf-8").write(body)
+        return tree
+
+    _nineteen = "\n".join(
+        f'    val L{n} = Law("P7-L{n}-A-LAW-THIS-ARM-DECLARES")' for n in range(1, 20)
+    )
+    def how_the_census_refuses(body: str) -> str:
+        try:
+            law_ids_the_kernel_declares(laws_kt_text(body))
+        except CannotRead as exc:
+            return str(exc)
+        return ""
+
+    expect(
+        "a law id left behind in a COMMENT declares nothing, and the census refuses (R19-05)",
+        "pinned to" in how_the_census_refuses(
+            "object P7Laws {\n" + _nineteen
+            + '\n    // Withdrawn for now; the id is kept here so the history reads:\n'
+            + '    // "P7-L20-THE-WITHDRAWN-ONE"\n}\n'
+        ),
+    )
+    expect(
+        "a `//` inside a STRING is not treated as a comment, so a real declaration survives "
+        "(R19-05)",
+        len(
+            law_ids_the_kernel_declares(
+                laws_kt_text(
+                    "object P7Laws {\n" + _nineteen
+                    + '\n    val L20 = Law("P7-L20-A-LAW-WHOSE-TEXT-HOLDS-A-SLASH", "see http://x")\n}\n'
+                )
+            )
+        ) == 20,
     )
     expect(
         "no module file sits beside this harness where it could shadow the standard library",
@@ -2817,10 +3126,11 @@ DEEPEST_LEGITIMATE_SPAWN = 2
 
 
 def spawn_depth() -> int:
-    try:
-        return int(os.environ.get(SPAWN_DEPTH_ENV, "0"))
-    except ValueError:
-        return 0
+    """How deep this process is. No `except ValueError`: the module-level
+    refusal above has already exited on anything this cannot parse, so a
+    handler here could never run, and a defensive branch that cannot be reached
+    is the same class of thing as a guard nobody calls (R19-03)."""
+    return int((os.environ.get(SPAWN_DEPTH_ENV, "0") or "0").strip())
 
 
 def env_for_a_child() -> dict[str, str]:
@@ -2855,34 +3165,142 @@ def wrapper_code_lines(wrapper_text: str) -> list[str]:
     ]
 
 
-def the_wrapper_pin_holds(wrapper_text: str) -> bool:
-    """Whether the wrapper runs the pinned interpreter, isolated, and nothing else.
+# R19-01, the nineteenth challenge, RULED P1 by the coordinator. The pin was a
+# SET OF EXACTLY ONE over the assignments a regex recognised at the start of a
+# line — an enumeration of SHAPES. The shell does not require a line to start
+# with an assignment, and the challenger walked past it with three one-line
+# edits (`true; PY=…`, `if true; then PY=…; fi`, `{ PY=…; }`), each leaving the
+# self-test log BYTE-IDENTICAL to the clean tree's, and then ran the whole
+# harness under a forged interpreter that printed
+# `ALL 104 RED PROOFS SATISFIED` at rc 0 while running nothing. The arm's own
+# sentence — "runs the pinned interpreter in isolated mode, verbatim and once" —
+# was printed while a foreign interpreter ran it, and a printed sentence the
+# measurement contradicts is this lane's blocking class.
+#
+# So the pin is BYTE EQUALITY over the wrapper's whole CODE, which is the one
+# shape of the three the challenger's plants do not evade: an added line of ANY
+# shape is a difference. Comments are still excluded, because a "must not
+# contain" over prose trips on a comment quoting the mistake it describes, and a
+# hardening that causes a false red is not hardening.
+#
+# Where this regress stops, said rather than left implied: the literal below is
+# bounded by REVIEW, exactly as the guard-branch count is. It cannot be bounded
+# from inside the file, because a check whose expectation is read out of the
+# subject is the subject checking itself. What the literal does buy is that no
+# EDIT to the wrapper is invisible, and the challenger measured the alternative
+# it would have recommended and found it worthless: a shim that `exec`s the
+# pinned interpreter leaves nothing of itself in the surviving process, so
+# `sys.executable` is identical under the plant and the clean tree. A
+# PROJECTION is not an IDENTITY.
+WRAPPER_CODE_PINNED: tuple[str, ...] = (
+    'set -uo pipefail',
+    'PY=/usr/bin/python3',
+    'if [ ! -x "$PY" ]; then',
+    '  echo "REFUSED-P7-NO-PINNED-INTERPRETER: $PY is not executable, and this script will not"',
+    '  echo "search PATH for a substitute: the interpreter is part of the command being pinned."',
+    '  exit 3',
+    'fi',
+    'echo "P7 RED PROOFS: interpreter $PY ($("$PY" -V 2>&1)), isolated mode -I"',
+    'exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"',
+)
 
-    R18-02, the eighteenth challenge: this was `"PY=/usr/bin/python3" in
-    wrapper_code`, which asks whether that assignment APPEARS. One line added
-    below it ran a different interpreter with the guard green at 27 of 27 and
-    the planted interpreter's own line in the output. The assignments are
-    therefore compared as a SET OF EXACTLY ONE, which also closes the
-    `export PY=`, `readonly PY=` and indented variants. It is a function so the
-    self-test can put it planted text and require a refusal.
-    """
-    code = wrapper_code_lines(wrapper_text)
-    execs = [line for line in code if line.startswith("exec ")]
-    assignments = [
-        line.strip() for line in code
-        if re.match(r"(?:export\s+|readonly\s+|declare\s+-\w+\s+)?PY=", line.strip())
-    ]
-    return (
-        execs == ['exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"']
-        and assignments == ["PY=/usr/bin/python3"]
-    )
+
+def the_wrapper_pin_holds(wrapper_text: str) -> bool:
+    """Whether the wrapper's code is, byte for byte, the code pinned above."""
+    return tuple(wrapper_code_lines(wrapper_text)) == WRAPPER_CODE_PINNED
 
 
 # The number of guard branches this harness's self-test declares. Pinned, not
 # derived: see the census in `self_test`.
-GUARD_BRANCHES_THIS_HARNESS_DECLARES = 38
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 62
+
+# F-I, the coordinator's actual-diff review of `9809db1`, a P1 fail-open that
+# needed no edit to reach: the stray census recognised trees by an ENUMERATED
+# prefix list, and the fourth prefix — `p7-census-arm-`, created by the F-G arms
+# of the very commit that turned the stray report into a refusal — was not on
+# it. Measured before the fix: 120 census-arm trees on disk, census sees 0, no
+# NOTE and no refusal at any number, so limitation 10's promise about a killed
+# run's leftovers was false for one prefix in four. This is the project's own
+# settled shape: a count rule that enumerates labels fails open on the next one,
+# and here the next label arrived in the same commit as the rule.
+#
+# So the prefixes are ONE tuple, every creation site goes through `a_tree`, and
+# `a_tree` refuses a prefix the tuple does not carry. A new creation site cannot
+# now be added without the census seeing it: it either uses the tuple or it does
+# not run.
+TREE_PREFIXES: tuple[str, ...] = (
+    "p7-proof-",
+    "p7-baseline-",
+    "p7-omission-arm-",
+    "p7-census-arm-",
+)
 
 TREES_THIS_RUN: list[str] = []
+
+# R19-02, the nineteenth challenge, P1 and the reason that head carries no
+# signature. The signal handler scrubbed and then printed
+# `N of N tree(s) removed, 0 left` — a claim about a RESOURCE, derived from a
+# list rather than from the directory. The challenger signalled four runs and
+# two of them printed a figure the filesystem contradicts; in one, four trees
+# were BORN 4 to 16 milliseconds AFTER the line claiming `0 left` was written.
+#
+# Mechanism, identified and not guessed: the proofs run in a thread pool, the
+# signal is delivered to the MAIN thread, and the workers keep running until the
+# process dies. So a worker creates a tree after `scrub_all()` has returned, and
+# `mkdtemp` followed by `append` is not atomic — a worker interrupted between
+# them leaves a tree this list never knew about at all.
+#
+# Three things close it, and all three are needed:
+#   * creation and registration happen together, under this lock, so no tree
+#     exists unregistered even for an instant;
+#   * a STOP flag the creation path reads inside that same lock, so once the
+#     handler has set it no further tree can be made;
+#   * the printed figure comes from LISTING the directory afterwards, which is
+#     the standard the normal-exit line already holds itself to: "confirmed by
+#     looking, not by assuming the call worked."
+# The lock is reentrant because the main thread makes trees too, and a signal
+# arriving while it holds the lock would otherwise deadlock the handler.
+_TREE_BOOKKEEPING = threading.RLock()
+_NO_MORE_TREES = threading.Event()
+
+
+def trees_on_disk() -> list[str]:
+    """Every directory under this harness's prefixes, whoever made it."""
+    tmp = tempfile.gettempdir()
+    try:
+        names = sorted(os.listdir(tmp))
+    except OSError:
+        return []
+    return [
+        os.path.join(tmp, name) for name in names
+        if name.startswith(TREE_PREFIXES) and os.path.isdir(os.path.join(tmp, name))
+    ]
+
+
+def a_tree(prefix: str) -> str:
+    """Make a temp tree under a prefix the census knows, and register it.
+
+    The refusal is by NAME and it fires on ABSENCE: a prefix absent from
+    TREE_PREFIXES is not quietly accepted, because the whole finding was a tree
+    nobody counted. `p7-proof-` sites pass `p7-proof-<i>-`, so the check is
+    membership of the declared prefix this one starts with, not equality.
+    """
+    if not prefix.startswith(TREE_PREFIXES):
+        raise CannotRead(
+            f"REFUSED-P7-TREE-PREFIX-NOT-CENSUSED: a tree was asked for under {prefix!r}, which "
+            f"no prefix in TREE_PREFIXES covers, so the stray census could never see it. Add it "
+            f"to TREE_PREFIXES — the arm that plants one tree per prefix will then cover it too."
+        )
+    with _TREE_BOOKKEEPING:
+        if _NO_MORE_TREES.is_set():
+            raise CannotRead(
+                "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED: a tree was asked for after a signal "
+                "ended this run and its trees were scrubbed. Making one now would leave a tree "
+                "behind that nothing is left to remove."
+            )
+        tree = tempfile.mkdtemp(prefix=prefix)
+        TREES_THIS_RUN.append(tree)
+    return tree
 
 
 def scrub(tree: str) -> None:
@@ -2917,11 +3335,20 @@ def scrub_all() -> list[str]:
 # as strays, which is why that report is a refusal above a threshold and no
 # longer a note.
 def _scrub_on_signal(signum: int, _frame: object) -> None:
-    left = scrub_all()
+    # R19-02. Order matters and is the whole fix: stop the creators FIRST, so
+    # the number about to be printed cannot be overtaken; then scrub; then LIST
+    # the directory and say what the listing says, not what the list says.
+    _NO_MORE_TREES.set()
+    with _TREE_BOOKKEEPING:
+        asked = len(TREES_THIS_RUN)
+        left = scrub_all()
+    on_disk = trees_on_disk()
     print(
-        f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; "
-        f"{len(TREES_THIS_RUN) - len(left)} of {len(TREES_THIS_RUN)} tree(s) removed, "
-        f"{len(left)} left.",
+        f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; {asked - len(left)} of {asked} "
+        f"tree(s) this run had registered were removed, and the temp directory now holds "
+        f"{len(on_disk)} tree(s) under this harness's prefixes — confirmed by LISTING it "
+        f"after the creators were stopped, not by counting a list other threads append to. "
+        f"{'Not all of these are this run\'s: ' if on_disk else ''}{on_disk[:5]}",
         flush=True,
     )
     signal.signal(signum, signal.SIG_DFL)
@@ -2938,7 +3365,68 @@ def arm_the_signal_handlers() -> None:
 # crash, or a copy of this file run by hand. Below it, a stray is ordinary
 # overlap with another session's run; at or above it, the disk is being filled
 # by runs that are not cleaning up and somebody has to act.
-ONE_RUNS_WORTH_OF_TREES = 101
+#
+# F-I's second limb: this was the literal 101, written when there were 99
+# proofs, and it sat five lines above the run's own `106 made`. A hand-written
+# figure that no command reproduces is the class this lane has closed twice
+# already, so it is DERIVED here from the only three things that make a tree in
+# a main run — one per proof, one baseline, one omission arm — and the run
+# compares its own counter to it at the end, so the figure is measured rather
+# than asserted. The self-test child makes census-arm trees in its OWN process
+# and reports them separately, which is why they are not in this sum.
+def one_runs_worth_of_trees() -> int:
+    """How many trees a main run of this harness makes, derived not written."""
+    return len(PROOFS) + 2  # the baseline tree, and the omission arm's tree
+
+
+def the_leftover_verdict(left: list[str]) -> tuple[str, bool] | None:
+    """What to say about trees THIS run made and failed to remove."""
+    if not left:
+        return None
+    return (
+        f"REFUSED-P7-TREES-LEFT-BEHIND: {len(left)} copied tree(s) this run made are still "
+        f"in the temp directory after cleanup, so this harness is filling the disk it runs "
+        f"on: {left[:5]}",
+        True,
+    )
+
+
+def the_prediction_verdict(made: int, am_child: bool, code: int) -> tuple[str, bool] | None:
+    """Whether this run's own tree count matches the figure the threshold uses.
+
+    Not compared for the self-test child, which makes census-arm trees and no
+    proof trees, and not on a run that already failed: there the counter
+    predicts nothing, because the sweep may have stopped early.
+    """
+    if am_child or code != 0 or made == one_runs_worth_of_trees():
+        return None
+    return (
+        f"REFUSED-P7-TREE-COUNT-PREDICTION-STALE: this run made {made} tree(s) and "
+        f"`one_runs_worth_of_trees()` says a run makes {one_runs_worth_of_trees()}. The "
+        f"threshold the stray refusal uses, and the figure limitation 10 prints, are "
+        f"therefore about a different run than this one.",
+        True,
+    )
+
+
+def the_strays_verdict(earlier: list[str]) -> tuple[str, bool] | None:
+    """What to say about trees on disk that this run did NOT make."""
+    if not earlier:
+        return None
+    if len(earlier) >= one_runs_worth_of_trees():
+        return (
+            f"REFUSED-P7-TEMP-DIRECTORY-FILLING: {len(earlier)} tree(s) matching this harness's "
+            f"prefixes are in {tempfile.gettempdir()} and are NOT this run's — at least one "
+            f"whole run's worth ({one_runs_worth_of_trees()}) was left behind by a killed or "
+            f"crashed run, and this harness cannot keep running on a disk it is filling. "
+            f"Remove them: {earlier[:5]}",
+            True,
+        )
+    return (
+        f"NOTE: {len(earlier)} tree(s) matching this harness's prefixes were already in "
+        f"{tempfile.gettempdir()} before this run and are NOT this run's to delete.",
+        False,
+    )
 
 
 def strays_from_earlier_runs() -> list[str]:
@@ -2950,7 +3438,7 @@ def strays_from_earlier_runs() -> list[str]:
         path = os.path.join(tmp, name)
         if path in mine or not os.path.isdir(path):
             continue
-        if name.startswith(("p7-proof-", "p7-baseline-", "p7-omission-arm-")):
+        if name.startswith(TREE_PREFIXES):
             found.append(path)
     return found
 
@@ -3008,8 +3496,7 @@ def main() -> int:
     guards_armed = armed.group(1)
     print()
 
-    baseline_tree = tempfile.mkdtemp(prefix="p7-baseline-")
-    TREES_THIS_RUN.append(baseline_tree)
+    baseline_tree = a_tree("p7-baseline-")
     for part in ("src", "test"):
         shutil.copytree(os.path.join(ROOT, part), os.path.join(baseline_tree, part))
     rc, failing, _details, log = run_suite(baseline_tree)
@@ -3023,7 +3510,7 @@ def main() -> int:
     covers = covers_the_suite_declared(log)
     print(
         f"COVERS THE SUITE DECLARED AT RUNTIME: {len(covers)}"
-        + (f" \u2014 {sorted(covers)}" if covers else " \u2014 none")
+        + (f" — {sorted(covers)}" if covers else " — none")
     )
     # F-1's second derivation, read from the subject's own text, compared as a
     # SET against the one above. Unreadable is a refusal, never zero.
@@ -3037,7 +3524,7 @@ def main() -> int:
         unreadable = str(cannot)
     print(
         f"COVERS THE SOURCE DECLARES: "
-        + (f"REFUSED \u2014 {unreadable}" if unreadable else f"{len(declared_covers)} \u2014 {sorted(declared_covers) or 'none'}")
+        + (f"REFUSED — {unreadable}" if unreadable else f"{len(declared_covers)} — {sorted(declared_covers) or 'none'}")
         + "\n"
     )
 
@@ -3057,8 +3544,7 @@ def main() -> int:
         `finally` and not a line at the end of it.
         """
         i, _ = indexed
-        tree = tempfile.mkdtemp(prefix=f"p7-proof-{i}-")
-        TREES_THIS_RUN.append(tree)
+        tree = a_tree(f"p7-proof-{i}-")
         try:
             return run_one_in(indexed, tree)
         finally:
@@ -3122,7 +3608,7 @@ def main() -> int:
     # because a harness whose own cover obligation fails open should say so
     # before it says anything else.
     arm_failures, arm_verdict = omission_arm(declared_covers)
-    print(f"OMISSION ARM (T-01): the print loop deleted on a copy \u2014 {arm_verdict}\n")
+    print(f"OMISSION ARM (T-01): the print loop deleted on a copy — {arm_verdict}\n")
     failures.extend(arm_failures)
 
     # An expectation for a law no proof carries is a STALE expectation: it was
@@ -3152,7 +3638,7 @@ def main() -> int:
     if unreadable is not None:
         failures.append(
             f"the covers {COVER_MAP_FILE} declares could not be read, so the set the run printed "
-            f"is bounded by nothing: {unreadable} \u2014 a reader that cannot read REFUSES, "
+            f"is bounded by nothing: {unreadable} — a reader that cannot read REFUSES, "
             f"because an unreadable declaration counting as zero covers is the hole F-1 names"
         )
     failures.extend(cover_failures(covers, declared_covers, reddened))
@@ -3212,13 +3698,13 @@ def main() -> int:
     print("     delays asserted are the schedule's own arithmetic, never a measured wait.")
     print("  5. This is a RECORD, not a required CI step. Phase 7 is PREPARED / NOT PROMOTED.")
     print("  6. The cover obligation above (S-01) is enforced HERE and nowhere else, so it is")
-    print("     conditional on this harness being run at a head \u2014 which limitation 5 is about.")
+    print("     conditional on this harness being run at a head — which limitation 5 is about.")
     print("  7. Each proof's expected refusal (F-2) was HARVESTED from a measured run and then")
     print("     frozen. It proves the reason a proof reds has not CHANGED since it was read; it")
     print("     does not prove the reason was the right one on the day it was harvested.")
     print("     F-F, measured by the coordinator over the table: eight distinct containment pairs")
     print("     exist and six are between proofs that also name the SAME test, so for those the")
-    print("     refusal adds nothing beyond `the named test failed` \u2014 which is the state F-2")
+    print("     refusal adds nothing beyond `the named test failed` — which is the state F-2")
     print("     exists to improve on. It is not a hole, because each plant runs in its own tree")
     print("     carrying only its own defect, so the assertion that fires is still that plant's;")
     print("     it is the claim being weaker for those proofs than this limitation reads.")
@@ -3238,7 +3724,7 @@ def main() -> int:
     print(f"  8. {named} of those {len(EXPECTED_REFUSAL)} refusals name the law or the refusal in")
     print(f"     prose. {len(bare)} are bare assertion text carrying the values that identify")
     print(f"     them ({', '.join(bare)}), and {len(HARM_IS_NONDETERMINISTIC)} (P7-L8) is exempted")
-    print("     from freezing its values because its own plant draws them \u2014 an exemption this")
+    print("     from freezing its values because its own plant draws them — an exemption this")
     print("     harness measures against the plants, in both directions.")
     if fragments:
         print(f"     {len(fragments)} are frozen as FRAGMENTS rather than whole, around a")
@@ -3250,19 +3736,22 @@ def main() -> int:
         print("     them, so a refusal listing a second offender matched. The coordinate is")
         print("     normalised on both sides now and the message is frozen WHOLE.")
     print("  9. The omission arm deletes the print loop on a copy and requires a refusal, so")
-    print("     that line is load-bearing twice over \u2014 but the ARM's own removal is bounded")
+    print("     that line is load-bearing twice over — but the ARM's own removal is bounded")
     print("     by review and not by measurement. What IS measured is the arms' census: the")
     print(f"    count is pinned at {GUARD_BRANCHES_THIS_HARNESS_DECLARES} as a literal, so an arm")
     print("     deleted or added is a refusal by name rather than a lower `N of N` that still")
-    print("     reads as armed \u2014 measured by deleting one and reading")
+    print("     reads as armed — measured by deleting one and reading")
     print("     REFUSED-P7-GUARD-BRANCH-CENSUS. The literal itself is bounded by review, and")
     print("     that is where this regress stops; it is named here rather than left to a reader.")
     print(" 10. A SIGNAL does not run a `finally`. SIGTERM and SIGINT are handled: this run's")
     print("     trees are scrubbed and the signal is then re-raised with its default")
     print("     disposition, so the exit status is the signal's own. SIGKILL CANNOT be closed")
-    print("     from inside \u2014 nothing of this process runs after it \u2014 so a run killed")
+    print("     from inside — nothing of this process runs after it — so a run killed")
     print("     with -9 leaves its trees, and the next run refuses above one whole run's worth")
-    print(f"    ({ONE_RUNS_WORTH_OF_TREES}) rather than noting them and exiting 0.")
+    print(f"    ({one_runs_worth_of_trees()}, derived from the proof count, not written down)")
+    print("     rather than noting them and exiting 0. Every prefix this harness creates under is")
+    print("     in ONE tuple that the census reads and that `a_tree` refuses to go outside, so")
+    print("     the sentence above is true of all four and not of three (F-I).")
     return 0
 
 
@@ -3272,12 +3761,15 @@ if __name__ == "__main__":
     _code = self_test() if _am_the_self_test_child else main()
     _earlier = strays_from_earlier_runs()
     _left = scrub_all()
-    if _left:
-        print(
-            f"REFUSED-P7-TREES-LEFT-BEHIND: {len(_left)} copied tree(s) this run made are still "
-            f"in the temp directory after cleanup, so this harness is filling the disk it runs "
-            f"on: {_left[:5]}"
-        )
+
+    # The coordinator's S-4 on `9809db1`: these verdicts lived here as inline
+    # branches, outside the guard-branch census, which is F-G's shape one layer
+    # out. They are now functions the census reaches, and this block only
+    # prints what they decide and ORs the exit code. Order is kept: leftovers
+    # first, then the TREES line, then this run's own prediction, then strays.
+    _leftover = the_leftover_verdict(_left)
+    if _leftover is not None:
+        print(_leftover[0])
         _code = _code or 1
     elif TREES_THIS_RUN or not _am_the_self_test_child:
         # R18-03, first limb. `main()` runs the self-test as a SUBPROCESS and
@@ -3291,24 +3783,19 @@ if __name__ == "__main__":
         # relay marks every line it does print. Both halves: either alone
         # leaves the other readable as the parent's.
         print(
-            f"TREES: {len(TREES_THIS_RUN)} made, {len(TREES_THIS_RUN)} removed, 0 left \u2014 "
+            f"TREES: {len(TREES_THIS_RUN)} made, {len(TREES_THIS_RUN)} removed, 0 left — "
             f"confirmed by looking, not by assuming the call worked."
         )
-    if len(_earlier) >= ONE_RUNS_WORTH_OF_TREES:
-        # R18-03's P3 limb, in the challenger's own words: the instrument that
-        # notices the disk filling declined to say anything that would make
-        # anyone act. It reported 522 strays as a NOTE and exited 0.
-        print(
-            f"REFUSED-P7-TEMP-DIRECTORY-FILLING: {len(_earlier)} tree(s) matching this harness's "
-            f"prefixes are in {tempfile.gettempdir()} and are NOT this run's — at least one whole "
-            f"run's worth ({ONE_RUNS_WORTH_OF_TREES}) was left behind by a killed or crashed run, "
-            f"and this harness cannot keep running on a disk it is filling. Remove them: "
-            f"{_earlier[:5]}"
+        _prediction = the_prediction_verdict(
+            len(TREES_THIS_RUN), _am_the_self_test_child, _code
         )
-        _code = _code or 1
-    elif _earlier:
-        print(
-            f"NOTE: {len(_earlier)} tree(s) matching this harness's prefixes were already in "
-            f"{tempfile.gettempdir()} before this run and are NOT this run's to delete."
-        )
+        if _prediction is not None:
+            print(_prediction[0])
+            _code = _code or 1
+
+    _strays = the_strays_verdict(_earlier)
+    if _strays is not None:
+        print(_strays[0])
+        if _strays[1]:
+            _code = _code or 1
     sys.exit(_code)
