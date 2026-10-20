@@ -7971,8 +7971,16 @@ def emission_sites():
     when it refuses is reached on no clean run, so requiring it would red every
     green run. What they bound is the CONVERSE law -- an emission that passed
     through a line of a verdict must have passed through a door derived here,
-    or it is named. So a new emitter is caught whether it RUNS (the converse)
-    or does not (the literal count moves).
+    or it is named.
+
+    WHAT THAT DOES NOT COVER, corrected from a sentence of this docstring that
+    `C37-S1` falsified. It used to say a new emitter is caught whether it RUNS
+    or does not, which is universal and was false for one cell: a form `ast`
+    cannot classify, at a site no arm provokes, is held by the door count
+    (which reads only the forms `ast` classifies), by the converse law (whose
+    reach is what the ARMS run) and by arrival (likewise) -- that is, by
+    nothing. That cell is now closed by `unclassifiable_calls`, which makes
+    such a call a FINDING in itself rather than waiting for a law to read it.
 
     The spans, rather than single lines, because a frame's `f_lineno` during a
     multi-line call is not required to be the line `ast` gives the `Call`
@@ -8094,12 +8102,14 @@ def _record_emissions(run):
         wherever it runs. What bounds the unrecorded form is not this
         recorder: it is the DOOR census, which counts the alias
         syntactically -- a planted `out = sys.stdout.write` moves 16 doors to
-        17 -- and ARRIVAL, which names the paragraph however it was printed. A
-        committed plant emitting through a SUBSCRIPT (`{"w": sys.stdout.write}
-        ["w"](...)`), which `ast` cannot classify and this proxy does not see,
-        reds SEVEN arrival arms, among them "every printed paragraph is a
-        finding or a declared one". Three laws, and the round states which one
-        holds which form rather than crediting this one with all three.
+        17 -- and ARRIVAL, which names the paragraph an ARM provoked, however
+        it was printed. A committed plant emitting through a SUBSCRIPT at a
+        site every arm provokes reds arrival arms; the SAME plant at a site no
+        arm provokes redded NOTHING, which is `C37-S1` and is why
+        `unclassifiable_calls` now makes that form a finding by CONSTRUCTION.
+        `C37-S1` corrected this paragraph too: it used to say the form was
+        bounded by the other two laws, full stop, and arrival's reach is the
+        arms' worlds, not every run.
       * the whole CHAIN of this file's frames is recorded, not the printing
         frame alone. A call to a helper that prints is an emission site of the
         caller -- that is what `_can_reach_a_print` says -- so the line that
@@ -8225,6 +8235,16 @@ def emission_site_census():
         (name, span) for (name, _at), span in sites.items()
         if not any(span[0] <= line <= span[1] for line in without)
     )
+    strange = unclassifiable_calls()
+    # `C37-S1` carries its OWN tag rather than the census's: a line printed
+    # under another residual's name is a line a reader cannot trace back to
+    # the review that asked for it.
+    good = not strange
+    ok = ok and good
+    print("  sites C37-S1 %-50s %-40s -> %s"
+          % ("no call inside a verdict is in a form this file cannot read",
+             "%d unclassifiable call(s)" % len(strange),
+             "as required" if good else "**SELFTEST FAILED**"))
     for label, good, shown in (
         ("every emission site of the verdicts was reached", not missed,
          "%d site(s) unreached of %d" % (len(missed), len(sites))),
@@ -8250,9 +8270,91 @@ def emission_site_census():
         print("    UNREACHED: %s, lines %d-%d" % (name, span[0], span[1]))
     for name, line in undeclared:
         print("    EMITTED FROM AN UNDECLARED SITE: %s, line %d" % (name, line))
+    for name, line, kind in strange:
+        print("    VERDICT-CALL-UNCLASSIFIABLE: %s, line %d: the call's function "
+              "is a %s, which this file cannot classify, so nothing holds what it "
+              "emits" % (name, line, kind))
     for name, span in blind:
         print("    reached only by the branch family: %s, lines %d-%d"
               % (name, span[0], span[1]))
+    return ok
+
+
+def unclassifiable_calls(bodies=None):
+    """`C37-S1`: calls inside a verdict in a form the derivation cannot read.
+
+    The coordinator measured the cell the three laws leave empty: a form `ast`
+    cannot classify (`Call.func` neither a `Name` nor an `Attribute` -- a
+    subscript, a `getattr` result, anything computed) AT A SITE NO ARM
+    PROVOKES. The door count holds the forms `ast` reads; the converse law and
+    arrival hold what an ARM runs; so that cell fell between all three, and at
+    the live `enrolled > 4` site it printed a pin-free criterion claim at
+    `--check-blocks` rc 0 with the selftest green.
+
+    Closed by CONSTRUCTION rather than by one more spelling, which is the
+    coordinator's prescription and the right one: the NEXT spelling does not
+    have to be thought of in advance. Inside a verdict, such a call is itself a
+    FINDING, named here by function and line. A verdict emits through a form
+    this file can read, or it does not emit.
+
+    Today this names nothing: 68 calls live inside the three verdicts and none
+    of them is in that form. That is the measurement, not the law's reason --
+    the law exists so that the next one is named the moment it is written.
+    """
+    if bodies is None:
+        bodies = {}
+        for name in EMITTING_VERDICTS:
+            body = _COMMITTED_AST.get(name) if _COMMITTED_AST else None
+            if body is None:
+                body = _source_of(globals()[name])
+            bodies[name] = body
+    out = []
+    for name in sorted(bodies):
+        for node in ast.walk(bodies[name]):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, (ast.Name, ast.Attribute)):
+                continue
+            out.append((name, node.lineno, type(node.func).__name__))
+    return sorted(out)
+
+
+def unclassifiable_call_arm():
+    """The plant for the rule above, on a SYNTHETIC body and not on this file.
+
+    A rule that names nothing in the commit it ships in is decorative until a
+    plant shows it names something. Both directions, because a rule that names
+    everything is no better: a body whose calls are all classifiable must come
+    back empty, and the same body with ONE subscript call must come back with
+    that call's line.
+
+    The body is parsed from a string here, never written to the tree: a frozen
+    file is not mutated to prove a law about it, not even temporarily.
+    """
+    ok = True
+    clean = ast.parse(
+        "def v():\n"
+        "    print('a')\n"
+        "    sys.stdout.write('b')\n"
+        "    out = sys.stdout.write\n"
+        "    out('c')\n"
+    ).body[0]
+    planted = ast.parse(
+        "def v():\n"
+        "    print('a')\n"
+        "    doors = {'w': sys.stdout.write}\n"
+        "    doors['w']('c')\n"
+    ).body[0]
+    for label, body, want in (
+        ("a body whose calls this file can all read names nothing", clean, 0),
+        ("one SUBSCRIPT call in the same body is named", planted, 1),
+    ):
+        got = unclassifiable_calls({"v": body})
+        good = len(got) == want
+        ok = ok and good
+        print("  sites C37-S1 %-50s %-40s -> %s"
+              % (label, "%d named, want %d" % (len(got), want),
+                 "as required" if good else "**SELFTEST FAILED**"))
     return ok
 
 
@@ -10332,6 +10434,7 @@ def selftest():
     ok = union_sentence_arms() and ok
     ok = capture_leak_arm() and ok
     ok = emission_site_census() and ok
+    ok = unclassifiable_call_arm() and ok
     ok = criterion_selector_arms(printed_paragraphs()) and ok
     ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
