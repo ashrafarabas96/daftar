@@ -1456,8 +1456,11 @@ byte-identical, which is what that single replacement proves.
 
 This record could not name its own commit by SHA when it was written: writing
 the SHA into the file would have changed the file and so changed the SHA. A
-later round re-points it, and round 36 does that here. **The commit this file
-is in is `493d13588c43e55690bb659d221e046a886febb7`**, which is on the remote
+later round re-points it, and round 36 does that here. **The commit this record
+MEASURES is `493d13588c43e55690bb659d221e046a886febb7`** -- which is the word
+`C35-S3` asked for: the file is in later commits too, because each re-pointing
+edits it, so "the commit this file is in" names an object a reader's `git` will
+answer differently. It is on the remote
 branch `claude/phase11-prep-re0epv` and is the round-33 head that an
 independent challenger and the coordinator's diff review both signed. The
 reproduction, with that SHA in place of "the commit this file is in":

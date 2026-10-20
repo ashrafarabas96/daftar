@@ -1489,15 +1489,35 @@ this file, truncated to the 1472 lines that precede this block. Everything else
 -- every document, every harness file, every other transcript -- is
 byte-identical, which is what that single replacement proves.
 
-This record cannot name its own commit by SHA: writing the SHA into the file
-would change the file and so change the SHA. Every OTHER record in this
-directory does name one, because a later round re-points it -- round 36 did
-that for round 33's record, round 33 for round 32's, round 32 for round 31's --
-and the next round will do it for this one. Until then, "this commit" is the
-commit a reader has checked out, and the reproduction is:
+This record could not name the commit it measures when it was written: writing
+the SHA into the file would have changed the file and so changed the SHA. A
+later round re-points it, and round 37 does that here. **The commit this record
+MEASURES is `e3a2df4a6970e455126157ad47169f84ce4d48b2`**, which is on the
+remote branch `claude/phase11-prep-re0epv`; the reproduction below takes that
+SHA in place of "the commit this file is in", and it must, because any later
+commit that touches `prep/phase11/` gives a different tree. The wording is the
+coordinator's `C35-S3`, applied here as well as to round 33's record: a record
+names the commit it MEASURES, not the commit it is in, because it is in every
+commit after that one too.
+
+TWO CORRECTIONS THAT LIVE HERE RATHER THAN IN THE HEADER, and the reason is
+this record's own arithmetic:
+
+  * `C35-S4`: the header above says the pushed tree adds "three things" to the
+    subject commit and then lists FOUR. **The number is four.** The header is
+    left BYTE-IDENTICAL on purpose -- it sits inside the 1,472 lines this
+    record pins, so editing it would move the blob and the tree named below,
+    and a record whose digests no longer reproduce is worse than a record with
+    a miscount in its prose. A count of a list is a figure, this pack re-counts
+    every figure with the thing that produces it, and this one was not
+    re-counted; that is the finding, and this is where it is answered.
+  * the same reasoning is why `C35-S3`'s wording is corrected in this block and
+    not in the sentence it describes.
+
+The reproduction:
 
     git clone <this repo> w && cd w
-    git checkout <the commit this file is in>
+    git checkout e3a2df4a6970e455126157ad47169f84ce4d48b2
     P=prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND36.txt
     blob=$(git show HEAD:$P | head -n 1472 | git hash-object -w --stdin)
     git read-tree HEAD^{tree}

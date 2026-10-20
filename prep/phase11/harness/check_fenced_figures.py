@@ -5965,6 +5965,27 @@ CMD = (
 # it" into a document, both undetected, the second being `R15-F1`'s exact
 # shape. A row with a subject and a claim can be checked for CONTRADICTION,
 # which a formatted line cannot.
+def _memo_key(name):
+    """The cache key for a memo of what a RUN produced.
+
+    `C35-S1`, the coordinator's `P2` on `A-35-F2`, and it closes the CLASS
+    rather than the site. `_HAYSTACK` and `_ASSERTED` are keyed on the capture
+    by `_haystack_key`, so a haystack read under one run can never be served to
+    another. `_BODIES` and `_ROWS` were keyed on the NAME alone -- and a
+    generator RUNS the arms, which is exactly how `A-35-F2` happened: a body
+    generated under a census's own capture was served to a verdict that had
+    none, and that verdict stopped refusing. Keyed this way a body generated
+    under one run is never served to another, and no future caller has to
+    remember a `finally`.
+
+    The snapshot and restore in `printed_block_sentences` stays as well. Two
+    independent mechanisms for one hole is deliberate here: the keying is the
+    law, and the restore is what keeps the cache from growing an entry per
+    capture in a process that installs several.
+    """
+    return (name, _RUN_CAPTURE[0] if _RUN_CAPTURE else None)
+
+
 _ROWS = {}
 
 
@@ -5975,18 +5996,20 @@ def _guard_rows():
     reds once the guard that subsumes it is gone, and both entries were about
     decoration rules that no longer exist.
     """
-    if "guard" not in _ROWS:
+    memo = _memo_key("guard")
+    if memo not in _ROWS:
         def reds(skip):
             return [label for label, want, run in _arms_with(skip) if run() != want]
 
         rows = [(guard, reds((guard,))) for guard in GUARDS]
-        _ROWS["guard"] = rows
-    return _ROWS["guard"]
+        _ROWS[memo] = rows
+    return _ROWS[memo]
 
 
 def _surface_rows():
     """(shape, verdict) for every documented shape, computed once."""
-    if "surface" not in _ROWS:
+    memo = _memo_key("surface")
+    if memo not in _ROWS:
         emitted = emitted_strings(os.path.join(PHASE_DIR, "harness"))
         planted = planted_tokens()
         rows = []
@@ -5999,8 +6022,8 @@ def _surface_rows():
             else:
                 verdict = "REDS THE GATE"
             rows.append((shape, verdict))
-        _ROWS["surface"] = rows
-    return _ROWS["surface"]
+        _ROWS[memo] = rows
+    return _ROWS[memo]
 
 
 def _backtick_rows():
@@ -6017,7 +6040,8 @@ def _backtick_rows():
     last decoration removal were taken, so a reader weighing `R25-S1` reads a
     measurement rather than my estimate of one.
     """
-    if "backtick" not in _ROWS:
+    memo = _memo_key("backtick")
+    if memo not in _ROWS:
         skip = ("inline code span",)
         emitted = emitted_strings(os.path.join(PHASE_DIR, "harness"), skip)
         planted = planted_tokens()
@@ -6032,7 +6056,7 @@ def _backtick_rows():
                     hits.append((rel, n, tok))
         lines = {(rel, n) for rel, n, _tok in hits}
         toks = {tok for _rel, _n, tok in hits}
-        _ROWS["backtick"] = [
+        _ROWS[memo] = [
             ("candidates with the guard deleted", str(seen)),
             ("document lines that would red", str(len(lines))),
             ("distinct tokens in them", str(len(toks))),
@@ -6043,7 +6067,7 @@ def _backtick_rows():
                 % (len(lines), len(toks)),
             ),
         ]
-    return _ROWS["backtick"]
+    return _ROWS[memo]
 
 
 def emit_backtick_cost():
@@ -6077,7 +6101,8 @@ def _pack_count_rows():
     with no `=`, like every block this file writes since `R26-F1`, so the
     block itself asserts no figure.
     """
-    if "counts" not in _ROWS:
+    memo = _memo_key("counts")
+    if memo not in _ROWS:
         harness = os.path.join(PHASE_DIR, "harness")
         top = _subject_top(harness)
         sha = _commit_of(top)
@@ -6103,8 +6128,8 @@ def _pack_count_rows():
             ("skip keys the committed source reads", len(read)),
             ("arms the selftest runs", len(_arms_with())),
         ]
-        _ROWS["counts"] = [(label, str(n)) for label, n in rows]
-    return _ROWS["counts"]
+        _ROWS[memo] = [(label, str(n)) for label, n in rows]
+    return _ROWS[memo]
 
 
 def emit_pack_counts():
@@ -6238,11 +6263,14 @@ _BODIES = {}
 
 
 def _block_body(name):
-    """What `--regenerate` would write for one generator. Memoised: a generator
-    is deterministic within a run, and `--check-blocks` asks every document."""
-    if name not in _BODIES:
-        _BODIES[name] = "\n".join(GENERATORS[name][0]())
-    return _BODIES[name]
+    """What `--regenerate` would write for one generator. Memoised PER RUN: a
+    generator is deterministic within a run and `--check-blocks` asks every
+    document, but a body is a body of ONE run -- see `_memo_key` and
+    `A-35-F2`."""
+    memo = _memo_key(name)
+    if memo not in _BODIES:
+        _BODIES[memo] = "\n".join(GENERATORS[name][0]())
+    return _BODIES[memo]
 
 
 # A word long enough to carry a subject, and a number STANDING ON ITS OWN: a
@@ -7806,6 +7834,33 @@ def printed_world_sentences():
     ])
 
 
+def _under_the_blocks_capture(run):
+    """Run `run()` with a capture carrying THIS subject's head installed, and
+    leave the two memo caches as they were found.
+
+    `A-35-F2`'s restore and `C35-F1`'s second pair of arms both need this, and
+    two copies of it is how two copies drift apart. The capture has to carry
+    the SUBJECT's head: the enrolment check resolves its subject from the
+    harness it runs in, so a world's capture makes it refuse
+    `RUN-CAPTURE-NOT-THIS-HEAD` and the census then holds a refusal where the
+    printed lines should be -- the vacuity this pack forbids. And the enrolment
+    check GENERATES on every call, even where nothing is enrolled, so an arm
+    that runs it with no capture refuses rather than printing: that is why the
+    two `C35-F1` arms are in here and not beside the others.
+    """
+    held = list(_RUN_CAPTURE)
+    bodies, rows = dict(_BODIES), dict(_ROWS)
+    _RUN_CAPTURE[:] = [_seat_capture("blocks", _subject_top(_harness_dir()))]
+    try:
+        return run()
+    finally:
+        _RUN_CAPTURE[:] = held
+        _BODIES.clear()
+        _BODIES.update(bodies)
+        _ROWS.clear()
+        _ROWS.update(rows)
+
+
 def printed_block_sentences():
     """Every distinct paragraph the ENROLMENT check says, run loud.
 
@@ -7839,38 +7894,187 @@ def printed_block_sentences():
     # are therefore snapshotted and put back, so nothing this family generated
     # outlives it; `capture_leak_arm` is the arm, and it reds if either cache
     # is left behind.
-    held = list(_RUN_CAPTURE)
-    bodies, rows = dict(_BODIES), dict(_ROWS)
-    _RUN_CAPTURE[:] = [_seat_capture("blocks", _subject_top(_harness_dir()))]
+    return _under_the_blocks_capture(lambda: _printed_by([
+        ("the enrolment check on an edited block",
+         (lambda: _blocks_arm("", edit=True, quiet=False))),
+        ("the enrolment check on a correct block",
+         (lambda: _blocks_arm("", quiet=False))),
+    ]))
+
+
+# ── `C35-F1` / `R36-S1`: the SET of emission sites, derived from the commit ──
+#
+# Three rounds running, the same shape of defect: a branch that PRINTS and that
+# no arm provokes, with prose saying the branch is bound. `C33-F1` was eight
+# doors in `scan` named as one; `C34-S1` was two branches of `scan` in no shape
+# of the census; `C35-F1` is two branches of `check_blocks`, and the coordinator
+# asked whether the author wanted to keep answering it one site at a time.
+#
+# The answer is no, and this is what replaces that: the set of emission sites
+# is DERIVED from the committed bytes of the verdicts, and every one of them
+# must have been REACHED while the census ran. A site is not something an
+# author remembers to list -- it is something `ast` finds and the recorder
+# either saw executed or did not. A twelfth site added later, armed by nobody,
+# is named by LINE here before anyone notices it is missing from a list.
+#
+# The declared reach, stated because every law in this file states one: the
+# three functions below, which are the two VERDICTS a reader acts on and the
+# single door they emit findings through. Generators and `--emit` print too,
+# and they assert no verdict; `--selftest`'s own arm lines print too, and they
+# are the measurement rather than the thing measured.
+EMITTING_VERDICTS = ("scan", "check_blocks", "_finding")
+
+
+def emission_sites():
+    """{(function, first line): the line span} for every emission site of the
+    verdicts, read from the COMMITTED bytes of this file.
+
+    The spans, rather than single lines, because a frame's `f_lineno` during a
+    multi-line call is not required to be the line `ast` gives the `Call`
+    node, and a law that depends on which of the two Python reports would be a
+    law about an implementation detail.
+
+    This reads the commit, like every other rule in this frame, so the line
+    numbers are the commit's. They are the running file's as well in any run
+    that reaches a verdict, because `self_bytes_committed` refuses by name when
+    the two differ -- and `emission_site_census` asserts that rather than
+    assuming it.
+    """
+    out = {}
+    for name in EMITTING_VERDICTS:
+        body = _COMMITTED_AST.get(name) if _COMMITTED_AST else None
+        if body is None:
+            body = _source_of(globals()[name])
+        for node in ast.walk(body):
+            if _is_an_emission(node):
+                last = getattr(node, "end_lineno", node.lineno) or node.lineno
+                out[(name, node.lineno)] = (node.lineno, last)
+    return out
+
+
+def _record_emissions(run):
+    """Run `run()` and return the set of lines of THIS file at which something
+    was printed.
+
+    `print` is wrapped for the length of the call and put back, which is the
+    plant idiom this file already uses for `_FRAME_PARSED` and for the
+    import-time snapshots. `builtins` is reached through `sys.modules` rather
+    than imported, so the import list of the commit is unchanged; and the
+    wrapper records the CALLER's line only when the caller is this file, so a
+    print from anywhere else is passed through untouched and uncounted.
+    """
+    mod = sys.modules["builtins"]
+    real = mod.print
+    here = os.path.realpath(__file__)
+    seen = set()
+
+    def recording(*args, **kw):
+        frame = sys._getframe(1)
+        try:
+            if os.path.realpath(frame.f_code.co_filename) == here:
+                seen.add(frame.f_lineno)
+        except (OSError, AttributeError):                      # pragma: no cover
+            pass
+        return real(*args, **kw)
+
     try:
-        return _printed_by([
-            ("the enrolment check on an edited block",
-             (lambda: _blocks_arm("", edit=True, quiet=False))),
-            ("the enrolment check on a correct block",
-             (lambda: _blocks_arm("", quiet=False))),
-        ])
+        mod.print = recording
+        run()
     finally:
-        _RUN_CAPTURE[:] = held
-        _BODIES.clear()
-        _BODIES.update(bodies)
-        _ROWS.clear()
-        _ROWS.update(rows)
+        mod.print = real
+    return seen
+
+
+def emission_site_census():
+    """`C35-F1`: every emission site of the verdicts is REACHED by an arm.
+
+    The closure of the class the last three rounds answered one site at a time.
+    Two sets, and neither is written down: the sites come from `ast` over the
+    committed bytes, the reached lines come from a recorder wrapped round
+    `print` while the whole census runs. A site in the first and not the second
+    is named by function and line.
+
+    Four lines, and the third and fourth are what keep it from being
+    decorative:
+
+      1. every derived site was reached;
+      2. the count of sites is pinned as a LITERAL, so a site DELETED reds as
+         loudly as one added -- a census pins its set;
+      3. the recorder is not blind: with one family of arms left out, the sites
+         only that family reaches are NAMED, measured here rather than assumed;
+      4. the premise is asserted, not assumed: the committed bytes and the
+         bytes on disk are the same file, so the commit's line numbers are the
+         running file's.
+    """
+    ok = True
+    bytes_msgs = []
+    try:
+        _ok, bytes_msgs = self_bytes_committed()
+    except Refusal as why:                                     # pragma: no cover
+        bytes_msgs = [str(why)]
+    sites = emission_sites()
+    reached = _record_emissions(printed_paragraphs)
+    missed = sorted(
+        (name, span) for (name, _at), span in sites.items()
+        if not any(span[0] <= line <= span[1] for line in reached)
+    )
+    # The blindness control: the branch family left out, which is the family
+    # `C35-F1` is about. The sites only it reaches must then be named -- if
+    # they are not, this law would pass with those branches unprovoked, which
+    # is the state this round found.
+    without = _record_emissions(lambda: (printed_finding_sentences(),
+                                         printed_world_sentences(),
+                                         printed_seat_sentences(),
+                                         printed_block_sentences()))
+    blind = sorted(
+        (name, span) for (name, _at), span in sites.items()
+        if not any(span[0] <= line <= span[1] for line in without)
+    )
+    for label, good, shown in (
+        ("every emission site of the verdicts was reached", not missed,
+         "%d site(s) unreached of %d" % (len(missed), len(sites))),
+        ("the census of emission sites", len(sites) == 10,
+         "%d site(s), want 10" % len(sites)),
+        ("with the branch family left out, its sites are NAMED", bool(blind),
+         "%d site(s) unreached without it" % len(blind)),
+        ("the commit's line numbers are this file's", not bytes_msgs,
+         "committed bytes: %s"
+         % ("the same" if not bytes_msgs else bytes_msgs[0].split(":")[0])),
+    ):
+        ok = ok and good
+        print("  sites C35-F1 %-50s %-40s -> %s"
+              % (label, shown, "as required" if good else "**SELFTEST FAILED**"))
+    for name, span in missed:
+        print("    UNREACHED: %s, lines %d-%d" % (name, span[0], span[1]))
+    for name, span in blind:
+        print("    reached only by the branch family: %s, lines %d-%d"
+              % (name, span[0], span[1]))
+    return ok
 
 
 def printed_branch_sentences():
-    """The two printed branches no family above provokes, run loud.
+    """Every printed branch of the two VERDICTS that no other family provokes.
 
-    `C34-S1`. Measured by the coordinator against the round-33 commit: `scan`
-    has eleven emission sites, and two of them were in NO shape of the union --
-    the `INERT` branch (`seen == 0`, rc 2, the gate refusing to report an
-    unweighed pass as a pass) and the frame refusal at the top of the scan
-    (rc 5). A branch no arm provokes is a branch no law here reads, whatever
-    the law says about its own reach, which is `C33-F1` one layer down: the
-    arrival predicates below are exact, and they only ever see what an arm
-    PROVOKED.
+    `C34-S1` and then `C35-F1`, which is the same class one function over and
+    is why this docstring no longer counts the branches it covers. Round 36
+    provoked the two `scan` has -- the `INERT` branch (`seen == 0`, rc 2) and
+    the frame refusal at the top (rc 5) -- and said in three places that the
+    printed side of `check_blocks` was bound. It was not: `check_blocks` has
+    four emission sites and its own family provokes two, so its `INERT`
+    paragraph (`enrolled == 0`), which both arrival predicates name when they
+    are handed it, was never handed to them. The coordinator committed a
+    criterion claim there and the selftest returned 0.
 
-    Both are reachable without a plant in the subject: a documents directory
-    with no figure in it gives the first, and an inadmissible frame the second.
+    All four are reachable without a plant in the subject's own logic: a
+    documents directory with no figure, a documents tree with no generated
+    block, and either verdict under an inadmissible frame.
+
+    What stops a third round of this is NOT this list, which a later branch can
+    outgrow in silence. It is `emission_site_census`, which derives the SET of
+    emission sites from the COMMITTED bytes of both verdicts and requires each
+    one to have been REACHED while the census ran. A site added later and armed
+    by nobody reds there, named by line, before anyone has to notice it is
+    missing from here.
     """
     def inert():
         # No `key=<number|boolean>` line anywhere in the documents, which is
@@ -7896,9 +8100,46 @@ def printed_branch_sentences():
         finally:
             _FRAME_PARSED[:] = cache
 
+    def block_inert():
+        # `C35-F1`: `enrolled == 0`, which an ordinary run reaches whenever the
+        # documents it is pointed at hold no generated block at all. The
+        # paragraph it prints is labelled, carries no pin, and is matched by no
+        # declaration until the sixth entry below -- so it is the one the
+        # coordinator's plant walked through.
+        def once():
+            with tempfile.TemporaryDirectory() as at:
+                docs = os.path.join(at, "docs")
+                os.makedirs(docs)
+                _write(docs, "a.md", "a document with no generated block in it\n")
+                return check_blocks(docs, quiet=False)
+
+        return _under_the_blocks_capture(once)
+
+    def block_frame():
+        # The other half of the same function, and the same mechanism as
+        # `frame` above: the refusal LIST is planted for the length of the arm
+        # because the frame instruments read the real tree, which is clean in
+        # any run that reaches this census.
+        def once():
+            cache = list(_FRAME_PARSED)
+            try:
+                _FRAME_PARSED[:] = [(
+                    "a refusal planted by this arm only, so that the sentence "
+                    "this branch prints arrives where a law reads it",
+                )]
+                with tempfile.TemporaryDirectory() as at:
+                    return check_blocks(at, quiet=False)
+            finally:
+                _FRAME_PARSED[:] = cache
+
+        return _under_the_blocks_capture(once)
+
     return _printed_by([
         ("the INERT branch, on a documents directory with no figure", inert),
         ("the frame refusal at the top of the scan", frame),
+        ("the enrolment INERT branch, on a tree with no generated block",
+         block_inert),
+        ("the frame refusal in front of the enrolment check", block_frame),
     ])
 
 
@@ -8384,6 +8625,8 @@ NON_FINDING_PARAGRAPHS = (
                + HAYSTACK_SENTENCE + " ("),
     ("whole", "INERT: no `X` line was found in any document. The check is "
               "measuring nothing, which it must not report as a pass."),
+    ("whole", "INERT: no generated block was found in any document, so this "
+              "check is measuring nothing and must not report a pass."),
 )
 """Every paragraph this gate PRINTS that is not a finding, declared.
 
@@ -8392,7 +8635,7 @@ the first form of this closure. Until this existed the arrival predicate bound
 only the LABELLED shape, so an UNLABELLED paragraph --
 printed through a callable the lint cannot resolve, in any branch -- sat below
 both layers. The rule is turned round here: a printed paragraph is bound unless
-it is one of these FIVE declared non-findings. A new kind of printed line reds
+it is one of these SIX declared non-findings. A new kind of printed line reds
 whether it is labelled or not and whatever emitted it.
 
 Two things this tuple does that a list of OPENINGS did not, both of them the
@@ -8405,6 +8648,21 @@ challenger's own attacks on the opening form:
     two digests, so it is matched by a PREFIX -- and that prefix is COMPOSED
     FROM the pin. An exempted paragraph of that kind therefore has to quote the
     rule itself, which is the thing the whole chain is for.
+
+The sixth is `C35-F1`: the ENROLMENT check's own `INERT` paragraph, which has
+different words from the scan's, so the fifth entry never covered it. It is
+declared here on the same terms and by the same whole-shape match.
+
+And one exclusion is stated rather than left silent, because `C35-F1` is partly
+a finding about silence. The frame refusals of BOTH verdicts print a paragraph
+beginning `REFUSED:`, and `_printed_to_stdout` classifies those as RAISED
+rather than PRINTED, so neither predicate here reads them. That is deliberate
+and it is not a gap: a refusal carries its own law, `gate_sentences` over the
+provoked refusals, and requiring the figure-legitimacy sentence of a `GIT-*`
+refusal about which repository holds the haystack would be a false red. Both
+frame branches are PROVOKED all the same -- they are in the census, under
+`gate_sentences` and under the emission-site law -- so what judges them is
+named instead of absent.
 
 And the exemptions are armed from both sides: the count is pinned as a literal,
 and every entry must be MATCHED by a live printed paragraph. An exemption
@@ -8466,10 +8724,10 @@ def union_sentence_arms():
     unpinned = _labelled_printed_without_the_pin(printed)
     for label, good, shown in (
         ("the live union reports nothing", not found, "%d finding(s)" % len(found)),
-        ("the census of paragraph shapes", len(printed) == 38,
-         "%d shape(s), want 38" % len(printed)),
-        ("of them PRINTED, not raised", len(said) == 28,
-         "%d printed, want 28" % len(said)),
+        ("the census of paragraph shapes", len(printed) == 40,
+         "%d shape(s), want 40" % len(printed)),
+        ("of them PRINTED, not raised", len(said) == 29,
+         "%d printed, want 29" % len(said)),
         ("the census of names", len(labels) == 15,
          "%d name(s), want 15" % len(labels)),
         ("C33-F1 the pin in every labelled paragraph PRINTED", not unpinned,
@@ -8486,7 +8744,7 @@ def union_sentence_arms():
         print("    " + where + ": " + text[:110])
     # `R34-S1`: the same question asked of EVERY printed paragraph, labelled or
     # not. Either `_finding` emitted it -- which the appended tail says -- or it
-    # is one of the five declared non-findings. Anything else is a sentence a
+    # is one of the six declared non-findings. Anything else is a sentence a
     # reader meets that no law has read.
     below = _printed_paragraphs_below_the_law(printed)
     good = not below
@@ -8510,8 +8768,8 @@ def union_sentence_arms():
     unused = [t for _k, t in NON_FINDING_PARAGRAPHS if t not in used]
     for label, good, shown in (
         ("the census of declared non-findings",
-         len(NON_FINDING_PARAGRAPHS) == 5,
-         "%d declared, want 5" % len(NON_FINDING_PARAGRAPHS)),
+         len(NON_FINDING_PARAGRAPHS) == 6,
+         "%d declared, want 6" % len(NON_FINDING_PARAGRAPHS)),
         ("every exemption is matched by a live paragraph", not unused,
          "%d matched, %d unused" % (len(used - {None}), len(unused))),
     ):
@@ -8571,6 +8829,39 @@ def union_sentence_arms():
         good = below_hit is want and label_hit is want
         ok = ok and good
         print("  union C34-S1 %-50s %-40s -> %s"
+              % (label,
+                 "below the law %s, labelled %s"
+                 % ("named" if below_hit else "not named",
+                    "named" if label_hit else "not named"),
+                 "as required" if good else "**SELFTEST FAILED**"))
+    # `C35-F1`, and the plant is the COORDINATOR'S: the ENROLMENT check's own
+    # `INERT` paragraph with a criterion statement in it. On `e3a2df4` that
+    # plant, COMMITTED, gave rc 0 with zero arms red -- the branch was in no
+    # shape of the union, so neither predicate was ever handed the sentence,
+    # though both name it when they are. Measured here the same way as the
+    # scan's: the edited paragraph stops matching the declared whole shape and
+    # is named by BOTH, and the live paragraph -- taken from THIS run, not
+    # imitated -- is named by neither.
+    block = next((t for _w, t in said
+                  if t.startswith("INERT: no generated block")), None)
+    if block is None:                                          # pragma: no cover
+        print("  union C35-F1 the enrolment INERT branch printed nothing -> "
+              "**SELFTEST FAILED**")
+        return False
+    planted_block = ("INERT: no generated block was found, and a figure here "
+                     "is legitimate when the " + " ".join(stems)
+                     + " of this run allowed it")
+    for label, text, want in (
+        ("the coordinator's plant: block INERT stating the criterion",
+         planted_block, True),
+        ("the control: the live block INERT paragraph itself", block, False),
+    ):
+        one = [("the planted paragraph", text)]
+        below_hit = bool(_printed_paragraphs_below_the_law(one))
+        label_hit = bool(_labelled_printed_without_the_pin(one))
+        good = below_hit is want and label_hit is want
+        ok = ok and good
+        print("  union C35-F1 %-50s %-40s -> %s"
               % (label,
                  "below the law %s, labelled %s"
                  % ("named" if below_hit else "not named",
@@ -9825,6 +10116,7 @@ def selftest():
     ok = seat_sentence_arms() and ok
     ok = union_sentence_arms() and ok
     ok = capture_leak_arm() and ok
+    ok = emission_site_census() and ok
     ok = criterion_selector_arms(printed_paragraphs()) and ok
     ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
