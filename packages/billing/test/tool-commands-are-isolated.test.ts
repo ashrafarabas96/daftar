@@ -900,6 +900,49 @@ const PINNED_TEST_SCRIPT = 'vitest run && python3 -I tools/law-ran.py && python3
 const REFUSED_NPM_CONFIG = 'REFUSED-NPM-CONFIG-PRESENT';
 
 /**
+ * ROUND 67, R65-F-1. The npm ancestor's own program, or a reason. npm rewrites
+ * its process title, so `/proc/<pid>/cmdline` holds ONE entry ("npm test ...")
+ * rather than argv as it was spelled -- measured, and the reason the first
+ * version of this walk found no npm ancestor under `npm test`. The first
+ * whitespace-separated word of the first entry is what names the program.
+ */
+const REFUSED_NPM_NODE_IS_NOT_THIS_ONE = 'REFUSED-NPM-RUNS-ON-ANOTHER-NODE';
+
+const npmAncestorProgram = (procRoot = '/proc', startPid = process.pid): { exe: string; pid: number } | string => {
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let words: string[] = [];
+    try {
+      words = readFileSync(join(procRoot, String(pid), 'cmdline'))
+        .toString('utf8')
+        .split('\0')
+        .filter((word) => word.length > 0);
+    } catch {
+      // Keep walking; the link above may still be npm.
+    }
+    const head = basename((words[0] ?? '').split(/\s+/)[0] ?? '');
+    if (head === 'npm' || words.some((word) => basename(word) === 'npm-cli.js')) {
+      try {
+        return { exe: realpathSync(join(procRoot, String(pid), 'exe')), pid };
+      } catch (error) {
+        return `pid ${pid} is npm and its program cannot be resolved (${String(error)})`;
+      }
+    }
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch (error) {
+      return `the parent chain stopped at pid ${pid} (${String(error)})`;
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return 'no ancestor of this process is npm, so this run has one anchor';
+};
+
+/**
  * ROUND 51, THE COORDINATOR'S P3. An arm that read a pack document with no
  * guard failed with ENOENT when the pack was absent -- a stack trace, not a
  * verdict, and indistinguishable from a broken test. Absence is named.
@@ -973,10 +1016,51 @@ const LOADS_NOTHING = [
   '--use-bundled-ca',
   '--experimental-import-meta-resolve',
   '--experimental-vm-modules',
-  '--conditions',
-  '--title',
 ];
+/**
+ * ROUND 66, FOUND WHILE MEASURING R61-S-3's SIBLING AND REMOVED FOR A REASON OF
+ * ITS OWN. `--title` was in the list because it loads no code -- true, and
+ * beside the point: it rewrites `/proc/<pid>/cmdline`, which is the EVIDENCE
+ * this scan reads. Measured: `node --title probe <vitest.mjs> run <file>` makes
+ * the runner's command line stop naming the script, so the flag region cannot
+ * be found and that link falls to the weaker form-list. The `--import` beside
+ * it was still refused (by the argv-pin arm, under
+ * REFUSED-RUNNER-ARGV-OVERRIDES-THE-FILE), so nothing passed -- but an admitted
+ * flag that edits the instrument has no business in a list of flags admitted
+ * BECAUSE they change nothing this law reads.
+ */
+/**
+ * ROUND 66, THE CHALLENGER'S R61-S-3. `--conditions` was in the list above on
+ * the argument that it "names a resolution order". It is out: a condition can
+ * redirect a package's `exports` to a DIFFERENT FILE, so it changes which code
+ * runs, even though it cannot introduce a file the tree does not already hold.
+ * Not measured as exploitable, and removed anyway, because the list is declared
+ * to be a reviewed one and this is the review. The cost is real and stated: an
+ * honest `NODE_OPTIONS=--conditions dev` on a bare run now reds, and a reader
+ * who wants it back argues for it in the commit that puts it back. vitest's own
+ * worker passes `--conditions` twice and is unaffected, because the scan reads
+ * this process's ANCESTORS and not this process.
+ */
 const nodeTokenLoadsNothing = (token: string): boolean => LOADS_NOTHING.includes(token.split('=', 1)[0] ?? token);
+
+/**
+ * ROUND 66, R61-S-2, and the rule lives HERE rather than inside one reader
+ * because the first fix for it reached only the `/proc` half and left the live
+ * `process.env` half refusing `ipv4first`: one rule in two places is two rules.
+ * Tokens of a flag region, judged. A token is refused unless it is admitted,
+ * OR it is the VALUE of the admitted flag immediately before it (written
+ * without `=`). A bare token standing on its own is still refused.
+ */
+const tokensNotAdmitted = (tokens: readonly string[], allowed: (token: string) => boolean): string[] => {
+  const out: string[] = [];
+  let previous = '';
+  for (const token of tokens) {
+    const isValueOfAnAdmittedFlag = !token.startsWith('-') && previous.startsWith('-') && !previous.includes('=') && allowed(previous);
+    if (!isValueOfAnAdmittedFlag && !allowed(token)) out.push(token);
+    previous = token;
+  }
+  return out;
+};
 
 const REFUSED_EXEC_ENVIRONMENT_UNREADABLE = 'REFUSED-EXEC-ENVIRONMENT-NOT-READABLE';
 const REFUSED_HANDED_DOWN_ENV_EDITED = 'REFUSED-HANDED-DOWN-ENVIRONMENT-EDITED';
@@ -1029,6 +1113,24 @@ const REFUSED_HANDED_DOWN_ENV_EDITED = 'REFUSED-HANDED-DOWN-ENVIRONMENT-EDITED';
  * A reason string is returned rather than a guess when it cannot be read, and
  * the gate refuses on a reason exactly as it refuses on a mismatch: an identity
  * this law cannot derive is not an identity that agrees.
+ *
+ * ROUND 67, THE COORDINATOR'S R65-C-02 (P3), the same narrowing from its other
+ * side: this identity is a PATH plus a SELF-REPORTED version string, never
+ * CONTENT. A binary placed at the resolved path satisfies both derivations,
+ * because both describe the same path and `--version` is what that binary says
+ * about itself. Nothing here hashes the runner, and nothing here would notice a
+ * patched node sitting where the honest one sat.
+ *
+ * ROUND 66, THE CHALLENGER'S R61-S-1, narrowing what the pair is worth. A
+ * DISAGREEMENT is refused; an AGREEMENT is worth exactly what the receipt is
+ * worth. Measured by the challenger with three shims inside a pinned prefix:
+ * a transparent wrapper that only execs the real node is caught (rc 1, the two
+ * paths named), while a shim that lets the law run honestly and then patches
+ * the two identity fields, and one that never starts node at all and rebuilds
+ * the receipt from this run's handed-down values, are both rc 0. So this closes
+ * the WRAPPER class and does not bound the actor who runs the suite -- that
+ * actor owns the receipt this comparison reads. Same bound as the nonce and the
+ * receipt itself, and the same narrowing the marker's claim took in round 64.
  */
 const runnerIdentity = (procRoot = '/proc', startPid = process.pid): { path: string; version: string } | string => {
   let pid = startPid;
@@ -1077,11 +1179,22 @@ const environmentEditedAfterExec = (
   live: Record<string, string | undefined>,
   keys: readonly string[] = HANDED_DOWN_KEYS,
 ): string[] =>
+  // ROUND 67, THE COORDINATOR'S R65-C-03 (P4, a bound it asked me to state and
+  // I would rather close). The predicate was `keys.filter(key =>
+  // atExec.has(key))`, so a key that ARRIVED after exec was never compared --
+  // departures and changes refused, arrivals not. A census pins its SET, both
+  // directions, and this phase has ruled that twice. An arrival is now named
+  // too. It cannot false-red an honest run: under the gate all five keys are
+  // present at exec, and a run the gate did not start is handed none of them
+  // and sets none of them from inside.
   atExec instanceof Map
     ? keys
-        .filter((key) => atExec.has(key))
-        .filter((key) => (live[key] ?? '') !== atExec.get(key))
-        .map((key) => `${key} (exec: ${JSON.stringify(atExec.get(key))}, now: ${JSON.stringify(live[key] ?? null)})`)
+        .filter((key) => atExec.has(key) || (live[key] ?? '') !== '')
+        .filter((key) => (live[key] ?? '') !== (atExec.get(key) ?? ''))
+        .map(
+          (key) =>
+            `${key} (exec: ${JSON.stringify(atExec.get(key) ?? null)}, now: ${JSON.stringify(live[key] ?? null)})${atExec.has(key) ? '' : ' -- an ARRIVAL: nothing handed this key down and something inside the run set it'}`,
+        )
     : [];
 
 const codeLoadingAncestry = (
@@ -1102,10 +1215,23 @@ const codeLoadingAncestry = (
   if (!existsSync(join(procRoot, String(startPid), 'status'))) {
     return { found, unreadable, platform: `this platform has no readable ${procRoot}` };
   }
+  // ROUND 66, THE CHALLENGER'S R61-S-2 (a false red of my own making). The
+  // first version tested every whitespace-separated token against the list
+  // independently, so the VALUE of an admitted flag was read as a flag:
+  // `NODE_OPTIONS="--dns-result-order ipv4first"` refused `ipv4first`. A value
+  // is not a flag. It is skipped only when the token before it is an admitted
+  // flag written WITHOUT `=`, so a bare token standing on its own is still
+  // refused rather than waved through: the skip is a rule about pairs, not a
+  // hole for anything that lacks a dash.
+  const scan = (tokens: string[], pid: number, where: string): void => {
+    for (const token of tokensNotAdmitted(tokens, allowed)) found.push(`pid ${pid}${where}: ${token}`);
+  };
   const offending = (value: string, pid: number): void => {
-    for (const token of value.split(/\s+/).filter((word) => word.length > 0)) {
-      if (!allowed(token)) found.push(`pid ${pid}: ${token}`);
-    }
+    scan(
+      value.split(/\s+/).filter((word) => word.length > 0),
+      pid,
+      '',
+    );
   };
   let pid = startPid;
   for (let hop = 0; hop < 32; hop += 1) {
@@ -1161,11 +1287,33 @@ const codeLoadingAncestry = (
           // and a hardening that causes a false red is not hardening.
           // DECLARED: on those links a token is refused only when it is one of
           // the known code-loading forms, which is the weaker half of this arm.
-          const isTheRunner = argv.some((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest');
-          for (const token of argv.slice(1)) {
-            if (!token.startsWith('-')) break;
-            const refused = isTheRunner ? !allowed(token) : KNOWN_CODE_LOADING_FORMS.includes(token.split('=', 1)[0] ?? token);
-            if (refused) found.push(`pid ${pid} (interpreter flag): ${token}`);
+          // ROUND 66, THE CHALLENGER'S R61-F-1 (P1, a fail-open in the fix for
+          // R60-F-1). This loop used to STOP at the first token without a dash,
+          // and four of the admitted flags take their value as a SEPARATE
+          // token -- so `--conditions dev --import=<loader>` ended the scan
+          // before the loader was read, and the bare suite was 30/30 green with
+          // the module running in the runner. It is the same mistake as
+          // R61-S-2 seen from the other side: a value was read as a flag there
+          // and as a terminator here.
+          //
+          // The region a human writes flags in ends at the SCRIPT, and the
+          // script is the word this loop already looks for. So the region is
+          // argv up to that word, every token in it is judged by `scan`, and
+          // no `break` is left to walk through.
+          const scriptAt = argv.findIndex((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest');
+          if (scriptAt > 0) {
+            scan(argv.slice(1, scriptAt), pid, ' (interpreter flag)');
+          } else {
+            // Not the runner: shells, `npx` and the harness sit here, and an
+            // allow-list over their honest flags would red runs nobody
+            // attacked. DECLARED, as before: these links are refused only on
+            // the known code-loading forms, which is the weaker half -- and
+            // with no `break`, so a form after a value is still seen.
+            for (const token of argv.slice(1)) {
+              if (KNOWN_CODE_LOADING_FORMS.includes(token.split('=', 1)[0] ?? token)) {
+                found.push(`pid ${pid} (interpreter flag): ${token}`);
+              }
+            }
           }
         }
       } catch {
@@ -4245,10 +4393,38 @@ describe('every written invocation of the pack tools is isolated', () => {
     // without the gate and a default config setting `script-shell` went
     // unread. The twin lives here, reading the same two paths by the same
     // rule, and neither file is required to exist.
+    // ROUND 67, THE COORDINATOR'S R65-F-1 (P1, a fail-open). Both readers of
+    // npm's DEFAULT global config -- this one and the gate's -- derived the
+    // file from the node THEY resolved. The file npm honours is the one beside
+    // the node running NPM, which need not be the same binary. Measured by the
+    // coordinator: with `/opt/node22/etc/npmrc` holding a `script-shell`, one
+    // PATH entry naming a directory inside a pinned prefix holding a COPY of
+    // node made the derived path `/opt/etc/npmrc`, which does not exist; the
+    // run was rc 0, 308 passed, and twelve invocations went through the
+    // attacker's shell. A SYMLINK does not do it, because realpath collapses
+    // it, so the cost is a second real binary inside a pinned prefix.
+    //
+    // So the anchor comes from where npm IS: the npm ancestor's own program,
+    // read out of /proc/<pid>/exe, which npm cannot choose for itself. Both
+    // files are checked, and the two anchors disagreeing is refused by name --
+    // in an honest run there is one node, so a disagreement is the attack. A
+    // run with no npm ancestor has one anchor and this arm says nothing about
+    // a second.
+    const npmNode = npmAncestorProgram();
     const defaults = [
       { what: "npm's default user config", file: join(homedir(), '.npmrc') },
-      { what: "npm's default global config", file: join(dirname(dirname(process.execPath)), 'etc', 'npmrc') },
+      { what: "npm's default global config, anchored on this run's node", file: join(dirname(dirname(process.execPath)), 'etc', 'npmrc') },
+      ...(typeof npmNode === 'string'
+        ? []
+        : [{ what: "npm's default global config, anchored on the node running npm", file: join(dirname(dirname(npmNode.exe)), 'etc', 'npmrc') }]),
     ].filter(({ file }) => existsSync(file));
+    if (typeof npmNode !== 'string') {
+      const mine = realpathSync(process.execPath);
+      expect(
+        npmNode.exe === mine ? '' : `npm is running on ${npmNode.exe} (pid ${npmNode.pid}) and this run is on ${mine}`,
+        `${REFUSED_NPM_NODE_IS_NOT_THIS_ONE}: npm reads the config beside ITS OWN node, so two different binaries mean the file this law checked is not the file npm honours -- which is how one PATH entry made an effective script-shell go unread at rc 0. In an honest run there is one node`,
+      ).toBe('');
+    }
     for (const { what, file } of defaults) {
       const sets = readFileSync(file, 'utf8')
         .split('\n')
@@ -4267,12 +4443,22 @@ describe('every written invocation of the pack tools is isolated', () => {
     // `--experimental-loader`, taken with a space or with `=`. (`-r./file`,
     // concatenated, node rejects outright.)
     //
-    // DECLARED LIMIT, so no later round reads this as default-deny: it is a
-    // list of FORMS, not an allowlist of everything else. A code-loading flag
-    // node adds after today is unrefused until it is written here. What does
-    // not depend on this list is the gate's own leg, where the variable never
-    // reaches the child at all -- two mechanisms, neither the other's only
-    // reader.
+    // ROUND 67, THE COORDINATOR'S R65-C-04 (P2): THAT PARAGRAPH IS NO LONGER
+    // TRUE OF THE ARM BELOW IT, so it is replaced rather than left to mislead.
+    // It said: "DECLARED LIMIT, so no later round reads this as default-deny:
+    // it is a list of FORMS, not an allowlist of everything else. A
+    // code-loading flag node adds after today is unrefused until it is written
+    // here." Round 65 inverted the direction (R64-C-01), so the arm below is
+    // an ALLOW-LIST and a flag node adds after today is REFUSED, not admitted.
+    // The true declaration is the opposite one, and it is a cost rather than a
+    // hole: measured on node v24.12.0 in this container with
+    // `process.allowedNodeEnvironmentFlags`, 268 flags are accepted in
+    // NODE_OPTIONS, this list admits 18 of them and refuses 250, of which 85
+    // are `--no-` negations (2 admitted). So an honest CI job that sets
+    // `--cpu-prof` or `--inspect-port` reds, and that is this bound and not a
+    // new defect. What still does not depend on the list is the gate's own
+    // leg, where the variable never reaches the child at all -- two
+    // mechanisms, neither the other's only reader.
     //
     // ROUND 65, the challenger's R60-F-1: the value is read from the EXEC-TIME
     // environment, because a module loaded by this very variable runs before
@@ -4293,11 +4479,10 @@ describe('every written invocation of the pack tools is isolated', () => {
     const loaders = [
       ...new Set([
         ...ancestry.found,
-        ...(process.env.NODE_OPTIONS ?? '')
-          .split(/\s+/)
-          .filter((token) => token.length > 0)
-          .filter((token) => !nodeTokenLoadsNothing(token))
-          .map((token) => `this run's live environment: ${token}`),
+        ...tokensNotAdmitted(
+          (process.env.NODE_OPTIONS ?? '').split(/\s+/).filter((token) => token.length > 0),
+          nodeTokenLoadsNothing,
+        ).map((token) => `this run's live environment: ${token}`),
       ]),
     ];
     expect(
@@ -4958,7 +5143,20 @@ describe('every written invocation of the pack tools is isolated', () => {
     // this run. It refuses by name instead of taking the fall-through path.
     // Where the keys agree it says nothing, so it cannot red an honest run, and
     // it says nothing about a run that never had them.
-    const editedAfterExec = environmentEditedAfterExec(executionEnvironment(), process.env);
+    // ROUND 66, THE CHALLENGER'S R61-F-2 (P1, a false sentence standing over a
+    // fail-open). `executionEnvironment()` returns a REASON STRING when it
+    // cannot read `/proc/self/environ`, and the comparison returns `[]` for
+    // that shape -- so an unreadable exec-time environment passed this rung in
+    // silence while the case below said in its own words that the caller
+    // refuses on the reason. It did not. One package must not hold two
+    // doctrines about one event: the sibling arm in the npm-config case
+    // refuses this condition by name, and so does this one now.
+    const atExecForRung = executionEnvironment();
+    expect(
+      typeof atExecForRung === 'string' ? atExecForRung : '',
+      `${REFUSED_EXEC_ENVIRONMENT_UNREADABLE}: the fourth rung compares the keys this run was HANDED at exec with the ones it holds now, and the exec-time environment cannot be read, so the comparison would return an empty list of edits -- which is exactly what a clean run returns. ${typeof atExecForRung === 'string' ? atExecForRung : ''}`,
+    ).toBe('');
+    const editedAfterExec = environmentEditedAfterExec(atExecForRung, process.env);
     expect(
       editedAfterExec,
       `${REFUSED_HANDED_DOWN_ENV_EDITED}: ${editedAfterExec.join('; ')}. These keys arrived with this process at exec and something inside the run changed them before this case read them, which is the shape of the round-62 fail-open seen from the other side`,
@@ -5742,16 +5940,56 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(environmentEditedAfterExec(exec, { P5_PACK_DIGEST: 'different', P5_PACK_NONCE: 'n1' })).toStrictEqual([
       'P5_PACK_DIGEST (exec: "abc", now: "different")',
     ]);
-    // A key that never arrived says nothing: this arm is about an EDIT, and a
-    // run that was handed nothing is the business of the three rungs above it.
+    // A key nobody handed down and nobody set says nothing: this arm is about
+    // an EDIT, and a run that was handed nothing is the business of the three
+    // rungs above it.
     expect(environmentEditedAfterExec(new Map([['UNRELATED', 'x']]), {})).toStrictEqual([]);
+    // R65-C-03: an ARRIVAL is an edit too, and it is named as one.
+    expect(environmentEditedAfterExec(new Map([['UNRELATED', 'x']]), { P5_PACK_DIGEST: 'appeared' })).toStrictEqual([
+      'P5_PACK_DIGEST (exec: null, now: "appeared") -- an ARRIVAL: nothing handed this key down and something inside the run set it',
+    ]);
+    // An empty string arriving is not an arrival: it is the absence this law
+    // reads everywhere else as absence.
+    expect(environmentEditedAfterExec(new Map([['UNRELATED', 'x']]), { P5_PACK_DIGEST: '' })).toStrictEqual([]);
+  });
+
+  it('R61-66: a value is not a flag, and a flag after a value is still read', () => {
+    // The two halves of R61-F-1 and R61-S-2 are one rule, so it is run here
+    // once rather than inferred from two readers. The challenger's own four
+    // command lines are the first four rows.
+    const judged = (line: string): string[] =>
+      tokensNotAdmitted(
+        line.split(' ').filter((t) => t.length > 0),
+        nodeTokenLoadsNothing,
+      );
+    expect(judged('--dns-result-order ipv4first --import=/x/loader.mjs')).toStrictEqual(['--import=/x/loader.mjs']);
+    expect(judged('--unhandled-rejections warn --import=/x/loader.mjs')).toStrictEqual(['--import=/x/loader.mjs']);
+    expect(judged('--disable-warning DEP0040 --import=/x/loader.mjs')).toStrictEqual(['--import=/x/loader.mjs']);
+    // `--title` is no longer admitted (it rewrites the cmdline this scan
+    // reads), so it reds with its value behind it, and the loader beside it is
+    // named too.
+    expect(judged('--title probe -r /x/loader.cjs')).toStrictEqual(['--title', 'probe', '-r', '/x/loader.cjs']);
+    // Honest lines, which must not red: a value of an admitted flag is skipped
+    // whether it is written with a space or with `=`.
+    expect(judged('--dns-result-order ipv4first')).toStrictEqual([]);
+    expect(judged('--max-old-space-size=3072 --enable-source-maps')).toStrictEqual([]);
+    expect(judged('')).toStrictEqual([]);
+    // A bare token on its own is NOT waved through, and neither is the value of
+    // a flag that is not admitted -- the skip is a rule about pairs.
+    expect(judged('ipv4first')).toStrictEqual(['ipv4first']);
+    expect(judged('--import /x/loader.mjs')).toStrictEqual(['--import', '/x/loader.mjs']);
+    // R61-S-3: --conditions left the list, so it reds with its value behind it.
+    expect(judged('--conditions dev')).toStrictEqual(['--conditions', 'dev']);
   });
 
   it('R60-65: an unreadable exec-time environment is not read as a clean one', () => {
-    // The string form is the "cannot be read" case. It must NOT come back as an
-    // empty list of edits, because an empty list is what a clean run returns:
-    // the caller refuses on the reason instead, and this case pins which of the
-    // two shapes a failure takes.
+    // The string form is the "cannot be read" case, and the comparison returns
+    // an empty list for it -- which is what a CLEAN run returns, so the empty
+    // list is not a verdict here. The caller refuses on the reason by name
+    // before calling this at all (R61-F-2: until round 66 it did not, and this
+    // comment claimed it did). What this case pins is the division of labour:
+    // the comparison answers about EDITS only, and the shape that means
+    // "cannot say" is the string, which the caller must read.
     expect(environmentEditedAfterExec('/proc/self/environ cannot be read', { P5_PACK_DIGEST: 'abc' })).toStrictEqual([]);
     const reason = executionEnvironment('/definitely-not-proc-65');
     expect(typeof reason).toBe('string');

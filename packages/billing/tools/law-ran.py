@@ -102,6 +102,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import signal
@@ -363,7 +364,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 30,
+    "test/tool-commands-are-isolated.test.ts": 31,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
 # environment comparison -- the fourth rung of round 62's closure -- with a
@@ -371,7 +372,10 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # that could edit the environment is refused by an earlier arm and the
 # comparison can only say nothing. An arm with no reachable positive control is
 # an arm nobody has run.
-EXPECTED_TOTAL_CASES = 308
+# 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
+# rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
+# inferred from two readers is a rule nobody ran.
+EXPECTED_TOTAL_CASES = 309
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -488,6 +492,7 @@ EXPECTED: dict[str, int] = {
     # ADMITTED so the arm is not vacuous. A "cannot say" that returned the empty
     # string would make REFUSED-PACK-HANDED-DOWN-DIRECTORY-NOT-PRIVATE
     # unreachable.
+    # 30 -> 31 at round 66: the flag-region rule's own case (R61-F-1/S-2).
     # 28 -> 30 at round 65: the two cases that RUN the exec-time environment
     # comparison (R60-F-1's fourth rung), measured as a function because no
     # route in the real path can provoke it.
@@ -497,7 +502,7 @@ EXPECTED: dict[str, int] = {
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 30,
+    "test/tool-commands-are-isolated.test.ts": 31,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -865,7 +870,69 @@ def main() -> int:
     # here depends on the copy, so it runs BEFORE it, where there is nothing to
     # leak -- the cheapest form of that fix, and the one with no cleanup path to
     # get wrong.
-    refuse_if_sets_shell("npm's default global config", Path(node).parent.parent / "etc" / "npmrc")
+    refuse_if_sets_shell("npm's default global config, anchored on the runner", Path(node).parent.parent / "etc" / "npmrc")
+
+    # ROUND 67, THE COORDINATOR'S R65-F-1 (P1, a fail-open). The anchor above is
+    # the node THIS STEP resolved -- and the file npm actually honours is the one
+    # beside the node running NPM, which need not be the same binary. Measured by
+    # the coordinator: with `/opt/node22/etc/npmrc` holding a `script-shell`, one
+    # PATH entry naming a directory inside a pinned prefix that holds a COPY of
+    # the node binary made this step resolve `/opt/zzshim/node`, derive
+    # `/opt/etc/npmrc` (which does not exist), read nothing, and exit 0 while
+    # twelve invocations went through the attacker's shell. A symlink does not do
+    # it -- realpath collapses it -- so the cost is a second REAL binary inside a
+    # pinned prefix.
+    #
+    # The anchor must come from where npm IS. This walk reads the npm ancestor's
+    # own program out of /proc/<pid>/exe, checks the npmrc beside it, and refuses
+    # by name when the two anchors disagree: in an honest run there is one node,
+    # so a disagreement is the attack itself. A run with no npm ancestor (this
+    # step started by hand) has one anchor and says so.
+    npm_exe: Path | None = None
+    npm_pid: int | None = None
+    walk = os.getpid()
+    for _ in range(32):
+        try:
+            argv = (Path("/proc") / str(walk) / "cmdline").read_bytes().decode("utf-8", "replace").split("\0")
+        except OSError:
+            argv = []
+        words = [w for w in argv if w]
+        # npm rewrites its process title, so /proc/<pid>/cmdline holds ONE entry
+        # ("npm exec ...") rather than argv as it was spelled. Measured here, and
+        # the reason the first version of this walk found no npm ancestor under
+        # `npm test`: the first WHITESPACE-separated word of the first entry is
+        # what names the program.
+        head = Path(words[0].split()[0]).name if words and words[0].split() else ""
+        if head == "npm" or any(Path(w).name == "npm-cli.js" for w in words):
+            try:
+                npm_exe = Path("/proc", str(walk), "exe").resolve(strict=True)
+                npm_pid = walk
+            except OSError as why:
+                refuse(
+                    f"{REFUSED_NPM_CONFIG}: pid {walk} in this step's ancestry is npm and its program cannot be "
+                    f"resolved ({why}), so the config file npm honours cannot be located. An anchor this step "
+                    "cannot derive is not an anchor that agrees"
+                )
+            break
+        try:
+            status = (Path("/proc") / str(walk) / "status").read_text()
+        except OSError:
+            break
+        parent = re.search(r"^PPid:\s*([0-9]+)$", status, re.M)
+        if parent is None:
+            break
+        walk = int(parent.group(1))
+        if walk <= 1:
+            break
+    if npm_exe is not None:
+        refuse_if_sets_shell("npm's default global config, anchored on the node running npm", npm_exe.parent.parent / "etc" / "npmrc")
+        if npm_exe != real_node:
+            refuse(
+                f"{REFUSED_NPM_CONFIG}: npm is running on {npm_exe} (pid {npm_pid}) and this step resolved the "
+                f"runner at {real_node}. npm reads the config beside ITS OWN node, so two different binaries mean "
+                "the file this step checked is not the file npm honours. In an honest run there is one node"
+            )
+    print(f"npm anchor: {npm_exe if npm_exe is not None else 'no npm ancestor of this step; one anchor only'}")
 
     # R53-F1: the pack is pinned by digest for the duration of the run this
     # step starts, so the figures below and the set the law checks are one
@@ -1221,8 +1288,25 @@ def main() -> int:
             # real path behind /proc/<runner>/exe, and that binary's --version),
             # and this step derives them from its own resolution. Two
             # derivations of one identity, compared where the config cannot
-            # reach, so "which interpreter produced these figures" is refused
-            # rather than printed.
+            # reach.
+            #
+            # ROUND 67, THE COORDINATOR'S R65-C-02: the same narrowing from its
+            # other side. This identity is a PATH plus a SELF-REPORTED version
+            # string, never CONTENT. A binary placed at the resolved path
+            # satisfies both derivations, and --version is what that binary says
+            # about itself. Nothing here hashes the runner.
+            #
+            # ROUND 66, THE CHALLENGER'S R61-S-1, narrowing the sentence that
+            # stood here ("so 'which interpreter produced these figures' is
+            # refused rather than printed"). A DISAGREEMENT is refused; an
+            # AGREEMENT is worth exactly what the receipt is worth. Measured by
+            # the challenger with three shims inside a pinned prefix: a
+            # transparent wrapper that only execs the real node is caught (rc 1,
+            # the two paths named); a shim that lets the law run honestly and
+            # then patches these two fields is rc 0; a shim that never starts
+            # node and rebuilds the receipt from this run's handed-down values
+            # is rc 0. This closes the WRAPPER class. It does not bound the
+            # actor who RUNS the suite, because that actor owns the receipt.
             "runner_real_path": str(real_node),
             "runner_version": runner_version,
         }
