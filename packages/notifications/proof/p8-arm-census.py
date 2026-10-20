@@ -201,6 +201,17 @@ ARM_LABELS = (
     # text.
     "SCANNER-AGREE",
     "SCANNER-AGREE-CTL",
+    # ROUND 32: the twenty-second challenge's D-1 and D-2 and the coordinator
+    # diff review's P1. Agreement between the two scanners was never
+    # conformance to the thing they implement, so these read the SERVER.
+    "SCANNER-ORACLE",
+    "SCANNER-ORACLE-CTL",
+    "IDENT-RULE",
+    "LEX-SETTINGS",
+    "ROW-ASTRAL",
+    "ROW-ASTRAL-WHERE",
+    "ROW-ASTRAL-CTL",
+    "ROW-ASTRAL-CLASS-CTL",
     "REACH-BENCH",
     "ROW-REACH",
     "ROW-REACH-COMMENT",
@@ -416,6 +427,7 @@ EXPECTED_ARMS = (
     ("GUARD-CTL y9", 1),
     ("HATCH", 1),
     ("I1-conc PASS", 1),
+    ("IDENT-RULE", 1),
     ("INTEGRITY-MUT a", 1),
     ("INTEGRITY-MUT b", 1),
     ("INTEGRITY-MUT c", 1),
@@ -436,6 +448,7 @@ EXPECTED_ARMS = (
     ("ISOLATION i12", 1),
     ("ISOLATION i4", 1),
     ("ISOLATION i7", 1),
+    ("LEX-SETTINGS", 1),
     ("LINEAGE a5", 1),
     ("LINEAGE a7", 1),
     ("MUT 1", 1),
@@ -464,6 +477,10 @@ EXPECTED_ARMS = (
     ("RETIREMENT n2", 1),
     ("RETIREMENT n3", 1),
     ("RETIREMENT-NET y19", 1),
+    ("ROW-ASTRAL", 1),
+    ("ROW-ASTRAL-CLASS-CTL", 1),
+    ("ROW-ASTRAL-CTL", 1),
+    ("ROW-ASTRAL-WHERE", 1),
     ("ROW-CLASS", 1),
     ("ROW-CLASS-CTL", 1),
     ("ROW-PACK", 1),
@@ -479,6 +496,8 @@ EXPECTED_ARMS = (
     ("SANDBOX-CTL y26", 1),
     ("SCANNER-AGREE", 1),
     ("SCANNER-AGREE-CTL", 1),
+    ("SCANNER-ORACLE", 1),
+    ("SCANNER-ORACLE-CTL", 1),
     ("SHALLOW s12", 1),
     ("SHALLOW s8", 1),
     ("VACUITY a", 1),
@@ -526,7 +545,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "a28f6a773df0523d23cc44f79d8fb2af609e2aafef4246a5fb351ad2712e8df3"
+EXPECTED_SEAL = "0e144fea76881be23b3da063dc4f739cca5bf0f22bff54d34bb870b034d71e6e"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not

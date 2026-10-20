@@ -1,0 +1,39 @@
+# The scanner ORACLE corpus. ROUND 32, answering the twenty-second challenge's
+# D-1 and D-2 (both P1).
+#
+# `p8-scanner-corpus.txt` compares the two scanners with EACH OTHER. That is a
+# necessary measurement and it is not a sufficient one, and the twenty-second
+# round proved it by building an input on which the two agree and the SERVER
+# does not: a dollar-quote tag carrying a supplementary-plane character, which
+# PostgreSQL accepts and neither scanner recognised, so a case hid its own
+# WHERE from every law and detached the predicate the row form appends. The
+# whole gate stayed FAILED=0.
+#
+# So this corpus ends the regress somewhere else: in what the SERVER DID.
+# Each line is a payload appended to
+#
+#     UPDATE <bench> SET v = v + 1 <payload>
+#
+# over a two-row bench. The server's verdict is READ FROM THE ROWS: if one row
+# moved, a predicate acted; if both moved, none did. The scanner's verdict is
+# whether its `strip` output still shows the keyword. The two must agree, and
+# where they do not the arm reds BY NAME. Nothing here reads a second text to
+# check the first.
+#
+# Fields: label <TAB> UTF-8 hex of the payload <TAB> comment. Hex, so that no
+# escaping convention of the shell, psql or Python sits between the payload
+# this file declares and the bytes the server is given.
+honest-none		no predicate at all: the server touches both rows and the scanner sees no where
+honest-where	205748455245206b203d20275827	an ordinary predicate: both the server and the scanner see it
+d1-dollar-tag	202c206b203d206b207c7c2024f09f9880246974277324f09f988024205748455245206b203d20275827	D-1: a supplementary-plane dollar tag round 31 did not recognise, so the where vanished from every law
+d1-plain-tag	202c206b203d206b207c7c2024712469742773247124205748455245206b203d20275827	the same shape with an ASCII tag, which round 31 did read
+dollar-cont	202c206b203d206b207c7c20276127205748455245206b203d20275827	an ordinary string before the predicate
+comment-where	202d2d205748455245206b203d20275827	a where inside a comment: the server does not act on it and the scanner must not see it
+blockcomment	202f2a205748455245206b203d20275827202a2f	the same inside a block comment
+literal-where	202c206b203d206b207c7c2027205748455245206b203d2027275827272027	a where inside a string literal: a value, not code
+dollar-where	202c206b203d206b207c7c20247124205748455245206b203d2027582720247124	a where inside a dollar-quoted body: a value, not code
+nested-comment	202f2a2061202f2a2062202a2f205748455245206b203d20275827202a2f	nested block comments: the where is still inside the comment
+escape-string	202c206b203d206b207c7c204527615c276227205748455245206b203d20275827	an E-string with a backslash escape before the predicate
+doubled-quote	202c206b203d206b207c7c20276127276227205748455245206b203d20275827	a doubled quote inside a plain string before the predicate
+quoted-ident	202c20226b22203d206b205748455245206b203d20275827	a quoted identifier: kept, and the predicate after it is code
+dollar-empty-tag	202c206b203d206b207c7c202424697427732424205748455245206b203d20275827	an empty dollar tag with an apostrophe in the body

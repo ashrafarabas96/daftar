@@ -29,3 +29,17 @@ unterm-d	53454c45435420247124756e7465726d696e61746564	unterminated dollar quote
 unterm-c	53454c454354202f2a20756e7465726d696e61746564	unterminated block comment
 empty		the empty input
 spaces	202020	whitespace only
+
+
+# ROUND 32 — the three classes the twenty-second challenge measured, and the
+# two more found reproducing them. Every one of these is a case on which the
+# two scanners AGREED and the server did not, which is why agreement alone was
+# never conformance: see p8-scanner-oracle.txt.
+r32-dollar-ident	53454c454354206124622463246224	R32: `$` is an identifier CONTINUATION char, so this is ONE identifier and there is no quote. Server: column "a$b$c$b$" does not exist
+r32-d1-tag	555044415445207420534554206b203d2024f09f9880246974277324f09f9880242057484552452076203d203939	D-1 (P1): a supplementary-plane dollar tag the server accepts and round 31 did not recognise, so WHERE vanished from every law
+r32-d2-sharp-s	53454c45435420c39f4527615c276227	D-2 (P1): the two readers disagreed here. Server: unterminated bit string literal at or near "b'" — so this refuses
+r32-d2-middot	53454c45435420c2b745276127	R32: U+00B7 is an identifier char to the server and NOT alphanumeric to Python, so round 31's two readers were wrong in OPPOSITE directions. Server: type "·e" does not exist
+r32-dollar-number	53454c454354203124782479247824	R32: after a NUMBER a dollar quote does open, unlike after an identifier — one character of lookback cannot tell the two apart
+r32-tag-param	53454c45435420243178247924317824	R32: a tag may not start with a digit, so this is a positional parameter. Server: trailing junk after parameter
+r32-estring-num	53454c454354203945276127	R32: after a numeric literal `E'` is not an E-string but an error the server names, so the scanner refuses rather than guessing
+r32-unterminated	53454c45435420247124616263	R32: an unterminated dollar quote is REFUSED rather than silently consumed to end of input

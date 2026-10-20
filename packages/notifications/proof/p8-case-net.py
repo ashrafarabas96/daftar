@@ -61,10 +61,107 @@ SQL_REF = re.compile(r'([A-Za-z0-9._-]+\.sql)')
 # the word is not a statement (round 30, W-4, learned on the other side of this
 # same question).
 DYNAMIC = re.compile(r'(^|[^a-z_])execute([^a-z_]|$)', re.I)
-CREATES = re.compile(r'(^|[^a-z_])create\s+(or\s+replace\s+)?function($|[^a-z_])', re.I)
+# ROUND 32, R-3 (P2), unanswered since round 21 and measured again at
+# `b81870a`: a PROCEDURE reaches the core exactly as a function does, and the
+# rule only knew the word `function`. Measured on the server:
+#   CREATE PROCEDURE p8.w() … PERFORM p8.case_refuses_core(…)   -> no match
+# The routine kinds are named here rather than left as one word, and a kind
+# this rule does not know is not silently admitted — see UNKNOWN_ROUTINE.
+CREATES = re.compile(
+    r'(^|[^a-z_])create\s+(or\s+replace\s+)?(function|procedure)($|[^a-z_])', re.I)
+# And the refusal must not depend on this list being complete. Anything the
+# server will CREATE that can hold a body is refused by name, so the next
+# routine kind is a named refusal rather than a hole: fail on what you cannot
+# classify, never skip it.
+UNKNOWN_ROUTINE = re.compile(
+    r'(^|[^a-z_])create\s+(or\s+replace\s+)?([a-z_]+)\s', re.I)
+ROUTINE_SAFE = frozenset((
+    'table', 'temp', 'temporary', 'unlogged', 'index', 'unique', 'view',
+    'sequence', 'type', 'domain', 'schema', 'role', 'extension', 'trigger',
+    'policy', 'rule', 'constraint', 'materialized', 'collation', 'cast',
+    'operator', 'aggregate', 'server', 'publication', 'subscription',
+    'statistics', 'database', 'tablespace', 'language',
+))
+# ROUND 32, R-3 (P2), the second route the challenger measured: a Unicode
+# escape in a QUOTED identifier spells the core helper's name without the
+# bytes of it ever appearing. The scanner KEEPS quoted identifiers, by design
+# and for a good reason, so the literal test passes straight over it:
+#   SELECT p8.U&"case_refuses_cor\0065"('UNI', …)   -> reaches the core
+# A `U&"…"` identifier in a case or fixtures file is therefore refused
+# OUTRIGHT. No case needs one, and admitting it would mean reading an
+# escaping convention in order to decide what a name is, which is the regress
+# this whole round is about.
+UESCAPE_IDENT = re.compile(r'U&\s*"', re.I)
 
 
-DOLLAR_TAG = re.compile(r'\$(?:[A-Za-z_\x80-￿][A-Za-z0-9_\x80-￿]*)?\$')
+# ROUND 32, D-1 and D-2 (both P1), and one class I found reproducing them.
+# The round-31 scanner restated PostgreSQL's identifier grammar as a regex, in
+# each language separately, and got it wrong three ways at once. All three were
+# measured against the SERVER on PG 16.15, and all three hide text a law must
+# see:
+#
+#   SELECT a$b$c$b$   -> ERROR: column "a$b$c$b$" does not exist
+#       `$` is an identifier CONTINUATION character, so that is ONE identifier
+#       and there is no dollar quote at all. Both scanners read `$b$ … $b$` as
+#       a quote and blanked `c` — text the server treats as code. (Mine.)
+#   SELECT 😀E'a'      -> ERROR: type "😀e" does not exist
+#       a supplementary-plane character is an identifier character, so `😀E` is
+#       one identifier. Both scanners stopped their class at U+FFFF. (D-1.)
+#   SELECT ßE'a\'b'   -> ERROR: unterminated bit string literal at or near "b'"
+#       `ßE` is an identifier and `'a\'` a plain string. Python asked
+#       `isalnum()` and the SQL side asked `[A-Za-z0-9_]`, so the two DISAGREED
+#       (D-2) — and `·E'a'` -> ERROR: type "·e" does not exist shows BOTH were
+#       wrong, in opposite directions: U+00B7 is an identifier character to the
+#       server and is not alphanumeric to Python.
+#
+# So the rule is declared ONCE, here, in the terms the server's own lexer uses
+# (`scan.l`: ident_start `[A-Za-z\200-\377_]`, ident_cont adds `[0-9$]`), it is
+# ASSERTED against the server by the `IDENT-RULE` arm rather than remembered,
+# and the scanner consumes an identifier as a WHOLE TOKEN so that a `$` or an
+# `E'` inside one is never examined on its own. Looking back one character is
+# not enough and that is why round 31 failed: `1$x$y$x$` IS a dollar quote to
+# the server and `a$x$y$x$` is not, and the character before the `$` is an
+# identifier-continuation character in both.
+
+
+def ident_start(ch):
+    """A character PostgreSQL will begin an identifier with."""
+    return ch == '_' or ('A' <= ch <= 'Z') or ('a' <= ch <= 'z') or ord(ch) >= 0x80
+
+
+def ident_cont(ch):
+    """A character PostgreSQL will continue an identifier with. `$` included."""
+    return ident_start(ch) or ('0' <= ch <= '9') or ch == '$'
+
+
+def dolq_cont(ch):
+    """A character PostgreSQL allows INSIDE a dollar-quote tag: no `$`."""
+    return ident_start(ch) or ('0' <= ch <= '9')
+
+
+def _dollar_tag(t, i):
+    """The dollar-quote tag opening at `i`, or None. PostgreSQL's tag follows
+    the identifier rules EXCEPT that `$` may not appear inside it (scan.l:
+    dolq_start / dolq_cont), which is why `$1x$` is a positional parameter with
+    trailing junk and not a tag. Measured: SELECT $1x$y$1x$ -> ERROR trailing
+    junk after parameter."""
+    n = len(t)
+    if i >= n or t[i] != '$':
+        return None
+    j = i + 1
+    if j < n and ident_start(t[j]):
+        j += 1
+        while j < n and dolq_cont(t[j]):
+            j += 1
+    if j < n and t[j] == '$':
+        return t[i:j + 1]
+    return None
+
+
+class Unlexable(Exception):
+    """The scanner will not guess. Raised where the server's reading is not
+    determined by the rules above, so a caller refuses BY NAME instead of
+    reading a statement one of us has mis-lexed."""
 
 
 def sql_scan(t, keep_dollar=False, keep_strings=False):
@@ -96,9 +193,21 @@ def sql_scan(t, keep_dollar=False, keep_strings=False):
     them, because to those a dollar-quoted body is a VALUE. The delimiters are
     consumed identically either way, which is the part that was wrong.
 
-    An unterminated construct consumes to end of input. That can only hide
-    text from a law, never reveal it, so it can only make a refusal more
-    likely — and `assert_balanced` below refuses it outright.
+    ROUND 32. The paragraph that stood here said an unterminated construct
+    consumes to end of input, that this "can only hide text from a law, never
+    reveal it, so it can only make a refusal more likely", and that
+    "`assert_balanced` below refuses it outright". Both halves were false and
+    the coordinator measured both. There is no `assert_balanced` anywhere in
+    the repository — `git grep` returns only that sentence. And the direction
+    is backwards: these laws refuse on what they SEE, so hiding text makes a
+    refusal LESS likely, not more. That is exactly how D-1 worked — the
+    astral-tag desync hid a `WHERE` from the shape law and the case passed.
+
+    So the behaviour is now what the sentence claimed: an unterminated string,
+    quoted identifier or dollar quote raises `Unlexable`, and the SQL twin
+    raises `p8.sql_scan: UNLEXABLE — …`. The scanner does not guess where it
+    cannot be sure the server agrees, and a caller refuses by name instead of
+    reading a statement one of the two has mis-lexed.
     """
     out = []
     i, n = 0, len(t)
@@ -130,13 +239,44 @@ def sql_scan(t, keep_dollar=False, keep_strings=False):
                     j += 1
                     break
                 j += 1
+            else:
+                raise Unlexable('an unterminated quoted identifier')
             out.append(t[i:j])
             i = j
             continue
-        if c == "'" or (c in 'Ee' and t.startswith("'", i + 1)
-                        and not (i and (t[i - 1].isalnum() or t[i - 1] == '_'))):
+        # A numeric token. The server does not continue an identifier into one,
+        # so `1$x$y$x$` IS a dollar quote while `a$x$y$x$` is not; and after a
+        # number `E'` is not an E-string but an error the server names
+        # (`trailing junk after numeric literal`), so the scanner refuses it
+        # rather than choosing one of the two readings.
+        if '0' <= c <= '9':
+            j = i + 1
+            while j < n and (('0' <= t[j] <= '9') or t[j] == '.'):
+                j += 1
+            if j < n and t[j] in 'Ee' and t.startswith("'", j + 1):
+                raise Unlexable("`E'` directly after a numeric literal")
+            out.append(t[i:j])
+            i = j
+            continue
+        # ROUND 32. An identifier is consumed as ONE TOKEN, and that single
+        # change is the whole of the D-1 / D-2 fix: a `$` or an `E'` falling
+        # INSIDE an identifier is never examined on its own, so there is no
+        # one-character lookback left to get wrong, and `a$b$c$b$` comes out
+        # whole exactly as the server reads it. The greedy consumption also
+        # ENCODES the lookback the E-string test below needs: control only
+        # reaches that test at a position where no identifier was running, so
+        # an `E'` found there really does open an E-string.
+        if ident_start(c) and not (c in 'Ee' and t.startswith("'", i + 1)):
+            j = i + 1
+            while j < n and ident_cont(t[j]):
+                j += 1
+            out.append(t[i:j])
+            i = j
+            continue
+        if c == "'" or (c in 'Ee' and t.startswith("'", i + 1)):
             esc = c in 'Ee'
             j = i + 2 if esc else i + 1
+            closed = False
             while j < n:
                 if esc and t[j] == '\\':
                     j += 2
@@ -146,20 +286,21 @@ def sql_scan(t, keep_dollar=False, keep_strings=False):
                         j += 2
                         continue
                     j += 1
+                    closed = True
                     break
                 j += 1
+            if not closed:
+                raise Unlexable('an unterminated string literal')
             out.append(t[i:j] if keep_strings else ' ')
             i = j
             continue
         if c == '$':
-            m = DOLLAR_TAG.match(t, i)
+            m = _dollar_tag(t, i)
             if m:
-                tag = m.group(0)
-                k = t.find(tag, m.end())
+                tag = m
+                k = t.find(tag, i + len(tag))
                 if k < 0:
-                    out.append(t[i:] if keep_strings else ' ')
-                    i = n
-                    continue
+                    raise Unlexable('an unterminated dollar-quoted string')
                 if keep_strings:
                     out.append(t[i:k + len(tag)])
                 elif keep_dollar:
@@ -170,7 +311,18 @@ def sql_scan(t, keep_dollar=False, keep_strings=False):
                     # show the handler ban its EXECUTE and must NOT show it the
                     # word inside that literal, which is a payload. Nested
                     # dollar bodies stay visible, which is what the ban is for.
-                    out.append(' %s ' % sql_scan(t[m.end():k], keep_dollar=True))
+                    # ROUND 32. A dollar body is a VALUE, not a statement, so
+                    # it need not lex as SQL: `$q$it's$q$` is a perfectly good
+                    # literal whose body alone is an unterminated string. The
+                    # re-scan exists only to REVEAL nested constructs to the
+                    # handler ban, so where it cannot lex the body the raw body
+                    # is kept. That is the safe direction — it can only show
+                    # the ban more text, never less.
+                    try:
+                        body = sql_scan(t[i + len(tag):k], keep_dollar=True)
+                    except Unlexable:
+                        body = t[i + len(tag):k]
+                    out.append(' %s ' % body)
                 else:
                     out.append(' ')
                 i = k + len(tag)
@@ -234,11 +386,45 @@ def main(argv):
                 continue
             parts = line.split("\t")
             lab, t = parts[0], bytes.fromhex(parts[1]).decode("utf-8")
-            for mode, out in (("strip", sql_scan(t)),
-                              ("dollar", sql_scan(t, keep_dollar=True)),
-                              ("exec", sql_scan(t, keep_strings=True))):
-                sys.stdout.write("%s\t%s\t%s\n"
-                                 % (lab, mode, out.encode("utf-8").hex()))
+            for mode, fn in (("strip", lambda x: sql_scan(x)),
+                             ("dollar", lambda x: sql_scan(x, keep_dollar=True)),
+                             ("exec", lambda x: sql_scan(x, keep_strings=True))):
+                # ROUND 32: a refusal is a READING, and both sides must report
+                # it the same way or the comparison is between an output and
+                # an abort.
+                try:
+                    out = fn(t).encode("utf-8").hex()
+                except Unlexable:
+                    out = "UNLEXABLE"
+                sys.stdout.write("%s\t%s\t%s\n" % (lab, mode, out))
+        return 0
+    # ROUND 32, SCANNER-ORACLE. The twenty-second challenge's D-1: the two
+    # scanners AGREED on an input the server reads differently, so the
+    # comparison above stayed green while a case hid its own WHERE from every
+    # law. Agreement between two implementations is not conformance to the
+    # thing they implement. This mode prints only THIS side's verdict — does
+    # the scanner still see the keyword as code — and the gate reads the
+    # server's verdict off the ROWS a bench statement moved. Nothing here
+    # checks one text by reading another.
+    if len(argv) == 4 and argv[1] == "--oracle-scan":
+        stem, kw = argv[3], "where"
+        for line in open(argv[2], encoding="utf-8"):
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            lab = parts[0]
+            payload = bytes.fromhex(parts[1]).decode("utf-8")
+            try:
+                seen = re.search(r'(^|[^A-Za-z0-9_])%s([^A-Za-z0-9_]|$)' % kw,
+                                 sql_scan(stem + payload), re.I) is not None
+                verdict = "sees" if seen else "blind"
+            except Unlexable:
+                # The arm compares only payloads the server RUNS, so a refusal
+                # here is a payload that should never have been in the corpus.
+                # Naming it as such keeps it from being compared to a verdict.
+                verdict = "NOT-A-LEXING-PROBE[scanner-refused]"
+            sys.stdout.write("%s\t%s\n" % (lab, verdict))
         return 0
     if len(argv) == 3 and argv[1] == "--pin":
         runner, want = argv[2], None
@@ -316,9 +502,21 @@ def main(argv):
                        "SQL, because a built name is a name this net cannot read "
                        "(F-4a)" % n)
         if CREATES.search(text):
-            bad.append("A FUNCTION CREATED in %s: a wrapper defined here would "
-                       "reach the core under a name this net does not know "
-                       "(F-4b)" % n)
+            bad.append("A ROUTINE CREATED in %s: a function or procedure "
+                       "defined here would reach the core under a name this "
+                       "net does not know (F-4b, R-3)" % n)
+        for m in UNKNOWN_ROUTINE.finditer(text):
+            kind = m.group(3).lower()
+            if kind not in ROUTINE_SAFE and kind not in ('function', 'procedure'):
+                bad.append("AN UNCLASSIFIED CREATE in %s: `create %s` is a kind "
+                           "this net has no rule for, and a kind it cannot "
+                           "classify is refused rather than admitted (R-3)"
+                           % (n, kind))
+        if UESCAPE_IDENT.search(raw):
+            bad.append("A U&\"…\" IDENTIFIER in %s: a Unicode escape spells a "
+                       "name without its bytes ever appearing, so "
+                       "`p8.U&\"case_refuses_cor\\0065\"` reaches the core past "
+                       "the literal test. No case needs one (R-3)" % n)
     if bad:
         sys.stderr.write("CASE NET FAIL: " + "; ".join(bad) + "\n")
         return 1
@@ -327,7 +525,8 @@ def main(argv):
     sys.stdout.write(
         "CASE NET: %d SQL files are loaded by this runner, derived from its own "
         "source; of them %d are case or fixtures files, and none names the core "
-        "helper, builds SQL or creates a function. Set pinned at %s\n"
+        "helper (scanned OR raw), builds SQL, creates a routine of any kind, "
+        "or spells a name through a U&\"…\" escape. Set pinned at %s\n"
         % (len(pairs), len(subjects), pin))
     return 0
 

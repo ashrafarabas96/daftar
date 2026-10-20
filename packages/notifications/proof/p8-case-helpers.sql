@@ -111,14 +111,30 @@ DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 --       dollar-quoted body blinded the stripper every law read through, so a
 --       predicate the case wrote itself was invisible too.
 --
---       What is true now is narrower and is a list of refusals rather than an
---       argument: the appended predicate applies because the statement may not
---       end in a comment (the form runs the scanner's 'exec' text), may not be
---       more than one statement (`assert_single_statement`), and may not carry
---       `where` or `@KEY@` of its own (the keyword law, reading through a
---       scanner that follows the server's own lexing). Each of those three is
---       refused BY NAME and each has an arm and a control. Reach is bounded by
---       those three refusals together, not by the shape of one expression.
+--       ROUND 31 wrote, in place of that argument, a list of three refusals
+--       and the sentence "Reach is bounded by those three refusals together".
+--       That sentence was FALSE AS WRITTEN and both reviewers measured it: the
+--       coordinator's `RB-astral`,
+--         UPDATE @REL@ SET v = 2 + length($𐀀$a'b$𐀀$) - 3 ; SELECT 1 FROM @REL@
+--       IS more than one statement, was NOT refused, and the appended
+--       predicate joined the second statement — `PASS refused by
+--       DENIED-BY-THE-OTHER-ROW [42501]`, rc 0, with the whole gate FAILED=0
+--       and the attack installed in the real case `W-2`. The three refusals
+--       were real; the clause that made them sufficient was not, because all
+--       three read the statement THROUGH a scanner that did not follow the
+--       server's own lexing, so each of them was looking at a different
+--       program. A list of refusals is only as good as the reading they share.
+--
+--       What is true now is that same list of three refusals, plus the thing
+--       the sentence above assumed and never measured: the shared reading is
+--       itself checked AGAINST THE SERVER. `SCANNER-ORACLE` runs each corpus
+--       payload on a two-row bench and reads the server's verdict OFF THE
+--       ROWS — one row moved means a predicate acted — and requires the
+--       scanner's reading of what is code to match it, with a control that
+--       restores round 31's tag class and reds. `IDENT-RULE` asks the server
+--       to classify each probe character and requires `p8.ident_start` to
+--       agree. So the bound is: three named refusals, over a reading the
+--       server attests. It is still not a proof that no fourth route exists.
 --
 --   case_refuses_relation(label, stmt, expect, relation)
 --       The refusal is about a RELATION. The statement must carry @REL@ and may
@@ -184,13 +200,79 @@ DROP FUNCTION IF EXISTS p8.case_refuses(TEXT, TEXT, TEXT, TEXT, TEXT);
 -- rather than carrying a value, and an apostrophe inside one would otherwise
 -- desync everything after it. An unterminated construct consumes to the end of
 -- the input, which can only hide text from a law and never reveal it.
+-- ROUND 32, D-1 and D-2 (both P1), and one class found reproducing them. The
+-- round-31 scanner restated PostgreSQL's identifier grammar as a regex, once
+-- per language, and got it wrong three ways at once. Measured on PG 16.15:
+--
+--   SELECT a$b$c$b$  -> ERROR: column "a$b$c$b$" does not exist
+--        `$` is an identifier CONTINUATION character, so that is ONE
+--        identifier and there is no dollar quote in it at all. Both scanners
+--        read a quote there and blanked `c`, which is code to the server.
+--   SELECT $E1$E'a'  -- and  SELECT 😀E'a' -> ERROR: type "😀e" does not exist
+--        a supplementary-plane character is an identifier character; both
+--        scanners stopped their class at U+FFFF (D-1).
+--   SELECT ·E'a'     -> ERROR: type "·e" does not exist
+--        U+00B7 is an identifier character to the server and is NOT
+--        alphanumeric to Python, so round 31's two readers disagreed (D-2)
+--        and BOTH were wrong, in opposite directions.
+--
+-- The rule is declared ONCE below in the server's own terms (scan.l:
+-- ident_start `[A-Za-z\200-\377_]`, ident_cont adds `[0-9$]`, and a
+-- dollar-quote tag takes the identifier characters EXCEPT `$`), it is
+-- ASSERTED against the server by the `IDENT-RULE` arm rather than remembered,
+-- and an identifier is consumed as a WHOLE TOKEN so that a `$` or an `E'`
+-- inside one is never examined alone. One character of lookback cannot decide
+-- it: `1$x$y$x$` IS a dollar quote to the server and `a$x$y$x$` is not, and
+-- the character before the `$` is an identifier-continuation character in
+-- both.
+CREATE OR REPLACE FUNCTION p8.ident_start(ch TEXT) RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT ch ~ '^[A-Za-z_]$' OR ascii(ch) >= 128
+$fn$;
+
+CREATE OR REPLACE FUNCTION p8.ident_cont(ch TEXT) RETURNS BOOLEAN
+LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT p8.ident_start(ch) OR ch ~ '^[0-9$]$'
+$fn$;
+
+-- A dollar-quote tag takes identifier characters but NOT `$`, which is why
+-- `SELECT $1x$y$1x$` is a positional parameter with trailing junk and not a
+-- tag. Returns the whole tag including both `$`, or NULL.
+CREATE OR REPLACE FUNCTION p8.dollar_tag(t TEXT, i INT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE AS $fn$
+DECLARE n INT := length(t); j INT;
+BEGIN
+  IF i > n OR substr(t, i, 1) <> '$' THEN RETURN NULL; END IF;
+  j := i + 1;
+  IF j <= n AND p8.ident_start(substr(t, j, 1)) THEN
+    j := j + 1;
+    WHILE j <= n AND (p8.ident_start(substr(t, j, 1))
+                      OR substr(t, j, 1) ~ '^[0-9]$') LOOP
+      j := j + 1;
+    END LOOP;
+  END IF;
+  IF j <= n AND substr(t, j, 1) = '$' THEN RETURN substr(t, i, j - i + 1); END IF;
+  RETURN NULL;
+END $fn$;
+
+-- The 'dollar' mode's recursion, with the refusal turned into the raw body.
+-- See the comment at its call site.
+CREATE OR REPLACE FUNCTION p8.sql_scan_value(body TEXT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE AS $fn$
+BEGIN
+  RETURN p8.sql_scan(body, 'dollar');
+EXCEPTION WHEN SQLSTATE 'P0001' THEN
+  IF SQLERRM LIKE 'p8.sql_scan: UNLEXABLE%' THEN RETURN body; END IF;
+  RAISE;
+END $fn$;
+
 CREATE OR REPLACE FUNCTION p8.sql_scan(t TEXT, mode TEXT DEFAULT 'strip')
 RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $fn$
 DECLARE
   out TEXT := '';
   i INT := 1;
   n INT := length(t);
-  j INT; k INT; depth INT; tag TEXT; esc BOOLEAN; c TEXT; prev TEXT;
+  j INT; k INT; depth INT; tag TEXT; esc BOOLEAN; c TEXT; closed BOOLEAN;
 BEGIN
   IF mode NOT IN ('strip', 'dollar', 'exec') THEN
     RAISE EXCEPTION 'p8.sql_scan: unknown mode %', mode;
@@ -211,48 +293,86 @@ BEGIN
       END LOOP;
       out := out || ' ';
     ELSIF c = '"' THEN
-      j := i + 1;
+      j := i + 1; closed := FALSE;
       WHILE j <= n LOOP
         IF substr(t, j, 1) = '"' THEN
           IF substr(t, j, 2) = '""' THEN j := j + 2; CONTINUE; END IF;
-          j := j + 1; EXIT;
+          j := j + 1; closed := TRUE; EXIT;
         END IF;
         j := j + 1;
       END LOOP;
+      IF NOT closed THEN
+        RAISE EXCEPTION 'p8.sql_scan: UNLEXABLE — an unterminated quoted identifier'
+          USING ERRCODE = 'P0001';
+      END IF;
+      out := out || substr(t, i, j - i);
+      i := j;
+    -- ROUND 32. An identifier is consumed as ONE TOKEN, and that single change
+    -- is the whole of the D-1 / D-2 fix: a `$` or an `E'` falling INSIDE an
+    -- identifier is never examined on its own, so there is no one-character
+    -- lookback left to get wrong, and `a$b$c$b$` comes out whole exactly as
+    -- the server reads it. The greedy consumption also ENCODES the lookback
+    -- the E-string test below needs: control only reaches that test where no
+    -- identifier was running, so an `E'` found there really does open one.
+    ELSIF p8.ident_start(c)
+          AND NOT (c IN ('E','e') AND substr(t, i + 1, 1) = '''') THEN
+      j := i + 1;
+      WHILE j <= n AND p8.ident_cont(substr(t, j, 1)) LOOP j := j + 1; END LOOP;
+      out := out || substr(t, i, j - i);
+      i := j;
+    -- A numeric token. The server does not continue an identifier into one, so
+    -- `1$x$y$x$` IS a dollar quote while `a$x$y$x$` is not; and after a number
+    -- `E'` is not an E-string but an error the server names, so the scanner
+    -- REFUSES rather than choosing one of the two readings.
+    ELSIF c ~ '^[0-9]$' THEN
+      j := i + 1;
+      WHILE j <= n AND substr(t, j, 1) ~ '^[0-9.]$' LOOP j := j + 1; END LOOP;
+      IF j <= n AND substr(t, j, 1) IN ('E','e') AND substr(t, j + 1, 1) = '''' THEN
+        RAISE EXCEPTION 'p8.sql_scan: UNLEXABLE — E-string directly after a numeric literal'
+          USING ERRCODE = 'P0001';
+      END IF;
       out := out || substr(t, i, j - i);
       i := j;
     ELSE
-      prev := CASE WHEN i > 1 THEN substr(t, i - 1, 1) ELSE '' END;
-      esc := c IN ('E','e') AND substr(t, i + 1, 1) = '''' AND prev !~ '[A-Za-z0-9_]';
+      esc := c IN ('E','e') AND substr(t, i + 1, 1) = '''';
       IF c = '''' OR esc THEN
         j := CASE WHEN esc THEN i + 2 ELSE i + 1 END;
+        closed := FALSE;
         WHILE j <= n LOOP
           IF esc AND substr(t, j, 1) = '\' THEN j := j + 2; CONTINUE; END IF;
           IF substr(t, j, 1) = '''' THEN
             IF substr(t, j, 2) = '''''' THEN j := j + 2; CONTINUE; END IF;
-            j := j + 1; EXIT;
+            j := j + 1; closed := TRUE; EXIT;
           END IF;
           j := j + 1;
         END LOOP;
+        IF NOT closed THEN
+          RAISE EXCEPTION 'p8.sql_scan: UNLEXABLE — an unterminated string literal'
+            USING ERRCODE = 'P0001';
+        END IF;
         out := out || CASE WHEN mode = 'exec' THEN substr(t, i, j - i) ELSE ' ' END;
         i := j;
       ELSE
-        tag := CASE WHEN c = '$'
-               THEN (SELECT m[1] FROM regexp_matches(substr(t, i),
-                       '^(\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$)') AS m)
-               ELSE NULL END;
+        tag := p8.dollar_tag(t, i);
         IF tag IS NOT NULL THEN
           k := position(tag in substr(t, i + length(tag)));
           IF k = 0 THEN
-            out := out || CASE WHEN mode = 'exec' THEN substr(t, i) ELSE ' ' END;
-            i := n + 1;
+            RAISE EXCEPTION 'p8.sql_scan: UNLEXABLE — an unterminated dollar-quoted string'
+              USING ERRCODE = 'P0001';
           ELSE
             out := out || CASE
                    WHEN mode = 'exec'   THEN substr(t, i, length(tag) + k - 1 + length(tag))
                    -- ROUND 31: the body is RE-SCANNED, not copied. A kept body that is
                    -- not read the way the top level is read is a second reading again.
                    WHEN mode = 'dollar'
-                     THEN ' ' || p8.sql_scan(substr(t, i + length(tag), k - 1), 'dollar') || ' '
+                     -- ROUND 32: a dollar body is a VALUE, not a statement, so
+                     -- it need not lex as SQL — `$q$it's$q$` is a good literal
+                     -- whose body alone is an unterminated string. The re-scan
+                     -- exists only to REVEAL nested constructs to the handler
+                     -- ban, so where it cannot lex the body the RAW body is
+                     -- kept: the safe direction, since it can only show the
+                     -- ban more text and never less.
+                     THEN ' ' || p8.sql_scan_value(substr(t, i + length(tag), k - 1)) || ' '
                    ELSE ' ' END;
             i := i + length(tag) + k - 1 + length(tag);
           END IF;
@@ -264,6 +384,20 @@ BEGIN
     END IF;
   END LOOP;
   RETURN out;
+END $fn$;
+
+-- The hex reading used by SCANNER-AGREE, with a refusal reported AS A READING.
+-- ROUND 32: the scanner now refuses an input whose lexing is not determined
+-- (an unterminated construct, an E-string after a number). Both sides must
+-- report that the same way, or the comparison is between an output on one
+-- side and an abort on the other, and an abort is not a reading.
+CREATE OR REPLACE FUNCTION p8.sql_scan_hex(t TEXT, mode TEXT) RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE AS $fn$
+BEGIN
+  RETURN encode(convert_to(p8.sql_scan(t, mode), 'UTF8'), 'hex');
+EXCEPTION WHEN SQLSTATE 'P0001' THEN
+  IF SQLERRM LIKE 'p8.sql_scan: UNLEXABLE%' THEN RETURN 'UNLEXABLE'; END IF;
+  RAISE;
 END $fn$;
 
 -- The two broken readers are REMOVED rather than left beside the scanner. A
@@ -745,13 +879,28 @@ BEGIN
     -- not decide. That case belongs in the row form, with its key declared and
     -- read. Derived from what ARRIVES, so no spelling of the statement can
     -- dodge it.
+    --
+    -- ROUND 32, R-2 (P2), measured by the twenty-second challenge and
+    -- reproduced here: SQLSTATE 42501 alone does not say a GRANT decided
+    -- anything. A trigger can raise it for one row —
+    --   RAISE EXCEPTION 'permission denied for table t2: ROW-DECIDED-DENIAL'
+    --     USING ERRCODE = '42501'
+    -- — and the relation case passed, rc 0, because the class matched and the
+    -- RLS phrase did not. So the third term is derived from the CONTEXT, the
+    -- same arrival this pack already reads elsewhere: a refusal whose
+    -- innermost frame is a PL/pgSQL function AT RAISE was raised by code that
+    -- ran for a row, not taken by the server before any row was read. A grant
+    -- or ownership denial, and an RLS WITH CHECK violation, both come from the
+    -- server itself and carry no such frame.
     rowlevel := (sst <> '42501'
-                 OR position('row-level security policy' in lower(coalesce(msg,''))) > 0);
+                 OR position('row-level security policy' in lower(coalesce(msg,''))) > 0
+                 OR split_part(coalesce(ctx,''), E'\n', 1) ~ 'PL/pgSQL function .* at RAISE');
     IF kind = 'relation' AND rowlevel THEN
       RAISE EXCEPTION '% FAIL: A RELATION CASE REFUSED BY SOMETHING ROW-LEVEL — this form claims '
                       'the refusal is about "%" as a whole, and what arrived is [%] %, which is '
                       'decided by the row rather than by a grant. Use case_refuses_row and declare '
-                      'the key the refusal is about (W-3)', label, subject, sst, msg;
+                      'the key the refusal is about (W-3, R-2). Innermost frame: %',
+        label, subject, sst, msg, split_part(coalesce(ctx,''), E'\n', 1);
     END IF;
     -- ROUND 31, C-2, and it runs HERE rather than at the top of the handler:
     -- the two rules above already name the attacks they were built for, and a
