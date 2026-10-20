@@ -1,0 +1,62 @@
+Phase 11, round 29 -- the probe worlds
+Each world is a COMMIT on a clean clone of dae75d780bf8.
+The capture is the authoritative run's own FIGURE SINK with its RUN_HEAD line
+substituted to the world's commit. That substitution is the author's disclosed
+`R26-S5` limit (a capture is unsigned), used here as an INSTRUMENT so a world's
+document or driver can move while the measurement stays this run's sink. It is
+the same instrument the coordinator used in the round-29 diff review.
+
+world 1-bidi-override        commit 9a595e4c1c81
+  what it is        : a document figure a case of this run required, with U+202E before its value
+  want              : BIDI-CONTROL-IN-A-CANDIDATE
+  rc                : 1
+  refusal           : BIDI-CONTROL-IN-A-CANDIDATE: P11-PROBE-ROUND29.md:4 reports `deleted=0` (written as `deleted=‮0 [FA-02]`) and carries U+202E, an explicit bidi formatting character. It is invisible and it REORDERS what follows, so the figure this gate weighs and the figure a reader sees need not be the same number. 
+  verdict           : as required
+
+world 2-bidi-isolate         commit 2524b17af198
+  what it is        : the same with U+2066, the second member of the execution-derived set
+  want              : BIDI-CONTROL-IN-A-CANDIDATE
+  rc                : 1
+  refusal           : BIDI-CONTROL-IN-A-CANDIDATE: P11-PROBE-ROUND29.md:4 reports `deleted=0` (written as `deleted=⁦0 [FA-02]`) and carries U+2066, an explicit bidi formatting character. It is invisible and it REORDERS what follows, so the figure this gate weighs and the figure a reader sees need not be the same number. 
+  verdict           : as required
+
+world 3-bidi-control-clean   commit 86547269b139
+  what it is        : the control: the same line with no bidi character, which must PASS
+  want              : (no finding)
+  rc                : 0
+  bidi findings     : 0
+  verdict           : as required
+
+world 4-sentence-wrapped     commit 2eac4107c1dd
+  what it is        : round 26's sentence back in the driver, WRAPPED over two comment lines -- the shape round 28's line scan passed
+  want              : DRIVER-SENTENCE-RETIRED
+  rc                : 1
+  refusal           : DRIVER-SENTENCE-RETIRED: rebuild_and_prove.sh, in the paragraph at lines 542-671, says 'what this run printed', which describes a rule this gate no longer holds. The sentence that says what the haystack is lives in check_fenced_figures.py as HAYSTACK_SENTENCE; quote it, or name the retired rule by i
+  refusal           : sentences C29-F1 one line, which round 28 caught       refused as DRIVER-SENTENCE-RETIRED    (want DRIVER-SENTENCE-RETIRED) -> as required
+  verdict           : as required
+
+world 5-sentence-two-echoes  commit 0ebe3b9b049e
+  what it is        : the same sentence SPLIT ACROSS TWO ECHOES -- the other shape it passed
+  want              : DRIVER-SENTENCE-RETIRED
+  rc                : 1
+  refusal           : DRIVER-SENTENCE-RETIRED: rebuild_and_prove.sh, in the paragraph at lines 542-671, says 'what this run printed', which describes a rule this gate no longer holds. The sentence that says what the haystack is lives in check_fenced_figures.py as HAYSTACK_SENTENCE; quote it, or name the retired rule by i
+  refusal           : sentences C29-F1 one line, which round 28 caught       refused as DRIVER-SENTENCE-RETIRED    (want DRIVER-SENTENCE-RETIRED) -> as required
+  verdict           : as required
+
+world 6-sentence-in-the-gate commit a14afe114fd9
+  what it is        : a retired sentence in the GATE's own text, which round 28 never read
+  want              : GATE-SENTENCE-RETIRED
+  rc                : 1
+  refusal           : GATE-SENTENCE-RETIRED: check_fenced_figures.py, in the paragraph at lines 1294-1295, says 'what this run printed', which describes a rule this gate no longer holds. The sentence that says what the haystack is lives in check_fenced_figures.py as HAYSTACK_SENTENCE; quote it, or name the retired rule b
+  refusal           : sentences C29-F1 a retired sentence in the gate itself refused as GATE-SENTENCE-RETIRED      (want GATE-SENTENCE-RETIRED) -> as required
+  verdict           : as required
+
+world 7-pin-cut-out          commit 7f71438aff98
+  what it is        : the pin cut out of the step header, so the driver no longer quotes the rule
+  want              : DRIVER-SENTENCE-UNQUOTED
+  rc                : 1
+  refusal           : DRIVER-SENTENCE-UNQUOTED: the step header of the figure gate does not quote HAYSTACK_SENTENCE ('the expectations the value cases of this run REQUIRED'). A sentence about the rule that is not the rule's own words is the defect C28-F2 named and C29-F1 measured again.
+  refusal           : sentences the exit description stops quoting it        refused as DRIVER-SENTENCE-UNQUOTED   (want DRIVER-SENTENCE-UNQUOTED) -> as required
+  verdict           : as required
+
+END OF PROBE

@@ -122,7 +122,7 @@ case committed into a byte-pinned deciding file, which is what a reviewer
 reads in the diff.
 
 `R27-F1` and `R27-F2` are why, and the sentence that stood here until this
-round -- "the exact token must appear in WHAT THIS RUN PRINTED" -- is the rule
+round -- the token had to appear in the run's own output -- is the rule
 both challengers of round 27 blocked. One `RAISE NOTICE '<literal>'` appended
 to a data fixture, one `echo` added to the driver, and one directory named
 `/tmp/p11x-<figure>` handed to the driver as `TMPDIR` each carried a
@@ -530,6 +530,35 @@ WHITESPACE_CATEGORIES = ("Zs", "Zl", "Zp", "Cc", "Cf")
 # category pair rather than a list of marks, for the reason every class in this
 # file is a category.
 COMBINING_CATEGORIES = ("Mn", "Me")
+# The coordinator's `C29-S1`. ONE CLASS, TWO DOCTRINES, and the second one is
+# not deletion. `_strip` deletes every `Cf`, which round 14 settled for the
+# zero-width hiding characters: deleting is right there because the display
+# does not change. For the EXPLICIT BIDI FORMATTING characters it is wrong.
+# They reorder what is displayed, so deleting one leaves this gate weighing
+# `axes=123` while a reader sees `axes=321` -- the figure weighed is not the
+# figure displayed, which is this phase's own standing promise and `R28-F1`'s
+# rule in the one subclass that round did not reach.
+#
+# The set is DERIVED BY RUNNING `unicodedata.bidirectional` over every `Cf`
+# codepoint, not listed: a list would be one more enumeration of the kind
+# `C29-F1` just measured, and the Unicode tables this interpreter carries are
+# the authority on which characters reorder text.
+#
+# The doctrine is REFUSAL, not deletion: a candidate line carrying one of them
+# is reported by name (`BIDI-CONTROL-IN-A-CANDIDATE`), because a figure whose
+# displayed value depends on an invisible character is not a figure a reader
+# can check, whichever way it is weighed. The coordinator measured that the
+# attack has no payload at this head -- every `key=digits` expectation of this
+# run is a SINGLE digit, and one digit cannot be reordered -- which is a
+# property of the data and not of the rule, and is why this is a residual
+# closed here rather than a blocker.
+BIDI_FORMATTING = ("LRE", "RLE", "PDF", "LRO", "RLO", "LRI", "RLI", "FSI", "PDI")
+BIDI_CONTROLS = tuple(
+    chr(cp)
+    for cp in range(0x110000)
+    if unicodedata.category(chr(cp)) == "Cf"
+    and unicodedata.bidirectional(chr(cp)) in BIDI_FORMATTING
+)
 
 # `R28-F1`, and it is `C27-S1` MEASURED AGAIN FROM THE OTHER SIDE. The
 # coordinator's residual was that `NFKC` expands some fifty compatibility
@@ -720,6 +749,11 @@ MATCHER_GUARDS = (
     "boolean case folding",
     "named exemptions",
     "planted tokens",
+    # The coordinator's `C29-S1`. Not a guard over what the matcher WEIGHS --
+    # it decides whether the line is a figure a reader can check at all -- but
+    # it is deleted and measured exactly like the others, and the two arms it
+    # reds are figures a case of this run really required.
+    "bidi controls",
 )
 
 # The guards over the HAYSTACK -- over what counts as something this tree
@@ -950,6 +984,22 @@ def _strip(line, skip=()):
         s = unicodedata.normalize("NFKC", s)
     if "combining marks" not in skip:
         s = _drop_marks(s)
+    if "bidi controls" not in skip:
+        # `C29-S1`. The nine `Cf` characters that REORDER what follows are not
+        # deleted like the other format characters -- deleting one leaves a
+        # token that is not the string a reader sees, which is the doctrine the
+        # coordinator objected to. Each becomes `U+FFFD`, which is in no class
+        # this file deletes and is not a digit, so the value class BREAKS and
+        # the line is not a figure under these rules at all. `scan` then
+        # refuses the line BY NAME rather than letting it fall through
+        # silently, and `planted_tokens` plants nothing for the arms, so the
+        # figures those arms borrow stay available to the documents.
+        #
+        # Skipping this guard restores round 14's doctrine for them: the
+        # control is deleted with the rest of `Cf`, the token becomes the
+        # figure a case required, and the arms PASS. That is the flip this
+        # guard is measured by.
+        s = "".join("\ufffd" if c in BIDI_CONTROLS else c for c in s)
     if "format characters" not in skip:
         s = "".join(c for c in s if unicodedata.category(c) != "Cf")
     if "whitespace around the equals" not in skip:
@@ -1244,11 +1294,12 @@ RUN_HEAD_LINE = re.compile(r"^RUN_HEAD\s*:\s*([0-9a-f]{40})\s*$", re.M)
 # `C28-F2`. THE ONE SENTENCE THAT SAYS WHAT THE HAYSTACK IS, as a literal.
 #
 # Four rounds running, the rule moved and a live sentence about the rule did
-# not: round 25's "a published evidence file", round 26's "an instrument under
-# the harness emits", round 27's "what this run printed" each stayed somewhere
+# not: round 25's wording, round 26's and round 27's -- the entries of
+# `RETIRED_SENTENCES` below, each named there and nowhere else in this file --
+# each stayed somewhere
 # after the rule they described was gone. The coordinator's `C28-F2` found two
 # of them in `rebuild_and_prove.sh` -- the step-7b header and the
-# `EXIT_FENCED_FIGURES` description -- printing "what this run printed" four
+# `EXIT_FENCED_FIGURES` description -- printing round 27's wording four
 # lines from the gate's own correct line, and a reader whose figure reds and
 # believes the driver adds the `print` this round abolished.
 #
@@ -1270,6 +1321,16 @@ RETIRED_SENTENCES = (
     "no instrument under the harness emits",
     "an instrument under the harness emits",
     "appears in a published evidence file",
+    # The coordinator's `C29-F1` measured these four LIVE in the two files
+    # this law reads, at `acfe049`, while the law reported zero. Each is one
+    # word away from an entry above, which is what an enumeration is worth;
+    # they are here because the file no longer spells any of them, not as a
+    # claim that the next wording is covered.
+    "this run's output",
+    "this run did not print",
+    "every line this run has printed",
+    "legitimate because it is in there",
+    "a run of this phase printed",
 )
 
 # `R27-F1`. One row per expectation of a value case that PASSED, written by
@@ -1310,10 +1371,11 @@ def _run_capture_text(path, sha, top):
     if not path:
         raise Refusal(
             "RUN-CAPTURE-ABSENT: no run capture was given. A figure is legitimate here "
-            "because a run of this phase PRINTED it, so this gate reads the output of "
-            "the run it is a step of (`--run-capture PATH`, which "
-            "`rebuild_and_prove.sh` writes outside the work tree and hands over). "
-            "There is no fall back to reading the files."
+            "because A CASE OF THIS RUN REQUIRED it, so the haystack is "
+            + HAYSTACK_SENTENCE
+            + " and this gate reads the FIGURE SINK of the run it is a step of "
+            "(`--run-capture PATH`, which `rebuild_and_prove.sh` writes outside the "
+            "work tree and hands over). There is no fall back to reading the files."
         )
     ap = os.path.realpath(path)
     anchor = os.path.realpath(top)
@@ -1669,7 +1731,9 @@ def haystack(root, skip=()):
 
 
 def emitted_strings(root, skip=()):
-    """What a run of this phase PRINTED.
+    """The haystack: in the live world, the expectations the value cases of this
+    run REQUIRED; in the `only an asserted case emits` world, what the run
+    printed; in the control, the commit's own files.
 
     `R26-F3` and the coordinator's `C26-S3`: the sentence that stood here said
     "what the instruments and the committed evidence under `root` emit", which
@@ -2385,6 +2449,23 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
     findings = []
     for path in docs:
         rel = os.path.relpath(path, docs_dir)
+        if "bidi controls" not in skip:
+            # `C29-S1`, asked before anything else and asked of the LINE: with
+            # the controls left in, the value class breaks and `tokens_in`
+            # yields nothing, so the question is what figure the line would
+            # PRETEND to be with them taken out the way every other `Cf`
+            # character is taken out. If that is a figure, the line is one a
+            # reader cannot check, and it is refused by name.
+            with open(path, encoding="utf-8") as fh:
+                for n, line in enumerate(fh, 1):
+                    if not any(c in line for c in BIDI_CONTROLS):
+                        continue
+                    bare = "".join(c for c in line if c not in BIDI_CONTROLS)
+                    for tok in figures_on(bare.rstrip("\n"), skip):
+                        seen += 1
+                        findings.append(
+                            (rel, n, tok, line.strip(), "bidi control", ())
+                        )
         for n, raw, tok in tokens_in(path, skip):
             seen += 1
             if tok not in emitted or tok in planted:
@@ -2443,9 +2524,9 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
             who = ", ".join("%s %s" % (sx, c) for sx, c in sorted(owners))
             if why == "unasserted":
                 # `R27-S1` of the second round-27 report, and it is the sentence
-                # a reviewer acts on: the old wording said "no instrument under
-                # the harness emits that string", which under round 26's rule
-                # was satisfied by anything that PRINTED -- a fixture's
+                # a reviewer acts on: the old wording was round 26's, the
+                # fifth entry of `RETIRED_SENTENCES`, which that rule let
+                # anything that PRINTED satisfy -- a fixture's
                 # `RAISE NOTICE`, an `echo` in the driver. What passing means is
                 # stated exactly now.
                 # `C28-F1`. The clause that stood here -- "nothing anywhere
@@ -2468,6 +2549,19 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                     "(`C28-F1`, a declared limit: the closure is mutation coverage of "
                     "every figure-bearing case, which is a round of work and is not "
                     "here)." % (rel, n, tok, written)
+                )
+            elif why == "bidi control":
+                print(
+                    "  BIDI-CONTROL-IN-A-CANDIDATE: %s:%d reports `%s`%s and carries "
+                    "%s, an explicit bidi formatting character. It is invisible and it "
+                    "REORDERS what follows, so the figure this gate weighs and the "
+                    "figure a reader sees need not be the same number. Remove it: a "
+                    "figure whose displayed value depends on an invisible character is "
+                    "not a figure anyone can check (the coordinator's `C29-S1`; the "
+                    "set is derived by running `unicodedata.bidirectional` over every "
+                    "`Cf` codepoint, not listed)."
+                    % (rel, n, tok, written,
+                       ", ".join("U+%04X" % ord(c) for c in raw if c in BIDI_CONTROLS))
                 )
             elif why == "no case named":
                 print(
@@ -2622,6 +2716,19 @@ CATCH = [
     # Round 27's class deleted marks beside the `=` alone and weighed
     # `deleted=0`, which passed.
     ("R28-F1 a mark truncating a value a case required", "deleted=0\u03014 [FA-02]"),
+    # These two borrow the arm world's own figure, like every other arm here:
+    # an arm is weighed against a SYNTHETIC world, not against the pack's run,
+    # so a figure of the real suites would not be in that world's sink at all.
+    # Borrowing it costs the documents nothing, because while this guard holds
+    # the matcher yields NO token for either body -- the control becomes
+    # `U+FFFD` and the value class breaks -- so `planted_tokens()` plants
+    # nothing and the three documents that quote this figure keep it. That is
+    # measured, not assumed: planting the token instead redded those three
+    # documents and this file's own `R14-S3` pass arm.
+    ("C29-S1 a bidi override before a value a case required",
+     "deleted=\u202e0 [FA-02]"),
+    ("C29-S1 a bidi isolate before a value a case required",
+     "deleted=\u20660 [FA-02]"),
     ("R28-F1 a mark inside the value", "fabricated_count=9\u030199"),
     ("R28-F1 a mark on the key side of the equals", "fabricated_count\u0301=999"),
     ("R28-F1 a mark inside the key", "fabricated_co\u0301unt=999"),
@@ -5326,6 +5433,16 @@ PROVENANCE = {
     "C27-S1 a bare combining mark before the value": (
         None, "`U+0301` written on its own, which is the residue the fold leaves and "
               "the thing the widened class actually deletes"),
+    "C29-S1 a bidi override before a value a case required": (
+        None, "the coordinator's `C29-S1`, in the direction that makes it a flip: a "
+              "figure a case of this run required, cited correctly, carrying "
+              "`U+202E` -- deleted with the rest of `Cf` since round 14, so without "
+              "this guard the line PASSES while a reader is shown the digits in "
+              "another order"),
+    "C29-S1 a bidi isolate before a value a case required": (
+        None, "the same, with `U+2066`, so the arm pair is not one codepoint's "
+              "behaviour: the set is derived by running `unicodedata.bidirectional` "
+              "over every `Cf` codepoint and both members come out of that run"),
     "R28-F1 a mark truncating a value a case required": (
         None, "round 28's blocker, in the direction that makes it one: a figure a case "
               "of this run required, cited correctly, with a mark between the value's "
@@ -7041,80 +7158,193 @@ def frame_gate_test():
     return good
 
 
-def driver_sentences(text):
-    """Every stale or missing sentence about the haystack in the driver's text.
+def _prose(text):
+    """The file's SENTENCES, not its lines: `(first line number, paragraph)`.
 
-    `C28-F2`. The driver is the file a reviewer reads the verdict in, so the two
-    places it SAYS what the figure gate weighs -- the step header and the
-    `EXIT_FENCED_FIGURES` description -- must quote `HAYSTACK_SENTENCE` by
-    bytes, and no sentence a rule of this file retired may stand anywhere in it.
+    `C29-F1`, the coordinator's blocker, and the whole of it. Round 28 wrote
+    this law as a line scan, and both these files wrap their prose at column
+    80, so the author's own arm -- a one-line `echo` -- redded while the same
+    sentence written the way the file actually writes sentences did not:
 
-    It takes TEXT rather than a path so the selftest can plant a retired
-    sentence and read the refusal, which is this pack's rule about a check
-    nobody runs against a world that breaks it.
+        one line                        -> 1 finding
+        wrapped over two comment lines  -> 0 findings   ESCAPED
+        split across two echoes         -> 0 findings   ESCAPED
 
-    The limit, declared: the pin is byte equality with this file's own literal,
-    and the retired list is an ENUMERATION that cannot name a wording nobody
-    has written yet. It catches the sentence a rule change leaves behind, which
-    is the defect four rounds running produced; it does not catch a sentence
-    somebody invents that contradicts the rule in new words.
+    A run of consecutive non-blank lines is therefore ONE string here. Comment
+    markers, the `echo "` prefix, a trailing quote and a trailing backslash are
+    removed first, so a sentence reads the way a reader reads it, whether it
+    was written as a comment, as one `echo`, or as six.
+
+    It over-joins: two adjacent lines that are not one sentence become one
+    paragraph. That direction is the safe one -- it can only ADD a candidate
+    sentence, never hide one -- and the live text of both files is measured
+    against it with the result required to be zero findings.
+    """
+    paras, cur, start, last = [], [], None, None
+    for n, line in enumerate(text.split("\n"), 1):
+        body = line.strip()
+        body = re.sub(r"^#+\s*", "", body)
+        hit = re.match(r'^echo\s+"(.*)$', body)
+        if hit:
+            body = hit.group(1)
+        body = body.rstrip("\\").rstrip()
+        if body.endswith('"'):
+            body = body[:-1]
+        if not body:
+            if cur:
+                paras.append((start, last, " ".join(cur)))
+            cur, start, last = [], None, None
+            continue
+        if start is None:
+            start = n
+        last = n
+        cur.append(body)
+    if cur:
+        paras.append((start, last, " ".join(cur)))
+    # `C29-F1`: one space between words, whatever the wrapping did. A sentence
+    # split across two `echo`s rejoins with the trailing space of the first,
+    # and a double space is not a different sentence to a reader.
+    return [(a, b, re.sub(r"\s+", " ", t)) for a, b, t in paras]
+
+
+def _without_the_declaration(text):
+    """`text` with the lines this file GENERATES from `RETIRED_SENTENCES` gone.
+
+    The declaration must be excluded or the law reports its own enumeration;
+    the coordinator asked for that exclusion BY CONSTRUCTION rather than by a
+    list, so the excluded lines are built here FROM the tuple's own values and
+    nothing is named a second time. Add an entry to the tuple and its line is
+    excluded; write that same sentence anywhere else in the file and it is not.
+    """
+    gone = set('    "%s",' % r for r in RETIRED_SENTENCES)
+    return "\n".join("" if l in gone else l for l in text.split("\n"))
+
+
+def sentences(text, prefix, name, pins=()):
+    """Every stale or missing sentence about the haystack in `text`, as PROSE.
+
+    `C28-F2` and the coordinator's `C29-F1`. What makes a figure legitimate
+    here has moved four times, and each time a sentence SAYING the old rule
+    stayed behind in live code -- once in the line the driver PRINTS to the one
+    reader who is looking, prescribing the remedy the move abolished. So:
+
+      * `HAYSTACK_SENTENCE` is the one place the rule is stated, and every
+        site in `pins` must quote it BY BYTES;
+      * no sentence a rule of this file retired may stand anywhere in `text`,
+        read as paragraphs;
+      * a retired rule is named by its ROUND in this file from `C29-F1` on,
+        never spelled, so this law's reach over its own file needs no
+        exemption beyond the declaration it is built from.
+
+    The limit, declared, and narrower than round 28 declared it: the tuple is
+    an enumeration, and it cannot name a wording nobody has written. Round 28
+    declared that for the NEXT wording and was wrong about the wordings
+    ALREADY IN THE FILE -- four of them, each one word from an entry. They are
+    in the tuple now because the files no longer spell them. What binds is the
+    positive pin; the tuple is the net under it.
     """
     out = []
-    for n, line in enumerate(text.split("\n"), 1):
-        low = line.lower()
+    for start, end, para in _prose(text):
+        low = para.lower()
         for retired in RETIRED_SENTENCES:
             if retired.lower() in low:
                 out.append(
-                    "DRIVER-SENTENCE-RETIRED: rebuild_and_prove.sh:%d says %r, which "
-                    "describes a rule this gate no longer holds. The sentence that "
-                    "says what the haystack is lives in check_fenced_figures.py as "
-                    "HAYSTACK_SENTENCE, and this file must quote it." % (n, retired)
+                    "%s-SENTENCE-RETIRED: %s, in the paragraph at lines %d-%d, says "
+                    "%r, which describes a rule this gate no longer holds. The "
+                    "sentence that says what the haystack is lives in "
+                    "check_fenced_figures.py as HAYSTACK_SENTENCE; quote it, or name "
+                    "the retired rule by its round instead of spelling it."
+                    % (prefix, name, start, end, retired)
                 )
-    for what, need in (
-        ("the step header of the figure gate", "=== 7b."),
-        ("the EXIT_FENCED_FIGURES description", "EXIT_FENCED_FIGURES:"),
-    ):
+    for what, need in pins:
         lines = [l for l in text.split("\n") if need in l and "echo" in l]
         if not lines:
             out.append(
-                "DRIVER-SENTENCE-ABSENT: no line of rebuild_and_prove.sh echoes %s "
-                "(looked for %r), so there is nothing to hold to the rule."
-                % (what, need)
+                "%s-SENTENCE-ABSENT: no line of %s echoes %s (looked for %r), so "
+                "there is nothing to hold to the rule." % (prefix, name, what, need)
             )
             continue
         if not any(HAYSTACK_SENTENCE in l for l in lines):
             out.append(
-                "DRIVER-SENTENCE-UNQUOTED: %s does not quote HAYSTACK_SENTENCE "
-                "(%r). A sentence about the rule that is not the rule's own words "
-                "is the defect C28-F2 named." % (what, HAYSTACK_SENTENCE)
+                "%s-SENTENCE-UNQUOTED: %s does not quote HAYSTACK_SENTENCE (%r). A "
+                "sentence about the rule that is not the rule's own words is the "
+                "defect C28-F2 named and C29-F1 measured again."
+                % (prefix, what, HAYSTACK_SENTENCE)
             )
     return out
 
 
-def driver_sentence_arms():
-    """The driver's sentences, and the world where a retired one comes back."""
-    ok = True
-    path = os.path.join(_harness_dir(), "rebuild_and_prove.sh")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            real = fh.read()
-    except OSError as why:
-        print("  sentences DRIVER-UNREADABLE: %s -> **SELFTEST FAILED**" % why)
-        return False
-    found = driver_sentences(real)
-    good = not found
-    ok = ok and good
-    print(
-        "  sentences C28-F2 the driver quotes the gate's own sentence in both places "
-        "and carries no retired one: %d finding(s) -> %s"
-        % (len(found), "as required" if good else "**SELFTEST FAILED**")
+DRIVER_PINS = (
+    ("the step header of the figure gate", "=== 7b."),
+    ("the EXIT_FENCED_FIGURES description", "EXIT_FENCED_FIGURES:"),
+)
+
+
+def driver_sentences(text):
+    """The driver's sentences: the two pinned sites, and no retired wording."""
+    return sentences(text, "DRIVER", "rebuild_and_prove.sh", DRIVER_PINS)
+
+
+def gate_text_sentences(text):
+    """This gate's OWN sentences, the declaration excluded by construction."""
+    return sentences(
+        _without_the_declaration(text), "GATE", "check_fenced_figures.py"
     )
-    for why in found:
-        print("    " + why)
-    for label, planted, want in (
+
+
+def _sentence_subject(name):
+    """One of the two files this law reads, by bytes, or a named refusal."""
+    path = os.path.join(_harness_dir(), name)
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def driver_sentence_arms():
+    """Both files' sentences, and the worlds where a retired one comes back.
+
+    The three wrap worlds are the coordinator's own measurement of round 28's
+    law: the same sentence as one line, wrapped over two comment lines, and
+    split across two `echo`s. Round 28 redded on the first and passed the two
+    that this file is actually written in.
+    """
+    ok = True
+    try:
+        real = _sentence_subject("rebuild_and_prove.sh")
+        mine = _sentence_subject("check_fenced_figures.py")
+    except OSError as why:
+        print("  sentences SENTENCE-SUBJECT-UNREADABLE: %s -> **SELFTEST FAILED**" % why)
+        return False
+    for label, found in (
+        ("the driver quotes the gate's own sentence in both places and carries no "
+         "retired one", driver_sentences(real)),
+        ("C29-F1 the gate's own text carries no retired sentence either",
+         gate_text_sentences(mine)),
+    ):
+        good = not found
+        ok = ok and good
+        print(
+            "  sentences C28-F2 %s: %d finding(s) -> %s"
+            % (label, len(found), "as required" if good else "**SELFTEST FAILED**")
+        )
+        for why in found:
+            print("    " + why)
+    retired = RETIRED_SENTENCES[0]
+    worlds = (
         (
-            "a retired sentence put back",
-            real + '\necho "the haystack is what this run printed"\n',
+            "C29-F1 one line, which round 28 caught",
+            real + '\necho "the haystack is %s"\n' % retired,
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
+            "C29-F1 wrapped over two comment lines",
+            real + "\n# the haystack is %s\n# %s\n" % (
+                retired.split()[0], " ".join(retired.split()[1:])),
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
+            "C29-F1 split across two echoes",
+            real + '\necho "the haystack is %s "\necho "%s"\n' % (
+                retired.split()[0], " ".join(retired.split()[1:])),
             "DRIVER-SENTENCE-RETIRED",
         ),
         (
@@ -7122,12 +7352,126 @@ def driver_sentence_arms():
             real.replace(HAYSTACK_SENTENCE, "something else entirely", 1),
             "DRIVER-SENTENCE-UNQUOTED",
         ),
-    ):
+    )
+    for label, planted, want in worlds:
         names = [f.split(":")[0] for f in driver_sentences(planted)]
         good = want in names
         ok = ok and good
         print(
-            "  sentences C28-F2 %-38s refused as %-28s (want %s) -> %s"
+            "  sentences %-44s refused as %-26s (want %s) -> %s"
+            % (label, names[0] if names else "NO REFUSAL", want,
+               "as required" if good else "**SELFTEST FAILED**")
+        )
+    planted = mine + "\n# the haystack is %s\n" % retired
+    names = [f.split(":")[0] for f in gate_text_sentences(planted)]
+    good = "GATE-SENTENCE-RETIRED" in names
+    ok = ok and good
+    print(
+        "  sentences %-44s refused as %-26s (want %s) -> %s"
+        % ("C29-F1 a retired sentence in the gate itself",
+           names[0] if names else "NO REFUSAL", "GATE-SENTENCE-RETIRED",
+           "as required" if good else "**SELFTEST FAILED**")
+    )
+    # The declaration is excluded BY CONSTRUCTION and not by a list: the whole
+    # tuple, spelled as this file spells it, must still report nothing.
+    declared = "\n".join('    "%s",' % r for r in RETIRED_SENTENCES)
+    good = not gate_text_sentences(declared)
+    ok = ok and good
+    print(
+        "  sentences %-44s %-26s -> %s"
+        % ("C29-F1 the declaration itself, excluded by construction",
+           "%d finding(s)" % len(gate_text_sentences(declared)),
+           "as required" if good else "**SELFTEST FAILED**")
+    )
+    return ok
+
+
+def gate_sentences(printed):
+    """Every stale or missing sentence about the haystack in what a RUN of this
+    gate PRINTS, as opposed to what its file says.
+
+    `A-29-F1`, which the coordinator rated up into `C29-F1`. The text law above
+    reads bytes a reviewer could grep; this one reads the strings a run
+    produced, which is what a reader is actually told. At `acfe049` the
+    `RUN-CAPTURE-ABSENT` refusal -- the first sentence anyone running this gate
+    by hand meets -- still stated round 26's criterion and sent a reader off to
+    make the run print their figure, which is the remedy `R27-F1` abolished.
+
+    The limit, declared: the set of sites is the set the arms PROVOKE. A new
+    refusal written in new words in a new place is not caught here; it is
+    caught by the text law above only if it spells a retired wording. The sink
+    closed the figure census by construction because `case()` writes a figure.
+    Prose is written by a person, and nothing here derives the set of
+    sentences a person may add.
+    """
+    out = []
+    for where, msg in printed:
+        low = msg.lower()
+        for retired in RETIRED_SENTENCES:
+            if retired.lower() in low:
+                out.append(
+                    "GATE-SENTENCE-RETIRED: %s prints %r, which describes a rule this "
+                    "file no longer holds." % (where, retired)
+                )
+        if HAYSTACK_SENTENCE not in msg:
+            out.append(
+                "GATE-SENTENCE-UNQUOTED: %s says what the haystack is without quoting "
+                "HAYSTACK_SENTENCE (%r). This file printed such a sentence for three "
+                "rounds while checking the driver for it."
+                % (where, HAYSTACK_SENTENCE)
+            )
+    return out
+
+
+def gate_sentence_arms():
+    """This gate's own printed sentence, provoked by RUNNING the refusal."""
+    ok = True
+    live = []
+    try:
+        _run_capture_text(None, "0" * 40, _harness_dir())
+    except Refusal as why:
+        live.append(("the RUN-CAPTURE-ABSENT refusal", str(why)))
+    except Exception as why:                                   # pragma: no cover
+        print("  sentences GATE-SENTENCE-NOT-REFUSED: %r -> **SELFTEST FAILED**" % why)
+        return False
+    if not live:
+        print(
+            "  sentences GATE-SENTENCE-NOT-PROVOKED: a missing capture did not refuse, "
+            "so there is no printed sentence to hold to the rule -> **SELFTEST FAILED**"
+        )
+        return False
+    found = gate_sentences(live)
+    good = not found
+    ok = ok and good
+    print(
+        "  sentences C29-F1 the gate's own refusal quotes its own sentence: "
+        "%d finding(s) -> %s"
+        % (len(found), "as required" if good else "**SELFTEST FAILED**")
+    )
+    for why in found:
+        print("    " + why)
+    for label, planted, want in (
+        (
+            "round 26's wording back in the refusal",
+            [("a planted refusal", "the haystack is %s" % RETIRED_SENTENCES[0])],
+            "GATE-SENTENCE-RETIRED",
+        ),
+        (
+            "a refusal in new words that drops the pin",
+            [("a planted refusal", "the haystack is whatever this gate feels like")],
+            "GATE-SENTENCE-UNQUOTED",
+        ),
+        (
+            "the live refusal with the pin cut out",
+            [("a planted refusal", live[0][1].replace(HAYSTACK_SENTENCE, "x", 1))],
+            "GATE-SENTENCE-UNQUOTED",
+        ),
+    ):
+        names = [f.split(":")[0] for f in gate_sentences(planted)]
+        good = want in names
+        ok = ok and good
+        print(
+            "  sentences C29-F1 %-38s refused as %-26s (want %s) -> %s"
             % (label, names[0] if names else "NO REFUSAL", want,
                "as required" if good else "**SELFTEST FAILED**")
         )
@@ -8125,6 +8469,7 @@ def selftest():
     ok = identity_arms_test() and ok
     ok = capture_names_test() and ok
     ok = driver_sentence_arms() and ok
+    ok = gate_sentence_arms() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok

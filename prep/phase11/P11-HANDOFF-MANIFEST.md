@@ -1107,12 +1107,13 @@ key class                  reds  2 arm(s): named: UPPERCASE key, key boundary: a
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
+bidi controls              reds  2 arm(s): C29-S1 a bidi override before a value a case required, C29-S1 a bidi isolate before a value a case required
 only an asserted case emits reds  7 arm(s): R27-F1 a RAISE NOTICE in a fixture requires nothing, R27-F1 an echo in the driver requires nothing, R27-F1 a printed plant with no case named requires nothing +4 more
 only a run emits           reds 12 arm(s): R26-S1 a comment in an instrument emits nothing, R26-S1 a committed .py nothing runs emits nothing, R26-S1 an unapplied mutation world emits nothing +9 more
 the same spelling on both sides reds  1 arm(s): R26-F1 a padded figure in the output is the same figure
 no repository redirects the subject reds  2 arm(s): R17 a repository planted inside the haystack is refused, R20-S2 git's toplevel and the census disagree
 
-24 guards, every one of them deleted on its own and measured
+25 guards, every one of them deleted on its own and measured
 ```
 
 <!-- END GENERATED guard-matrix -->
@@ -1285,7 +1286,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts --run-capture $P11_RUN_CAPTURE -->
 
 ```text
-88 catch arms, 16 skip arms, 2 pass arms, 42 others
+90 catch arms, 16 skip arms, 2 pass arms, 42 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -3304,10 +3305,10 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     76
-of them recordings of past runs              52
-skip keys the committed source reads         24
-arms the selftest runs                       148
+files the commit holds under the harness     78
+of them recordings of past runs              54
+skip keys the committed source reads         25
+arms the selftest runs                       150
 ```
 
 <!-- END GENERATED pack-counts -->
@@ -3850,6 +3851,178 @@ supersession is marked where the old claim stands rather than quietly
 rewritten. `24f6ebe` is still the last fully signed head;
 `READY_TO_PROMOTE` = **NO**; **no migration number exists** -- none allocated,
 reserved, examined, exampled, or written in a filename or a comment;
+`OD-P11-07` is the owner's alone; and no CI has ever run this pack, so the
+gate's own authority is `UNMEASURED` outside this container.
+
+## 7.30 ROUND 29 (challenger: NO BLOCKING DEFECT at `acfe049`; coordinator diff review of the same head: `NO-SIGN`) — a law that reads LINES cannot see a sentence that WRAPS
+
+The independent challenger could not break `acfe049`: it confirmed `R28-F1`
+closed with a guard-drop control, `C28-F2` armed and wired, the removed promise
+gone, all ten published digests matching, and a clean driver run. The
+coordinator's diff review of the same head returned `NO-SIGN` on one blocker,
+and the blocker is this round's own round-28 fix.
+
+### `C29-F1`, the blocker — the round answered "a rule moved and a sentence did not" with a check, and the check reported ZERO on the file it was written to protect
+
+Round 28 made `HAYSTACK_SENTENCE` the one statement of the rule and required
+`rebuild_and_prove.sh` to quote it by bytes, with a declared enumeration of
+retired sentences as the net. At `acfe049` that law reported no finding at all
+while the same file stated the abolished round-26 rule in three places — and
+PRINTED one of them, at the moment a reader's figure reds, prescribing the
+remedy `R27-F1` abolished. The author had self-reported one site of it in the
+gate (`A-29-F1`, rated `P2`); the coordinator measured the whole class and
+rated it up, correctly: this is the same defect for the third consecutive round.
+
+Two independent mechanisms, both measured by the coordinator and both
+reproduced here before anything was changed:
+
+| mechanism | what it means |
+|---|---|
+| the law read LINE BY LINE | both files wrap their prose at column 80, so the author's own arm — a one-line `echo` — redded while the same sentence written the way the file actually writes sentences did not. Wrapped over two comment lines: no finding. Split across two `echo`s: no finding |
+| the enumeration missed BY ONE WORD | the live wordings were `this run's output` against the entry `this run's own output`, and `THIS RUN DID NOT PRINT` against `what this run printed`. Round 28 declared the enumeration's limit for the NEXT wording nobody had written, and was wrong about four wordings ALREADY IN THE FILE |
+
+**The fix, and it is the class and not the four sentences.** `_prose` reads a
+run of consecutive non-blank lines as ONE string, with comment markers, the
+`echo "` prefix and trailing quotes removed and whitespace collapsed, so a
+sentence is what a reader reads whether it was written as a comment, as one
+`echo` or as six. It over-joins, which is the safe direction: it can only add a
+candidate sentence, never hide one. `sentences()` then applies the positive pin
+and the retired list to any text, and the law is run over **both** files —
+`rebuild_and_prove.sh` and `check_fenced_figures.py` itself. The declaration is
+excluded BY CONSTRUCTION, as the coordinator asked: the excluded lines are
+generated FROM `RETIRED_SENTENCES`, so adding an entry excludes its own line and
+writing that same sentence anywhere else in the file does not escape.
+
+**And the discipline that makes the reach total: a retired rule is named by its
+ROUND in these files from now on, never spelled.** Three prose sites in the gate
+that quoted round 25's, round 26's and round 27's wordings to narrate history
+now point at the declaration instead. That is why the law needs no exemption
+list for its own file, and it is the answer to the objection that running a
+retired-sentence scan over the file that declares them is circular.
+
+**The second half, which the file's text cannot reach.** What a reader is
+actually told is not the file's bytes but the strings a run PRINTS, so
+`gate_sentences` takes printed strings — the `RUN-CAPTURE-ABSENT` refusal is
+provoked by running it — and requires each to quote the pin and carry no retired
+wording. Its limit is declared: the set of sites is the set the arms PROVOKE.
+
+**The flip, measured against the previous head's own files.** Round 28's law
+over `acfe049`'s driver: no finding. This round's law over the same bytes: four
+findings in the driver, naming each of the coordinator's three sites, and seven
+in the gate, naming both of the sites the coordinator found there. Four worlds
+arm it — the one-line sentence round 28 caught, the same sentence wrapped over
+two comment lines, the same sentence split across two `echo`s, and the pin cut
+out of the exit description — plus one world for a retired sentence planted in
+the gate itself, and one that requires the declaration to stay silent.
+
+### `C29-S1` — one class, two doctrines: the bidi controls are REFUSED, not deleted
+
+`_strip` deletes every `Cf` character, which round 14 settled for the
+zero-width hiding characters because deleting them does not change what is
+displayed. For the explicit bidi formatting characters it is the wrong doctrine:
+they REORDER what follows, so deleting one leaves the gate weighing one number
+while a reader sees another — `R28-F1`'s rule in the one subclass that round did
+not reach. The coordinator derived the set by running `unicodedata.bidirectional`
+over every `Cf` codepoint, nine of a hundred and seventy, and measured with a
+real implementation of the Unicode algorithm that one such character is enough.
+
+The class is now a REFUSAL by name (`BIDI-CONTROL-IN-A-CANDIDATE`), with the set
+derived here the same way the coordinator derived it — by execution, not as a
+list — and the doctrine is not deletion at any step. While the guard holds,
+each of the nine becomes `U+FFFD`, which is in no class this file deletes and is
+not a digit, so the value class BREAKS and the line is no figure under these
+rules at all; `scan` then asks of the LINE what figure it would pretend to be
+with the controls taken out, and refuses it by name. Skipping the guard restores
+round 14's doctrine for them — the control is deleted with the rest of `Cf`, the
+token becomes the figure a case required, and the line PASSES. That is the flip
+the guard is measured by, and the two arms are the arm world's own figure with
+one of two different controls before its value.
+
+**A cost measured rather than assumed, and TWO defects of the first attempts,
+both found by running the instrument on itself.** The arms were first written on
+the `deleted` figure of the selftest's own case, and that redded this file's
+`R14-S3` pass arm and three real documents: `planted_tokens` excludes every
+token the arms plant, and three documents quote that figure, so planting it took
+the figure away from them. Moved onto two figures of the real suites that no document
+quotes, it then reported redding NO arm in the generated guard matrix, twice
+over: an arm is weighed against a SYNTHETIC world whose sink holds that world's
+figures and not the suites', and the first design only REFUSED, leaving the
+token identical in both worlds so that nothing flipped. **A guard that reds
+nothing is deleted or armed, with no third option**, which is this pack's own
+rule and the reason the doctrine above breaks the token instead of only
+refusing. With the final design the arms borrow the arm world's own figure like
+every other arm, the matcher yields no token for either body while the guard
+holds, `planted_tokens` plants nothing, and the three documents that quote that
+figure keep it — so arming this guard costs zero candidates, measured. The coordinator's
+own measurement stands beside it: every `key=digits` expectation of this run is
+a single digit, a single digit cannot be reordered, and so no figure this gate
+can currently accept could have been made to display a different number. The
+guard is armed for the day the pack quotes its first two-digit figure.
+
+### `C29-S2` — the `C28-F1` limit is now declared where a case is WRITTEN
+
+The limit was stated at the gate's refusal, in the header, in the conservation
+row and in the Arabic report, and not at the line in `proofs.py` and
+`proofs_b.py` that writes the sink row. It is stated there now, in both suites,
+with the closure named in the same breath: a figure-bearing case is credible
+exactly when it REDS under a mutation that changes the quantity, and a literal
+cannot be mutated.
+
+### `C29-S3` — `emitted_strings`
+
+Its docstring said what a run PRINTED. It now says what the haystack is in each
+of the three worlds the guard ladder defines.
+
+### The `C28-F1` closure, SIZED — and what the sizing says
+
+The coordinator ruled the mutation closure owed. It is sized here and it is not
+claimed as closed. Every mutation world in `harness/mutations/` was run at
+`acfe049` on a fresh clone of its own, with the full driver log kept:
+
+| what was measured | the answer |
+|---|---|
+| mutation worlds run | ten, plus the no-op, which refuses with its own exit as designed |
+| value cases that red under at least one existing mutation | 30 of 76 |
+| value cases no existing mutation reds | 46 |
+| case identifiers a document cites beside a figure | two, `PA9-P1` and `PA9-P2` |
+| mutations that red those two | `M21-drop-force-on-the-ledger` reds both |
+
+So the figures the documents actually quote ARE carried by cases a mutation of
+the database reds — measured, at this head, by running it. What is NOT true is
+the general claim: the existing mutations were written to red the conservation
+LAWS, not to change the QUANTITIES a value case reports, and for forty-six value
+cases no mutation in the pack changes their answer. The closure `C28-F1` names
+therefore needs mutations of the DATA, which is a round of work and is not here.
+`C28-F1` stays OPEN and DECLARED, now with its size known rather than estimated.
+
+### The evidence this head carries, and the commit it measures
+
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND29.txt` is the whole driver run from
+zero on a fresh clone, and `harness/RUN-EVIDENCE-PROBE-ROUND29.txt` is the
+committed worlds this round planted. Both name their subject by its full SHA,
+which is this commit's tree minus those two files, the regenerated block figures
+that counting them moves, and these lines.
+
+### Residuals
+
+| id | `P` | what |
+|---|---|---|
+| `C29-F1` | — | CLOSED as a class: the law reads prose, reads both files, and a retired rule is named by its round rather than spelled. The declared limit is unchanged in kind — an enumeration cannot name a wording nobody has written — and is narrower now, because the positive pin is required in both files and the printed strings are read by running them |
+| `A-29-S1` | P3 | the set of the gate's own PRINTED sentences is the set the arms provoke. A refusal written in new words in a new place is caught only if it spells a retired wording. Prose is written by a person and nothing here derives the set of sentences a person may add |
+| `C29-S1` | — | CLOSED by refusal, with the cost measured at zero candidates. The nine are derived by execution; a future Unicode table that adds a tenth is picked up by the derivation, not by an edit |
+| `C29-S2`, `C29-S3` | — | ANSWERED |
+| `C28-F1` | P1 | still OPEN and DECLARED, now SIZED: thirty of seventy-six value cases red under an existing mutation, the two cited cases among them, and forty-six do not. The closure needs mutations of the data |
+| `R28-S3` / `R27-S1` (first report) | P3 | the render-blank characters in no whitespace category stay a named residual on the coordinator's ruling. This round's bidi work does not reach them: they neither reorder nor combine |
+| carried | — | `R28-S1`, `R28-S2`, `R27-S5` through `R27-S8`, `R26-S5` (the capture is unsigned, which the coordinator used as an instrument this round and disclosed), `R26-S7`, `R25-S1` (deferred), `R17-S3`, the substring haystack, the two named exemptions, `G6` — reproduced by the coordinator at the merge-base, so not of this diff |
+| standing | — | **no CI has ever run the Phase 11 pack** |
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature, and none is
+claimed. This commit answers the coordinator's one blocker and its three
+residuals, carries the author's own `A-29-F1` into them, and sizes the `C28-F1`
+closure the coordinator ruled owed. It is owed a challenger round and a
+coordinator diff review of THIS head. `24f6ebe` is still the last fully signed
+head; `READY_TO_PROMOTE` = **NO**; **no migration number exists** -- none
+allocated, reserved, examined, exampled, or written in a filename or a comment;
 `OD-P11-07` is the owner's alone; and no CI has ever run this pack, so the
 gate's own authority is `UNMEASURED` outside this container.
 

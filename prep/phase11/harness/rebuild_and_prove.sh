@@ -597,18 +597,23 @@ echo
 echo "=== 7b. the quoted figures, against the expectations the value cases of this run REQUIRED ==="
 # The gate's own red proof runs first, as it always has -- and HERE rather than
 # at step 0c, because `blocks_test` runs the generators and the generators read
-# the haystack, which is this run's output. A selftest of the figure gate that
-# could not read a run would have to skip that arm, and this pack does not skip
-# what it cannot classify.
+# the haystack, which is the expectations the value cases of this run REQUIRED. A
+# selftest of the figure gate that could not read the sink of a run would have
+# to skip that arm, and this pack does not skip what it cannot classify.
 $PY -I $H/check_fenced_figures.py --selftest --run-capture "$P11_RUN_CAPTURE" || { echo "the fenced-figure check cannot fail; refusing to trust it"; RC=1; }
-# `R26-S1`. The haystack is the capture above, which by now holds every line
-# this run has printed: the migrations, both proof suites twice, both race
-# programs, every digest and every exit code. A figure in a document of this
-# phase is legitimate because it is in there.
+# `R27-F1`, and the coordinator's `C29-F1`, which found round 26's rule still
+# written out here four lines above the gate that stopped holding it. The
+# haystack is the expectations the value cases of this run REQUIRED:
+# the FIGURE SINK the capture above carries, one row per expectation a
+# `kind="value"` case of this run asserted and PASSED. A figure in a document
+# of this phase is legitimate because A CASE OF THIS RUN REQUIRED IT -- not
+# because something printed it, which is as cheap as commenting it.
 $PY -I $H/check_fenced_figures.py --run-capture "$P11_RUN_CAPTURE"
 RC_FIGURES=$?
 if [ $RC_FIGURES -ne 0 ]; then
-  echo "A document of this phase shows a figure THIS RUN DID NOT PRINT (exit 1), the "
+  echo "A document of this phase shows a figure NO VALUE CASE OF THIS RUN REQUIRED "
+  echo "(exit 1) -- the remedy is to have a case assert it and to name that case "
+  echo "beside the figure, never to make some step print it -- or the "
   echo "check matched nothing at all (exit 2), or it REFUSED (exit 5) -- the capture "
   echo "is absent, unreadable, empty, inside the repository that holds the subject, or "
   echo "carries another commit'\''s RUN_HEAD; or the haystack'\''s anchor could not be "
@@ -621,7 +626,8 @@ if [ $RC_FIGURES -ne 0 ]; then
   echo "since this file imported it, a frame function whose source is not the code "
   echo "that runs, and a DECIDING FILE whose bytes are not the bytes the commit holds. "
   echo "In every case a figure in these documents would be standing on something other "
-  echo "than a run of this phase, and this run is not evidence for it."
+  echo "than the expectations the value cases of this run REQUIRED, and this "
+  echo "run is not evidence for it."
 fi
 $PY -I $H/check_fenced_figures.py --check-blocks --run-capture "$P11_RUN_CAPTURE"
 RC_BLOCKS=$?

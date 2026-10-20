@@ -111,6 +111,18 @@ def case(name, sql, expect, role="postgres", pre=CTX, kind="refusal"):
     else:
         ok = rc==0 and expect in out
         detail=(out or err.splitlines()[0] if err else out) if not ok else expect
+    # `C28-F1`, and the coordinator's `C29-S2`: this line is what legitimises
+    # a figure in every document of this phase, so the limit is declared HERE,
+    # where the next value case is written. What the sink records is that a
+    # case ASSERTED the expectation and passed. It does NOT record that the
+    # case COMPUTED it from the database: a case whose subject is a literal
+    # (`SELECT '<figure>'::text`) writes a row like any other, which the
+    # coordinator demonstrated by driving the pack green twice with two
+    # different fabricated numbers. The closure, owed and not here: a
+    # figure-bearing case is credible exactly when it REDS under a mutation
+    # that changes the quantity (`mutations/M*.sql`, through
+    # `P11_MUTATION_SQL`), and a literal cannot be mutated. Write the case so
+    # that a mutation of the data would change its answer.
     if kind == "value" and ok:
         _sink(name, expect)
     cases.append((name,"RED (refused as required)" if (ok and kind=="refusal") else ("GREEN" if ok else "**PROOF FAILED**"),detail))
