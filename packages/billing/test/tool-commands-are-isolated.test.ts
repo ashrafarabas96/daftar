@@ -83,6 +83,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import type { Stats } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
@@ -1311,12 +1312,59 @@ const realpathNonStrict = (path: string): string => {
   return out === '' ? sep : out;
 };
 
-const bytesUnder = (root: string, repoRoot: string): Record<string, string> => {
+// ROUND 73, THE CHALLENGER'S R65-F-1 (P1, blocking). `bytesUnder` reached an
+// entry that was neither a symlink nor a directory through its final `else`
+// and called `readFileSync` on it. Measured with one FIFO under the pinned
+// package: `isFile=false isFIFO=true`, `readFileSync` entered, and the process
+// exited 124 at a ten-second timeout -- BLOCKED, with no verdict of any kind.
+// The gate's half of the same defect skipped it silently and printed ACCOUNTED
+// FOR at rc 0. Only `isFile()` may be hashed now, and any other kind becomes a
+// ROW, so the census refuses it as an arrival and the law returns a verdict
+// instead of hanging. The kind is read from the dirent, and one this does not
+// know is `unknown` -- the refusal is for the CLASS, not for the name.
+// The kind of a non-regular entry, from the stat the classification already
+// took: a second syscall is a second answer, and R56-S3 was two readers
+// parting company over one entry.
+const statKind = (stat: Stats): string => {
+  if (stat.isFIFO()) return 'fifo';
+  if (stat.isSocket()) return 'socket';
+  if (stat.isBlockDevice()) return 'blockdevice';
+  if (stat.isCharacterDevice()) return 'characterdevice';
+  return 'unknown';
+};
+
+// ROUND 73, THE CHALLENGER'S R65-S-1 (P4, latent). `SYMLINK:`, `BROKEN:` and
+// `repo:` are prefixes joined to a path that may itself begin with those
+// literals, so the row was not injective: measured, a link to a real file
+// named `BROKEN:foo.js` and a dangling link to `foo.js` recorded the same row,
+// in BOTH readers. The row is the pin's identity, so a colon in the path is
+// escaped, and `%` with it so the escape is reversible. An ordinary path holds
+// neither character, so every ordinary row is unchanged.
+const encodeZone = (zone: string): string => zone.split('%').join('%25').split(':').join('%3A');
+
+const bytesUnder = (root: string, repoRoot: string, problems: string[] = []): Record<string, string> => {
   const out: Record<string, string> = {};
   const walk = (dir: string, prefix: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
-      const full = join(dir, entry.name);
-      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+    // ROUND 73, THE COORDINATOR'S R70-C-02 (P1). The kind comes from ONE
+    // `lstat` per entry and the classification happens BEFORE any read, so
+    // nothing an entry IS can make this reader block: `readdirSync` without
+    // `withFileTypes` returns names, and the one stat below answers every
+    // question asked of the entry. Classifying from a `Dirent` and then
+    // reading is two sources for one fact, which is how R56-S3's two readers
+    // parted company over one entry.
+    for (const name of readdirSync(dir).sort((a, b) => (a < b ? -1 : 1))) {
+      const full = join(dir, name);
+      const rel = prefix === '' ? name : `${prefix}/${name}`;
+      let stat: Stats;
+      try {
+        stat = lstatSync(full);
+      } catch (error) {
+        problems.push(
+          `${REFUSED_FILE_NOT_READABLE}: ${full} is under the pinned package and cannot be stat'ed at all (${String(error)}), so this reader cannot say what it is. It is refused rather than dropped: an entry nobody classified is an entry nobody reviewed`,
+        );
+        out[rel] = 'OTHER:unstattable';
+        continue;
+      }
       // A symbolic link is recorded as what it RESOLVES TO and never followed
       // as a file: the pinned package holds none today, and one that appears
       // is an ARRIVAL the comparison refuses rather than a file it hashes.
@@ -1343,36 +1391,73 @@ const bytesUnder = (root: string, repoRoot: string): Record<string, string> => {
       // path lexically and carried on. Both now resolve it lexically and mark
       // it `BROKEN:`, so the row is legible, the two readers agree, and the
       // comparison refuses it as an arrival BY NAME.
-      if (entry.isSymbolicLink()) {
-        let target: string;
-        let broken = false;
-        try {
-          target = realpathSync(full);
-        } catch {
-          // ROUND 70, THE CHALLENGER'S CAUTION BEFORE THE PUSH, and it was
-          // right: a BROKEN row has no `realpath` to appeal to, so its zone is
-          // decided by whatever each reader does with a path it cannot walk to
-          // the end. MEASURED on a nine-row fixture: resolving nothing, a
-          // dangling link under a symlinked directory was
-          // `SYMLINK:BROKEN:dirlink/missing2.js` here and
-          // `SYMLINK:BROKEN:real-dir/missing2.js` in the gate. Resolving only
-          // the link's PARENT fixed those nine rows and still diverged on the
-          // shape its second caution named -- an interior component that is
-          // itself a link -- so the rule is not 'resolve the parent' but
-          // 'resolve what can be resolved', which is `realpathNonStrict`
-          // above, by the same rule the gate's reader follows. All thirteen rows
-          // now agree in both readers.
-          broken = true;
-          target = realpathNonStrict(full);
-        }
+      if (stat.isSymbolicLink()) {
+        // ROUND 73, THE COORDINATOR'S R70-C-01 (P3). Brokenness was inferred
+        // from `realpathSync` THROWING, and it throws `ENOTDIR` for a trailing
+        // separator on a file as well as `ENOENT` for an absent target -- so
+        // for `-> package.json/` this reader said BROKEN and the gate said
+        // healthy, and NO pinned value satisfied both: a permanent false red,
+        // and a hardening that causes one is not hardening. `EACCES` and
+        // `ELOOP` are the same mistake. The question is now the gate's own:
+        // resolve what can be resolved, then ask the RESOLVED PATH whether it
+        // exists. Measured on node v24.12.0 with a link at
+        // `<package>/package.json/`: both readers record
+        // `SYMLINK:package.json`, and the two controls the coordinator used --
+        // a trailing separator on a DIRECTORY, and `package.json/x` with no
+        // trailing separator -- are unchanged.
+        // ROUND 70, THE CHALLENGER'S CAUTION BEFORE THE PUSH, and it was
+        // right: a BROKEN row has no `realpath` to appeal to, so its zone is
+        // decided by whatever each reader does with a path it cannot walk to
+        // the end. MEASURED on a nine-row fixture: resolving nothing, a
+        // dangling link under a symlinked directory was
+        // `SYMLINK:BROKEN:dirlink/missing2.js` here and
+        // `SYMLINK:BROKEN:real-dir/missing2.js` in the gate. Resolving only
+        // the link's PARENT fixed those nine rows and still diverged on the
+        // shape its second caution named -- an interior component that is
+        // itself a link -- so the rule is not 'resolve the parent' but
+        // 'resolve what can be resolved', which is `realpathNonStrict`, by
+        // the same rule the gate's reader follows.
+        const target = realpathNonStrict(full);
+        const broken = !existsSync(target);
         const zone = target.startsWith(`${root}${sep}`)
-          ? relative(root, target)
+          ? encodeZone(relative(root, target))
           : target.startsWith(`${repoRoot}${sep}`)
-            ? `repo:${relative(repoRoot, target)}`
-            : target;
+            ? `repo:${encodeZone(relative(repoRoot, target))}`
+            : encodeZone(target);
         out[rel] = `SYMLINK:${broken ? 'BROKEN:' : ''}${zone}`;
-      } else if (entry.isDirectory()) walk(full, rel);
-      else out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
+      } else if (stat.isDirectory()) {
+        // ROUND 73, THE COORDINATOR'S R70-C-02, the half of it that GREENED.
+        // A directory used to produce no row at all, so an EMPTY one arriving
+        // under the pinned package was invisible to both readers: measured at
+        // the previous head, `mkdir node_modules/vitest/zz-emptydir` left the
+        // gate at rc 0 printing `114 file(s) pinned and identical` with no
+        // mention of it. A directory is a ROW now -- it carries no bytes, so
+        // the row says only that it is one -- and an arrival refuses like any
+        // other. The pin grew from 114 rows to 118: `dist`, `dist/chunks`,
+        // `dist/workers` and `browser`.
+        out[rel] = 'DIR';
+        walk(full, rel);
+      } else if (stat.isFile()) {
+        try {
+          out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
+        } catch (error) {
+          problems.push(
+            `${REFUSED_FILE_NOT_READABLE}: ${full} is a regular file under the pinned package and could not be read (${String(error)}), so this reader never saw the bytes it is being asked to compare`,
+          );
+          out[rel] = 'OTHER:unreadable';
+        }
+      } else {
+        // ROUND 73, R65-F-1 and the coordinator's R70-C-02 together: anything
+        // else is a ROW and never a read, AND a named refusal. A FIFO here
+        // used to block `readFileSync` -- rc 124 with no verdict of any kind,
+        // which is worse than a wrong one -- and no pin should be able to make
+        // one acceptable, which a row alone would allow. The name is the one
+        // this file already uses for the same question in both pack copiers.
+        out[rel] = `OTHER:${statKind(stat)}`;
+        problems.push(
+          `${REFUSED_PACK_ENTRY_NOT_A_FILE}: ${full} is a ${statKind(stat)} under the pinned package. No published tarball carries one, nothing can pin its bytes, and this reader refuses what it cannot classify rather than reading it or dropping it`,
+        );
+      }
     }
   };
   walk(root, '');
@@ -4968,7 +5053,44 @@ describe('every written invocation of the pack tools is isolated', () => {
     symlinkSync(outside, join(scratch, 'link-outside'));
     symlinkSync(join(realpathSync(repo), 'package.json'), join(scratch, 'link-in-the-repo'));
     symlinkSync(join(scratch, 'inner', 'missing.js'), join(scratch, 'link-dangling'));
-    const rows = bytesUnder(realpathSync(scratch), realpathSync(repo));
+    // ROUND 73, R65-S-1: a path that itself begins with one of the row's own
+    // prefixes. Before the escaping, these two recorded the SAME row.
+    writeFileSync(join(scratch, 'inner', 'BROKEN:foo.js'), 'z\n');
+    symlinkSync(join(scratch, 'inner', 'BROKEN:foo.js'), join(scratch, 'link-to-a-colon-name'));
+    symlinkSync(join(scratch, 'inner', 'foo.js'), join(scratch, 'link-dangling-plain'));
+    // ROUND 73, R65-F-1: the entry kind that used to BLOCK this reader. The
+    // fixture holds one so the branch that answers it is a branch that runs.
+    const fifo = spawnSync('/usr/bin/mkfifo', [join(scratch, 'a-fifo')], { encoding: 'utf8' });
+    expect(fifo.status, `this case needs a FIFO to measure the branch that answers one: ${fifo.stderr}`).toBe(0);
+    // ROUND 73, THE COORDINATOR'S R70-C-02, the shape that GREENED: an empty
+    // directory arriving under the pinned package. It must be a ROW, so the
+    // comparison refuses it like any other arrival.
+    mkdirSync(join(scratch, 'an-empty-directory'));
+    // ROUND 73, ITS R70-C-01: a trailing separator whose target is a FILE.
+    // Measured at the previous head, this reader said BROKEN (realpathSync
+    // throws ENOTDIR) and the gate said healthy, so NO pinned value satisfied
+    // both -- a permanent false red. The two controls it used ride with it.
+    symlinkSync(`${join(scratch, 'inner', 'real.js')}${sep}`, join(scratch, 'link-trailing-on-a-file'));
+    symlinkSync(`${join(scratch, 'inner')}${sep}`, join(scratch, 'link-trailing-on-a-dir'));
+    symlinkSync(join(scratch, 'inner', 'real.js', 'x'), join(scratch, 'link-interior-on-a-file'));
+    const problems: string[] = [];
+    const rows = bytesUnder(realpathSync(scratch), realpathSync(repo), problems);
+    expect(
+      rows['an-empty-directory'],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: a DIRECTORY must be a row of its own. Measured at the previous head with \`mkdir node_modules/vitest/zz-emptydir\`: the gate stayed at rc 0 and printed \`114 file(s) pinned and identical\` with the arrival present and unmentioned, because a directory carrying no files produced no row at all`,
+    ).toBe('DIR');
+    expect(
+      [rows['link-trailing-on-a-file'], rows['link-trailing-on-a-dir'], rows['link-interior-on-a-file']],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: brokenness is whether the RESOLVED PATH exists, not whether \`realpathSync\` threw -- it throws ENOTDIR for a trailing separator on a file, and EACCES and ELOOP are the same mistake. These three are the coordinator's shape and its two controls, on node v24.12.0`,
+    ).toStrictEqual([`SYMLINK:${join('inner', 'real.js')}`, 'SYMLINK:inner', `SYMLINK:BROKEN:${join('inner', 'real.js', 'x')}`]);
+    expect(
+      problems.filter((problem) => !problem.startsWith(REFUSED_PACK_ENTRY_NOT_A_FILE)),
+      `${REFUSED_FILE_NOT_READABLE}: this reader classifies by ONE stat before it reads anything, and every entry it cannot classify or cannot read is a NAMED refusal. The only one this fixture plants is the FIFO`,
+    ).toStrictEqual([]);
+    expect(
+      problems.filter((problem) => problem.startsWith(REFUSED_PACK_ENTRY_NOT_A_FILE)).length,
+      `${REFUSED_PACK_ENTRY_NOT_A_FILE}: the FIFO is a row AND a named refusal, because a row alone lets a pin make one acceptable and a pin is a thing that can be written`,
+    ).toBe(1);
     expect(
       rows['link-inside'],
       'a link INSIDE the pinned root must be recorded by its path relative to that root, or the pin is a property of the checkout and not of the package',
@@ -5002,6 +5124,23 @@ describe('every written invocation of the pack tools is isolated', () => {
       'SYMLINK:BROKEN:cycle-b',
       `SYMLINK:BROKEN:${join('cycle-a', 'x')}`,
     ]);
+    expect(
+      [rows['link-to-a-colon-name'], rows['link-dangling-plain']],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: a path that begins with one of the row's own prefixes must not record the row a DIFFERENT path records. Measured before the escaping: a link to a real file named BROKEN:foo.js and a dangling link to foo.js both recorded SYMLINK:BROKEN:foo.js, in both readers, so the row was not the pin's identity`,
+    ).toStrictEqual([`SYMLINK:${join('inner', 'BROKEN%3Afoo.js')}`, `SYMLINK:BROKEN:${join('inner', 'foo.js')}`]);
+    expect(
+      rows['a-fifo'],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: a FIFO under the pinned package must be a ROW this reader returns, not a readFileSync it blocks in. Measured at the previous head: exit 124 at a ten-second timeout, with no verdict of any kind`,
+    ).toBe('OTHER:fifo');
+    const liveProblems: string[] = [];
+    expect(
+      Object.entries(bytesUnder(packageRoot, realpathSync(repo), liveProblems)).filter(([, row]) => row.startsWith('OTHER:')),
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: an entry under the pinned package that is neither a file, a directory nor a symlink is one no published tarball carries and nothing can pin. It refuses here whatever the pin says, because a pin that could make one acceptable is a pin that can be written`,
+    ).toStrictEqual([]);
+    expect(
+      liveProblems,
+      `${REFUSED_PACK_ENTRY_NOT_A_FILE}: the pinned package itself must hold nothing this reader cannot classify or cannot read`,
+    ).toStrictEqual([]);
     expect(
       rows['link-outside'],
       'a link pointing out of the REPOSITORY keeps its absolute target, because a link into /opt or /usr is a different tree in any sense that matters',

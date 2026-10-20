@@ -520,6 +520,52 @@ def refuse(why: str) -> "None":
     raise SystemExit(f"{LAW_NOT_RUN}: {why}")
 
 
+def entry_kind(path: Path) -> str:
+    """What an entry IS, for an entry that is neither a file nor a directory.
+
+    ROUND 73, THE CHALLENGER'S R65-F-1 (P1, blocking). The census was
+    `if is_symlink ... elif is_file ...` with no `else`, so an entry that is
+    neither -- a FIFO, a socket, a device node -- was skipped SILENTLY: not an
+    arrival, not a departure, not a difference. Measured with one FIFO under
+    the pinned package: recorded `[('inner/real.js', 'file')]` and skipped
+    `[('a-fifo', 'OTHER'), ('inner', 'dir')]`, with every pinned file identical
+    and this step printing ACCOUNTED FOR at rc 0 over an entry it had not
+    accounted for. The rule this phase wrote for itself is never SKIP what you
+    cannot classify, and it was broken at the point where the classification
+    happens. The kind is read from the mode bits, and a mode this does not know
+    is `unknown` -- which still refuses, because the refusal is for the CLASS
+    and not for the name.
+    """
+    try:
+        mode = path.lstat().st_mode
+    except OSError as exc:
+        return f"UNREADABLE:{exc.errno}"
+    for test, name in (
+        (stat.S_ISFIFO, "fifo"),
+        (stat.S_ISSOCK, "socket"),
+        (stat.S_ISBLK, "blockdevice"),
+        (stat.S_ISCHR, "characterdevice"),
+        (stat.S_ISDOOR if hasattr(stat, "S_ISDOOR") else (lambda _m: False), "door"),
+    ):
+        if test(mode):
+            return name
+    return "unknown"
+
+
+def encode_zone(zone: str) -> str:
+    """A zone as a row FIELD rather than as a prefix somebody could write.
+
+    ROUND 73, THE CHALLENGER'S R65-S-1 (P4, latent). `SYMLINK:`, `BROKEN:` and
+    `repo:` are prefixes joined to a path that may itself begin with those
+    literals, so the encoding is not injective: measured, a link to a real file
+    named `BROKEN:foo.js` and a dangling link to `foo.js` both recorded
+    `SYMLINK:BROKEN:foo.js`, in BOTH readers. The row is the pin's identity, so
+    a colon inside the path is escaped and `%` with it; nothing else changes,
+    and every ordinary row is unchanged because an ordinary path holds neither.
+    """
+    return zone.replace("%", "%25").replace(":", "%3A")
+
+
 def symlink_row(path: Path, base: Path, root: Path) -> str:
     """How a symbolic link under the pinned package is recorded.
 
@@ -542,12 +588,12 @@ def symlink_row(path: Path, base: Path, root: Path) -> str:
     """
     target = path.resolve()
     try:
-        zone = str(target.relative_to(base))
+        zone = encode_zone(str(target.relative_to(base)))
     except ValueError:
         try:
-            zone = "repo:" + str(target.relative_to(root))
+            zone = "repo:" + encode_zone(str(target.relative_to(root)))
         except ValueError:
-            zone = str(target)
+            zone = encode_zone(str(target))
     return "SYMLINK:" + ("" if target.exists() else "BROKEN:") + zone
 
 
@@ -590,6 +636,12 @@ def symlink_zone_branches(refuse_to: list[str]) -> str:
         (pkg / "real-dir").mkdir()
         (pkg / "dirlink").symlink_to(pkg / "real-dir")
         (pkg / "real-dir" / "under-link").symlink_to("missing2.js")
+        # ROUND 73, R65-S-1: a path that itself begins with one of the row's own
+        # prefixes. Before the escaping, a link to a real file named
+        # `BROKEN:foo.js` and a dangling link to `foo.js` recorded the same row.
+        (pkg / "inner" / "BROKEN:foo.js").write_text("z\n", encoding="utf-8")
+        (pkg / "link-to-a-colon-name").symlink_to(pkg / "inner" / "BROKEN:foo.js")
+        (pkg / "link-dangling-plain").symlink_to(pkg / "inner" / "foo.js")
         # ROUND 70, its SECOND caution: a dangling target whose INTERIOR
         # component is an existing link, and a link CYCLE. This reader resolves
         # every component it can and keeps a cycling one literally; the law's
@@ -599,8 +651,20 @@ def symlink_zone_branches(refuse_to: list[str]) -> str:
         (pkg / "cycle-a").symlink_to(pkg / "cycle-b")
         (pkg / "cycle-b").symlink_to(pkg / "cycle-a")
         (pkg / "link-through-the-cycle").symlink_to(pkg / "cycle-a" / "x")
+        # ROUND 73, THE COORDINATOR'S R70-C-01 (P3): a trailing separator whose
+        # target is a FILE, where the two readers measurably disagreed -- this
+        # one healthy, the law BROKEN, with no pinned value satisfying both.
+        # The shape and the two controls it was bounded by are planted here so
+        # this program's own answer to each is a measured row and not a
+        # reading of the review.
+        (pkg / "link-trailing-on-a-file").symlink_to(str(pkg / "inner" / "real.js") + os.sep)
+        (pkg / "link-trailing-on-a-dir").symlink_to(str(pkg / "inner") + os.sep)
+        (pkg / "link-interior-on-a-file").symlink_to(pkg / "inner" / "real.js" / "x")
         want = {
             "link-inside": "SYMLINK:inner/real.js",
+            "link-trailing-on-a-file": "SYMLINK:inner/real.js",
+            "link-trailing-on-a-dir": "SYMLINK:inner",
+            "link-interior-on-a-file": "SYMLINK:BROKEN:inner/real.js/x",
             "link-in-the-repo": "SYMLINK:repo:package.json",
             "link-outside": "SYMLINK:" + str(outside.resolve()),
             "link-dangling": "SYMLINK:BROKEN:inner/missing.js",
@@ -613,19 +677,107 @@ def symlink_zone_branches(refuse_to: list[str]) -> str:
             "cycle-a": "SYMLINK:BROKEN:cycle-a",
             "cycle-b": "SYMLINK:BROKEN:cycle-b",
             "link-through-the-cycle": "SYMLINK:BROKEN:cycle-a/x",
+            "link-to-a-colon-name": "SYMLINK:inner/BROKEN%3Afoo.js",
+            "link-dangling-plain": "SYMLINK:BROKEN:inner/foo.js",
         }
+        # ROUND 73, R65-F-1 provoked rather than reasoned about: a FIFO in the
+        # fixture, through the SAME function the real census calls.
+        os.mkfifo(pkg / "a-fifo")
+        # ROUND 73, THE COORDINATOR'S R70-C-02, the half that GREENED: an
+        # EMPTY directory, which produced no row at all and so was invisible.
+        (pkg / "an-empty-directory").mkdir()
+        fifo_problems: list[str] = []
+        fifo_rows = census_rows(pkg, repo.resolve(), fifo_problems)
+        want["a-fifo via the census"] = "OTHER:fifo"
+        want["an empty directory via the census"] = "DIR"
+        got_empty = fifo_rows.get("an-empty-directory", "no row at all")
+        if got_empty != "DIR":
+            refuse_to.append(
+                f"{REFUSED_ARM_NOT_AS_SPECIFIED}: an EMPTY directory under the pinned package gave the census "
+                f"{got_empty!r}. It must be a row, or an arrival nothing refuses is an arrival the census passed "
+                "over -- measured at the previous head as rc 0 with `114 file(s) pinned and identical`"
+            )
+        (pkg / "an-empty-directory").rmdir()
+        got_fifo = fifo_rows.get("a-fifo", "no row at all")
+        if got_fifo != "OTHER:fifo" or not any(REFUSED_RUNNER_PROGRAM_UNPINNED in p for p in fifo_problems):
+            refuse_to.append(
+                f"{REFUSED_ARM_NOT_AS_SPECIFIED}: a FIFO under the pinned package gave the census {got_fifo!r} and "
+                f"{len(fifo_problems)} refusal(s). It must be a row AND a named refusal: skipping what cannot be "
+                "classified is what R65-F-1 was"
+            )
+        (pkg / "a-fifo").unlink()
+
         agreed = 0
         for name, expected in want.items():
+            if name == "a-fifo via the census":
+                if got_fifo == "OTHER:fifo":
+                    agreed += 1
+                continue
+            if name == "an empty directory via the census":
+                if got_empty == "DIR":
+                    agreed += 1
+                continue
             got = symlink_row(pkg / name, pkg.resolve(), repo.resolve())
             if got == expected:
                 agreed += 1
             else:
                 refuse_to.append(
                     f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: this step's own symlink rule answered {got!r} for "
-                    f"{name!r} where the law's answers {expected!r}. Two readers of one definition that "
-                    "disagree measure nothing together"
+                    f"{name!r} where THIS FILE SPECIFIES {expected!r}. ROUND 73, THE CHALLENGER'S R65-S-3 (P4): "
+                    "this sentence used to say 'where the law's answers', and nothing here reads the law -- the "
+                    "expectation is this program's own, written beside the rule it measures, and what would "
+                    "establish that the two readers agree is a comparison of their rows over ONE tree, which this "
+                    "head does not carry. Two readers of one definition that disagree measure nothing together"
                 )
     return f"{agreed}/{len(want)} symlink zone branches as specified"
+
+
+def census_rows(base: Path, root: Path, problems: list[str]) -> "dict[str, str]":
+    """Every entry under `base` as a row: a digest, a symlink zone, or a refusal.
+
+    ROUND 73, THE CHALLENGER'S R65-F-1 (P1, blocking). This was inline in
+    `runner_bytes_disagreements` as `if is_symlink ... elif is_file ...` with no
+    `else`, so an entry that is neither was skipped SILENTLY. It is a function
+    now for the reason the defect existed: a branch nobody can reach from a
+    fixture is a branch nobody has measured, and `publisher_bytes_branches`
+    and `symlink_zone_branches` can both call this one.
+    """
+    rows: dict[str, str] = {}
+    for path in sorted(base.rglob("*")):
+        rel = str(path.relative_to(base))
+        if path.is_symlink():
+            rows[rel] = symlink_row(path, base, root)
+        elif path.is_dir():
+            # ROUND 73, THE COORDINATOR'S R70-C-02, the half of it that
+            # GREENED rather than hung. A directory produced NO ROW, so an
+            # EMPTY one arriving under the pinned package was invisible to both
+            # readers: measured at the previous head, `mkdir
+            # node_modules/vitest/zz-emptydir` left this step at rc 0 printing
+            # `114 file(s) pinned and identical` with no mention of it, and the
+            # census's whole contract is that an arrival refuses. A directory
+            # is a ROW now; it carries no bytes, so the row says only that it
+            # is one. The pin grew from 114 rows to 118.
+            rows[rel] = "DIR"
+        elif path.is_file():
+            try:
+                rows[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                problems.append(f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {path} cannot be read ({exc})")
+        else:
+            # A FIFO, a socket or a device node. Recorded as a ROW so the
+            # census refuses it as an arrival, and refused BY NAME as well,
+            # because no pin should be able to make one acceptable. The law's
+            # half of this defect was worse than silence: it called
+            # `readFileSync` on the FIFO and returned no verdict at all.
+            kind = entry_kind(path)
+            rows[rel] = "OTHER:" + kind
+            problems.append(
+                f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {path} is a {kind} under the pinned package. No published "
+                "tarball carries one, nothing can pin its bytes, and this step does not SKIP what it cannot "
+                "classify -- which is what it did before round 73, printing ACCOUNTED FOR at rc 0 over an entry "
+                "it had never read"
+            )
+    return rows
 
 
 def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[str]:
@@ -678,32 +830,33 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
         )
 
     pinned: dict = pin.get("files", {})
-    installed: dict[str, str] = {}
     if not base.is_dir():
         return problems + [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: the pinned package directory {base} is not there"]
-    for path in sorted(base.rglob("*")):
-        if path.is_symlink():
-            installed[str(path.relative_to(base))] = symlink_row(path, base, root.resolve())
-        elif path.is_file():
-            try:
-                installed[str(path.relative_to(base))] = hashlib.sha256(path.read_bytes()).hexdigest()
-            except OSError as exc:
-                problems.append(f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {path} cannot be read ({exc})")
+    installed = census_rows(base, root.resolve(), problems)
     arrived = sorted(set(installed) - set(pinned))
     departed = sorted(set(pinned) - set(installed))
     moved = sorted(name for name in set(pinned) & set(installed) if pinned[name] != installed[name])
     for label, names in (("not pinned at all", arrived), ("pinned and absent", departed), ("pinned and different", moved)):
         if names:
             problems.append(
-                f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {len(names)} file(s) of the runner's own package are {label}, "
+                f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {len(names)} row(s) of the runner's own package are {label}, "
                 f"the first being {names[0]!r}. If the change is intended it moves with {lock_path.name}, in the same "
                 "commit, with the reason in the message"
             )
+    # ROUND 73, THE CHALLENGER'S R65-S-2 (P4): this used to run INSIDE the
+    # `if not problems` guard below and append to that same list, so its own
+    # refusals landed after the test that had already read the list and the
+    # ACCOUNTED FOR line printed on a run that refuses. The exit code was right
+    # because the caller refuses each problem, but the line was not. It runs
+    # first now, and the line prints only if nothing refused.
+    branches = symlink_zone_branches(problems)
     if not problems:
-        print(symlink_zone_branches(problems))
+        print(branches)
         print(
             f"runner program: {here.relative_to(root)} inside {pin.get('package')}@{pin.get('version')}, "
-            f"{len(pinned)} file(s) pinned and identical -- ACCOUNTED FOR ONE PACKAGE DEEP. What this package "
+            f"{len(pinned)} row(s) pinned and identical, of which {sum(1 for row in pinned.values() if row == 'DIR')} "
+            f"are directories and {sum(1 for row in pinned.values() if str(row).startswith('SYMLINK:'))} are symbolic "
+            "links -- ACCOUNTED FOR ONE PACKAGE DEEP. What this package "
             "IMPORTS is not pinned: measured, the same attacker import placed in node_modules/vite ran twice "
             "with the suite green at rc 0. This line narrows the attacker to one who can write under "
             "node_modules OUTSIDE this package; it does not say the program that ran is accounted for"
