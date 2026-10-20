@@ -1,12 +1,29 @@
 Phase 11 -- the authoritative run of round 30, from zero on a fresh clone.
 
-SUBJECT: 9db13a571bb8fa7062cfc049968c0b47c43f71f5
+SUBJECT: 9db13a571bb8fa7062cfc049968c0b47c43f71f5  (a COMMIT, and one no reader can resolve)
 
-That is this commit's tree MINUS the two round-30 transcripts beside this file
-and minus the generated block figures that counting them moves. A transcript
-cannot carry the digest of the commit that creates it, so it names the tree it
-measured and states the delta. The confirming run of the FINAL tree is recorded
-at the end of this file.
+That forty-character number is a COMMIT digest and not a tree digest. It is
+what `git rev-parse HEAD` printed in the throwaway clone this run was made in,
+which `rebuild_and_prove.sh` writes into the run capture as `RUN_HEAD`; a tree
+would have been `HEAD^{tree}`. This header called it a tree for four rounds --
+`C32-S2`, the coordinator's, raised against the one round whose own subject
+was that confusion.
+
+The commit lives only in that clone. It is on no branch and no remote, and
+`git cat-file -t` on it fails in a fresh clone of this repository, which is
+measured and not supposed: a reader cannot check it out, and nothing here asks
+them to. What it HOLDS is the tree of the PUSHED commit
+`ad57c1cd9a0526f8eb53e8308df999c22aac5a65`, which is the commit that added
+this file, minus the two round-30 transcripts beside it and minus the
+generated block figures that counting them moves. Its parent in that clone was
+`3f4b63022713c55a222fd60232c7b78bd8ffac10`. A transcript cannot carry the
+digest of the commit that creates it, which is why the run measures a commit
+of its own and states the delta against one a reader has.
+
+THE CONFIRMING RUN OF THE FINAL TREE IS AT THE END OF THIS FILE, as a git TREE
+object digest with the commands that rebuild it from a pushed commit. `A-30-F1`
+was that same sentence standing in the round-28 and round-29 transcripts while
+it was false; it is kept from this round on.
 
 PostgreSQL 16, en_US.utf8, migrations applied as daftar_migrator (NOT
 superuser), a scratch cluster of its own, /usr/bin/python3 -I throughout.

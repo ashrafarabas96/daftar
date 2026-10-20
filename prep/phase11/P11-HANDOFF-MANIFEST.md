@@ -3134,11 +3134,11 @@ then reported that the real run does not name its own refusals.
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      154
-document lines that would red          89
+candidates with the guard deleted      156
+document lines that would red          91
 distinct tokens in them                39
 
-deleting `inline code span` would red 89 document line(s) carrying 39 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 91 document line(s) carrying 39 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -3305,8 +3305,8 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     82
-of them recordings of past runs              58
+files the commit holds under the harness     83
+of them recordings of past runs              59
 skip keys the committed source reads         25
 arms the selftest runs                       152
 ```
@@ -4246,7 +4246,11 @@ A retired wording that CONTAINS an apostrophe is destroyed by removing `'` from
 the text, so the strongest spelling of round 30's law could not catch such a
 wording split across the arguments of one command. There is now a spelling that
 removes `"` and nothing else, and the four readings are declared in
-`SENTENCE_SPELLINGS` plus the whole-file scope, with `skip` naming any of them.
+`SENTENCE_SPELLINGS` plus the whole-file scope, with `without` naming any of
+them. (This sentence said `skip` for one round, as did the gate's own comment;
+`skip` is the MATCHER's guard set, and passing it here raises a `TypeError`.
+`C32-S4`, the coordinator's, and it is the defect the paragraph it sits beside
+names.)
 
 **Each of the four is armed, one deletion and one red, which is the harder
 half.** These readings are a ladder of over-joins, so a stronger reading
@@ -4332,7 +4336,7 @@ never by another text check.*
 |---|---|
 | `FINDING_TAIL` | one sentence, composed from `HAYSTACK_SENTENCE` rather than written beside it, appended to every finding |
 | `_finding(text)` | the single door every branch of the report now prints through, so the pin is in the text a reader meets whatever that branch's own words are |
-| `direct_prints_in_the_finding_loops` | an `ast` reading of the COMMITTED bytes, scoped to `scan` alone, that names any `print` inside the loops which emit findings. Zero is required |
+| `emitters_in_the_finding_loops` | an `ast` LINT over the COMMITTED bytes, scoped to `scan` alone: inside the `for`, `while` and comprehension loops whose iterable mentions `findings` or `extra`, it names every call that emits (`print`, `builtins.print`, any `write`) or reaches an emission through a module-level helper, except `_finding`. Zero is required. Its reach is stated, not implied: an emission OUTSIDE those loops is outside it by construction, and `check_blocks` is outside it too — both are bound by ARRIVAL in `union_sentence_arms` instead (`C33-F1`) |
 | the arm | a `print` planted inside the findings loop of a COPY of the committed source is named by line. Nothing on disk moves to measure it |
 | the census | the pin is now required of **every labelled paragraph with no selector in the way** — four of them at this head — which is what the construction makes true |
 
@@ -4362,9 +4366,234 @@ this pack has a lesson about.
 **The coordinator diff review of `1024c3b` is OWED**, so that head has ONE of
 its two links. This commit answers `R32-S1` and is unsigned by anyone.
 
+## 7.34 ROUND 33 (challenger at `2f2a910`: NO BLOCKING DEFECT, one residual; coordinator diff review of `2f2a910`: **`NO-SIGN`**, `C33-F1` at `P1`; coordinator diff review of `1024c3b`: **`SIGN`**) — a closure by SYNTAX was credited with a reach only ARRIVAL can give it
+
+Two heads were reviewed into this round, and they end in opposite places.
+
+**`1024c3b` is FULLY SIGNED.** The round-32 challenger found no blocking defect
+in it and the coordinator's diff review of the same head signs it — the second
+fully signed head in three rounds, after nineteen with none. A signature covers
+ONE SHA and it is not a promotion verdict.
+
+**`2f2a910` is NOT SIGNED.** The round-33 challenger found no blocking defect in
+it and named one residual; the coordinator's diff review of the same head is
+`NO-SIGN`, on one defect of its own finding, `C33-F1` at `P1` — **and it is
+mine: a claim I made in three places that measurement shows false.**
+
+| | |
+|---|---|
+| coordinator, `1024c3b` | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-1024c3b.md`, sha256 `adc8fe5db014375ded1f34afa1f234485515f6201b5e58bb4f1f23bf823bdb75` — `SIGN`, with `C32-S1`/`C32-S2` at `P2` and `C32-S3`/`C32-S4` at `P3` |
+| challenger, `2f2a910` | `/mnt/project-files/phase11/P11-CHALLENGE-2f2a9109eac57567f99c9a923e516fee1ffde209.md`, sha256 `008c54b057dc65df62a7628a8e9576e96664380b082a034d7cfdabb2d2ec3099`; Arabic `…-AR.md`, sha256 `f77ba2b5a62d7b7e147f534943bd52ca585bd226823100ea2685c9b093104655` — NO BLOCKING DEFECT, `R33-S1` named |
+| coordinator, `2f2a910` | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-2f2a910.md`, sha256 `46c89c5fa6c99081a217d6d7b5c6483ccb266e0f95d22f0430ccc17495f2dfb7` — **`NO-SIGN`**, `C33-F1` at `P1`, `C33-S1` at `P4`, and `C32-S1`–`S4` carried |
+
+This commit answers all of it: the blocker first.
+
+### `C33-F1` (`P1`) — I said "any other door" and the law read one door of eight
+
+Round 32 closed `R32-S1` by making `_finding` the single door that appends the
+pin, and by an `ast` law over the committed bytes. In three places — the
+`FINDING_TAIL` docstring, the law's own docstring, and §7.33 — I wrote that the
+law refuses any OTHER door and that the closure is a property of the code. The
+coordinator planted eight doors in a copy of the committed source and measured
+that the law named **one**: `print` as a bare Name, inside a `for` loop over
+`findings` or `extra`. `builtins.print`, `sys.stdout.write`, a helper that
+prints, a `while` loop, a renamed alias, a comprehension and an emission outside
+the loops all walked through it.
+
+Then the coordinator built the attack end to end: a labelled finding, printed
+through a helper, in the **`extra` / `NOT IN THE HAYSTACK`** branch — the one
+branch no `CATCH` arm provokes, so no census counted it — stating what makes a
+figure legitimate here in its own words, with no pin. Committed on a clean tree:
+**selftest rc 0, zero failed lines, and the sentence reached a reader.** By this
+project's own test for a fail-open fix — it is done only when deleting it reds a
+gate, read by refusal name — the fix was not done, and I had demoted the belt
+that was holding the class on the strength of it.
+
+**What closes it is arrival, not a better syntax.** `printed_paragraphs` is the
+union of four families run LOUD: the `CATCH` arms, **every declared world in
+`WORLDS`** (derived, not listed, so a world added later is censused without
+anyone remembering), both seat arms, and the enrolment check — `_blocks_arm`
+being the third hardcoded `quiet=True` of `C32-S3`. The binding arm is
+`_labelled_printed_without_the_pin`: **every labelled paragraph the gate PRINTS
+must carry the pin**, which is a property of what a reader is told and not of
+how the code says it. Raised refusals are judged apart by `gate_sentences`,
+because requiring the figure-legitimacy sentence of a `GIT-*` refusal about
+which repository holds the haystack is a false red — measured, not preferred.
+
+Measured, with every plant COMMITTED on a clean tree in a throwaway clone:
+
+| plant | the widened lint | the arrival census and the pin arm |
+|---|---|---|
+| the coordinator's own attack (helper, `extra` branch) | named | **reds**: one more shape than the census holds, one more printed than it holds, and one labelled printed paragraph without the pin |
+| `print` in the loop / `builtins.print` / `write` / a helper / a `while` loop / a comprehension | named | — |
+| a `for` over a RENAMED alias | not named, by construction | **reds**, the same three lines |
+| an emission OUTSIDE every finding loop | not named, by construction | **reds**, the same three lines |
+
+So eight doors of eight red, six of them twice.
+
+**And the census had to be made a property of the commit before it could be
+trusted.** Run by hand it counted 34 shapes; run under the driver, where a real
+capture is on the command line, it counted 36 — because the enrolment check
+stops earlier and says less with no capture installed, so the set was reading
+the command line. `printed_block_sentences` now installs a world's own capture
+for the length of its two arms, the way every other arm does, and an arm runs
+the union BOTH ways and requires the same count. A census whose number depends
+on the environment measures the environment, which is the same species of defect
+as the one this section is about: a number credited with a provenance it does not
+have. And the law is restated as what
+it is: `emitters_in_the_finding_loops` is a **LINT with a stated reach** — every
+emitting call, and every call reaching an emission through a module-level
+helper, inside the `for`, `while` and comprehension loops of `scan` over
+`findings` or `extra`, except `_finding`. Its two declared blind spots are named
+in its own docstring, and the closure of the class is the arrival census. A lint
+credited with a census's reach is exactly the defect `C33-F1` named, and the
+three sentences that did the crediting are gone.
+
+### `C32-S1` — the selector's declared limit was wrong by measurement, so the thing it declared is gone
+
+Round 31 decided which printed paragraphs must quote the pin by reading the
+pin's own vocabulary: a paragraph had to say `this run` AND carry three or more
+of the pin's content words. The review built the attacks and measured both
+halves false. Three stems is not the boundary the docstring claimed: the pin
+yields four stems, one of which is `thi`, so `this run` scores one for free and
+the real boundary was two — and the live finding sentence with the pin cut out
+and the single word `value` removed states the criterion in full and escaped in
+silence. And `\bthis run\b` was a LITERAL written beside the pin, not derived
+from it: `the run`, `this  run` with two spaces, `the present run` all keep every
+one of the pin's words and all escaped, while a pin that stopped containing the
+phrase would have left the gate alive on a string of its own. The coupling the
+docstring claimed was held by accident.
+
+**The phrase is gone.** `_criterion_stems` derives every word this selector
+reads from `HAYSTACK_SENTENCE` and nothing else; whitespace is normalised before
+matching, so a rewrapped or double-spaced sentence is the same sentence;
+`SENTENCE_STEM_THRESHOLD` is **two**, and the number is measured, not chosen.
+Measured on the twelve live shapes this round reads — the six finding shapes and
+the six seat shapes of `C32-S3` — and on six attacks built FROM the live
+sentence:
+
+| selector | false reds on the twelve live shapes | attacks caught |
+|---|---|---|
+| no phrase, two stems or more (this commit) | none | A B C E F G |
+| no phrase, three stems or more | none | F G only |
+| no phrase, one stem or more | thirteen | A B C E F G |
+| the phrase kept, two stems or more | none | A B C E G — `the run` escapes |
+
+The row to read is the last one: keeping the phrase and lowering the line still
+lets `the run` through, and dropping the phrase catches it. So the fix is not a
+better line, it is one fewer thing to evade.
+
+**`criterion_selector_arms` arms the line on BOTH sides**, which round 32 did not
+do: every one of the six attacks must be refused `GATE-SENTENCE-UNQUOTED`; the
+twelve live shapes must report nothing; **at one stem the live shapes must red**
+and **at three stems an attack must escape**, so moving the number in either
+direction fails the selftest; and the coupling is measured by replacing the pin
+inside the arm and requiring the stems, a paragraph in the new pin's words and a
+paragraph in the old pin's words all to follow.
+
+### `C32-S3` — two scan sites still could not be run loud, and now they are a census
+
+`_arm` gained a `quiet` parameter in round 32. `_gitfile_arm` and `_anchor_arm`
+— the git-file seat and the five anchor positions from three working directories
+— hardcoded `quiet=True`, so their paragraphs were in no law, which is exactly
+the state the findings were in for four rounds. Both take `quiet` now.
+`printed_seat_sentences` runs them loud, collects printed lines AND refusal
+messages, and `seat_sentence_arms` censuses what comes back by LITERALS: **six
+distinct shapes** and **four names** (`GIT-BARE-REPOSITORY`, `GIT-NESTED-REPO`,
+`GIT-TOPLEVEL-DISAGREES`, `NOT REQUIRED BY ANY CASE`). Shapes are counted, not
+pinned by body, because two of them carry a temporary directory's name; the
+masking that makes a shape stable is now ONE function, `_sentence_shape`, shared
+with the finding census, since two shape functions for one census is the split
+doctrine this pack has a lesson about. `finding_labels` steps over the `REFUSED:`
+prefix, which a count that read it would have collapsed to one name.
+
+Measured exposure stays nil: none of the six states the criterion, so the law
+reads nothing it should have refused. The arm under the census is a seat refusal
+REWORDED to state the rule without the pin, which is refused now and was read by
+nothing before.
+
+### `C32-S2` — the header called a commit a tree, in the round whose subject was that confusion
+
+`SUBJECT:` in each authoritative transcript is `git rev-parse HEAD` from the
+throwaway clone, which is a **commit**; a tree would be `HEAD^{tree}`. The
+header said *"that is this commit's tree MINUS …"* in rounds 29, 30, 31 and 32.
+The review rated it `P2` because a reader who followed `C31-S1` to its fix meets
+the unfixed form of it first, three pages above the appended block that gets it
+right.
+
+All four headers are rewritten, and each says what the number is, that it is on
+no branch and no remote, that `git cat-file -t` on it fails in a fresh clone
+(measured, in a `--no-local` clone, for all four), what tree it holds, and the
+PUSHED commit that tree is a delta against — named by SHA rather than as "this
+commit", because this round edits the files and "this commit" would stop being
+true. Round 32's appended record is re-pointed at `2f2a910` for the same reason,
+and its recipe was re-run in a fresh clone at that SHA: blob
+`0756adb3948f67a8c1d5003b4d2d9ca63edf1478`, tree
+`4222d498dc0a17d4d147ecf9b61548c601cd73c2`, both reproduced exactly.
+
+Two things the rewrite says that the old wording did not. Round 29's header
+claimed an appended block at the end of the file and there is none — that is
+`A-30-F1`, and the false pointer is **removed rather than reworded**. And round
+32's subject commit has `ad57c1c` as its parent, not `1024c3b`, because the
+local commit had been amended onto it when that run was made: the re-parenting
+disclosed to the coordinator, caught by an ancestor check before any push. What
+the run measured is the TREE, which the appended block pins; the parent pointer
+of a commit no reader can resolve decides nothing, and it is named here rather
+than left for a reader to find.
+
+### `C32-S4` — the file's own lesson, broken three lines below where it states it
+
+The comment inside `sentences` named `SENTENCE_READINGS`, which does not exist,
+and said `skip` where the parameter is `without` — three lines under the
+docstring that explains why it must be `without`, and `skip=` raises a
+`TypeError`. The manifest repeated it. Both are corrected, and both now name
+`C32-S4` so the correction is not mistaken for the original wording.
+
+### The run
+
+Whole driver, from zero, on a fresh clone, PostgreSQL 16, `en_US.utf8`,
+migrations applied as `daftar_migrator` (NOT superuser), its own scratch cluster
+and port, `/usr/bin/python3 -I` throughout. Nothing was pushed by the run and no
+remote was touched. Every step returned 0 — `EXIT_SCRIPT 0` — with 121 Pack A
+cases and 53 Pack B cases, 0 failed, twice each for idempotence. The transcript
+is `prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND33.txt`, and the
+confirming run of the FINAL tree is the appended block at its end, as a git tree
+object digest with the commands that rebuild it from the pushed commit.
+
+### `C33-S1` (`P4`) and `R33-S1`
+
+`C33-S1`: the rewritten `NOT REQUIRED BY ANY CASE` said *"that haystack"*
+early in the sentence and named the haystack five hundred characters later, at
+the appended tail. The clause now says what it means where it first leans on it,
+and names `C33-S1` so the correction is not mistaken for the original.
+
+`R33-S1`, the round-33 challenger's residual, **stays named**, and this round
+moves one of its two edges:
+
+* (i) the `ast` law is scoped to `scan`, so `check_blocks`' own print path is
+  outside it. Its printed paragraphs are now inside the ARRIVAL census
+  (`printed_block_sentences`), so a haystack claim printed there is bound; the
+  shared door itself is still one doctrine for two functions, and the
+  coordinator has ruled it a later round.
+* (ii) an **unlabelled** figure-finding printed outside the finding loops sits
+  below both the lint and the labelled-pin arm. What is under it is the
+  vocabulary belt: a printed paragraph carrying two or more of the pin's own
+  content words must quote the pin, labelled or not. That is the belt's
+  declared job now, and `C32-S1` is what made it worth the name.
+
+### What this round does not do
+
+The `check_blocks` door is a **declared limit, not a fix**: the `ast` law of
+`R32-S1` is scoped to `scan`, because `check_blocks` keeps a findings list of
+its own and prints it directly, and holding two functions to one doctrine is the
+defect this pack has a lesson about. Bringing it under the same door is a round
+of its own, and the coordinator has ruled it a later one. `C28-F1` stays OPEN
+and sized. **No CI has ever run this pack**, no migration number exists anywhere
+in it, `OD-P11-07` is the owner's alone, and `READY_TO_PROMOTE` = NO.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: the coordinator's diff review signed `3f4b630` (§7.31), which is this phase's last fully signed head, and an independent challenger signed the same head with no blocking defect. `ad57c1c` is FULLY SIGNED too and replaces it as the last signed head: an independent challenger found no blocking defect in it and the coordinator's diff review signed it (§7.32). None of these is a promotion verdict, none covers any other SHA, and no one has signed this head.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), and now **`1024c3b`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it and the coordinator's diff review of the same head signed it (§7.34). The head AFTER it, `2f2a910`, is **NOT signed**: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which this commit answers. None of these is a promotion verdict, none covers any other SHA, and **no one has signed this head.**
 
 ---
 

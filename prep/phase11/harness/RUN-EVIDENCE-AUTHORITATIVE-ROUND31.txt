@@ -1,10 +1,24 @@
 Phase 11 -- the authoritative run of round 31, from zero on a fresh clone.
 
-SUBJECT: 0ba6a75ef4028277064652185179b57572d99eeb
+SUBJECT: 0ba6a75ef4028277064652185179b57572d99eeb  (a COMMIT, and one no reader can resolve)
 
-That is this commit's tree MINUS this transcript and minus the generated block
-figures that counting it moves. A transcript cannot carry the digest of the
-commit that creates it, so it names the tree it measured and states the delta.
+That forty-character number is a COMMIT digest and not a tree digest. It is
+what `git rev-parse HEAD` printed in the throwaway clone this run was made in,
+which `rebuild_and_prove.sh` writes into the run capture as `RUN_HEAD`; a tree
+would have been `HEAD^{tree}`. This header called it a tree for four rounds --
+`C32-S2`, the coordinator's, raised against the one round whose own subject
+was that confusion.
+
+The commit lives only in that clone. It is on no branch and no remote, and
+`git cat-file -t` on it fails in a fresh clone of this repository, which is
+measured and not supposed: a reader cannot check it out, and nothing here asks
+them to. What it HOLDS is the tree of the PUSHED commit
+`1024c3bd3dfb4d3573d5b52d9f9138c0c074bda6`, which is the commit that added
+this file, minus this transcript and minus the generated block figures that
+counting it moves. Its parent in that clone was
+`ad57c1cd9a0526f8eb53e8308df999c22aac5a65`. A transcript cannot carry the
+digest of the commit that creates it, which is why the run measures a commit
+of its own and states the delta against one a reader has.
 
 THE CONFIRMING RUN OF THE FINAL TREE IS AT THE END OF THIS FILE. That sentence
 stood in the round-28 and round-29 transcripts while it was false (`A-30-F1`),

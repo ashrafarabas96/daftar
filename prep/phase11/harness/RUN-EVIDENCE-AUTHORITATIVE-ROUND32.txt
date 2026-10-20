@@ -1,9 +1,29 @@
 Phase 11 -- the authoritative run of round 32, from zero on a fresh clone.
 
-SUBJECT: c0db72c07c771e4a3ef4a02ca037c697635a16d2
+SUBJECT: c0db72c07c771e4a3ef4a02ca037c697635a16d2  (a COMMIT, and one no reader can resolve)
 
-That is this commit's tree MINUS this transcript and minus the generated block
-figures that counting it moves.
+That forty-character number is a COMMIT digest and not a tree digest. It is
+what `git rev-parse HEAD` printed in the throwaway clone this run was made in,
+which `rebuild_and_prove.sh` writes into the run capture as `RUN_HEAD`; a tree
+would have been `HEAD^{tree}`. This header called it a tree for four rounds --
+`C32-S2`, the coordinator's, raised against the one round whose own subject
+was that confusion.
+
+The commit lives only in that clone. It is on no branch and no remote, and
+`git cat-file -t` on it fails in a fresh clone of this repository, which is
+measured and not supposed: a reader cannot check it out, and nothing here asks
+them to. What it HOLDS is the tree of the PUSHED commit
+`2f2a9109eac57567f99c9a923e516fee1ffde209`, which is the commit that added
+this file, minus this transcript and minus the generated block figures that
+counting it moves. Its parent in that clone was
+`ad57c1cd9a0526f8eb53e8308df999c22aac5a65`. That parent is the round-30 head
+and not round 31's, because the local commit had been amended onto it when
+this run was made -- the re-parenting disclosed in the manifest, caught before
+any push. What the run MEASURED is the tree, which the appended block pins;
+the parent pointer of a commit no reader can resolve decides nothing, and it
+is named here rather than left for a reader to find. A transcript cannot carry
+the digest of the commit that creates it, which is why the run measures a
+commit of its own and states the delta against one a reader has.
 
 THE CONFIRMING RUN OF THE FINAL TREE IS AT THE END OF THIS FILE, as a git tree
 digest with the commands that rebuild it. `A-30-F1` was that sentence standing
@@ -1410,25 +1430,31 @@ and reproducible below from the commit that holds this file):
 
     4222d498dc0a17d4d147ecf9b61548c601cd73c2
 
-That tree is this commit's tree with ONE path replaced: this file, truncated to
-the 1398 lines that precede this block. Everything else -- every document,
-every harness file, every other transcript -- is byte-identical, which is what
-that single replacement proves. To reproduce it, in a throwaway clone checked
-out at the commit this file is in:
+That tree is the tree of the PUSHED commit
+`2f2a9109eac57567f99c9a923e516fee1ffde209` with ONE path replaced: this file,
+truncated to the 1398 lines that precede this block AS THAT COMMIT CARRIES IT.
+Everything else -- every document, every harness file, every other transcript
+-- is byte-identical, which is what that single replacement proves. The commit
+is named explicitly rather than as "this commit" because round 33 edited this
+file's header (`C32-S2`), so the line count and the bytes above belong to
+`2f2a910` and a reader checks them there. To reproduce it:
 
+    git clone <this repo> w && cd w
+    git checkout 2f2a9109eac57567f99c9a923e516fee1ffde209
     P=prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND32.txt
     blob=$(git show HEAD:$P | head -n 1398 | git hash-object -w --stdin)
     git read-tree HEAD^{tree}
     git update-index --cacheinfo 100644,$blob,$P
     git write-tree
 
-That prints the tree digest above, and $blob is
-0756adb3948f67a8c1d5003b4d2d9ca63edf1478. (`git read-tree` writes the clone's index; do
-not run it in a tree you are working in.)
+That prints the tree digest above, and `$blob` is
+0756adb3948f67a8c1d5003b4d2d9ca63edf1478. (`git read-tree` writes the clone's
+index; do not run it in a tree you are working in.)
 
-A later round that adds a file makes "this commit's tree" a different tree, so
-the round doing it re-points this record at the SHA this one was pushed as --
-which is what round 32 did to round 31's record, and round 31 to round 30's.
+A later round that adds a file to, or edits a file in, this commit makes "this
+commit's tree" a different tree, so the round doing it re-points this record at
+the SHA this one was pushed as -- which is what round 33 did here, round 32 to
+round 31's record, and round 31 to round 30's.
 
 RUN_ID            : p11-20261020T070759Z-17878
 RUN_AT_UTC_START  : 2026-10-20T07:07:59Z

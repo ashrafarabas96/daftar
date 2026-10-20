@@ -2582,7 +2582,11 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                 # more than it checked.
                 _finding(
                     ("NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, which is "
-                     "not in that haystack: no value case of this run asserted it "
+                     "not in the haystack this gate weighs a figure against -- "
+                     "named at the end of this sentence, where every finding of "
+                     "this gate names it (`C33-S1`: this clause used to say "
+                     "\"that haystack\" five hundred characters before anything "
+                     "said what it was): no value case of this run asserted it "
                      "and passed. "
                      "Either have a case assert it -- and name that case beside the "
                      "figure -- or drop it. WHAT THIS CHECKS is that a case of this "
@@ -3483,8 +3487,14 @@ def _gitfile_world():
     return _GITFILE["world"]
 
 
-def _gitfile_arm(skip=()):
-    """The census and git disagree: a named refusal, from the harness seat."""
+def _gitfile_arm(skip=(), quiet=True):
+    """The census and git disagree: a named refusal, from the harness seat.
+
+    `C32-S3`: `quiet` is a parameter here, and not hardcoded, for the reason
+    `_arm` gained one in round 32 -- a scan nobody can run LOUD prints
+    paragraphs no law reads. `printed_seat_sentences` runs this arm loud and
+    censuses what it says.
+    """
     subject, harness = _gitfile_world()
     capture = _seat_capture("gitfile", subject)
     was = os.getcwd()
@@ -3496,7 +3506,7 @@ def _gitfile_arm(skip=()):
         _RUN_CAPTURE[:] = [capture]
         try:
             os.chdir(harness)
-            return scan(docs, harness, quiet=True, skip=skip)
+            return scan(docs, harness, quiet=quiet, skip=skip)
         finally:
             os.chdir(was)
             _RUN_CAPTURE[:] = held
@@ -3523,8 +3533,12 @@ def _seat_capture(tag, root):
     return _SEAT_CAPTURES[tag]
 
 
-def _anchor_arm(where, cwd_kind, skip=()):
-    """One anchor world, weighed from one working directory."""
+def _anchor_arm(where, cwd_kind, skip=(), quiet=True):
+    """One anchor world, weighed from one working directory.
+
+    `C32-S3`: `quiet` is a parameter, not a hardcoded `True`. See
+    `_gitfile_arm`.
+    """
     root, harness, sibling = _anchor_world(where)
     capture = _seat_capture("anchor-%s" % where, root)
     seat = {
@@ -3541,7 +3555,7 @@ def _anchor_arm(where, cwd_kind, skip=()):
         _RUN_CAPTURE[:] = [capture]
         try:
             os.chdir(seat)
-            return scan(docs, harness, quiet=True, skip=skip)
+            return scan(docs, harness, quiet=quiet, skip=skip)
         finally:
             os.chdir(was)
             _RUN_CAPTURE[:] = held
@@ -6696,8 +6710,12 @@ BLOCK_ARMS = (
 )
 
 
-def _blocks_arm(extra, edit=False):
-    """One synthetic document: a correct `arm-counts` block plus one line."""
+def _blocks_arm(extra, edit=False, quiet=True):
+    """One synthetic document: a correct `arm-counts` block plus one line.
+
+    `C32-S3` and `C33-F1`: the third hardcoded `quiet=True` in this file, and
+    the census cannot see a paragraph an arm cannot be asked to print.
+    """
     with tempfile.TemporaryDirectory() as d:
         docs = os.path.join(d, "docs")
         os.makedirs(docs)
@@ -6715,7 +6733,7 @@ def _blocks_arm(extra, edit=False):
             + "\n"
         )
         _write(docs, "a.md", text)
-        return check_blocks(docs, quiet=True)
+        return check_blocks(docs, quiet=quiet)
 
 
 def blocks_test():
@@ -7339,8 +7357,13 @@ def sentences(text, prefix, name, pins=(), without=()):
     # not spell one -- including inside an example, which is a rule this very
     # reading caught me breaking.
     #
-    # So the text is read under FOUR readings, declared in `SENTENCE_READINGS`,
-    # and `skip` names any of them so the selftest can delete one at a time:
+    # So the text is read under FOUR readings: the three SPELLINGS declared in
+    # `SENTENCE_SPELLINGS` and the whole-file scope named by
+    # `SENTENCE_WHOLE_FILE`. The parameter that drops one is `without`, and
+    # `skip` -- which this comment said for one round, and the manifest with it
+    # (`C32-S4`) -- is the MATCHER's guard set, a different set with a census of
+    # its own; passing `skip=` here raises a TypeError, which is the one honest
+    # thing about the old wording. The names are:
     #
     #   as written            the paragraph as a reader reads it
     #   the double quotes     `"` removed and nothing else -- `C31-S2`: a
@@ -7603,33 +7626,80 @@ def sentence_reading_arms():
     return ok
 
 
-def _states_the_criterion(text):
-    """Does this printed paragraph SAY what makes a figure legitimate here?
+SENTENCE_STEM_THRESHOLD = 2
+"""How many of the pin's own content words mark a paragraph as talking about
+the criterion. Two, and the number is MEASURED rather than chosen: at three the
+four attacks of `C32-S1` escape, and at one the stem `thi` alone selects every
+paragraph that contains the word `this`, which reds thirteen live shapes. Both
+sides are armed in `criterion_selector_arms`, so this line cannot be moved in
+either direction without a selftest failing."""
 
-    The coordinator's `C31-S3`. The printed-sentence law requires the pin, and
-    requiring it of EVERY line a run prints would red on a table row; so the
-    set it is required of has to be decided, and deciding it by a list of
-    sentences is the defect this whole chain has been closing. It is decided
-    from the PIN'S OWN VOCABULARY instead: a paragraph that says `this run` and
-    carries three or more of the pin's content words is talking about the
-    criterion, and a paragraph that QUOTES the pin has nothing left to judge.
 
-    The limit, declared: a paragraph that states the criterion in words sharing
-    none of the pin's vocabulary is not selected. That is an enumeration of
-    WORDS rather than of sentences, which is one level further out than round
-    29's net, and it is derived from the pin rather than written beside it --
-    change the pin and this selector changes with it.
+def _criterion_stems():
+    """The pin's own content words, derived from the pin and nothing else.
+
+    `C32-S1`. Round 31 derived these but then gated on the literal phrase
+    `this run` written BESIDE the pin, so the selector's coupling to the pin
+    was held by accident: a paragraph keeping all four of these words escaped
+    by writing `the run`, and a pin that stopped containing the phrase would
+    have left the gate alive on a string of its own. There is no phrase any
+    more. Everything this selector reads comes out of `HAYSTACK_SENTENCE`.
     """
-    low = text.lower()
-    if HAYSTACK_SENTENCE.lower() in low:
-        return False
-    stems = sorted({
+    return sorted({
         re.sub(r"[^a-z]", "", w.lower()).rstrip("s")
         for w in HAYSTACK_SENTENCE.split()
         if len(re.sub(r"[^a-z]", "", w)) > 3
     })
-    hits = sum(1 for st in stems if re.search(r"\b%ss?\b" % re.escape(st), low))
-    return bool(re.search(r"\bthis run\b", low)) and hits >= 3
+
+
+def _states_the_criterion(text):
+    """Does this printed paragraph SAY what makes a figure legitimate here?
+
+    The coordinator's `C31-S3`, with its `C32-S1` after it. The
+    printed-sentence law requires the pin, and requiring it of EVERY line a run
+    prints would red on a table row; so the set it is required of has to be
+    decided, and deciding it by a list of sentences is the defect this whole
+    chain has been closing. It is decided from the PIN'S OWN VOCABULARY
+    instead: a paragraph carrying `SENTENCE_STEM_THRESHOLD` or more of the
+    pin's content words is talking about the criterion, and a paragraph that
+    QUOTES the pin has nothing left to judge.
+
+    Whitespace is normalised before matching, because a sentence rewrapped
+    across two lines or printed with a double space is the same sentence to a
+    reader and was not the same string to round 31's selector.
+
+    The limit, declared, and this time measured rather than asserted: a
+    paragraph that states the criterion while carrying at most ONE of the four
+    words `case`, `expectation`, `this`, `value` is not selected -- every word
+    of it replaced by a synonym. `C32-S1` built four paragraphs that kept two
+    of them and escaped round 31's line of three; they are arms now, and they
+    red if the line moves back. What remains open is one level further out
+    than round 29's net: an enumeration of WORDS, derived, not of sentences.
+    The outer declaration in `gate_sentences` is what bounds it -- prose is
+    written by a person, and nothing here derives the set of sentences a person
+    may add.
+    """
+    low = re.sub(r"\s+", " ", text.lower())
+    if HAYSTACK_SENTENCE.lower() in low:
+        return False
+    hits = sum(1 for st in _criterion_stems()
+               if re.search(r"\b%ss?\b" % re.escape(st), low))
+    return hits >= SENTENCE_STEM_THRESHOLD
+
+
+def _sentence_shape(text):
+    """One SHAPE of a printed paragraph: its words, with what MOVES masked.
+
+    `C32-S3`. A census counts shapes, so anything that differs between two runs
+    of the same sentence has to be masked or the census is a census of one run:
+    quoted tokens, absolute paths (the seat worlds live in temporary
+    directories) and digits. The masking is shared by the finding census and
+    the seat census, because two shape functions for one census is the kind of
+    split doctrine this pack has a lesson about.
+    """
+    out = re.sub(r"`[^`]*`", "`X`", text)
+    out = re.sub(r"/[A-Za-z0-9_.+-]+(?:/[A-Za-z0-9_.+-]+)*", "<PATH>", out)
+    return re.sub(r"[0-9]+", "N", out)
 
 
 def printed_finding_sentences():
@@ -7654,7 +7724,7 @@ def printed_finding_sentences():
             text = line.strip()
             if not text:
                 continue
-            key = re.sub(r"`[^`]*`", "`X`", re.sub(r"[0-9]+", "N", text))
+            key = _sentence_shape(text)
             if key in seen:
                 continue
             seen.add(key)
@@ -7662,11 +7732,155 @@ def printed_finding_sentences():
     return out
 
 
+def _printed_by(arms):
+    """Every distinct paragraph a family of arms SAYS, by running them loud.
+
+    `C33-F1`. One runner for every family, because the hole the coordinator
+    walked through was a family nobody could run loud: a paragraph a law never
+    reads is bounded by nothing, whichever branch prints it. A refusal message
+    counts as a paragraph -- in several of these worlds the refusal IS the
+    output a reader meets.
+    """
+    out, seen = [], set()
+    for label, runner in arms:
+        buf = io.StringIO()
+        said = []
+        try:
+            with contextlib.redirect_stdout(buf):
+                runner()
+        except Refusal as why:
+            said.append("REFUSED: " + str(why).split("\n")[0])
+        except Exception as why:                               # pragma: no cover
+            said.append("RAISED: %r" % (why,))
+        for line in buf.getvalue().split("\n"):
+            if line.strip():
+                said.append(line.strip())
+        for text in said:
+            key = _sentence_shape(text)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((label, text))
+    return out
+
+
+def _printed_to_stdout(paragraphs):
+    """The paragraphs a run PRINTED, as opposed to the refusals it RAISED.
+
+    `C33-F1`. A finding is printed; a refusal is raised and carries its own
+    law (`gate_sentences` over the provoked refusals). The two are judged
+    apart, because requiring the figure-legitimacy sentence of a `GIT-*`
+    refusal about which repository holds the haystack would be a false red --
+    which is the measurement that forced this split rather than a preference.
+    """
+    return [(w, t) for w, t in paragraphs if not t.startswith("REFUSED: ")]
+
+
+def printed_world_sentences():
+    """Every distinct paragraph the gate says in each DECLARED WORLD.
+
+    The coordinator's `C33-F1`, and it is the arrival half of that closure. The
+    census of round 31 read the paragraphs the `CATCH` arms provoke, and the
+    `extra` branch -- `NOT IN THE HAYSTACK`, the one that names a file the
+    commit does not carry -- is provoked by no `CATCH` arm. So a finding
+    printed there, by a helper rather than by `_finding`, was read by nothing:
+    it passed the selftest and reached a reader. The set of worlds is `WORLDS`
+    itself, derived and not listed here, so a world added later is censused
+    without anyone remembering to add it.
+    """
+    return _printed_by([
+        ("the gate in the world %r" % kind,
+         (lambda k=kind: _arm(PROBE, kind=k, quiet=False)))
+        for kind in sorted(WORLDS)
+    ])
+
+
+def printed_block_sentences():
+    """Every distinct paragraph the ENROLMENT check says, run loud.
+
+    `C32-S3`'s third site. `check_blocks` keeps a findings list of its own and
+    prints it directly, which is the declared limit of the `ast` law; it is
+    bounded here by ARRIVAL instead, which is the closure that does not depend
+    on a syntax.
+    """
+    # A world's own capture is installed for the length of these two arms, the
+    # way `_arm` does it, and for a reason this round measured: with no capture
+    # installed the enrolment check stops earlier and says LESS, so the census
+    # counted 34 shapes when run by hand and 36 under the driver, where a real
+    # capture is on the command line. A census whose number depends on the
+    # environment measures the environment; this one is pinned to a world.
+    harness = _world_harness("plain")
+    held = list(_RUN_CAPTURE)
+    _RUN_CAPTURE[:] = [_world_capture("plain", harness)]
+    try:
+        return _printed_by([
+            ("the enrolment check on an edited block",
+             (lambda: _blocks_arm("", edit=True, quiet=False))),
+            ("the enrolment check on a correct block",
+             (lambda: _blocks_arm("", quiet=False))),
+        ])
+    finally:
+        _RUN_CAPTURE[:] = held
+
+
+def printed_paragraphs():
+    """EVERY paragraph this gate can print, as far as its arms can provoke it.
+
+    The union of the four families: the `CATCH` arms, every declared world, the
+    two seat arms and the enrolment check. This is the set the pin arm binds
+    and the set the criterion selector is measured against, so that adding a
+    finding branch cannot add a sentence no law reads -- the defect `C33-F1`
+    named, where a closure by SYNTAX was credited with a reach only arrival can
+    give it.
+    """
+    out, seen = [], set()
+    for label, text in (printed_finding_sentences()
+                        + printed_world_sentences()
+                        + printed_seat_sentences()
+                        + printed_block_sentences()):
+        key = _sentence_shape(text)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((label, text))
+    return out
+
+
+def printed_seat_sentences():
+    """Every distinct paragraph the SEAT arms say, by running them loud.
+
+    The coordinator's `C32-S3`. `_arm` gained a `quiet` parameter in round 32
+    and these two did not, so the harness-inside-a-repository worlds -- the
+    git-file seat, the five anchor positions from three working directories --
+    printed and refused in sentences no law read, which is exactly the state
+    the findings were in for four rounds.
+
+    A refusal is included deliberately. In these worlds the refusal IS the
+    output a reader meets, and `GIT-*` refusals talk about which repository
+    holds the haystack -- where the word names a DIRECTORY and not the rule --
+    so they are the paragraphs most likely to drift into stating a criterion
+    they do not hold.
+    """
+    arms = [("the git-file seat", lambda: _gitfile_arm(quiet=False))]
+    for where in ANCHOR_POSITIONS:
+        for seat in ANCHOR_CWDS:
+            arms.append((
+                "the anchor seat %s, run from %s" % (where, seat),
+                (lambda w=where, c=seat: _anchor_arm(w, c, quiet=False)),
+            ))
+    return _printed_by(arms)
+
+
 def finding_labels(printed):
-    """The distinct NAMES a finding prints, derived from the paragraphs."""
+    """The distinct NAMES a finding prints, derived from the paragraphs.
+
+    `C32-S3`: a seat world's paragraph arrives as `REFUSED: GIT-...`, so the
+    `REFUSED` prefix is stepped over rather than counted as a name of its own.
+    A count that names the prefix sees one label where there are four.
+    """
     names = set()
     for _, text in printed:
-        hit = re.match(r"^([A-Z][A-Z -]{6,}):", text)
+        hit = re.match(r"^(?:REFUSED: )?([A-Z][A-Z -]{6,}):", text)
         if hit:
             names.add(hit.group(1))
     return sorted(names)
@@ -7711,19 +7925,76 @@ def gate_sentences(printed, rule_statements_only=False):
     return out
 
 
-def direct_prints_in_the_finding_loops(text):
-    """The `print` calls inside the loops that emit FINDINGS, from source.
+def _can_reach_a_print(tree):
+    """Module-level functions that can reach an emission, by a fixed point.
 
-    `R32-S1` closed by CONSTRUCTION. A finding must reach a reader through
-    `_finding`, which appends the pin; a branch that calls `print` itself emits
-    a sentence no law has read, which is how the round-31 selector could be
-    evaded. This reads the committed bytes and names every such call, so the
-    closure is a property of the code and not of the words the code happens to
-    use.
+    `C33-F1`: the law below read the Name `print` and nothing else, so a
+    helper that prints, called from the loop, walked through it. A helper is
+    now resolved transitively -- `_coord_emit` calling `print` is an emitter,
+    and so is anything calling `_coord_emit`.
+    """
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    emits = {name for name, node in funcs.items()
+             if any(_is_an_emission(x) for x in ast.walk(node))}
+    moved = True
+    while moved:
+        moved = False
+        for name, node in funcs.items():
+            if name in emits:
+                continue
+            for x in ast.walk(node):
+                if (isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                        and x.func.id in emits):
+                    emits.add(name)
+                    moved = True
+                    break
+    return emits
+
+
+def _is_an_emission(node):
+    """Is this call a way of putting a line in front of a reader?
+
+    `print`, `builtins.print`, and `write` on anything -- `sys.stdout.write`,
+    `os.write`, a file handle. Named by the CALL and not by a list of modules,
+    because the list is what `C33-F1` walked around.
+    """
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    if isinstance(f, ast.Name) and f.id == "print":
+        return True
+    return isinstance(f, ast.Attribute) and f.attr in ("print", "write")
+
+
+def emitters_in_the_finding_loops(text):
+    """Calls inside `scan`'s FINDING loops that can emit, other than `_finding`.
+
+    `R32-S1`, as `C33-F1` corrected it. WHAT THIS LAW READS, exactly: inside
+    the `for`, `while` and comprehension loops of `scan` whose iterable
+    mentions `findings` or `extra`, every call that is an emission
+    (`_is_an_emission`) or that reaches one through a module-level helper
+    (`_can_reach_a_print`), except `_finding` itself. It names them by line.
+
+    WHAT IT DOES NOT READ, and this is the correction the coordinator's measure
+    forced -- the round-32 commit said this law refused "any other door" in
+    three places, and it read one syntactic form in two loops, one door of
+    eight:
+
+      * an emission in `scan` OUTSIDE every finding loop. That is outside this
+        law BY CONSTRUCTION, and it is bounded instead by ARRIVAL, in
+        `union_sentence_arms`: a labelled paragraph the gate PRINTS without the
+        pin is named there however it was printed.
+      * `check_blocks`, which keeps a findings list of its own and prints it
+        directly. One doctrine for two functions is this pack's own named
+        defect; `printed_block_sentences` brings that function under the
+        arrival law instead, and the coordinator has ruled the shared door a
+        later round.
+
+    So this is a LINT with a stated reach, and the closure of the class is the
+    arrival census. A lint credited with a census's reach is exactly the defect
+    `C33-F1` named.
     """
     tree = ast.parse(text)
-    # `scan` only: `check_blocks` keeps a findings list of its own, and holding
-    # two functions to one doctrine is the defect this pack has a lesson about.
     body = next((n for n in tree.body
                  if isinstance(n, ast.FunctionDef) and n.name == "scan"), None)
     if body is None:                                           # pragma: no cover
@@ -7731,19 +8002,30 @@ def direct_prints_in_the_finding_loops(text):
             "FRAME-FUNCTION-ABSENT: `scan` is not in the committed bytes, so the "
             "loops this law reads are not the loops that print a finding."
         )
+    helpers = _can_reach_a_print(tree)
     bad = []
     for node in ast.walk(body):
-        if not isinstance(node, ast.For):
+        over = None
+        if isinstance(node, (ast.For, ast.While)):
+            over = node.iter if isinstance(node, ast.For) else node.test
+        elif isinstance(node, (ast.ListComp, ast.SetComp, ast.GeneratorExp,
+                               ast.DictComp)):
+            over = node
+        if over is None:
             continue
-        names = {n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name)}
+        names = {n.id for n in ast.walk(over) if isinstance(n, ast.Name)}
         if not ({"findings", "extra"} & names):
             continue
         for inner in ast.walk(node):
-            if (isinstance(inner, ast.Call)
-                    and isinstance(inner.func, ast.Name)
-                    and inner.func.id == "print"):
+            if not isinstance(inner, ast.Call):
+                continue
+            f = inner.func
+            if isinstance(f, ast.Name) and f.id == "_finding":
+                continue
+            if _is_an_emission(inner) or (
+                    isinstance(f, ast.Name) and f.id in helpers):
                 bad.append(inner.lineno)
-    return sorted(bad)
+    return sorted(set(bad))
 
 
 def finding_construction_test():
@@ -7756,7 +8038,7 @@ def finding_construction_test():
             "read, so the construction this law binds is not the one the commit "
             "carries."
         )
-    live = direct_prints_in_the_finding_loops(text)
+    live = emitters_in_the_finding_loops(text)
     good = not live
     ok = ok and good
     print(
@@ -7779,7 +8061,7 @@ def finding_construction_test():
               "**SELFTEST FAILED**")
         return False
     planted = text.replace(hit, hit + '        print("a finding of its own")\n', 1)
-    found = direct_prints_in_the_finding_loops(planted)
+    found = emitters_in_the_finding_loops(planted)
     good = len(found) == 1
     ok = ok and good
     print(
@@ -7812,10 +8094,11 @@ def finding_sentence_arms():
         ("the census of finding names", labels == [
             "BIDI-CONTROL-IN-A-CANDIDATE", "NOT REQUIRED BY ANY CASE"],
          ", ".join(labels) or "none"),
-        # `R32-S1`: the pin is required of every LABELLED paragraph with no
-        # selector in the way, which is what `_finding` makes true by
-        # construction. The vocabulary selector of round 31 is a belt over the
-        # paragraphs that are not findings, and is no longer what binds these.
+        # `R32-S1`, and `C33-F1` after it: the pin is required of every
+        # LABELLED paragraph, with no selector in the way. This line is the
+        # CATCH set only; `union_sentence_arms` applies the same requirement to
+        # every paragraph the gate can print, which is where the reach comes
+        # from -- a census of one family is a census of one family.
         ("the pin in every labelled finding, no selector",
          all(HAYSTACK_SENTENCE in t for _, t in printed
              if re.match(r"^[A-Z][A-Z -]{6,}:", t)),
@@ -7860,6 +8143,278 @@ def finding_sentence_arms():
     ok = ok and good
     print("  findings %-44s %-35s -> %s"
           % ("control: a printed line that states no rule", "0 finding(s)",
+             "as required" if good else "**SELFTEST FAILED**"))
+    return ok
+
+
+def _criterion_attacks(live):
+    """`C32-S1`'s four escapes and two more, built FROM the live sentence.
+
+    Each world is the live finding sentence with the pin cut out -- which is
+    the world the round-32 arm already reds -- and then one further change that
+    took it under round 31's line of three stems. They are built here rather
+    than written out so that a change to the live sentence changes the attacks
+    with it.
+    """
+    cut = live.replace(HAYSTACK_SENTENCE, "what this gate happens to hold")
+    return (
+        ("A: no `value`, no `expectation`",
+         cut.replace("value case", "case").replace("expectations", "things")),
+        ("B: `demanded` for `asserted`",
+         cut.replace("value case", "case").replace("asserted", "demanded")),
+        ("C: the label dropped too",
+         cut.replace("NOT REQUIRED BY ANY CASE", "NOT HELD HERE")
+            .replace("value case", "case")),
+        ("E: the live sentence minus the word `value`",
+         cut.replace("no value case", "no case")),
+        ("F: `the run` for `this run`", cut.replace("this run", "the run")),
+        ("G: `this  run`, two spaces", cut.replace("this run", "this  run")),
+    )
+
+
+def criterion_selector_arms(printed):
+    """`C32-S1`: the selector's line, armed on BOTH sides by measurement.
+
+    Round 32 left this selector loose in the one direction no arm read: the
+    coordinator built four paragraphs that state the criterion in detail,
+    quote nothing, and were not selected, and measured that only RAISING the
+    threshold redded anything. The line is now two derived stems with no
+    phrase beside them, and this arm requires three things of it at once --
+    every attack caught, nothing live redded, and a FAILURE at each
+    neighbouring threshold, which is what makes the number measured rather
+    than chosen.
+    """
+    global SENTENCE_STEM_THRESHOLD, HAYSTACK_SENTENCE
+    ok = True
+    live = next((t for w, t in printed
+                 if t.startswith("NOT REQUIRED BY ANY CASE")
+                 and "(written as" not in t), None)
+    if live is None:                                           # pragma: no cover
+        print("  criterion C32-S1 the subject sentence is not in the set -> "
+              "**SELFTEST FAILED**")
+        return False
+    attacks = _criterion_attacks(live)
+    for label, planted in attacks:
+        names = [f.split(":")[0]
+                 for f in gate_sentences([("the planted paragraph", planted)],
+                                         rule_statements_only=True)]
+        good = "GATE-SENTENCE-UNQUOTED" in names
+        ok = ok and good
+        print("  criterion C32-S1 %-40s refused as %-24s -> %s"
+              % (label, names[0] if names else "NO REFUSAL",
+                 "as required" if good else "**SELFTEST FAILED**"))
+    # Nothing live may be selected, or the line is a net that reds a table row.
+    held = gate_sentences(printed, rule_statements_only=True)
+    good = not held
+    ok = ok and good
+    print("  criterion C32-S1 %-40s %-35s -> %s"
+          % ("the live shapes report nothing",
+             "%d finding(s)" % len(held),
+             "as required" if good else "**SELFTEST FAILED**"))
+    for why in held:
+        print("    " + why)
+    # And the two neighbours. Each MUST break something, or the number is not
+    # measured: at one, live shapes red; at three, an attack walks through.
+    was = SENTENCE_STEM_THRESHOLD
+    try:
+        SENTENCE_STEM_THRESHOLD = 1
+        loose = gate_sentences(printed, rule_statements_only=True)
+        good = bool(loose)
+        ok = ok and good
+        print("  criterion C32-S1 %-40s %-35s -> %s"
+              % ("at one stem the live shapes red",
+                 "%d finding(s), want more than 0" % len(loose),
+                 "as required" if good else "**SELFTEST FAILED**"))
+        SENTENCE_STEM_THRESHOLD = 3
+        escaped = [label for label, planted in attacks
+                   if not gate_sentences([("x", planted)],
+                                         rule_statements_only=True)]
+        good = bool(escaped)
+        ok = ok and good
+        print("  criterion C32-S1 %-40s %-35s -> %s"
+              % ("at three stems an attack escapes",
+                 "%d escape(s), want more than 0" % len(escaped),
+                 "as required" if good else "**SELFTEST FAILED**"))
+    finally:
+        SENTENCE_STEM_THRESHOLD = was
+    # The coupling the round-31 docstring CLAIMED and held by accident: with
+    # the phrase gone, every word this selector reads comes from the pin, so
+    # replacing the pin replaces the selector. Measured, not asserted.
+    other = "whatever the signed baseline FROZE for this document"
+    kept = HAYSTACK_SENTENCE
+    try:
+        HAYSTACK_SENTENCE = other
+        stems = _criterion_stems()
+        moved = ("baseline" in stems and "case" not in stems)
+        follows = (_states_the_criterion(
+            "the signed baselines froze this document") is True)
+        stale = (_states_the_criterion(
+            "no value case of this run required it") is False)
+    finally:
+        HAYSTACK_SENTENCE = kept
+    for label, good in (
+        ("a replaced pin replaces the stems", moved),
+        ("a paragraph in the NEW pin's words is selected", follows),
+        ("a paragraph in the OLD pin's words is not", stale),
+    ):
+        ok = ok and good
+        print("  criterion C32-S1 %-40s %-35s -> %s"
+              % (label, "yes" if good else "NO",
+                 "as required" if good else "**SELFTEST FAILED**"))
+    return ok
+
+
+def _labelled_printed_without_the_pin(paragraphs):
+    """Labelled paragraphs a run PRINTED that do not carry the pin.
+
+    `C33-F1`, and this predicate is the closure the round-32 commit claimed for
+    its `ast` law. It decides nothing from the SHAPE of the code: a finding
+    printed by a helper, by `sys.stdout.write`, from a `while` loop, from a
+    comprehension or from outside every loop arrives here all the same, as long
+    as an arm provokes the branch -- which `printed_paragraphs` now makes true
+    of every declared world, both seats and the enrolment check.
+    """
+    out = []
+    for where, text in _printed_to_stdout(paragraphs):
+        if not re.match(r"^[A-Z][A-Z -]{6,}:", text):
+            continue
+        if HAYSTACK_SENTENCE not in text:
+            out.append((where, text))
+    return out
+
+
+def union_sentence_arms():
+    """`C33-F1`: every paragraph this gate can print, bound by ARRIVAL.
+
+    The coordinator passed the round-32 closure by printing a labelled finding
+    through a helper in the `extra` branch -- `NOT IN THE HAYSTACK` -- which no
+    `CATCH` arm provokes, so no census counted it, and which contains no
+    `print` inside a findings loop, so the `ast` law saw nothing. The selftest
+    returned 0 and the sentence reached a reader. Measured, it was one of eight
+    doors the law does not read; seven of the other eight were caught by the
+    census, by arrival, and not by the construction.
+
+    So the set is widened to every family of arms this file has, and the
+    binding arm is the pin in every labelled paragraph PRINTED, which is a
+    property of what a reader is told rather than of how the code says it. The
+    counts are a census, pinned by LITERALS, so a world or a branch arriving
+    later reds here instead of passing unread.
+    """
+    ok = True
+    printed = printed_paragraphs()
+    said = _printed_to_stdout(printed)
+    labels = finding_labels(printed)
+    found = gate_sentences(printed, rule_statements_only=True)
+    unpinned = _labelled_printed_without_the_pin(printed)
+    for label, good, shown in (
+        ("the live union reports nothing", not found, "%d finding(s)" % len(found)),
+        ("the census of paragraph shapes", len(printed) == 35,
+         "%d shape(s), want 35" % len(printed)),
+        ("of them PRINTED, not raised", len(said) == 25,
+         "%d printed, want 25" % len(said)),
+        ("the census of names", len(labels) == 13,
+         "%d name(s), want 13" % len(labels)),
+        ("C33-F1 the pin in every labelled paragraph PRINTED", not unpinned,
+         "%d labelled printed, %d without the pin"
+         % (sum(1 for _w, t in said if re.match(r"^[A-Z][A-Z -]{6,}:", t)),
+            len(unpinned))),
+    ):
+        ok = ok and good
+        print("  union C33-F1 %-50s %-40s -> %s"
+              % (label, shown, "as required" if good else "**SELFTEST FAILED**"))
+    for why in found:
+        print("    " + why)
+    for where, text in unpinned:
+        print("    " + where + ": " + text[:110])
+    # The census must be a property of the COMMIT, not of the command line
+    # that ran it. Measured, because it was not: with no capture installed the
+    # enrolment check says less, so this set counted 34 by hand and 36 under
+    # the driver until `printed_block_sentences` pinned its own world's
+    # capture. The arm runs the union twice, once each way.
+    held = list(_RUN_CAPTURE)
+    try:
+        _RUN_CAPTURE[:] = [_world_capture("plain", _world_harness("plain"))]
+        with_one = len(printed_paragraphs())
+        _RUN_CAPTURE[:] = []
+        with_none = len(printed_paragraphs())
+    finally:
+        _RUN_CAPTURE[:] = held
+    good = with_one == with_none == len(printed)
+    ok = ok and good
+    print("  union C33-F1 %-50s %-40s -> %s"
+          % ("the census does not depend on the command line",
+             "%d with a capture, %d with none" % (with_one, with_none),
+             "as required" if good else "**SELFTEST FAILED**"))
+    # And the arm under the predicate, which is the coordinator's own attack
+    # rebuilt: the `extra` branch's live paragraph with the appended pin taken
+    # off, exactly as a helper that prints it would produce. If this does not
+    # red, the predicate is decorative.
+    # The live paragraph for the two arms below is the one `_finding` emitted,
+    # which is the one carrying the appended tail. Taking "the first `extra`
+    # paragraph" would, in a world where the attack is PRESENT, hand the
+    # control the attack's own sentence and report a cascade as a second
+    # failure.
+    live = next((t for _w, t in said
+                 if t.startswith("NOT IN THE HAYSTACK")
+                 and FINDING_TAIL in t), None)
+    if live is None:                                           # pragma: no cover
+        print("  union C33-F1 the `extra` branch printed nothing -> "
+              "**SELFTEST FAILED**")
+        return False
+    for label, planted, want in (
+        ("the attack: the `extra` finding with no appended pin",
+         live.replace(FINDING_TAIL, ""), True),
+        ("the control: the same paragraph as `_finding` emits it",
+         live, False),
+    ):
+        hit = bool(_labelled_printed_without_the_pin(
+            [("the planted paragraph", planted)]))
+        good = hit is want
+        ok = ok and good
+        print("  union C33-F1 %-50s %-40s -> %s"
+              % (label, "named" if hit else "not named",
+                 "as required" if good else "**SELFTEST FAILED**"))
+    return ok
+
+
+def seat_sentence_arms():
+    """`C32-S3`: the paragraphs the SEAT arms say, read by a law at last.
+
+    A census, so it is pinned by LITERALS on both counts and an arrival reds
+    as loudly as a departure. The bodies are NOT pinned, because two of these
+    shapes carry a temporary directory's name; what is pinned is how many
+    distinct shapes there are and which refusals they name.
+    """
+    ok = True
+    printed = printed_seat_sentences()
+    labels = finding_labels(printed)
+    found = gate_sentences(printed, rule_statements_only=True)
+    for label, good, said in (
+        ("the live set reports nothing", not found, "%d finding(s)" % len(found)),
+        ("the census of printed shapes", len(printed) == 6,
+         "%d paragraph shape(s), want 6" % len(printed)),
+        ("the census of names", labels == [
+            "GIT-BARE-REPOSITORY", "GIT-NESTED-REPO", "GIT-TOPLEVEL-DISAGREES",
+            "NOT REQUIRED BY ANY CASE"], ", ".join(labels) or "none"),
+    ):
+        ok = ok and good
+        print("  seats C32-S3 %-35s %-44s -> %s"
+              % (label, said, "as required" if good else "**SELFTEST FAILED**"))
+    for why in found:
+        print("    " + why)
+    # The arm under the census: a seat refusal REWORDED to state the criterion
+    # without the pin is refused now, where before round 33 nothing read it.
+    planted = ("REFUSED: GIT-NESTED-REPO: two repositories contain the haystack, "
+               "and the haystack here is whatever this gate happens to hold: no "
+               "value case of this run asserted the figure.")
+    names = [f.split(":")[0]
+             for f in gate_sentences([("a planted seat refusal", planted)],
+                                     rule_statements_only=True)]
+    good = "GATE-SENTENCE-UNQUOTED" in names
+    ok = ok and good
+    print("  seats C32-S3 %-35s refused as %-26s -> %s"
+          % ("a seat refusal that states the rule",
+             names[0] if names else "NO REFUSAL",
              "as required" if good else "**SELFTEST FAILED**"))
     return ok
 
@@ -8938,6 +9493,9 @@ def selftest():
     ok = sentence_reading_arms() and ok
     ok = gate_sentence_arms() and ok
     ok = finding_sentence_arms() and ok
+    ok = seat_sentence_arms() and ok
+    ok = union_sentence_arms() and ok
+    ok = criterion_selector_arms(printed_paragraphs()) and ok
     ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok

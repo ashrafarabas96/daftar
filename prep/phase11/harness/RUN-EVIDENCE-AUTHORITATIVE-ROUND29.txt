@@ -1,12 +1,30 @@
 Phase 11 -- the authoritative run of round 29, from zero on a fresh clone.
 
-SUBJECT: dae75d780bf89c5e7156c45d6f5abdb3761e51d7
+SUBJECT: dae75d780bf89c5e7156c45d6f5abdb3761e51d7  (a COMMIT, and one no reader can resolve)
 
-That is this commit's tree MINUS the two round-29 transcripts beside this file
-and minus the generated block figures that counting them moves. A transcript
-cannot carry the digest of the commit that creates it, so it names the tree it
-measured and states the delta. The confirming run of the FINAL tree is recorded
-at the end of this file.
+That forty-character number is a COMMIT digest and not a tree digest. It is
+what `git rev-parse HEAD` printed in the throwaway clone this run was made in,
+which `rebuild_and_prove.sh` writes into the run capture as `RUN_HEAD`; a tree
+would have been `HEAD^{tree}`. This header called it a tree for four rounds --
+`C32-S2`, the coordinator's, raised against the one round whose own subject
+was that confusion.
+
+The commit lives only in that clone. It is on no branch and no remote, and
+`git cat-file -t` on it fails in a fresh clone of this repository, which is
+measured and not supposed: a reader cannot check it out, and nothing here asks
+them to. What it HOLDS is the tree of the PUSHED commit
+`3f4b63022713c55a222fd60232c7b78bd8ffac10`, which is the commit that added
+this file, minus the two round-29 transcripts beside it and minus the
+generated block figures that counting them moves. Its parent in that clone was
+`acfe049e5f5c127b39fdc2b194b7b6c575b7b176`. A transcript cannot carry the
+digest of the commit that creates it, which is why the run measures a commit
+of its own and states the delta against one a reader has.
+
+THERE IS NO APPENDED BLOCK AT THE END OF THIS FILE. The sentence that used to
+stand here said the confirming run was recorded there, and it was not: that is
+`A-30-F1`, self-reported, and it is recorded in round 30's appended block. The
+run was made and its verdict is in the round's section and its published index;
+the pointer was false, and it is removed rather than reworded.
 
 PostgreSQL 16, en_US.utf8, migrations applied as daftar_migrator (NOT
 superuser), a scratch cluster of its own, /usr/bin/python3 -I throughout.
