@@ -52,6 +52,25 @@ if not sys.flags.isolated:
     )
     raise SystemExit(2)
 
+import os
+
+# F-H, the coordinator's review of `85bfbf5`. It sits ABOVE every mode — the
+# isolation probe included — because the refusal has to precede the first
+# opportunity to fork, and because a mode that exits above it is a mode the
+# bound does not cover: placed below the probe, the arm that set a depth of
+# three watched the probe answer normally and measured nothing. The isolation
+# refusal above still runs first, so `-I` is guaranteed here and `os` cannot be
+# a file dropped beside this one. Nothing between them spawns anything.
+if int(os.environ.get("P7_HARNESS_SPAWN_DEPTH", "0") or 0) > 2:
+    print(
+        f"REFUSED-P7-HARNESS-SPAWNED-ITSELF: this process is "
+        f"{os.environ.get('P7_HARNESS_SPAWN_DEPTH')} spawns deep and the deepest legitimate "
+        f"chain is 2 (harness, self-test child, isolation probe). A deeper one is this file "
+        f"spawning itself, which has twice exhausted this container's memory, so it refuses "
+        f"rather than forking again."
+    )
+    raise SystemExit(2)
+
 if "--isolation-probe" in sys.argv:
     # Reached only WITH -I, because the refusal above exits first without it.
     # The isolation arms below spawn THIS rather than `--self-test`: the first
@@ -63,9 +82,9 @@ if "--isolation-probe" in sys.argv:
     print("P7-ISOLATION-PROBE: isolated, so no file beside this one is importable")
     raise SystemExit(0)
 
-import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1221,7 +1240,7 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-DELETING-THE-WAIT-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find='                                judged("waits", op.state, aWaitIsHonest(op.state)) {\n                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +\n                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +\n                                        "$op on $event"\n                                }\n',
+        find='                                judged(JudgmentKind.WAIT, op) {\n                                    "a ${op.state} row refused ${step.code}, which tells the merchant to " +\n                                        "wait (${view.message} / ${view.action}) while nothing is pending: " +\n                                        "$op on $event"\n                                }\n',
         replace="",
         expect_red="every reachable configuration honours every invariant",
         why=(
@@ -1236,7 +1255,7 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-DELETING-THE-TRANSMISSION-JUDGMENT-TAKES-ITS-COUNT-WITH-IT",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find='                                judged("transmissions", op.state, aTransmissionIsHonest(op.attempts)) {\n                                    "a refusal with nothing sent (${step.code}) is shown as " +\n                                        "${view.message}, which asserts a transmission: $op on $event"\n                                }\n',
+        find='                                judged(JudgmentKind.TRANSMISSION, op) {\n                                    "a refusal with nothing sent (${step.code}) is shown as " +\n                                        "${view.message}, which asserts a transmission: $op on $event"\n                                }\n',
         replace="",
         expect_red="every reachable configuration honours every invariant",
         why=(
@@ -1263,8 +1282,8 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-THE-TRANSMISSION-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find="        fun aTransmissionIsHonest(attempts: Int) = attempts > 0\n",
-        replace="        fun aTransmissionIsHonest(attempts: Int) = true\n",
+        find="    private fun aTransmissionIsHonest(attempts: Int) = attempts > 0\n",
+        replace="    private fun aTransmissionIsHonest(attempts: Int) = true\n",
         expect_red="every reachable configuration honours every invariant",
         why=(
             "the coordinator's F-E one layer in, after the measurement it asked for came back "
@@ -1283,14 +1302,90 @@ PROOFS: list[Proof] = [
     Proof(
         law="U-01-THE-WAIT-JUDGMENTS-PREDICATE-CANNOT-BE-REPLACED-BY-TRUE",
         path="test/app/daftar/offline/QueueModelCheckTest.kt",
-        find="        fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending\n",
-        replace="        fun aWaitIsHonest(state: OperationState) = true\n",
+        find="    private fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending\n",
+        replace="    private fun aWaitIsHonest(state: OperationState) = true\n",
         expect_red="every reachable configuration honours every invariant",
         why=(
             "the same, on the judgment that keeps a till from telling a cashier to wait while "
             "nothing is pending. Two cases per predicate rather than one, because a predicate "
             "stuck at FALSE is as wrong as one stuck at `true` and would pass a refusal case "
             "offered alone"
+        ),
+    ),
+    Proof(
+        law="R18-01-THE-WAIT-DISPATCH-CANNOT-BE-REPLACED-BY-TRUE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="                JudgmentKind.WAIT -> aWaitIsHonest(op.state)\n",
+        replace="                JudgmentKind.WAIT -> true\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the eighteenth review's R18-01, answered one layer further in than it asked. Naming "
+            "each predicate closed hollowing of the function's BODY and OPENED hollowing of the "
+            "call's argument: the call site passed the predicate's RESULT, an expression no arm "
+            "saw, and one line changed left the whole suite at 99 of 99 rc 0 with both predicate "
+            "arms passing and every per-state count identical. The call site now passes the KIND "
+            "and the ROW, so choosing the predicate and reading its field both happen inside the "
+            "helper, on the one path the arms travel. This plant hollows that choice where it now "
+            "lives, and the wait arm below the walk reds by name at 98 of 99"
+        ),
+    ),
+    Proof(
+        law="R18-01-THE-TRANSMISSION-DISPATCH-CANNOT-BE-REPLACED-BY-TRUE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="                JudgmentKind.TRANSMISSION -> aTransmissionIsHonest(op.attempts)\n",
+        replace="                JudgmentKind.TRANSMISSION -> true\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the same on the other branch, and on the judgment this lane exists to keep: that a "
+            "refusal with nothing sent is never shown to a merchant as something that left the "
+            "device. This is the exact plant the eighteenth review measured as green against the "
+            "previous head"
+        ),
+    ),
+    Proof(
+        law="R18-01-A-DISPATCH-BRANCH-CANNOT-BE-STUCK-AT-FALSE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="                JudgmentKind.WAIT -> aWaitIsHonest(op.state)\n",
+        replace="                JudgmentKind.WAIT -> false\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "two cases per branch rather than one, for the same reason there are two per "
+            "predicate: a dispatch stuck at FALSE judges nothing it exists to judge and would "
+            "pass a refusal arm offered alone. It reds inside the walk itself, on the first "
+            "honest wait it meets, before the accept arm below is reached \u2014 which is the "
+            "right order and is why both arms exist"
+        ),
+    ),
+    Proof(
+        law="R18-01-A-CALL-SITE-CANNOT-SWAP-WHICH-JUDGMENT-A-ROW-IS-PUT-TO",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find="                                judged(JudgmentKind.TRANSMISSION, op) {\n",
+        replace="                                judged(JudgmentKind.WAIT, op) {\n",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "what a one-line edit at a call site CAN still change, now that it passes no "
+            "predicate: which judgment the row is put to. It is not silent, because the kind is "
+            "also the counter's key \u2014 the swap moves 312 rows onto the wait total and the "
+            "per-state anchors red. Measured: 98 of 99. This is the pair to the two above: the "
+            "dispatch is armed from inside, the kind from the counts"
+        ),
+    ),
+    Proof(
+        law="R18-01-AN-ARMS-WITNESS-CANNOT-GO-MISSING-IN-SILENCE",
+        path="test/app/daftar/offline/QueueModelCheckTest.kt",
+        find=(
+            "                if (aRowWithNothingPending == null && !aWaitIsHonest(op.state)) {\n"
+            "                    aRowWithNothingPending = op\n"
+            "                }\n"
+        ),
+        replace="",
+        expect_red="every reachable configuration honours every invariant",
+        why=(
+            "the arms are put rows the WALK produced, not rows written beside them, because a row "
+            "built next to its own arm is a row chosen to pass it. The cost is that a witness can "
+            "be absent, and an arm that skips because its witness is null measures nothing. So "
+            "each witness is REQUIRED to exist, by name, before its arm runs \u2014 fail on "
+            "absence, never skip \u2014 and this plant removes one and reds on that refusal"
         ),
     ),
     Proof(
@@ -1701,13 +1796,13 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
         'org.opentest4j.AssertionFailedError: a refusal with nothing sent (offline.payload_changed_after_capture) is shown as ALREADY_SENDING, which asserts a transmission: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Send(digestNow=sha256:deadbeef, actingScope=tenant-1/business-1/member-1)'
     ),
     'U-01-DELETING-THE-WAIT-JUDGMENT-TAKES-ITS-COUNT-WITH-IT': (
-        'org.opentest4j.AssertionFailedError: no refusal anywhere told the merchant to wait, so INV-9b judged nothing'
+        "org.opentest4j.AssertionFailedError: a different number of refusals was judged for telling the merchant to wait while nothing is pending, which is the judgment a narrowing of that condition removes in silence. 939 of these are the walk's own and 2 are the arms above, which go through the same helper and are counted by it like any other row ==> expected: <941> but was: <2>"
     ),
     'U-01-DELETING-THE-TRANSMISSION-JUDGMENT-TAKES-ITS-COUNT-WITH-IT': (
-        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02 ==> expected: <312> but was: <0>'
+        "org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02. 312 of these are the walk's own and 2 are the arms above ==> expected: <314> but was: <2>"
     ),
     'U-01-THE-HELPER-THAT-COUNTS-AND-JUDGES-CANNOT-STOP-JUDGING': (
-        'org.opentest4j.AssertionFailedError: the helper that counts and judges in one statement did not refuse a judgment known to be false, so it has stopped judging and every count below counts nothing'
+        'org.opentest4j.AssertionFailedError: put a CAPTURED row with nothing pending, the helper did not refuse the WAIT judgment, so either its dispatch no longer reads that predicate or it no longer fails on a false judgment, and every wait judged in the walk above judged nothing'
     ),
     'R-03-A-SWEEPS-TOTAL-READ-FROM-ITS-OWN-LIST-MOVES-WITH-A-NARROWING': (
         'org.opentest4j.AssertionFailedError: THE-SWEEPS-DOMAIN-CHANGED: the server codes this exhaustive sweep walks are not the ones it claims to walk, so every claim made over it is made over a narrower space than it names. codes = [null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed] ==> expected: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, customer.credit_limit_exceeded, VALIDATION_FAILED, accounting.period_closed]> but was: <[null, ,    , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.idempotency_conflict, sales.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed]>'
@@ -1716,10 +1811,10 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
         'org.opentest4j.AssertionFailedError: THE-SWEEPS-DOMAIN-CHANGED: the server codes this sweep covers are not the ones it claims to cover, so the lemma that reads its result is reading a narrower search than it says. codes = [null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED] ==> expected: <[null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED, accounting.period_closed]> but was: <[null, , IDEMPOTENCY_KEY_REUSED, accounting.idempotency_conflict, inventory.insufficient_stock, VALIDATION_FAILED]>'
     ),
     'T-02-A-GATED-JUDGMENT-WITH-NO-TOTAL-IS-REMOVED-IN-SILENCE': (
-        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02 ==> expected: <312> but was: <240>'
+        "org.opentest4j.AssertionFailedError: a different number of refusals was judged for being shown as something that left the device, which is the judgment that had no counter at all until T-02. 312 of these are the walk's own and 2 are the arms above ==> expected: <314> but was: <242>"
     ),
     'T-02-NARROWING-THE-WAIT-JUDGMENT-DROPS-A-CLASS-TOTAL': (
-        'org.opentest4j.AssertionFailedError: a different number of refusals was judged for telling the merchant to wait while nothing is pending, which is the judgment a narrowing of that condition removes in silence ==> expected: <939> but was: <609>'
+        "org.opentest4j.AssertionFailedError: a different number of refusals was judged for telling the merchant to wait while nothing is pending, which is the judgment a narrowing of that condition removes in silence. 939 of these are the walk's own and 2 are the arms above, which go through the same helper and are counted by it like any other row ==> expected: <941> but was: <611>"
     ),
     'E-03-A-CODE-NO-QUEUE-STATE-EVER-PRODUCES': (
         'org.opentest4j.AssertionFailedError: the set of refusals that tell a merchant something is in progress is not the set of refusals the model check has proven can only be produced while something is pending on the device (P7-L20-A-DESTRUCTION-IS-RECORDED-BEFORE-IT-HAPPENS). A code that belongs here needs its state proven in QueueModelCheckTest first; a code that no longer belongs is a line to delete from waitIsHonest, with its reason ==> expected: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight]> but was: <[offline.already_released, offline.already_sending, offline.cancel_after_send, offline.no_attempt_in_flight, offline.session_expired]>'
@@ -2005,6 +2100,26 @@ EXPECTED_REFUSAL: dict[str, str | tuple[str, ...]] = {
     'S-02-NARROWING-THE-PREDICATE-THAT-DEFINES-A-DOMAIN-MOVES-BOTH-COUNTS-TOGETHER': (
         'org.opentest4j.AssertionFailedError: a different number of offline.another_members_capture refusals is now classed as a foreign-scope refusal, which is the class INV-9a judges ==> expected: <1125> but was: <1110>'
     ),
+    # R18-01, the eighteenth challenger's P1. Naming the predicate closed hollowing
+    # of its BODY and opened hollowing of the ARGUMENT, so these five proofs arm the
+    # call itself: the two dispatch branches, a branch stuck at false, a call site
+    # that names the other kind, and a witness that goes missing. Their expectations
+    # are the messages a harvest run printed, not sentences written here.
+    'R18-01-A-CALL-SITE-CANNOT-SWAP-WHICH-JUDGMENT-A-ROW-IS-PUT-TO': (
+        "org.opentest4j.AssertionFailedError: a different number of refusals was judged for telling the merchant to wait while nothing is pending, which is the judgment a narrowing of that condition removes in silence. 939 of these are the walk's own and 2 are the arms above, which go through the same helper and are counted by it like any other row ==> expected: <941> but was: <1253>"
+    ),
+    'R18-01-A-DISPATCH-BRANCH-CANNOT-BE-STUCK-AT-FALSE': (
+        'org.opentest4j.AssertionFailedError: a QUEUED row refused offline.already_released, which tells the merchant to wait (ALREADY_CONFIRMED / WAIT_IT_IS_IN_PROGRESS) while nothing is pending: Operation(id=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee, scope=tenant-1/business-1/member-1, effect=FINANCIAL, amount=12500 SAR, state=QUEUED, attempts=0, lastCode=null, replayed=false, schema=1, minimized=false) on Release(actingScope=tenant-1/business-1/member-1)'
+    ),
+    'R18-01-AN-ARMS-WITNESS-CANNOT-GO-MISSING-IN-SILENCE': (
+        'org.opentest4j.AssertionFailedError: the walk never produced a row with nothing pending, so the arm that needs it would measure nothing'
+    ),
+    'R18-01-THE-TRANSMISSION-DISPATCH-CANNOT-BE-REPLACED-BY-TRUE': (
+        'org.opentest4j.AssertionFailedError: put a row with 0 attempts out, the helper did not refuse the TRANSMISSION judgment, so either its dispatch no longer reads that predicate or it no longer fails on a false judgment, and every transmission judged in the walk above judged nothing'
+    ),
+    'R18-01-THE-WAIT-DISPATCH-CANNOT-BE-REPLACED-BY-TRUE': (
+        'org.opentest4j.AssertionFailedError: put a CAPTURED row with nothing pending, the helper did not refuse the WAIT judgment, so either its dispatch no longer reads that predicate or it no longer fails on a false judgment, and every wait judged in the walk above judged nothing'
+    ),
 }
 
 # A refusal whose text a plant makes nondeterministic cannot be frozen whole,
@@ -2188,6 +2303,28 @@ def law_ids_the_kernel_declares(root: str) -> set[str]:
             f"{LAWS_THE_KERNEL_DECLARES}. A law added there needs a proof here; a law removed "
             f"there needs this number changed with its reason. Read: {sorted(ids)}"
         )
+    # F-G, the coordinator's review of `85bfbf5`, second half. The pin above
+    # counts IDS; everything downstream joins on the law NUMBER. Those are not
+    # the same set, so a removal plus an arrival that REUSES a number keeps this
+    # count at 20 while one number is covered twice and another is not declared
+    # at all — a count sees reach, never content, which is the finding this file
+    # has now answered at four depths. Numbers are therefore compared as a set
+    # of their own, and a collision is a refusal naming both ids.
+    numbers: dict[str, list[str]] = {}
+    for law in sorted(ids):
+        # No arm for an id with no number, and no guard for it either: this
+        # census reads ids through LAW_ID_IN_THE_KERNEL, which requires
+        # `P7-L<n>-`, so an unnumbered id is never READ here and a guard against
+        # one could not be run. What closes that shape is ABSENCE — the id is
+        # not counted, the count falls below the pin, and the pin refuses. The
+        # arm below measures exactly that rather than asserting it.
+        numbers.setdefault(re.match(r"(P7-L\d+)-", law).group(1), []).append(law)
+    collisions = {n: laws for n, laws in numbers.items() if len(laws) > 1}
+    if collisions:
+        raise CannotRead(
+            f"{LAWS_KT} declares two or more law ids sharing one number, so the census's join "
+            f"covers one of them twice and the other never: {collisions}"
+        )
     return ids
 
 
@@ -2232,7 +2369,14 @@ def census_failures(proofs: list[Proof], root: str = ROOT) -> list[str]:
 
 
 def self_test() -> int:
-    """Arm every branch of the two guards above, as a SUBPROCESS of the harness.
+    """Arm every guard branch this file declares, as a SUBPROCESS of the harness.
+
+    The families armed here are the cover rule, the refusal rules, the guard-branch
+    census itself and the interpreter/shell isolation pins. The number of branches is
+    not written in this sentence, because a sentence cannot be made to red: the arm
+    below compares the length of `checks` to GUARD_BRANCHES_THIS_HARNESS_DECLARES and
+    refuses by name on any difference, in either direction, so an arm added or removed
+    without the declaration moving reds this self-test rather than passing quietly.
 
     The coordinator's review of `771b525` proved the `did not redden` branch by
     DELETING it, and recorded that no plant reaches it. A plant cannot: the
@@ -2402,20 +2546,96 @@ def self_test() -> int:
     # exactly what the fail-open destroyed.
     me = os.path.abspath(__file__)
     loose = subprocess.run(
-        [sys.executable, me, "--isolation-probe"], capture_output=True, text=True
+        [sys.executable, me, "--isolation-probe"],
+        capture_output=True, text=True, env=env_for_a_child(),
     )
     expect(
         "started without -I, this harness refuses BY NAME",
         "REFUSED-P7-HARNESS-NOT-ISOLATED" in loose.stdout and loose.returncode != 0,
     )
     tight = subprocess.run(
-        [sys.executable, "-I", me, "--isolation-probe"], capture_output=True, text=True
+        [sys.executable, "-I", me, "--isolation-probe"],
+        capture_output=True, text=True, env=env_for_a_child(),
     )
     expect(
         "started with -I, the refusal does not fire and the probe answers",
         "REFUSED-P7-HARNESS-NOT-ISOLATED" not in tight.stdout
         and "P7-ISOLATION-PROBE: isolated" in tight.stdout
         and tight.returncode == 0,
+    )
+    # F-H's arm, and the reason the bound is a counter the children CARRY
+    # rather than an early return: a depth marker can be set directly, so this
+    # branch measures the refusal without spawning a single extra process. The
+    # review's objection to the early-exit block was exactly that arming it
+    # meant running the recursion.
+    too_deep = subprocess.run(
+        [sys.executable, "-I", me, "--isolation-probe"],
+        capture_output=True, text=True,
+        env=dict(os.environ, **{SPAWN_DEPTH_ENV: str(DEEPEST_LEGITIMATE_SPAWN + 1)}),
+    )
+    expect(
+        "a spawn deeper than the legitimate chain refuses BY NAME (F-H)",
+        "REFUSED-P7-HARNESS-SPAWNED-ITSELF" in too_deep.stdout
+        and too_deep.returncode != 0,
+    )
+    expect(
+        "at the legitimate depth the probe still answers, so the bound is not a false red (F-H)",
+        too_deep_to_be_anything_but_a_fork() is None
+        and "P7-ISOLATION-PROBE: isolated" in subprocess.run(
+            [sys.executable, "-I", me, "--isolation-probe"],
+            capture_output=True, text=True,
+            env=dict(os.environ, **{SPAWN_DEPTH_ENV: str(DEEPEST_LEGITIMATE_SPAWN)}),
+        ).stdout,
+    )
+    # F-G's arms. The count pin and the number collision are both put a planted
+    # `Laws.kt` and required to refuse BY the CannotRead they raise, because a
+    # pin nothing exercises is a sentence — which is the finding.
+    def laws_kt_holding(ids: list[str]) -> str:
+        tree = tempfile.mkdtemp(prefix="p7-census-arm-")
+        TREES_THIS_RUN.append(tree)
+        path = os.path.join(tree, LAWS_KT)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        body = "\n".join(f'    val L{i} = Law("{law}")' for i, law in enumerate(ids))
+        open(path, "w", encoding="utf-8").write("object P7Laws {\n" + body + "\n}\n")
+        return tree
+
+    twenty = [f"P7-L{n}-A-LAW-THIS-ARM-DECLARES" for n in range(1, 21)]
+    def census_refusal(ids: list[str]) -> str:
+        try:
+            law_ids_the_kernel_declares(laws_kt_holding(ids))
+        except CannotRead as exc:
+            return str(exc)
+        return ""
+
+    expect(
+        "the law COUNT pin refuses an arrival, so the pin is armed (F-G)",
+        "pinned to" in census_refusal(twenty + ["P7-L21-ONE-LAW-TOO-MANY"]),
+    )
+    expect(
+        "the law COUNT pin refuses a departure too (F-G)",
+        "pinned to" in census_refusal(twenty[:-1]),
+    )
+    expect(
+        "two law ids sharing ONE number is a refusal, which no count can see (F-G)",
+        # TWENTY ids, not twenty-one: the count pin refuses first otherwise and
+        # the arm measures the count rather than the collision, which is the
+        # very confusion F-G is about. L19 is declared twice and L20 not at all.
+        "sharing one number" in census_refusal(
+            twenty[:-2] + ["P7-L19-THE-NINETEENTH", "P7-L19-THE-NINETEENTH-AGAIN"]
+        ),
+    )
+    expect(
+        "an id carrying no number is not read at all, and the COUNT is what refuses (F-G)",
+        # The pair to the arm above. There the count cannot see the defect and
+        # the numbers must; here the numbers never see the id and the count
+        # must. Both halves of `a count sees reach, never content` are measured.
+        (lambda refusal: "pinned to" in refusal and "LAWLESS" not in refusal)(
+            census_refusal(twenty[:-1] + ["LAWLESS-ID-WITH-NO-P7-NUMBER"])
+        ),
+    )
+    expect(
+        "the arms' own planted file of twenty well-formed ids READS, so none of this is vacuous",
+        census_refusal(twenty) == "",
     )
     # And the WRAPPER, pinned by bytes rather than by a regex over its text: a
     # pattern says the flag APPEARS somewhere, and only byte equality says the
@@ -2433,21 +2653,68 @@ def self_test() -> int:
     # mistake it describes, which is a false red, and a hardening that causes a
     # false red is not hardening. So: exactly one `exec` among the code lines,
     # and that line byte-equal to the pinned one.
-    wrapper_code = [
-        line for line in wrapper_text.split("\n")
-        if line.strip() and not line.lstrip().startswith("#")
+    execs = [
+        line for line in wrapper_code_lines(wrapper_text) if line.startswith("exec ")
     ]
-    execs = [line for line in wrapper_code if line.startswith("exec ")]
+    # R18-02, the eighteenth challenge. `"PY=/usr/bin/python3" in wrapper_code`
+    # asked whether that assignment APPEARS among the code lines. Measured by
+    # that review: one line added after it, assigning a different interpreter,
+    # left this line and the `exec` line byte-identical and the guard GREEN at
+    # 27 of 27, while the wrapper then ran the planted interpreter — its own
+    # line was in the output. A membership test is the same mistake one layer
+    # down from the regex this file already refuses: a pattern says a command
+    # appears, and only byte equality over the WHOLE SET says it is all that
+    # runs. So the assignments are compared as a set of exactly one, which also
+    # closes the `export PY=`, `readonly PY=` and indented variants.
     expect(
         "the wrapper runs the pinned interpreter in isolated mode, verbatim and once",
-        execs == ['exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"']
-        and "PY=/usr/bin/python3" in wrapper_code,
+        the_wrapper_pin_holds(wrapper_text),
+    )
+    # And the pin's own arms, because a pin whose failure nothing exercises is a
+    # sentence. The first is R18-02's plant verbatim: one line added below the
+    # pinned assignment, with that line and the `exec` line untouched.
+    expect(
+        "a SECOND PY= assignment below the pinned one is a refusal (R18-02)",
+        not the_wrapper_pin_holds(
+            wrapper_text.replace(
+                "PY=/usr/bin/python3",
+                "PY=/usr/bin/python3\nPY=/tmp/not-the-pinned-interpreter",
+                1,
+            )
+        ),
+    )
+    expect(
+        "an exported or indented second assignment is a refusal too (R18-02)",
+        not the_wrapper_pin_holds(wrapper_text + "\n  export PY=/tmp/not-the-pinned-interpreter\n")
+        and not the_wrapper_pin_holds(wrapper_text + "\nreadonly PY=/tmp/not-the-pinned-interpreter\n"),
+    )
+    expect(
+        "the pinned assignment REMOVED is a refusal, so the pin is not vacuous (R18-02)",
+        not the_wrapper_pin_holds(wrapper_text.replace("PY=/usr/bin/python3\n", "", 1)),
+    )
+    expect(
+        "every line the self-test child prints is marked as the child's (R18-03)",
+        marked_as_the_childs("SELF-TEST: 1 of 1 guard branches armed.\nTREES: 0 made\n")
+        == "[self-test] SELF-TEST: 1 of 1 guard branches armed.\n[self-test] TREES: 0 made\n"
+        and marked_as_the_childs("") == ""
+        and "\n" not in marked_as_the_childs("one line").rstrip("\n"),
     )
     expect(
         "no module file sits beside this harness where it could shadow the standard library",
+        # S-4, the coordinator's review of `85bfbf5`: this scanned `*.py` only
+        # while its NAME says module file. Not a hole — under `-I` the
+        # directory is off `sys.path` and the refusal at the top of this file
+        # guarantees `-I` — but a check whose name is broader than its scan is
+        # read by the next editor as covering what it does not. These are the
+        # extensions an interpreter will import from a directory on the path,
+        # plus a package directory, so the name and the scan now agree.
         sorted(
             f for f in os.listdir(os.path.dirname(me))
-            if f.endswith(".py") and f != os.path.basename(me)
+            if f != os.path.basename(me)
+            and (
+                f.endswith((".py", ".pyc", ".pyo", ".pyd", ".so", ".pth"))
+                or os.path.isfile(os.path.join(os.path.dirname(me), f, "__init__.py"))
+            )
         ) == [],
     )
 
@@ -2456,6 +2723,21 @@ def self_test() -> int:
     bad = [name for name, ok in checks if not ok]
     if bad:
         print(f"SELF-TEST FAILED ({len(bad)} of {len(checks)}): the guards are not armed.")
+        return 1
+    # The arms are a census of themselves, and a census pins its SET. `N of N`
+    # is satisfied by any number of arms, including fewer: deleting one lowered
+    # both sides and printed a clean line, which is the same shape as every
+    # total this file has had to replace with a literal. So the count is a
+    # LITERAL, and a departure is a refusal by name. An arrival is a refusal
+    # too, deliberately: an arm added without this number being raised is an arm
+    # nobody reviewed.
+    if len(checks) != GUARD_BRANCHES_THIS_HARNESS_DECLARES:
+        print(
+            f"REFUSED-P7-GUARD-BRANCH-CENSUS: {len(checks)} guard branches ran and this harness "
+            f"declares {GUARD_BRANCHES_THIS_HARNESS_DECLARES}. An arm deleted lowers `N of N` on "
+            f"both sides and reads as armed; an arm added unreviewed reads the same. Neither is "
+            f"a figure a reader can act on, so the count is pinned."
+        )
         return 1
     print(f"SELF-TEST: {len(checks)} of {len(checks)} guard branches armed.")
     return 0
@@ -2495,6 +2777,111 @@ def _refuses_to_read() -> bool:
 # Every tree this run creates is recorded here, removed in a `finally` so an
 # early return cannot skip it, and then CONFIRMED gone by looking: a cleanup
 # that reports success without checking is the shape this lane keeps refusing.
+CHILD_MARK = "[self-test] "
+
+
+def marked_as_the_childs(text: str) -> str:
+    """Mark every line of the self-test child's relayed output as the child's.
+
+    R18-03, the eighteenth challenge. The child's output was relayed verbatim,
+    and the child reaches the same cleanup block as the parent, so its `TREES:`
+    line read as the parent's — on an interrupted run it was the ONLY such line
+    in the log, saying nothing leaked while the parent had trees on disk. The
+    child is silent about trees it never made now, and this marks what it does
+    say. What this binds is the relay: it is the one path the child's output
+    reaches this log through, so a line without the mark is the parent's. It
+    does not bind what the child CHOOSES to print, which is the other half and
+    is closed in `__main__`.
+    """
+    if not text:
+        return text
+    lines = text.split("\n")
+    trailing = lines.pop() if lines and lines[-1] == "" else None
+    out = "\n".join(CHILD_MARK + line for line in lines)
+    return out + "\n" if trailing is not None else out
+
+
+# F-H, the coordinator's review of `85bfbf5`. The recursion stop added for the
+# isolation arms was ONE early-exit block with no depth bound: deleting it
+# reproduced the fork (566 live processes, a neighbouring run OOM-killed), and
+# the coordinator's point was that arming an early return means running the
+# recursion. It does not, once the bound is a COUNTER the children carry: a
+# child spawned past the legitimate depth refuses by name, and an arm can set
+# the marker directly and read that refusal without a single extra process.
+#
+# The legitimate chain is exactly three deep: the harness, the `--self-test`
+# child it runs, and the `--isolation-probe` that child spawns. Anything deeper
+# is this file spawning itself.
+SPAWN_DEPTH_ENV = "P7_HARNESS_SPAWN_DEPTH"
+DEEPEST_LEGITIMATE_SPAWN = 2
+
+
+def spawn_depth() -> int:
+    try:
+        return int(os.environ.get(SPAWN_DEPTH_ENV, "0"))
+    except ValueError:
+        return 0
+
+
+def env_for_a_child() -> dict[str, str]:
+    """This process's environment with the spawn depth incremented."""
+    env = dict(os.environ)
+    env[SPAWN_DEPTH_ENV] = str(spawn_depth() + 1)
+    return env
+
+
+def too_deep_to_be_anything_but_a_fork() -> str | None:
+    depth = spawn_depth()
+    if depth <= DEEPEST_LEGITIMATE_SPAWN:
+        return None
+    return (
+        f"REFUSED-P7-HARNESS-SPAWNED-ITSELF: this process is {depth} spawns deep and the "
+        f"deepest legitimate chain is {DEEPEST_LEGITIMATE_SPAWN} (harness, self-test child, "
+        f"isolation probe). A deeper one is this file spawning itself, which has twice "
+        f"exhausted this container's memory, so it refuses rather than forking again."
+    )
+
+
+def wrapper_code_lines(wrapper_text: str) -> list[str]:
+    """The wrapper's CODE lines.
+
+    Not its prose: a "must not contain" over the whole file trips on a comment
+    that quotes the very mistake it describes, which is a false red, and a
+    hardening that causes a false red is not hardening.
+    """
+    return [
+        line for line in wrapper_text.split("\n")
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def the_wrapper_pin_holds(wrapper_text: str) -> bool:
+    """Whether the wrapper runs the pinned interpreter, isolated, and nothing else.
+
+    R18-02, the eighteenth challenge: this was `"PY=/usr/bin/python3" in
+    wrapper_code`, which asks whether that assignment APPEARS. One line added
+    below it ran a different interpreter with the guard green at 27 of 27 and
+    the planted interpreter's own line in the output. The assignments are
+    therefore compared as a SET OF EXACTLY ONE, which also closes the
+    `export PY=`, `readonly PY=` and indented variants. It is a function so the
+    self-test can put it planted text and require a refusal.
+    """
+    code = wrapper_code_lines(wrapper_text)
+    execs = [line for line in code if line.startswith("exec ")]
+    assignments = [
+        line.strip() for line in code
+        if re.match(r"(?:export\s+|readonly\s+|declare\s+-\w+\s+)?PY=", line.strip())
+    ]
+    return (
+        execs == ['exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"']
+        and assignments == ["PY=/usr/bin/python3"]
+    )
+
+
+# The number of guard branches this harness's self-test declares. Pinned, not
+# derived: see the census in `self_test`.
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 38
+
 TREES_THIS_RUN: list[str] = []
 
 
@@ -2511,6 +2898,47 @@ def scrub_all() -> list[str]:
         if os.path.exists(tree):
             left.append(tree)
     return left
+
+
+# R18-03, the eighteenth challenge, second limb: A SIGNAL DOES NOT RUN THE
+# `finally`. Measured by that review, three killed runs of this harness at the
+# head before this one: SIGTERM rc 143, SIGINT rc 130 and SIGKILL rc 137 each
+# left the run's own trees on disk, with no `TREES:` line and no refusal. The
+# `finally` closes an early RETURN, which is what it was written for, and says
+# nothing about a kill — and in this container the normal end of a long run IS
+# a kill, which is how 2,620 trees accumulated in the first place.
+#
+# SIGTERM and SIGINT are closable from inside and are closed here: scrub what
+# this run made, then re-raise the signal with the default disposition so the
+# exit status is the one the signal means (128 + n) rather than a status this
+# handler invented. SIGKILL CANNOT BE CLOSED FROM INSIDE — the process is gone
+# before any Python runs — so it is named here rather than left for a reader to
+# discover: a run killed with -9 leaves its trees, and the next run reports them
+# as strays, which is why that report is a refusal above a threshold and no
+# longer a note.
+def _scrub_on_signal(signum: int, _frame: object) -> None:
+    left = scrub_all()
+    print(
+        f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; "
+        f"{len(TREES_THIS_RUN) - len(left)} of {len(TREES_THIS_RUN)} tree(s) removed, "
+        f"{len(left)} left.",
+        flush=True,
+    )
+    signal.signal(signum, signal.SIG_DFL)
+    os.kill(os.getpid(), signum)
+
+
+def arm_the_signal_handlers() -> None:
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, _scrub_on_signal)
+
+
+# One whole run of this harness makes this many trees, so more strays than this
+# means at least one entire run's worth was left behind by something — a kill, a
+# crash, or a copy of this file run by hand. Below it, a stray is ordinary
+# overlap with another session's run; at or above it, the disk is being filled
+# by runs that are not cleaning up and somebody has to act.
+ONE_RUNS_WORTH_OF_TREES = 101
 
 
 def strays_from_earlier_runs() -> list[str]:
@@ -2555,10 +2983,10 @@ def main() -> int:
     # thing being tested.
     probe = subprocess.run(
         [sys.executable, "-I", os.path.abspath(__file__), "--self-test"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, env=env_for_a_child(),
     )
-    sys.stdout.write(probe.stdout)
-    sys.stdout.write(probe.stderr)
+    sys.stdout.write(marked_as_the_childs(probe.stdout))
+    sys.stdout.write(marked_as_the_childs(probe.stderr))
     if probe.returncode != 0:
         print("THE GUARDS ARE NOT ARMED — no proof below means anything. Fix the self-test first.")
         return 1
@@ -2823,13 +3251,25 @@ def main() -> int:
         print("     normalised on both sides now and the message is frozen WHOLE.")
     print("  9. The omission arm deletes the print loop on a copy and requires a refusal, so")
     print("     that line is load-bearing twice over \u2014 but the ARM's own removal is bounded")
-    print("     by review and not by measurement. The regress stops here, and is named here")
-    print("     rather than left for a reader to find.")
+    print("     by review and not by measurement. What IS measured is the arms' census: the")
+    print(f"    count is pinned at {GUARD_BRANCHES_THIS_HARNESS_DECLARES} as a literal, so an arm")
+    print("     deleted or added is a refusal by name rather than a lower `N of N` that still")
+    print("     reads as armed \u2014 measured by deleting one and reading")
+    print("     REFUSED-P7-GUARD-BRANCH-CENSUS. The literal itself is bounded by review, and")
+    print("     that is where this regress stops; it is named here rather than left to a reader.")
+    print(" 10. A SIGNAL does not run a `finally`. SIGTERM and SIGINT are handled: this run's")
+    print("     trees are scrubbed and the signal is then re-raised with its default")
+    print("     disposition, so the exit status is the signal's own. SIGKILL CANNOT be closed")
+    print("     from inside \u2014 nothing of this process runs after it \u2014 so a run killed")
+    print("     with -9 leaves its trees, and the next run refuses above one whole run's worth")
+    print(f"    ({ONE_RUNS_WORTH_OF_TREES}) rather than noting them and exiting 0.")
     return 0
 
 
 if __name__ == "__main__":
-    _code = self_test() if "--self-test" in sys.argv else main()
+    arm_the_signal_handlers()
+    _am_the_self_test_child = "--self-test" in sys.argv
+    _code = self_test() if _am_the_self_test_child else main()
     _earlier = strays_from_earlier_runs()
     _left = scrub_all()
     if _left:
@@ -2839,12 +3279,34 @@ if __name__ == "__main__":
             f"on: {_left[:5]}"
         )
         _code = _code or 1
-    else:
+    elif TREES_THIS_RUN or not _am_the_self_test_child:
+        # R18-03, first limb. `main()` runs the self-test as a SUBPROCESS and
+        # relays its output; the child reaches this same block and printed the
+        # same sentence, unprefixed. Measured by the eighteenth challenge on an
+        # interrupted run: the ONLY `TREES:` line in the log was the child's
+        # `0 made, 0 removed, 0 left`, printed while the parent had trees on
+        # disk — so a reader, or a `grep TREES:`, was handed a confirmation
+        # that nothing leaked by the one process that could not have leaked
+        # anything. The child made no trees, so it now says nothing, and the
+        # relay marks every line it does print. Both halves: either alone
+        # leaves the other readable as the parent's.
         print(
             f"TREES: {len(TREES_THIS_RUN)} made, {len(TREES_THIS_RUN)} removed, 0 left \u2014 "
             f"confirmed by looking, not by assuming the call worked."
         )
-    if _earlier:
+    if len(_earlier) >= ONE_RUNS_WORTH_OF_TREES:
+        # R18-03's P3 limb, in the challenger's own words: the instrument that
+        # notices the disk filling declined to say anything that would make
+        # anyone act. It reported 522 strays as a NOTE and exited 0.
+        print(
+            f"REFUSED-P7-TEMP-DIRECTORY-FILLING: {len(_earlier)} tree(s) matching this harness's "
+            f"prefixes are in {tempfile.gettempdir()} and are NOT this run's — at least one whole "
+            f"run's worth ({ONE_RUNS_WORTH_OF_TREES}) was left behind by a killed or crashed run, "
+            f"and this harness cannot keep running on a disk it is filling. Remove them: "
+            f"{_earlier[:5]}"
+        )
+        _code = _code or 1
+    elif _earlier:
         print(
             f"NOTE: {len(_earlier)} tree(s) matching this harness's prefixes were already in "
             f"{tempfile.gettempdir()} before this run and are NOT this run's to delete."

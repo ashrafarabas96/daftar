@@ -4,8 +4,35 @@ import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
+
+/**
+ * Which judgment a counted row is being put to, and the ONLY thing a call site
+ * passes about it.
+ *
+ * `R18-01`, the eighteenth challenge. The round before this one named each
+ * judgment's predicate and gave it an arm, and wrote that the loop and the arm
+ * therefore read the same function. That was true of the function's BODY and
+ * false of the call, because the call site passed the predicate's RESULT: an
+ * expression no arm sees. Measured by that review, one line changed —
+ * `aTransmissionIsHonest(op.attempts)` to `true` — and the whole suite stayed
+ * at 99 of 99, rc 0, with both predicate arms passing and every per-state count
+ * identical, because the helper was still called the same number of times from
+ * the same places.
+ *
+ * So the call site passes this kind and the ROW, and nothing else. There is no
+ * boolean and no predicate reference left at the call site to hollow: choosing
+ * which predicate runs, and reading the field it runs on, both happen inside
+ * the helper, on the one path the arms below also travel. What a one-line edit
+ * at a call site can still change is the KIND, and that moves the per-state
+ * counts to another key, where the anchors are.
+ */
+private enum class JudgmentKind(val label: String) {
+    WAIT("waits"),
+    TRANSMISSION("transmissions"),
+}
 
 /**
  * A model check of the queue, not a walk through a few scenarios.
@@ -359,6 +386,17 @@ class QueueModelCheckTest {
         OperationState.IN_FLIGHT to "an attempt is out and its answer has not been seen",
         OperationState.UNKNOWN_OUTCOME to "an attempt's answer was lost and the device will ask again",
     ).keys
+
+    /**
+     * The two judgments' predicates, named so that ONE path reads them: the
+     * helper's dispatch in the model check, and the arms that put each a row it
+     * must refuse and a row it must accept. Members rather than locals so the
+     * dispatch can be written above the walk and the arms below it, with no
+     * second copy of either condition anywhere.
+     */
+    private fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending
+
+    private fun aTransmissionIsHonest(attempts: Int) = attempts > 0
 
     /**
      * The captured facts, DIFFERENT for each effect class on purpose.
@@ -791,28 +829,34 @@ class QueueModelCheckTest {
         // predicate narrowed to skip a state drops that state's total to zero
         // rather than hiding inside a surviving sum. The per-state figures are
         // the ones the sixteenth review's own probe measured.
+        // The arms below the walk are put rows the WALK produced, not rows
+        // written here: a row built beside its own arm is a row chosen to pass
+        // it. These four are the first of each shape the walk reaches, and the
+        // walk is exhaustive and deterministic, so they are the same four every
+        // run. Each is required to EXIST before its arm runs — an arm that
+        // silently skips because its witness is null measures nothing, and
+        // absence is the one thing a null check here can still refuse.
+        var aRowWithNothingPending: Operation? = null
+        var aRowThatIsPending: Operation? = null
+        var aRowWithNoAttempt: Operation? = null
+        var aRowWithAnAttempt: Operation? = null
         val judgmentsByState = mutableMapOf<Pair<String, OperationState>, Int>()
-        fun judged(name: String, state: OperationState, holds: Boolean, message: () -> String) {
-            judgmentsByState[name to state] = (judgmentsByState[name to state] ?: 0) + 1
+        fun judged(kind: JudgmentKind, op: Operation, message: () -> String) {
+            judgmentsByState[kind.label to op.state] =
+                (judgmentsByState[kind.label to op.state] ?: 0) + 1
+            val holds = when (kind) {
+                JudgmentKind.WAIT -> aWaitIsHonest(op.state)
+                JudgmentKind.TRANSMISSION -> aTransmissionIsHonest(op.attempts)
+            }
             if (!holds) fail(message())
         }
-        // The helper's own arm, and it is here rather than in a review's notes
-        // because deleting the `if (!holds)` line above is a ONE-LINE edit that
-        // no count can catch: every count would survive it and every anchor
-        // would pass while nothing in this loop judged anything. So a judgment
-        // known false is put to the helper on every run, under a name of its
-        // own, and the helper must refuse it.
-        var theHelperRefusedAKnownFalseJudgment = false
-        try {
-            judged("the helper's own arm", OperationState.QUEUED, false) { "a known-false judgment" }
-        } catch (expected: AssertionError) {
-            theHelperRefusedAKnownFalseJudgment = true
-        }
-        assertTrue(
-            theHelperRefusedAKnownFalseJudgment,
-            "the helper that counts and judges in one statement did not refuse a judgment known " +
-                "to be false, so it has stopped judging and every count below counts nothing",
-        )
+        // The helper's own arm, and the arm on each predicate, are BELOW the
+        // walk rather than here, because `R18-01` is what happens when an arm
+        // is offered an input of its own: it then measures the function and not
+        // the path the walk travels. They are put rows the WALK produced, and
+        // they go through `judged` itself, so deleting the `if (!holds)` line,
+        // replacing either branch of the dispatch with `true`, and hollowing
+        // either predicate are each red by name.
         // The coordinator's F-E, one layer in, and the reason a count was never
         // going to be enough. Deleting a judgment now takes its count with it,
         // but REPLACING a judgment's predicate with `true` leaves every row
@@ -828,13 +872,16 @@ class QueueModelCheckTest {
         // instrument.
         //
         // So each judgment's predicate is NAMED and put a case it must refuse
-        // and a case it must accept, on every run. The loop and the arm read
-        // the SAME function, so a predicate replaced by `true` reds here by
-        // name rather than somewhere else by luck. Two cases each, because a
+        // and a case it must accept, on every run. Two cases each, because a
         // predicate stuck at `false` is as wrong as one stuck at `true` and
         // would otherwise pass the refusal case alone.
-        fun aWaitIsHonest(state: OperationState) = state in somethingIsGenuinelyPending
-        fun aTransmissionIsHonest(attempts: Int) = attempts > 0
+        //
+        // `R18-01`: what these four assertions bind is the FUNCTION. They do
+        // not bind the walk's call to it, and the round that wrote them claimed
+        // they did — see `JudgmentKind` at the top of this file for the
+        // measurement, and the four arms below the walk for the part these
+        // cannot reach. The predicates are members now, so there is one copy of
+        // each condition for the dispatch, these arms and those to read.
         assertFalse(
             aWaitIsHonest(OperationState.CAPTURED),
             "the WAIT judgment's own predicate accepts a CAPTURED row, a row with nothing pending " +
@@ -871,6 +918,18 @@ class QueueModelCheckTest {
             while (frontier.isNotEmpty()) {
                 val (op, history) = frontier.removeFirst()
                 statesSeen += op.state
+                // The arms' witnesses, taken from the walk rather than written
+                // beside the arm (`R18-01`).
+                if (aRowWithNothingPending == null && !aWaitIsHonest(op.state)) {
+                    aRowWithNothingPending = op
+                }
+                if (aRowThatIsPending == null && aWaitIsHonest(op.state)) aRowThatIsPending = op
+                if (aRowWithNoAttempt == null && !aTransmissionIsHonest(op.attempts)) {
+                    aRowWithNoAttempt = op
+                }
+                if (aRowWithAnAttempt == null && aTransmissionIsHonest(op.attempts)) {
+                    aRowWithAnAttempt = op
+                }
                 for (event in events()) {
                     edges++
                     when (val step = op.step(event)) {
@@ -1046,7 +1105,7 @@ class QueueModelCheckTest {
                             if (view.action == RecoveryAction.WAIT_IT_IS_IN_PROGRESS ||
                                 view.message in assertsSomethingLeftTheDevice
                             ) {
-                                judged("waits", op.state, aWaitIsHonest(op.state)) {
+                                judged(JudgmentKind.WAIT, op) {
                                     "a ${op.state} row refused ${step.code}, which tells the merchant to " +
                                         "wait (${view.message} / ${view.action}) while nothing is pending: " +
                                         "$op on $event"
@@ -1058,7 +1117,7 @@ class QueueModelCheckTest {
                                 // counter at all, so narrowing its condition
                                 // removed it in silence. It is counted now, and
                                 // the count is pinned with the others below.
-                                judged("transmissions", op.state, aTransmissionIsHonest(op.attempts)) {
+                                judged(JudgmentKind.TRANSMISSION, op) {
                                     "a refusal with nothing sent (${step.code}) is shown as " +
                                         "${view.message}, which asserts a transmission: $op on $event"
                                 }
@@ -1665,6 +1724,67 @@ class QueueModelCheckTest {
             terminalRefusals > 0,
             "no refusal on a finished row was judged, so INV-15 defends nothing",
         )
+        // `R18-01`'s answer, and the helper's own arm with it. These four go
+        // THROUGH `judged`, on rows the walk produced, so what they bind is the
+        // path the walk itself travels: the dispatch that chooses the predicate,
+        // the field that predicate is given, and the `if (!holds)` line that
+        // turns a false judgment into a failure. Each kind is put a row it must
+        // REFUSE and a row it must ACCEPT, because a dispatch branch replaced by
+        // `false` is as wrong as one replaced by `true` and would pass a refusal
+        // arm offered alone.
+        //
+        // Each witness is resolved BEFORE its arm's `try`, deliberately: a
+        // missing witness fails with an AssertionError too, and inside the try
+        // that failure would be caught and read as the helper refusing — an arm
+        // that passes because its own setup failed is the shape this file keeps
+        // refusing.
+        fun witness(what: String, row: Operation?): Operation =
+            row ?: fail(
+                "the walk never produced $what, so the arm that needs it would measure nothing",
+            )
+        val nothingPending = witness("a row with nothing pending", aRowWithNothingPending)
+        val isPending = witness("a row that is genuinely pending", aRowThatIsPending)
+        val noAttempt = witness("a row with no attempt out", aRowWithNoAttempt)
+        val anAttempt = witness("a row with an attempt out", aRowWithAnAttempt)
+        var theHelperRefusedADishonestWait = false
+        try {
+            judged(JudgmentKind.WAIT, nothingPending) { "the WAIT arm's own row: $nothingPending" }
+        } catch (expected: AssertionError) {
+            theHelperRefusedADishonestWait = true
+        }
+        assertTrue(
+            theHelperRefusedADishonestWait,
+            "put a ${nothingPending.state} row with nothing pending, the helper did not refuse " +
+                "the WAIT judgment, so either its dispatch no longer reads that predicate or it " +
+                "no longer fails on a false judgment, and every wait judged in the walk above " +
+                "judged nothing",
+        )
+        var theHelperRefusedADishonestTransmission = false
+        try {
+            judged(JudgmentKind.TRANSMISSION, noAttempt) { "the TRANSMISSION arm's own row: $noAttempt" }
+        } catch (expected: AssertionError) {
+            theHelperRefusedADishonestTransmission = true
+        }
+        assertTrue(
+            theHelperRefusedADishonestTransmission,
+            "put a row with ${noAttempt.attempts} attempts out, the helper did not refuse the " +
+                "TRANSMISSION judgment, so either its dispatch no longer reads that predicate or " +
+                "it no longer fails on a false judgment, and every transmission judged in the " +
+                "walk above judged nothing",
+        )
+        // The accept arms carry no boolean of their own: if the dispatch is
+        // stuck at false, these two FAIL, with the message the walk's own call
+        // site would have produced.
+        judged(JudgmentKind.WAIT, isPending) {
+            "put a ${isPending.state} row that IS pending, the helper refused the WAIT judgment, " +
+                "so its predicate or its dispatch is stuck at false and judges nothing it exists " +
+                "to judge: $isPending"
+        }
+        judged(JudgmentKind.TRANSMISSION, anAttempt) {
+            "put a row with ${anAttempt.attempts} attempts out, the helper refused the " +
+                "TRANSMISSION judgment, so its predicate or its dispatch is stuck at false and " +
+                "judges nothing it exists to judge: $anAttempt"
+        }
         val waitsJudged = judgmentsByState.entries.filter { it.key.first == "waits" }.sumOf { it.value }
         val transmissionsJudged =
             judgmentsByState.entries.filter { it.key.first == "transmissions" }.sumOf { it.value }
@@ -1768,15 +1888,17 @@ class QueueModelCheckTest {
             "a different number of refusals was produced with nothing sent",
         )
         assertEquals(
-            939, waitsJudged,
+            941, waitsJudged,
             "a different number of refusals was judged for telling the merchant to wait while " +
                 "nothing is pending, which is the judgment a narrowing of that condition removes " +
-                "in silence",
+                "in silence. 939 of these are the walk's own and 2 are the arms above, which go " +
+                "through the same helper and are counted by it like any other row",
         )
         assertEquals(
-            312, transmissionsJudged,
+            314, transmissionsJudged,
             "a different number of refusals was judged for being shown as something that left " +
-                "the device, which is the judgment that had no counter at all until T-02",
+                "the device, which is the judgment that had no counter at all until T-02. 312 of " +
+                "these are the walk's own and 2 are the arms above",
         )
         // U-01, per STATE. The totals above bound the gate's reach; these bound
         // it per class, because a predicate narrowed to skip one state keeps a
@@ -1784,17 +1906,26 @@ class QueueModelCheckTest {
         // figures are the reachable space's own, and they sum to the two totals.
         assertEquals(
             mapOf(
+                // The walk's own figures, plus the one row each arm above put
+                // through the same helper. The arms are visible HERE rather
+                // than excluded: an arm that did not run leaves its row at
+                // nothing and this anchor says so, which is the only thing
+                // that makes "the arms ran" a measured claim rather than a
+                // sentence. `CAPTURED` is both arms' refusal row, `QUEUED` the
+                // wait arm's accepted row (399 from the walk and one from it),
+                // and `IN_FLIGHT` the transmission arm's (180 and one).
                 "waits" to mapOf(
-                    OperationState.QUEUED to 399,
+                    OperationState.QUEUED to 400,
                     OperationState.IN_FLIGHT to 210,
                     OperationState.UNKNOWN_OUTCOME to 330,
+                    OperationState.CAPTURED to 1,
                 ),
                 "transmissions" to mapOf(
                     OperationState.QUEUED to 72,
-                    OperationState.IN_FLIGHT to 180,
+                    OperationState.IN_FLIGHT to 181,
                     OperationState.UNKNOWN_OUTCOME to 60,
+                    OperationState.CAPTURED to 1,
                 ),
-                "the helper's own arm" to mapOf(OperationState.QUEUED to 1),
             ),
             judgmentsByState.entries
                 .groupBy { it.key.first }
@@ -1802,6 +1933,27 @@ class QueueModelCheckTest {
             "a different number of rows reached a counted judgment, PER STATE. A judgment " +
                 "deleted takes its whole row with it; a condition narrowed to skip one state " +
                 "drops that state to nothing while the sum stays plausible",
+        )
+        // The anchor above catches a call site that puts a row to the WRONG
+        // judgment only because the two per-state distributions are not the
+        // same shape: were they equal, swapping which kind BOTH call sites
+        // name would leave every key's figure where it is and the anchor would
+        // pass. That is a property of today's reachable space, not of the
+        // construction, so it is asserted here rather than assumed. If a later
+        // change makes the two shapes coincide, this reds and says what the
+        // anchor stopped being able to see.
+        val waitShape =
+            judgmentsByState.entries.filter { it.key.first == "waits" }
+                .associate { it.key.second to it.value }
+        val transmissionShape =
+            judgmentsByState.entries.filter { it.key.first == "transmissions" }
+                .associate { it.key.second to it.value }
+        assertNotEquals(
+            waitShape, transmissionShape,
+            "the two judgments now have the SAME per-state distribution, so the anchor above " +
+                "can no longer see a call site that names the other kind: swapping both sites " +
+                "would move every figure onto an identical one. Add a discriminator the swap " +
+                "cannot preserve before trusting that anchor again",
         )
         assertTrue(edges > 1_000, "only $edges edges were explored")
     }
