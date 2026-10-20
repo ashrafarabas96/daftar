@@ -70,6 +70,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -86,6 +87,8 @@ import {
 import type { Stats } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+
+import { gunzipSync } from 'node:zlib';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -1203,6 +1206,17 @@ const REFUSED_HANDED_DOWN_ENV_EDITED = 'REFUSED-HANDED-DOWN-ENVIRONMENT-EDITED';
  */
 const REFUSED_RUNNER_PROGRAM_UNPINNED = 'REFUSED-RUNNER-PROGRAM-NOT-PINNED';
 const REFUSED_RUNNER_PACKAGE_NOT_LOCKED = 'REFUSED-RUNNER-PACKAGE-NOT-THE-LOCKED-ONE';
+// ROUND 71, THE COORDINATOR'S R68-C-01 (P3): the rest of the installed tree,
+// against the bytes its PUBLISHERS shipped rather than against a pin this
+// repository writes, which is the only way the regress leaves the repository.
+const REFUSED_PUBLISHER_BYTES_UNAVAILABLE = 'REFUSED-PUBLISHER-BYTES-UNAVAILABLE';
+const REFUSED_LOCKFILE_NOT_COMMITTED = 'REFUSED-LOCKFILE-NOT-THE-COMMITTED-ONE';
+const REFUSED_CACHE_BYTES_DISAGREE = 'REFUSED-CACHE-BYTES-DISAGREE-WITH-INTEGRITY';
+const REFUSED_PACKAGE_NOT_IN_LOCKFILE = 'REFUSED-PACKAGE-NOT-NAMED-BY-THE-LOCKFILE';
+const REFUSED_FILE_NOT_PUBLISHED = 'REFUSED-FILE-NO-PUBLISHER-BYTE-IN-THE-CLOSURE';
+const REFUSED_PACKAGE_NAMED_NOT_INSTALLED = 'REFUSED-PACKAGE-NAMED-BUT-NOT-INSTALLED';
+const REFUSED_INTEGRITY_NOT_SHA512 = 'REFUSED-INTEGRITY-ALGORITHM-NOT-SHA512';
+const REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED = 'REFUSED-LOCKFILE-ROW-NOT-CLASSIFIED';
 
 /**
  * THE PROGRAM THE RUNNER IS RUNNING, derived from the chain rather than from a
@@ -1341,6 +1355,350 @@ const statKind = (stat: Stats): string => {
 // escaped, and `%` with it so the escape is reversible. An ordinary path holds
 // neither character, so every ordinary row is unchanged.
 const encodeZone = (zone: string): string => zone.split('%').join('%25').split(':').join('%3A');
+
+// ROUND 71, THE COORDINATOR'S R68-C-01 (P3). The members of a published
+// tarball, by their path inside the package, read from the FORMAT rather than
+// from the other reader's library: `tools/law-ran.py` uses Python's `tarfile`,
+// this walks the 512-byte headers itself, and two readers of one definition
+// that share an implementation are one reader. Long names arrive as a GNU `L`
+// record or a pax `x` record and override the next entry's name; a record this
+// does not understand is skipped as a non-file rather than guessed at.
+const publishedMembers = (raw: Buffer): Record<string, string> => {
+  const tar = gunzipSync(raw);
+  const out: Record<string, string> = {};
+  const field = (block: Buffer, from: number, to: number): string =>
+    block
+      .subarray(from, to)
+      .toString('utf8')
+      .replace(/\0[\s\S]*$/, '');
+  let at = 0;
+  let override: string | undefined;
+  while (at + 512 <= tar.length) {
+    const header = tar.subarray(at, at + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const size = Number.parseInt(field(header, 124, 136).trim() || '0', 8);
+    const type = String.fromCharCode(header[156] ?? 0);
+    const prefix = field(header, 345, 500);
+    const name = override ?? (prefix === '' ? field(header, 0, 100) : `${prefix}/${field(header, 0, 100)}`);
+    at += 512;
+    const body = tar.subarray(at, at + size);
+    at += Math.ceil(size / 512) * 512;
+    override = undefined;
+    if (type === 'L') {
+      override = body.toString('utf8').replace(/\0[\s\S]*$/, '');
+      continue;
+    }
+    if (type === 'x' || type === 'g') {
+      const path = /(?:^|\n)\d+ path=([^\n]*)\n/.exec(body.toString('utf8'));
+      if (path !== null) override = path[1];
+      continue;
+    }
+    if (type !== '0' && type !== '\0') continue;
+    const rel = name.includes('/') ? name.slice(name.indexOf('/') + 1) : name;
+    if (!(rel in out)) out[rel] = createHash('sha256').update(body).digest('hex');
+  }
+  return out;
+};
+
+// Whether a lockfile row's own `os`/`cpu` exclude THIS machine, in node's own
+// vocabulary -- which this arm takes from `process`, not from a table, because
+// the row was written in it. `!name` means everything but that one. An unknown
+// value yields NOT EXCLUDED, so an absent row on a machine this does not
+// recognise refuses by name instead of being waved through as somebody
+// else's platform.
+const platformExcludes = (row: { os?: string[]; cpu?: string[] }): boolean => {
+  const rulesOut = (wanted: string[] | undefined, mine: string): boolean => {
+    if (wanted === undefined || wanted.length === 0) return false;
+    const negated = wanted.filter((name) => name.startsWith('!')).map((name) => name.slice(1));
+    const positive = wanted.filter((name) => !name.startsWith('!'));
+    if (negated.includes(mine)) return true;
+    return positive.length > 0 && !positive.includes(mine);
+  };
+  return rulesOut(row.os, process.platform) || rulesOut(row.cpu, process.arch);
+};
+
+// Every installed byte against the byte its publisher shipped AT THE SAME PATH
+// IN THE SAME PACKAGE. What this does NOT say: it accounts for every installed
+// byte, not for every byte that RAN. The set comes from the lockfile, which
+// over-approximates what the process loaded, and this arm does not ask the run
+// what it imported -- a run that reports its own imports is not a witness to
+// them.
+const publisherBytes = (
+  root: string,
+  cacheRoot: string,
+  declared: Record<string, [string, string, string, string]>,
+): { problems: string[]; compared: number; checked: number; exceptions: string[]; excluded: number; binLinks: number } => {
+  const problems: string[] = [];
+  const lockPath = join(root, 'package-lock.json');
+  const lockBytes = readFileSync(lockPath);
+  const committed = spawnSync('/usr/bin/git', ['--no-replace-objects', 'cat-file', 'blob', 'HEAD:package-lock.json'], {
+    cwd: root,
+    maxBuffer: 64 * 1024 * 1024,
+    env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+  });
+  if (committed.status !== 0)
+    return {
+      problems: [
+        `${REFUSED_LOCKFILE_NOT_COMMITTED}: \`git cat-file blob HEAD:package-lock.json\` in ${root} exited ${committed.status}, so nothing here can say the lockfile is the committed one`,
+      ],
+      compared: 0,
+      checked: 0,
+      exceptions: [],
+      excluded: 0,
+      binLinks: 0,
+    };
+  if (!lockBytes.equals(committed.stdout as Buffer))
+    return {
+      problems: [
+        `${REFUSED_LOCKFILE_NOT_COMMITTED}: ${lockPath} is ${lockBytes.length} bytes and the committed blob is ${(committed.stdout as Buffer).length}, or they differ at equal length. The lockfile is the oracle every figure here rests on, so an edited one is refused rather than measured`,
+      ],
+      compared: 0,
+      checked: 0,
+      exceptions: [],
+      excluded: 0,
+      binLinks: 0,
+    };
+
+  const rows = (
+    JSON.parse(lockBytes.toString('utf8')) as {
+      packages: Record<string, { integrity?: string; version?: string; optional?: boolean; os?: string[]; cpu?: string[]; link?: boolean }>;
+    }
+  ).packages;
+  const excludedRows: string[] = [];
+  const members = new Map<string, Record<string, string>>();
+  const integrityOf = new Map<string, string>();
+  const published = new Map<string, [string, string, string]>();
+  for (const key of Object.keys(rows).sort()) {
+    if (!(key.startsWith('node_modules/') || key.includes('/node_modules/'))) continue;
+    const integrity = rows[key]?.integrity;
+    const live = join(root, key);
+    // A row with no integrity is a WORKSPACE LINK: repository code, judged by
+    // git and by this repository's own pins, never by a publisher. Named, not
+    // admitted by a path suffix. A row that is named and not installed is a
+    // platform-optional dependency: an absence is not a hole, an ARRIVAL is,
+    // and arrivals refuse below.
+    if (integrity === undefined) continue;
+    if (!existsSync(live) || !statSync(live).isDirectory()) {
+      // 499 rows and 408 compared: an uncompared row contributes no difference
+      // BY CONSTRUCTION, so a count of differing files over a set with a silent
+      // remainder is a figure about the remainder. Each absent row lands in a
+      // NAMED class -- optional, and excluded from this machine by its own
+      // `os`/`cpu` -- or it refuses. Measured: 83 absent, 83 explained, 0 not.
+      const absent = rows[key] ?? {};
+      if (absent.optional === true && platformExcludes(absent)) excludedRows.push(key);
+      else
+        problems.push(
+          `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the lockfile names ${key} and it is not installed, and its row does not say this machine is excluded from it (optional=${JSON.stringify(absent.optional)}, os=${JSON.stringify(absent.os)}, cpu=${JSON.stringify(absent.cpu)}). A row nothing compares is a row the oracle is silent about, and silence is not agreement`,
+        );
+      continue;
+    }
+    // `integrity` may carry SEVERAL entries separated by whitespace, and an arm
+    // that reads the first, or accepts whatever algorithm it finds, accepts a
+    // row carrying sha1 -- a digest an attacker can meet. Only a sha512 entry
+    // is read, and a row without one refuses BY NAME.
+    const sha512 = integrity.split(/\s+/).find((entry) => entry.startsWith('sha512-'));
+    if (sha512 === undefined) {
+      problems.push(
+        `${REFUSED_INTEGRITY_NOT_SHA512}: ${key} carries integrity ${JSON.stringify(integrity)}, which holds no sha512 entry. A weaker digest is one an attacker can meet, so this refuses rather than measuring with it`,
+      );
+      continue;
+    }
+    const algorithm = 'sha512';
+    const encoded = sha512.slice('sha512-'.length);
+    if (Buffer.from(encoded, 'base64').length !== 64) {
+      problems.push(`${REFUSED_INTEGRITY_NOT_SHA512}: ${key}'s sha512 entry decodes to ${Buffer.from(encoded, 'base64').length} bytes, not 64`);
+      continue;
+    }
+    const hex = Buffer.from(encoded, 'base64').toString('hex');
+    const tarball = join(cacheRoot, 'content-v2', algorithm, hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
+    if (!existsSync(tarball)) {
+      problems.push(
+        `${REFUSED_PUBLISHER_BYTES_UNAVAILABLE}: no cached tarball for ${key} at ${tarball}. The publisher's bytes are the oracle, and their ABSENCE is a refusal rather than a package this arm passes over`,
+      );
+      continue;
+    }
+    const raw = readFileSync(tarball);
+    if (createHash(algorithm).update(raw).digest('base64') !== encoded) {
+      problems.push(
+        `${REFUSED_CACHE_BYTES_DISAGREE}: ${tarball} does not hash to the ${key} integrity the lockfile carries, so these are not the publisher's bytes`,
+      );
+      continue;
+    }
+    const theirs = publishedMembers(raw);
+    members.set(key, theirs);
+    integrityOf.set(key, encoded);
+    for (const [rel, digest] of Object.entries(theirs)) if (!published.has(digest)) published.set(digest, [encoded, key, rel]);
+  }
+
+  // Keyed by REAL path, because the lockfile names a workspace's own
+  // dependencies by their real path and `node_modules/@daftar/admin` is a link
+  // to `apps/admin`. Measured: keyed by the written path instead, four
+  // directories look like arrivals and none is one, and a hardening that
+  // causes a false red is not hardening.
+  const namedPaths = new Set(Object.keys(rows).map((key) => (existsSync(join(root, key)) ? realpathSync(join(root, key)) : join(root, key))));
+  // The `.bin` check below asks whether a link resolves INSIDE a named
+  // package, and `namedPaths` carries the row for `''` -- the repository root
+  // -- which every path under it starts with. Measured: with that row in the
+  // set, a shim pointing at a file this repository itself writes passes. So
+  // that question is asked against the rows that name a PACKAGE and nothing
+  // else; all 25 links here resolve under `node_modules/<package>/`, so the
+  // narrower set costs no true row.
+  const namedPackages = [...Object.keys(rows)]
+    .filter((key) => key !== '' && (key.startsWith('node_modules/') || key.includes('/node_modules/')))
+    .map((key) => (existsSync(join(root, key)) ? realpathSync(join(root, key)) : join(root, key)));
+  const arrivals: string[] = [];
+  let binLinks = 0;
+  // A link row is derived POSITIVELY -- `link` is true -- rather than from
+  // what the row LACKS. npm writes rows with no `integrity` for things that
+  // are not links (a `git+https://` or `file:` dependency, a local tarball, a
+  // bundled row), so "no integrity means a workspace link" is a whitelist by
+  // ABSENCE that fails open on the next kind npm writes. Measured on this
+  // lockfile: 8 rows with `link: true` and 8 with no integrity, the same 8 --
+  // a coincidence that holds today and licenses nothing.
+  for (const [key, row] of Object.entries(rows)) {
+    if (key === '' || !(key.startsWith('node_modules/') || key.includes('/node_modules/'))) continue;
+    if (row.link === true || row.integrity !== undefined) continue;
+    problems.push(
+      `${REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED}: the lockfile row ${key} carries neither \`link: true\` nor an \`integrity\`, so nothing here can say whether it is repository code or a published package. Its keys are ${JSON.stringify(Object.keys(row).sort())}. A class defined by what a row LACKS fails open on the next kind npm writes`,
+    );
+  }
+  const walkPackages = (folder: string): void => {
+    if (!existsSync(folder) || !statSync(folder).isDirectory()) return;
+    for (const entry of readdirSync(folder, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const here = join(folder, entry.name);
+      if (entry.name.startsWith('.')) {
+        // THE SET HAS AN `else` NOW. `.bin` and `.package-lock.json` are on
+        // disk and in NO lockfile row, so a census that enumerates FROM the
+        // lockfile can never see them: measured, 378 package directories on
+        // disk and 376 named, the two unnamed being exactly those. `.vite` is
+        // the runner's own cache, written by the very run this arm certifies.
+        // All three are NAMED and unpinned; anything else dotted refuses,
+        // because a SET with no `else` is the same defect as a classification
+        // with none, one level up.
+        if (entry.name === '.package-lock.json' || entry.name === '.vite') continue;
+        if (entry.name === '.bin') {
+          for (const shim of readdirSync(here, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+            const link = join(here, shim.name);
+            if (!shim.isSymbolicLink()) {
+              problems.push(
+                `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: ${relative(root, link)} under node_modules/.bin is not a symbolic link. npm writes links there; a regular file is something else`,
+              );
+              continue;
+            }
+            const target = existsSync(link) ? realpathSync(link) : link;
+            if (!namedPackages.some((named) => target.startsWith(`${named}${sep}`)))
+              problems.push(
+                `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: ${relative(root, link)} resolves to ${target}, which is inside no package the lockfile names. The suite is started through these links, so one pointing out of the named closure runs a program nobody resolved`,
+              );
+            else binLinks += 1;
+          }
+          continue;
+        }
+        problems.push(
+          `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: ${relative(root, here)} is a dotted entry under node_modules that this arm has no class for. The three it knows are .bin, .package-lock.json and .vite; anything else refuses rather than being passed over`,
+        );
+        continue;
+      }
+      const children = entry.name.startsWith('@') ? readdirSync(here, { withFileTypes: true }).map((child) => join(here, child.name)) : [here];
+      for (const candidate of children) {
+        const real = existsSync(candidate) ? realpathSync(candidate) : candidate;
+        if (!namedPaths.has(real)) arrivals.push(relative(root, candidate));
+        walkPackages(join(candidate, 'node_modules'));
+      }
+    }
+  };
+  walkPackages(join(root, 'node_modules'));
+  for (const group of ['packages', 'apps'])
+    if (existsSync(join(root, group))) for (const workspace of readdirSync(join(root, group))) walkPackages(join(root, group, workspace, 'node_modules'));
+  if (arrivals.length > 0)
+    problems.push(
+      `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: ${arrivals.length} package director(y/ies) under node_modules are not named by the lockfile, the first being ${JSON.stringify(arrivals[0])}. A package nobody resolved is a package nobody reviewed, and the runner loads what its own code points at`,
+    );
+
+  let checked = 0;
+  const touched = new Set<string>();
+  const exceptions: string[] = [];
+  const unpublished: string[] = [];
+  for (const [key, theirs] of members) {
+    const live = join(root, key);
+    const walk = (dir: string): void => {
+      // ONE `lstat` per entry here too, by the rule round 73 settled for the
+      // census: the kind and the read must not come from two sources.
+      for (const name of readdirSync(dir).sort((a, b) => (a < b ? -1 : 1))) {
+        const full = join(dir, name);
+        let stat: Stats;
+        try {
+          stat = lstatSync(full);
+        } catch (error) {
+          unpublished.push(`${relative(root, full)} (cannot be stat'ed: ${String(error)})`);
+          continue;
+        }
+        if (stat.isSymbolicLink()) continue;
+        if (stat.isDirectory()) {
+          if (name !== 'node_modules') walk(full);
+          continue;
+        }
+        // R65-F-1's class, in this arm's own walker: an entry that is neither
+        // a file, a directory nor a symlink is not a file any publisher
+        // shipped, and skipping it here would be the same silence one commit
+        // after it was closed in the census.
+        if (!stat.isFile()) {
+          unpublished.push(`${relative(root, full)} (a ${statKind(stat)}, which no published tarball carries)`);
+          continue;
+        }
+        checked += 1;
+        const rel = relative(live, full).split(sep).join('/');
+        const digest = createHash('sha256').update(readFileSync(full)).digest('hex');
+        if (theirs[rel] === digest) continue;
+        const row = declared[`${key}::${rel}`];
+        const source = published.get(digest);
+        if (row !== undefined) {
+          // REACHED, whatever the verdict: a row whose destination exists has
+          // been measured, and the stale-row check below is about rows nothing
+          // on disk reached at all. Reporting one wrong row twice says the
+          // same thing in two voices.
+          touched.add(`${key}::${rel}`);
+          // FOUR values, because "esbuild's binary may be any attested byte"
+          // is not an exception, it is a hole with a name on it: the
+          // destination, the source package, that package's VERSION and the
+          // exact digest, all of them held here and now.
+          const [sourceKey, sourceMember, sourceVersion, sourceDigest] = row;
+          if (digest === sourceDigest && members.get(sourceKey)?.[sourceMember] === sourceDigest && rows[sourceKey]?.version === sourceVersion) {
+            exceptions.push(`${key}::${rel}`);
+            continue;
+          }
+          problems.push(
+            `${REFUSED_FILE_NOT_PUBLISHED}: ${key}::${rel} is declared as ${sourceKey}@${sourceVersion}::${sourceMember} with sha256 ${sourceDigest.slice(0, 16)}..., and on disk it is ${digest.slice(0, 16)}... while that member is ${String(members.get(sourceKey)?.[sourceMember]).slice(0, 16)}... at version ${JSON.stringify(rows[sourceKey]?.version)}. A declaration is four values or it is a hole with a name on it`,
+          );
+          continue;
+        }
+        unpublished.push(
+          source === undefined
+            ? `${relative(root, full)} (no publisher shipped these bytes)`
+            : `${relative(root, full)} (these bytes are published as ${source[1]}::${source[2]}, undeclared here)`,
+        );
+      }
+    };
+    walk(live);
+  }
+  const stale = Object.keys(declared).filter((row) => !touched.has(row));
+  if (unpublished.length > 0)
+    problems.push(
+      `${REFUSED_FILE_NOT_PUBLISHED}: ${unpublished.length} installed file(s) are not the published member at their own path in their own package, the first being ${unpublished[0]}. A file written after the tarball was unpacked is accounted for by a DECLARED row naming the member it equals, or not at all`,
+    );
+  if (stale.length > 0)
+    problems.push(
+      `${REFUSED_FILE_NOT_PUBLISHED}: ${stale.length} declared install-written row(s) matched nothing on disk, the first being ${JSON.stringify(stale[0])}. A declaration that no longer describes the tree is a standing exemption nobody re-measured`,
+    );
+  return {
+    problems,
+    compared: members.size,
+    checked,
+    exceptions: exceptions.sort(),
+    excluded: excludedRows.length,
+    binLinks,
+  };
+};
 
 const bytesUnder = (root: string, repoRoot: string, problems: string[] = []): Record<string, string> => {
   const out: Record<string, string> = {};
@@ -5153,6 +5511,315 @@ describe('every written invocation of the pack tools is isolated', () => {
       bytesUnder(packageRoot, realpathSync(repo)),
       `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the installed bytes of ${pin.package}@${pin.version} are not the pinned ones. If the change is intended it moves with package-lock.json, in the same commit, with the reason in the message`,
     ).toStrictEqual(pin.files);
+  });
+
+  it("R68-C-01: every installed byte is the byte its PUBLISHER shipped, read out of the cache by the lockfile's own integrity", () => {
+    // ROUND 71, THE COORDINATOR'S R68-C-01 (P3). `tools/runner-bytes.json`
+    // covers the runner's own package and says so; a patch one package deeper
+    // ran inside the gate's own run at rc 0, twice, measured. A deeper pin in
+    // this repository cannot close that: a pin the same commit recomputes is
+    // bounded by review and nothing else, which is R68-C-02 declared in the
+    // pin's own prose. So this arm's oracle is not mine. `package-lock.json`
+    // carries an `integrity` for every resolved package, npm's cache is
+    // ADDRESSED by that digest, and the tarball is re-hashed before one byte
+    // of it is believed -- so the regress ends in the lockfile's bytes, which
+    // this arm compares to the committed blob, and in sha512 preimage
+    // resistance. The cache PATH is not trusted: a planted one can only make
+    // this refuse by name or hand it bytes that already hash to what the
+    // lockfile says.
+    //
+    // The match is per-package AND per-path, and the challenger measured why a
+    // digest-only match is not an account: it needs no forgery at all. The
+    // attacker does not have to produce bytes, only to CHOOSE bytes somebody
+    // already published, and the useful choice is a HOLLOW one -- 65 zero-byte
+    // files and four one-newline files in this tree, one inside the runner's
+    // own closure (`node_modules/@vitest/runner/dist/types.js`, sha256
+    // 01ba4719c80b6fe9...), so under a digest-only rule any file could be
+    // hollowed to that newline and stay fully attested. An emptied ESM module
+    // exports nothing and an emptied CJS module exports `{}`: every guard
+    // whose emptiness fails open would be disabled at a cost of zero
+    // cryptography. From the other side, measured here: 996 installed files
+    // equal some member of some OTHER package in this closure. The one file that is
+    // genuinely written by an install script is DECLARED, up front:
+    // `node_modules/esbuild/bin/esbuild` is a 9350-byte shim in its own
+    // tarball and an 11427952-byte stripped ELF on disk, which is what
+    // `@esbuild/linux-x64` publishes at the same path.
+    //
+    // This arm and `tools/law-ran.py` are two programs reading one definition,
+    // and the tar reader here is written from the format rather than taken
+    // from Python's, so neither is the other's only witness.
+    const repo = realpathSync(REPO);
+    const cacheRoot = join(homedir(), '.npm', '_cacache');
+    // The install-written class, DECLARED by four values and keyed by
+    // PLATFORM, which is the challenger's condition and not a nicety: on
+    // another architecture the source package is a different one, so a table
+    // that is not keyed by platform is an exemption whose scope nobody stated.
+    // A platform with no table of its own has no declared rows, so an
+    // install-written file there refuses by name instead of matching nothing.
+    const DECLARED_BY_PLATFORM: Record<string, Record<string, [string, string, string, string]>> = {
+      'linux-x64': {
+        'node_modules/esbuild::bin/esbuild': [
+          'node_modules/@esbuild/linux-x64',
+          'bin/esbuild',
+          '0.28.2',
+          'e1698a3d5c6c0798fee4fd3b5cc816651f460c63d390a7a26ea4beb0b1884100',
+        ],
+      },
+    };
+    const declared = DECLARED_BY_PLATFORM[`${process.platform}-${process.arch}`] ?? {};
+
+    const lockRows = (
+      JSON.parse(readFileSync(join(repo, 'package-lock.json'), 'utf8')) as {
+        packages: Record<string, { integrity?: string }>;
+      }
+    ).packages;
+
+    const { problems, compared, checked, exceptions, excluded, binLinks } = publisherBytes(repo, cacheRoot, declared);
+    expect(
+      problems,
+      `${REFUSED_FILE_NOT_PUBLISHED}: the installed tree holds bytes no publisher shipped at the path they sit at. Each line names the file and, where the bytes are published somewhere else, where`,
+    ).toStrictEqual([]);
+    // A set this arm could silently measure as EMPTY is a set it does not
+    // measure: floors, not "more than zero".
+    expect(
+      [compared >= 300, checked >= 20000],
+      `${REFUSED_FILE_NOT_PUBLISHED}: this arm compared ${compared} package(s) and ${checked} file(s), which is too few to be the installed tree it claims to have read`,
+    ).toStrictEqual([true, true]);
+    expect(
+      exceptions,
+      'every DECLARED install-written row must match something on disk: a declaration nobody re-measured is how an enumerated exemption becomes a time hole',
+    ).toStrictEqual(Object.keys(declared));
+    // The remainder, itemised rather than left silent: 499 lockfile rows under
+    // node_modules against 408 compared, and an uncompared row contributes no
+    // difference BY CONSTRUCTION. Every absent one must be optional AND
+    // excluded from this machine by its own os/cpu, which is what the reader
+    // refuses on, and the count is asserted so the class cannot quietly
+    // swallow a row that stops being excluded.
+    expect(
+      excluded > 0 &&
+        excluded + compared + 8 === Object.keys(lockRows).filter((key) => key.startsWith('node_modules/') || key.includes('/node_modules/')).length,
+      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: ${compared} package(s) compared, ${excluded} named-but-excluded, and 8 workspace link rows must together be every row under node_modules, or this arm is measuring a subset it has not named`,
+    ).toBe(true);
+
+    // The `.bin` bound, asserted as a FLOOR so it cannot pass by reaching
+    // nothing: 25 shims on this tree, each of which must resolve inside a
+    // package the lockfile names. The set that question is asked against
+    // leaves out the row for the repository ROOT -- measured, with that row in
+    // it a shim pointing at a file this repository itself writes passes the
+    // check, because every path under the root starts with the root.
+    expect(
+      binLinks >= 20,
+      `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: ${binLinks} link(s) under node_modules/.bin were bounded, which is too few to be this tree's shims`,
+    ).toBe(true);
+
+    // The refusals, PROVOKED on a repository this case builds. The live tree
+    // is a SHARED install and planting a file in it would red every other
+    // thread's run; a hardening measured by breaking somebody else's run is
+    // not one. The lockfile row and the cached tarball are the REAL ones, so
+    // no tar is written here to be read back by the same code.
+    const lock = JSON.parse(readFileSync(join(repo, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; integrity?: string }>;
+    };
+    const borrowed = 'node_modules/semver';
+    const row = lock.packages[borrowed];
+    expect(typeof row?.integrity, `${REFUSED_FILE_NOT_PUBLISHED}: this case borrows ${borrowed} from the lockfile and it is not there`).toBe('string');
+
+    const scratch = mkdtempSync(join(tmpdir(), 'r71-publisher-'));
+    onTestFinished(() => rmSync(scratch, { recursive: true, force: true }));
+    const fixtureRoot = join(scratch, 'repo');
+    mkdirSync(join(fixtureRoot, 'node_modules'), { recursive: true });
+    cpSync(join(repo, borrowed), join(fixtureRoot, borrowed), { recursive: true });
+    const fixtureLock = {
+      name: 'fixture',
+      lockfileVersion: 3,
+      packages: { '': { name: 'fixture' }, [borrowed]: { version: row?.version, integrity: row?.integrity } },
+    };
+    const writeLock = (): void => writeFileSync(join(fixtureRoot, 'package-lock.json'), `${JSON.stringify(fixtureLock, null, 2)}\n`);
+    writeLock();
+    for (const args of [
+      ['init', '-q', '-b', 'fixture'],
+      ['config', 'user.email', 'fixture@example.invalid'],
+      ['config', 'user.name', 'fixture'],
+      ['add', 'package-lock.json'],
+      ['commit', '-q', '-m', 'lockfile'],
+    ]) {
+      const done = spawnSync('/usr/bin/git', ['--no-replace-objects', ...args], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+      });
+      expect(done.status, `fixture git ${args[0]} said ${done.stderr}`).toBe(0);
+    }
+
+    const named = (where: string): string[] => publisherBytes(fixtureRoot, cacheRoot, {}).problems.map((problem) => problem.split(':')[0] + ` <- ${where}`);
+    expect(named('an honest copy'), 'the honest control must refuse nothing, or this arm refuses everything and measures nothing').toStrictEqual([]);
+
+    const victim = join(fixtureRoot, borrowed, 'package.json');
+    writeFileSync(victim, `${readFileSync(victim, 'utf8')}\n`);
+    expect(named('an edited installed file')).toStrictEqual([`${REFUSED_FILE_NOT_PUBLISHED} <- an edited installed file`]);
+    cpSync(join(repo, borrowed, 'package.json'), victim);
+
+    const borrowedVersion = row?.version ?? '';
+    const borrowedDigest = createHash('sha256')
+      .update(readFileSync(join(repo, borrowed, 'package.json')))
+      .digest('hex');
+
+    // A file whose bytes ARE published, at a path nobody published them at:
+    // the move a closure-wide digest match would have admitted.
+    const moved = join(fixtureRoot, borrowed, 'index.js');
+    const source = join(repo, borrowed, 'package.json');
+    writeFileSync(moved, readFileSync(source));
+    expect(named('a published byte at a path nobody published it at')).toStrictEqual([
+      `${REFUSED_FILE_NOT_PUBLISHED} <- a published byte at a path nobody published it at`,
+    ]);
+    expect(
+      publisherBytes(fixtureRoot, cacheRoot, {
+        [`${borrowed}::index.js`]: [borrowed, 'package.json', borrowedVersion, borrowedDigest],
+      }).problems,
+      'the same file with a DECLARED row naming the member it equals is accounted for, which is the esbuild class exercised',
+    ).toStrictEqual([]);
+    // THE CHALLENGER'S FIRST CONDITION, provoked: a row that is not four
+    // values held HERE is a hole with a name on it, so each of the three ways
+    // one can be wrong must refuse.
+    for (const [wrong, what] of [
+      [[borrowed, 'package.json', borrowedVersion, '0'.repeat(64)], 'the wrong digest'],
+      [[borrowed, 'nowhere.js', borrowedVersion, borrowedDigest], 'a member nobody published'],
+      [[borrowed, 'package.json', '9.9.9', borrowedDigest], 'another version'],
+    ] as [[string, string, string, string], string][]) {
+      expect(
+        publisherBytes(fixtureRoot, cacheRoot, { [`${borrowed}::index.js`]: wrong }).problems.map((problem) => problem.split(':')[0]),
+        `a declared row naming ${what} must refuse`,
+      ).toStrictEqual([REFUSED_FILE_NOT_PUBLISHED]);
+    }
+    // THE CHALLENGER'S SECOND CONDITION: a platform with no table of its own.
+    // The rows are selected by platform OUTSIDE this reader, so the case this
+    // provokes is the one that reaches it -- no declared rows at all.
+    expect(
+      publisherBytes(fixtureRoot, cacheRoot, DECLARED_BY_PLATFORM['a-platform-nobody-declared'] ?? {}).problems.map((problem) => problem.split(':')[0]),
+      'on a platform this table does not name, an install-written file refuses BY NAME rather than silently matching nothing',
+    ).toStrictEqual([REFUSED_FILE_NOT_PUBLISHED]);
+    rmSync(moved);
+
+    expect(
+      publisherBytes(fixtureRoot, cacheRoot, {
+        [`${borrowed}::gone.js`]: [borrowed, 'package.json', borrowedVersion, borrowedDigest],
+      }).problems.map((problem) => problem.split(':')[0]),
+      'a declared row that matches nothing on disk refuses rather than ages',
+    ).toStrictEqual([REFUSED_FILE_NOT_PUBLISHED]);
+
+    mkdirSync(join(fixtureRoot, 'node_modules', 'arrived'));
+    writeFileSync(join(fixtureRoot, 'node_modules', 'arrived', 'index.js'), 'x\n');
+    expect(named('a package nobody resolved')).toStrictEqual([`${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a package nobody resolved`]);
+    rmSync(join(fixtureRoot, 'node_modules', 'arrived'), { recursive: true });
+
+    writeFileSync(join(fixtureRoot, 'package-lock.json'), `${JSON.stringify(fixtureLock, null, 2)}\n\n`);
+    expect(named('a lockfile the working tree edited after the commit')).toStrictEqual([
+      `${REFUSED_LOCKFILE_NOT_COMMITTED} <- a lockfile the working tree edited after the commit`,
+    ]);
+    writeLock();
+
+    // THE SET's own `else`, provoked. Three dotted entries are a NAMED class
+    // on this tree, so each is exercised as a class rather than asserted in a
+    // comment, and a fourth refuses.
+    const dotted = join(fixtureRoot, 'node_modules');
+    writeFileSync(join(dotted, '.package-lock.json'), '{}\n');
+    mkdirSync(join(dotted, '.vite', 'vitest'), { recursive: true });
+    writeFileSync(join(dotted, '.vite', 'vitest', 'results.json'), '{}\n');
+    expect(named('the named dotted records'), "npm's own resolution record and the runner's cache are a NAMED class, not a refusal").toStrictEqual([]);
+    mkdirSync(join(dotted, '.secret'));
+    expect(named('a dotted entry in no named class')).toStrictEqual([`${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a dotted entry in no named class`]);
+    rmSync(join(dotted, '.secret'), { recursive: true });
+
+    // `node_modules/.bin`, the three ways it can go. The suite is STARTED
+    // through these links, so a shim is a program this arm either bounds or
+    // does not.
+    const shims = join(dotted, '.bin');
+    mkdirSync(shims);
+    symlinkSync(join(fixtureRoot, borrowed, 'package.json'), join(shims, 'honest'));
+    expect(named('a shim into a package the lockfile names')).toStrictEqual([]);
+    expect(publisherBytes(fixtureRoot, cacheRoot, {}).binLinks, 'a bound that reaches no link is a bound nobody has measured').toBe(1);
+    writeFileSync(join(shims, 'plain'), 'x\n');
+    expect(named('a regular file under .bin')).toStrictEqual([`${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a regular file under .bin`]);
+    rmSync(join(shims, 'plain'));
+    const written = join(fixtureRoot, 'written-by-this-repository.js');
+    writeFileSync(written, 'x\n');
+    symlinkSync(written, join(shims, 'stray'));
+    expect(named('a shim resolving outside the named closure')).toStrictEqual([
+      `${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a shim resolving outside the named closure`,
+    ]);
+    rmSync(join(shims, 'stray'));
+    rmSync(written);
+
+    // A lockfile row that is neither a link nor a published package: the class
+    // defined by ABSENCE, closed. npm writes such a row today for a
+    // `git+https://` dependency, and this refuses nothing on the live tree --
+    // it catches the first one anybody adds.
+    const commitFixture = (message: string): void => {
+      const done = spawnSync('/usr/bin/git', ['--no-replace-objects', 'commit', '-qam', message], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+      });
+      expect(done.status, `fixture git commit said ${done.stderr}`).toBe(0);
+    };
+    writeFileSync(
+      join(fixtureRoot, 'package-lock.json'),
+      `${JSON.stringify({ ...fixtureLock, packages: { ...fixtureLock.packages, 'node_modules/from-a-repository': { version: '1.0.0', resolved: 'git+https://example.invalid/x.git' } } }, null, 2)}\n`,
+    );
+    commitFixture('a git dependency');
+    expect(named('a row that is neither a link nor a package')).toStrictEqual([
+      `${REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED} <- a row that is neither a link nor a package`,
+    ]);
+    writeLock();
+    commitFixture('back to the resolved lockfile');
+
+    // THE ORACLE'S OWN READER, attacked where it reads. The lockfile is
+    // compared to `HEAD:package-lock.json`, so an attacker who can write
+    // `refs/replace/` hands git another commit under the same name WITHOUT
+    // touching a tracked byte. The control measures that the attack works on a
+    // plain read; this reader passes `--no-replace-objects` and scrubs the
+    // environment to `GIT_NO_REPLACE_OBJECTS=1`, and still refuses by name.
+    const revision = (): string =>
+      spawnSync('/usr/bin/git', ['--no-replace-objects', 'rev-parse', 'HEAD'], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+      }).stdout.trim();
+    const honestCommit = revision();
+    writeFileSync(join(fixtureRoot, 'package-lock.json'), `${JSON.stringify(fixtureLock, null, 2)}\n\n`);
+    commitFixture('the forged lockfile');
+    const forgedCommit = revision();
+    for (const args of [
+      ['update-ref', 'refs/heads/fixture', honestCommit],
+      ['replace', '-f', honestCommit, forgedCommit],
+    ])
+      expect(
+        spawnSync('/usr/bin/git', ['--no-replace-objects', ...args], {
+          cwd: fixtureRoot,
+          encoding: 'utf8',
+          env: { PATH: '/usr/bin', GIT_NO_REPLACE_OBJECTS: '1' },
+        }).status,
+        `fixture git ${args[0]} did not succeed`,
+      ).toBe(0);
+    expect(
+      spawnSync('/usr/bin/git', ['cat-file', 'blob', 'HEAD:package-lock.json'], {
+        cwd: fixtureRoot,
+        encoding: 'utf8',
+        env: { PATH: '/usr/bin' },
+      }).stdout.endsWith('}\n\n'),
+      'the attack must REPRODUCE on a plain read, or the refusal below measures nothing',
+    ).toBe(true);
+    expect(named('a replace ref forging the committed lockfile')).toStrictEqual([
+      `${REFUSED_LOCKFILE_NOT_COMMITTED} <- a replace ref forging the committed lockfile`,
+    ]);
+    // HEAD is the honest commit again; the replace ref stays in place, so the
+    // case below runs with the forgery still installed and must not see it.
+    writeLock();
+
+    expect(
+      publisherBytes(fixtureRoot, join(scratch, 'no-cache-here'), {}).problems.map((problem) => problem.split(':')[0]),
+      'the publisher bytes ABSENT is a refusal, not a package this arm passes over: it is the one case that will differ on another machine',
+    ).toStrictEqual([REFUSED_PUBLISHER_BYTES_UNAVAILABLE]);
   });
 
   it("R54-S1/R55-S3: the two digest readers agree over the pack's own names and over names built to break them", () => {

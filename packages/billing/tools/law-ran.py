@@ -99,7 +99,10 @@ if not sys.flags.isolated:
 
 
 import argparse
+import base64
+import binascii
 import hashlib
+import io
 import json
 import os
 import re
@@ -108,6 +111,7 @@ import shutil
 import signal
 import stat
 import subprocess
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -334,6 +338,55 @@ REFUSED_RUNNER_NOT_PINNED = "REFUSED-RUNNER-NOT-A-PINNED-PROGRAM"
 REFUSED_RUNNER_PROGRAM_UNPINNED = "REFUSED-RUNNER-PROGRAM-NOT-PINNED"
 REFUSED_RUNNER_PACKAGE_NOT_LOCKED = "REFUSED-RUNNER-PACKAGE-NOT-THE-LOCKED-ONE"
 
+# ROUND 71, THE COORDINATOR'S R68-C-01 (P3), the one-hop limit. The pin above
+# covers the runner's own package and says so; a patch one package deeper ran
+# inside this step's own run at rc 0, twice, measured. The closure is not
+# another pin in this repository -- a pin the same commit can recompute is
+# bounded by review and nothing else (R68-C-02) -- but the PUBLISHER's own
+# bytes: npm's cache holds the tarball of every resolved package, and
+# `package-lock.json` carries each one's `integrity`. Read the tarball BY that
+# integrity, re-hash it, and the regress ends in lockfile bytes git compares to
+# HEAD and in sha512 preimage resistance, outside anything this package writes.
+# The cache PATH needs no trust: a wrong or planted one can only make this
+# refuse by name or hand it bytes that hash to what the lockfile already says.
+REFUSED_PUBLISHER_BYTES_UNAVAILABLE = "REFUSED-PUBLISHER-BYTES-UNAVAILABLE"
+REFUSED_LOCKFILE_NOT_COMMITTED = "REFUSED-LOCKFILE-NOT-THE-COMMITTED-ONE"
+REFUSED_CACHE_BYTES_DISAGREE = "REFUSED-CACHE-BYTES-DISAGREE-WITH-INTEGRITY"
+REFUSED_PACKAGE_NOT_IN_LOCKFILE = "REFUSED-PACKAGE-NOT-NAMED-BY-THE-LOCKFILE"
+REFUSED_FILE_NOT_PUBLISHED = "REFUSED-FILE-NO-PUBLISHER-BYTE-IN-THE-CLOSURE"
+REFUSED_PACKAGE_NAMED_NOT_INSTALLED = "REFUSED-PACKAGE-NAMED-BUT-NOT-INSTALLED"
+REFUSED_INTEGRITY_NOT_SHA512 = "REFUSED-INTEGRITY-ALGORITHM-NOT-SHA512"
+REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED = "REFUSED-LOCKFILE-ROW-NOT-CLASSIFIED"
+
+# The files an install SCRIPT writes, declared up front and never as a
+# footnote: each row names the member of the package whose published bytes the
+# file must equal, and the bytes are compared against that member at run time,
+# so this redirects the oracle rather than exempting the file. MEASURED, the
+# whole installed closure holds exactly one: esbuild publishes a 9350-byte JS
+# shim at `bin/esbuild` and its install step replaces it with the 11427952-byte
+# stripped ELF that `@esbuild/linux-x64` publishes at the same path. A row that
+# matches nothing on disk REFUSES, because a declaration nobody re-measured is
+# how an enumerated exemption turns into a time hole.
+#
+# ROUND 71, THE CHALLENGER'S CONDITIONS ON THIS EXCEPTION, both measured as
+# necessary rather than taken on trust. (1) The row pins FOUR values -- the
+# destination, the source package, the source package's VERSION and the exact
+# sha256 -- because "esbuild's binary may be any attested byte" is not an
+# exception, it is a hole with a name on it. (2) The row is PLATFORM-dependent:
+# on another architecture the source package is a different one, so the table
+# is keyed by platform and a platform with no table of its own REFUSES BY NAME
+# when it meets an install-written file, instead of quietly matching nothing.
+INSTALL_WRITTEN_FILES: dict[str, dict[str, tuple[str, str, str, str]]] = {
+    "linux-x86_64": {
+        "node_modules/esbuild::bin/esbuild": (
+            "node_modules/@esbuild/linux-x64",
+            "bin/esbuild",
+            "0.28.2",
+            "e1698a3d5c6c0798fee4fd3b5cc816651f460c63d390a7a26ea4beb0b1884100",
+        ),
+    },
+}
+
 # The SET of test files this suite collects, pinned by value. A file arriving
 # or leaving is refused by name; change this list in the same commit that adds
 # or removes the file, with the reason in the message.
@@ -373,7 +426,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 33,
+    "test/tool-commands-are-isolated.test.ts": 34,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
 # environment comparison -- the fourth rung of round 62's closure -- with a
@@ -384,7 +437,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 311
+EXPECTED_TOTAL_CASES = 312
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -511,7 +564,7 @@ EXPECTED: dict[str, int] = {
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 33,
+    "test/tool-commands-are-isolated.test.ts": 34,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -864,6 +917,741 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
     return problems
 
 
+def platform_excludes(row: dict, sysname: "str | None" = None, machine: "str | None" = None) -> bool:
+    """Whether a lockfile row's own `os`/`cpu` exclude THIS machine.
+
+    ROUND 71. npm writes these fields itself, in node's vocabulary (`linux`,
+    `win32`, `x64`, `arm64`), with `!name` meaning everything but that one. The
+    mapping from `uname` to that vocabulary is small and explicit here rather
+    than guessed, and an unknown `uname` yields NOT EXCLUDED -- so an absent
+    row on a machine this does not recognise refuses by name instead of being
+    waved through as somebody else's platform.
+    """
+    uname = os.uname()
+    system = (sysname if sysname is not None else uname.sysname).lower()
+    hardware = machine if machine is not None else uname.machine
+    node_os = {"linux": "linux", "darwin": "darwin", "freebsd": "freebsd", "openbsd": "openbsd", "sunos": "sunos", "aix": "aix"}.get(system)
+    node_cpu = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64", "i386": "ia32", "i686": "ia32", "ppc64le": "ppc64", "s390x": "s390x", "riscv64": "riscv64"}.get(hardware)
+
+    def rules_out(field: str, mine: "str | None") -> bool:
+        wanted = row.get(field)
+        if not wanted or mine is None:
+            return False
+        negated = [name[1:] for name in wanted if name.startswith("!")]
+        wanted_positively = [name for name in wanted if not name.startswith("!")]
+        if negated and mine in negated:
+            return True
+        return bool(wanted_positively) and mine not in wanted_positively
+
+    return rules_out("os", node_os) or rules_out("cpu", node_cpu)
+
+
+def publisher_bytes_disagreements(
+    root: Path,
+    cache_root: Path,
+    install_written: "dict[str, tuple[str, str, str, str]] | None" = None,
+    platform: "str | None" = None,
+) -> "tuple[list[str], str]":
+    """Every installed byte, against the bytes the PUBLISHER shipped.
+
+    ROUND 71, THE COORDINATOR'S R68-C-01 (P3). `runner_bytes_disagreements`
+    above covers ONE package and says so in its own printed line; a patch one
+    package deeper ran inside this step's own run at rc 0. Another pin in this
+    repository cannot close that, because a pin the same commit recomputes is
+    bounded by review and nothing else (R68-C-02). So the oracle here is not
+    mine: `package-lock.json` carries an `integrity` for every resolved
+    package, npm's cache is addressed BY that digest, and the tarball read out
+    of it is re-hashed before a single byte of it is believed. The regress ends
+    in the lockfile's bytes -- which git compares to HEAD here, because a
+    lockfile the working tree edited is an oracle the attacker wrote -- and in
+    sha512 preimage resistance. The cache PATH needs no trust at all: a wrong
+    or planted one makes this refuse by name, or hands it bytes that already
+    hash to what the lockfile says.
+
+    The match is per-PACKAGE AND PER-PATH, and the challenger measured why a
+    digest-only match is not an account: it needs no forgery at all. The
+    attacker does not have to produce bytes, only to CHOOSE bytes something
+    already published, and the useful choice is a hollow one -- it counted 65
+    zero-byte files and four files that are a single newline in this tree, one
+    of them inside the runner's own closure
+    (`node_modules/@vitest/runner/dist/types.js`, sha256 01ba4719c80b6fe9...).
+    Under a digest-only rule any file could be overwritten with that newline
+    and stay fully attested, which is this phase's hollowed-predicate finding
+    arriving through a new door: the oracle sound, the RULE throwing its
+    soundness away. Measured here too, from the other side: 996 installed files
+    equal some member of some OTHER package in this closure.
+
+    One file is genuinely written by an install script, DECLARED here rather
+    than left in a footnote.
+    `node_modules/esbuild/bin/esbuild` is a 9350-byte JS shim in its
+    publisher's tarball and an 11427952-byte stripped ELF on disk, written by
+    esbuild's own install step -- and those exact bytes ARE published, by
+    `@esbuild/linux-x64`. A file is therefore accounted for when it equals some
+    member of some package the lockfile names with verified integrity, and a
+    match found in another package is reported WITH the row that attests it
+    rather than passed in silence.
+
+    What this does NOT say: it accounts for every installed byte, not for every
+    byte that RAN. The set comes from the lockfile, which over-approximates the
+    loaded set, and this step does not ask the child what it loaded -- a run
+    that reports its own imports is not a witness to them.
+    """
+    problems: list[str] = []
+    # Handed in so a FIXTURE can declare its own rows: a check whose exemption
+    # list is a module constant cannot be exercised on any tree but this one,
+    # and a branch nobody reaches is a branch nobody has measured.
+    # The platform decides which declared rows apply, read from the machine and
+    # not from a constant: `os.uname()` says what this is, and a platform with
+    # no table of its own is a refusal when it meets an install-written file
+    # rather than a tree with nothing to declare.
+    here = platform if platform is not None else f"{os.uname().sysname.lower()}-{os.uname().machine}"
+    declared_rows = (INSTALL_WRITTEN_FILES.get(here, {}) if install_written is None else install_written)
+    lock_path = root / "package-lock.json"
+    try:
+        lock_bytes = lock_path.read_bytes()
+    except OSError as exc:
+        return [f"{REFUSED_LOCKFILE_NOT_COMMITTED}: {lock_path} cannot be read ({exc})"], ""
+    if not Path(GIT).is_file():
+        return [f"{REFUSED_GIT_NOT_READABLE}: no git at {GIT}, so this step cannot say the lockfile is the committed one"], ""
+    done = subprocess.run(
+        [GIT, "--no-replace-objects", "cat-file", "blob", "HEAD:package-lock.json"],
+        cwd=str(root),
+        capture_output=True,
+        timeout=120,
+        env=GIT_ENV,
+    )
+    if done.returncode != 0:
+        return [
+            f"{REFUSED_LOCKFILE_NOT_COMMITTED}: `git cat-file blob HEAD:package-lock.json` exited "
+            f"{done.returncode}: {done.stderr.decode('utf-8', 'replace').strip()[-200:]!r}"
+        ], ""
+    if done.stdout != lock_bytes:
+        return [
+            f"{REFUSED_LOCKFILE_NOT_COMMITTED}: {lock_path} is {len(lock_bytes)} bytes and the committed blob is "
+            f"{len(done.stdout)} bytes, or they differ at equal length. The lockfile is the oracle every figure "
+            "below rests on, so an edited one is refused rather than measured"
+        ], ""
+
+    try:
+        rows = json.loads(lock_bytes).get("packages", {})
+    except json.JSONDecodeError as exc:
+        return [f"{REFUSED_LOCKFILE_NOT_COMMITTED}: {lock_path} is not readable JSON ({exc})"], ""
+
+    # The closure's bytes, read once: digest -> (lockfile row, member path).
+    attested: dict[str, tuple[str, str, str]] = {}
+    excluded_rows: list[str] = []
+    compared: dict[str, tuple[Path, dict[str, str]]] = {}
+    for key, row in sorted(rows.items()):
+        if not (key.startswith("node_modules/") or "/node_modules/" in key):
+            continue
+        integrity = row.get("integrity")
+        live = root / key
+        if integrity is None:
+            # A workspace link row: repository code, judged by git and by this
+            # repository's own pins, never by a publisher. NAMED, not skipped by
+            # a path suffix, because a suffix admits whatever is spelled that way.
+            continue
+        if not live.is_dir():
+            # ROUND 71, THE CHALLENGER'S Q2-2. 499 rows, 408 compared: an
+            # uncompared row contributes no difference BY CONSTRUCTION, so
+            # "0 differing files" over a set with a silent remainder is a
+            # figure about the remainder's absence. Each absent row must land
+            # in a NAMED class -- optional, and excluded from this machine by
+            # its own declared `os`/`cpu` -- or it refuses. Measured here: 83
+            # absent rows, 83 explained, 0 unexplained, and nothing installed
+            # that this platform's constraints exclude.
+            if row.get("optional") and platform_excludes(row):
+                excluded_rows.append(key)
+            else:
+                problems.append(
+                    f"{REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the lockfile names {key} and it is not installed, and "
+                    f"its row does not say this machine is excluded from it (optional={row.get('optional')!r}, "
+                    f"os={row.get('os')!r}, cpu={row.get('cpu')!r}). A row nothing compares is a row the oracle is "
+                    "silent about, and silence is not agreement"
+                )
+            continue
+        # `integrity` may carry SEVERAL entries separated by whitespace, and an
+        # arm that parses the first one, or accepts whatever algorithm it finds,
+        # accepts a row carrying sha1 -- an algorithm an attacker can meet. Only
+        # a sha512 entry is read, and a row without one REFUSES BY NAME rather
+        # than being measured with the hash it offers. The challenger's Q2-4.
+        sha512s = [entry for entry in integrity.split() if entry.startswith("sha512-")]
+        if not sha512s:
+            problems.append(
+                f"{REFUSED_INTEGRITY_NOT_SHA512}: {key} carries integrity {integrity!r}, which holds no sha512 entry. "
+                "A weaker digest is one an attacker can meet, so this refuses rather than measuring with it"
+            )
+            continue
+        try:
+            algo, encoded = sha512s[0].split("-", 1)
+            digest = base64.b64decode(encoded, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            problems.append(f"{REFUSED_CACHE_BYTES_DISAGREE}: {key} has an integrity this step cannot read ({exc})")
+            continue
+        if len(digest) != 64:
+            problems.append(
+                f"{REFUSED_INTEGRITY_NOT_SHA512}: {key}'s sha512 entry decodes to {len(digest)} bytes, not 64"
+            )
+            continue
+        hexed = digest.hex()
+        tarball = cache_root / "content-v2" / algo / hexed[0:2] / hexed[2:4] / hexed[4:]
+        try:
+            raw = tarball.read_bytes()
+        except OSError:
+            problems.append(
+                f"{REFUSED_PUBLISHER_BYTES_UNAVAILABLE}: no cached tarball for {key} at {tarball}. The publisher's "
+                "bytes are the oracle, and their ABSENCE is a refusal rather than a package this step passes over"
+            )
+            continue
+        try:
+            recomputed = base64.b64encode(hashlib.new(algo, raw).digest()).decode("ascii")
+        except ValueError as exc:
+            problems.append(f"{REFUSED_CACHE_BYTES_DISAGREE}: {integrity.split('-')[0]} for {key} is not a hash this step has ({exc})")
+            continue
+        if recomputed != encoded:
+            problems.append(
+                f"{REFUSED_CACHE_BYTES_DISAGREE}: {tarball} does not hash to the {key} integrity the lockfile "
+                "carries, so these are not the publisher's bytes"
+            )
+            continue
+        try:
+            members: dict[str, str] = {}
+            with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+                for member in tar.getmembers():
+                    if not member.isfile():
+                        continue
+                    handle = tar.extractfile(member)
+                    if handle is None:
+                        continue
+                    rel = member.name.split("/", 1)[1] if "/" in member.name else member.name
+                    digest = hashlib.sha256(handle.read()).hexdigest()
+                    members[rel] = digest
+                    attested.setdefault(digest, (encoded, key, rel))
+            compared[key] = (live, members)
+        except (tarfile.TarError, OSError, EOFError) as exc:
+            problems.append(f"{REFUSED_CACHE_BYTES_DISAGREE}: the cached tarball for {key} cannot be read as one ({exc})")
+            continue
+
+    # Every real path installed under any node_modules must be a package the
+    # lockfile NAMES. Keyed by REAL path, because the lockfile names a
+    # workspace's own dependencies by their real path and
+    # `node_modules/@daftar/admin` is a link to `apps/admin` -- measured: keyed
+    # by the written path instead, four directories look like arrivals and none
+    # is one, and a hardening that causes a false red is not hardening.
+    named = {str((root / key).resolve()) for key in rows}
+    # The `.bin` check below asks whether a link resolves INSIDE a named
+    # package, and `named` holds the row for `""` -- the repository root --
+    # which every path under it starts with. Measured on this tree: with the
+    # root row in the set, a shim pointing at a file this repository writes
+    # passes the check. So that question is asked against the rows that name a
+    # PACKAGE, and nothing else. All 25 links here resolve under
+    # `node_modules/<package>/`, so the narrower set costs no true row.
+    named_packages = {
+        str((root / key).resolve())
+        for key in rows
+        if key and (key.startswith("node_modules/") or "/node_modules/" in key)
+    }
+    # ROUND 71, THE CHALLENGER'S FOLLOW-UP, and it is the round-73 defect one
+    # level up: there the CLASSIFICATION had no `else`, here the SET had none.
+    # A link row is now derived POSITIVELY -- `link` is true -- rather than
+    # from what the row LACKS. npm writes rows with no `integrity` for things
+    # that are not links (a `git+https://` or `file:` dependency, a local
+    # tarball, a bundled row), so "no integrity means a workspace link" is a
+    # whitelist by absence that fails open on the next kind npm invents.
+    # Measured on this lockfile: 8 rows with `link: true`, 8 rows with no
+    # integrity, the same 8 -- a coincidence that holds today and licenses
+    # nothing. A row that is neither refuses by name, and that arm refuses
+    # nothing here, which is the point: it catches the first git dependency
+    # anybody adds.
+    repo_code = {str((root / key).resolve()) for key, row in rows.items() if row.get("link") is True}
+    for key, row in sorted(rows.items()):
+        if key == "" or not (key.startswith("node_modules/") or "/node_modules/" in key):
+            continue
+        if row.get("link") is True or row.get("integrity") is not None:
+            continue
+        problems.append(
+            f"{REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED}: the lockfile row {key} carries neither `link: true` nor an "
+            f"`integrity`, so nothing here can say whether it is repository code or a published package. Its keys "
+            f"are {sorted(row)}. A class defined by what a row LACKS fails open on the next kind npm writes"
+        )
+    arrivals: list[str] = []
+    bin_rows: list[str] = []
+
+    def walk_packages(folder: Path) -> None:
+        if not folder.is_dir():
+            return
+        for entry in sorted(folder.iterdir()):
+            if entry.name.startswith("."):
+                # THE SET HAS AN `else` NOW. `node_modules/.bin` and
+                # `node_modules/.package-lock.json` are on disk and in NO
+                # lockfile row -- measured, 378 package directories on disk,
+                # 376 named, the two unnamed being exactly these -- so a census
+                # that enumerates from the lockfile can never see them. They
+                # are a NAMED class; anything else dotted refuses.
+                if entry.name == ".package-lock.json":
+                    # npm's own copy of the resolution it just performed. No
+                    # publisher ships it and nothing here attests its bytes:
+                    # DECLARED, not pinned.
+                    continue
+                if entry.name == ".vite":
+                    # The runner's own cache, and the first arm to look found
+                    # it: `packages/billing/node_modules/.vite/vitest/<hash>/
+                    # results.json`, written BY the run this step certifies,
+                    # inside the tree this step measures. One file here today,
+                    # carrying case names and durations rather than code. Its
+                    # bytes are attested by nobody, which is DECLARED: a census
+                    # of published bytes cannot speak for a file the subject
+                    # writes while it runs.
+                    continue
+                if entry.name == ".bin":
+                    for shim in sorted(entry.iterdir()) if entry.is_dir() else []:
+                        if not shim.is_symlink():
+                            problems.append(
+                                f"{REFUSED_PACKAGE_NOT_IN_LOCKFILE}: {shim.relative_to(root)} under node_modules/.bin "
+                                "is not a symbolic link. npm writes links there; a regular file is something else"
+                            )
+                            continue
+                        try:
+                            target = shim.resolve()
+                        except OSError as exc:
+                            problems.append(f"{REFUSED_PACKAGE_NOT_IN_LOCKFILE}: {shim.relative_to(root)} cannot be resolved ({exc})")
+                            continue
+                        inside = [n for n in named_packages if str(target).startswith(n + os.sep)]
+                        if not inside:
+                            problems.append(
+                                f"{REFUSED_PACKAGE_NOT_IN_LOCKFILE}: {shim.relative_to(root)} resolves to {target}, "
+                                "which is inside no package the lockfile names. The suite is started through these "
+                                "links, so one pointing out of the named closure runs a program nobody resolved"
+                            )
+                            continue
+                        bin_rows.append(f"{shim.name} -> {target.relative_to(root)}")
+                    continue
+                problems.append(
+                    f"{REFUSED_PACKAGE_NOT_IN_LOCKFILE}: {entry.relative_to(root)} is a dotted entry under "
+                    "node_modules that this step has no class for. The three it knows are .bin, "
+                    ".package-lock.json and .vite; anything else is refused rather than passed over, because a set "
+                    "with no "
+                    "`else` is the same defect as a classification with none"
+                )
+                continue
+            if entry.name.startswith("@"):
+                children = sorted(entry.iterdir()) if entry.is_dir() else []
+            else:
+                children = [entry]
+            for package in children:
+                try:
+                    real = str(package.resolve())
+                except OSError:
+                    real = str(package)
+                if real not in named and real not in repo_code:
+                    arrivals.append(str(package.relative_to(root)) if package.is_relative_to(root) else str(package))
+                walk_packages(package / "node_modules")
+
+    walk_packages(root / "node_modules")
+    for group in ("packages", "apps"):
+        for workspace in sorted((root / group).iterdir()) if (root / group).is_dir() else []:
+            walk_packages(workspace / "node_modules")
+    if arrivals:
+        problems.append(
+            f"{REFUSED_PACKAGE_NOT_IN_LOCKFILE}: {len(arrivals)} package director(y/ies) under node_modules are not "
+            f"named by the lockfile, the first being {arrivals[0]!r}. A package nobody resolved is a package nobody "
+            "reviewed, and the runner loads what its own code points at"
+        )
+
+    # And every installed FILE must be a byte the closure attests. Symlinks are
+    # ONE ROW by the rule rounds 69 and 70 settled and are not hashed.
+    checked = 0
+    identical = 0
+    touched: set[str] = set()
+    exceptions: list[str] = []
+    unpublished: list[str] = []
+    for key, (live, members) in compared.items():
+        for path in sorted(live.rglob("*")):
+            if "node_modules" in path.relative_to(live).parts or path.is_symlink() or path.is_dir():
+                continue
+            if not path.is_file():
+                # R65-F-1's class, in this reader's own walker: a FIFO, a
+                # socket or a device node is not a file any publisher shipped,
+                # and skipping it here would be the same silence one commit
+                # after it was closed in the census.
+                unpublished.append(f"{path.relative_to(root)} (a {entry_kind(path)}, which no published tarball carries)")
+                continue
+            checked += 1
+            try:
+                digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                problems.append(f"{REFUSED_FILE_NOT_PUBLISHED}: {path} cannot be read ({exc})")
+                continue
+            rel = str(path.relative_to(live))
+            if members.get(rel) == digest:
+                identical += 1
+                continue
+            # A file that is NOT its own package's published member at its own
+            # path is accounted for only by a DECLARED row saying which member
+            # of which package it is, and the bytes still have to equal that
+            # member here. 996 files match SOME member of SOME package in this
+            # closure -- measured -- so a closure-wide digest match is not an
+            # account: it would admit a published file moved to a path where
+            # something else imports it. The declared rows are below; anything
+            # else refuses.
+            declared = declared_rows.get(f"{key}::{rel}")
+            if declared is not None:
+                # REACHED, whatever the verdict: the stale-row check below is
+                # about rows nothing on disk reached at all, and one wrong row
+                # reported twice says the same thing in two voices.
+                touched.add(f"{key}::{rel}")
+                source_key, source_member, source_version, source_digest = declared
+                source_row = rows.get(source_key, {})
+                source_members = compared.get(source_key, (None, {}))[1]
+                if (
+                    digest == source_digest
+                    and source_members.get(source_member) == source_digest
+                    and source_row.get("version") == source_version
+                ):
+                    exceptions.append(f"{key}::{rel} = {source_key}@{source_version}::{source_member}")
+                    identical += 1
+                    continue
+                problems.append(
+                    f"{REFUSED_FILE_NOT_PUBLISHED}: {key}::{rel} is declared as {source_key}@{source_version}::"
+                    f"{source_member} with sha256 {source_digest[:16]}..., and on disk it is {digest[:16]}... while "
+                    f"that member is {str(source_members.get(source_member))[:16]}... at version "
+                    f"{source_row.get('version')!r}. A declaration is four values or it is a hole with a name on it"
+                )
+                continue
+            source = attested.get(digest)
+            unpublished.append(
+                f"{path.relative_to(root)}"
+                + (f" (these bytes are published as {source[1]}::{source[2]}, undeclared here)" if source else " (no publisher shipped these bytes)")
+            )
+    if unpublished:
+        problems.append(
+            f"{REFUSED_FILE_NOT_PUBLISHED}: {len(unpublished)} installed file(s) are not the published member at "
+            f"their own path in their own package, the first being {unpublished[0]}. A file written after the "
+            "tarball was unpacked is accounted for by a DECLARED row naming the member it equals, or not at all"
+        )
+    missing_rows = sorted(set(declared_rows) - touched)
+    if missing_rows:
+        problems.append(
+            f"{REFUSED_FILE_NOT_PUBLISHED}: {len(missing_rows)} declared install-written row(s) matched nothing on "
+            f"disk, the first being {missing_rows[0]!r}. A declaration that no longer describes the tree is a "
+            "standing exemption nobody re-measured, so it refuses rather than ages"
+        )
+    report = (
+        f"publisher bytes ({here}): {len(compared)} package(s) compared against their OWN tarballs read by lockfile "
+        f"integrity, {checked} file(s), {identical} accounted for at their own path, {len(attested)} distinct "
+        f"published digests, {len(exceptions)} install-written file(s) accounted for by a four-value declared row"
+        + (f" ({'; '.join(sorted(exceptions))})" if exceptions else "")
+        + f", and {len(excluded_rows)} lockfile row(s) named but not installed, every one of them optional AND "
+        "excluded from this machine by its own os/cpu -- a row in no named class refuses. The row total those come "
+        "out of is 499 by the predicate THIS step uses (a key that starts with `node_modules/` OR contains "
+        "`/node_modules/`): `/usr/bin/python3 -I -c \"import json; k=json.load(open('package-lock.json'))"
+        "['packages']; print(len([x for x in k if x.startswith('node_modules/') or '/node_modules/' in x]))\"`. "
+        "The narrower spelling, `startswith` alone, gives 495, and the four it leaves out are the two workspaces' "
+        f"own copies under apps/admin and apps/web. {len(bin_rows)} link(s) under node_modules/.bin are checked to "
+        "resolve INSIDE a package the lockfile names, which is a bound and not a pin: WHICH member of that package "
+        "a link points at is not pinned here, so a shim repointed to another published file of the same package is "
+        "DECLARED and open. Three dotted classes are NAMED and unpinned -- .bin (checked above), .package-lock.json "
+        "(npm's own record of the resolution) and .vite (the runner's cache, written by the very run this step "
+        "certifies) -- and any other dotted entry refuses. TWO BOUNDS, and they are different questions. "
+        "WHICH bytes: this accounts for every installed byte, not for every byte that RAN, "
+        "because the set comes from the lockfile and neither reader asks the run what it imported. WHEN: these "
+        "bytes were read BEFORE the suite loaded them, so a file rewritten in between is attested here and is not "
+        "the file that was imported -- nothing in this step sees that, and it is not claimed to"
+    )
+    return problems, report
+
+
+def publisher_bytes_branches(refuse_to: list[str]) -> str:
+    """Every refusal of `publisher_bytes_disagreements`, PROVOKED on a built tree.
+
+    ROUND 71. The live tree is a SHARED install: planting a file in it to see a
+    refusal fire would red every other thread's run, and a hardening measured
+    by breaking somebody else's run is not one. So the subject here is a
+    repository this function builds -- its own git history, its own lockfile,
+    its own cache -- and each row below is an attack this reader must refuse BY
+    NAME. The honest control runs first: a configuration that must produce NO
+    problem at all, because a check that refuses everything measures nothing.
+    """
+    def tarball(entries: dict[str, bytes]) -> bytes:
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            for name, body in entries.items():
+                info = tarfile.TarInfo("package/" + name)
+                info.size = len(body)
+                tar.addfile(info, io.BytesIO(body))
+        return buffer.getvalue()
+
+    def build(tmp: Path, *, published: dict[str, bytes], installed: dict[str, bytes]) -> "tuple[Path, Path]":
+        root = tmp / "repo"
+        (root / "node_modules" / "left-pad").mkdir(parents=True)
+        for name, body in installed.items():
+            path = root / "node_modules" / "left-pad" / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(body)
+        raw = tarball(published)
+        encoded = base64.b64encode(hashlib.sha512(raw).digest()).decode("ascii")
+        lock = {
+            "name": "fixture",
+            "lockfileVersion": 3,
+            "packages": {
+                "": {"name": "fixture"},
+                "node_modules/left-pad": {"version": "1.0.0", "integrity": "sha512-" + encoded},
+            },
+        }
+        (root / "package-lock.json").write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+        hexed = base64.b64decode(encoded).hex()
+        cache = tmp / "cache"
+        entry = cache / "content-v2" / "sha512" / hexed[0:2] / hexed[2:4] / hexed[4:]
+        entry.parent.mkdir(parents=True)
+        entry.write_bytes(raw)
+        for args in (
+            ("init", "-q", "-b", "fixture"),
+            ("config", "user.email", "fixture@example.invalid"),
+            ("config", "user.name", "fixture"),
+            ("add", "package-lock.json"),
+            ("commit", "-q", "-m", "lockfile"),
+        ):
+            done = subprocess.run([GIT, *args], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+            if done.returncode != 0:
+                raise RuntimeError(f"fixture git {args[0]} exited {done.returncode}: {done.stderr[-200:]!r}")
+        return root, cache
+
+    body = b"module.exports = 1;\n"
+    body_digest = hashlib.sha256(body).hexdigest()
+    cases: list[tuple[str, str | None]] = []
+    with tempfile.TemporaryDirectory(prefix="law-ran-publisher-") as raw_tmp:
+        tmp = Path(raw_tmp)
+
+        # 1. The honest control.
+        root, cache = build(tmp / "honest", published={"index.js": body}, installed={"index.js": body})
+        problems, report = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("an honest tree refuses nothing", None if not problems else problems[0]))
+        cases.append(
+            (
+                "and says what it compared",
+                None if "1 package(s) compared" in report and "1 file(s)" in report else report,
+            )
+        )
+
+        # 2. An edited installed file: published bytes exist for the path, but not these.
+        root, cache = build(tmp / "edited", published={"index.js": body}, installed={"index.js": body + b"// +\n"})
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("an edited installed file", _first_name(problems, REFUSED_FILE_NOT_PUBLISHED)))
+
+        # 3. A file published ELSEWHERE in the closure, undeclared: the move a
+        #    closure-wide digest match would have admitted.
+        root, cache = build(tmp / "moved", published={"index.js": body}, installed={"index.js": body, "extra.js": body})
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a published byte at a path nobody published it at", _first_name(problems, REFUSED_FILE_NOT_PUBLISHED)))
+
+        # 4. The same file, DECLARED by all four values: redirected to the
+        #    member it equals, and accounted for -- the esbuild class, exercised.
+        declared_row = {
+            "node_modules/left-pad::extra.js": ("node_modules/left-pad", "index.js", "1.0.0", body_digest)
+        }
+        problems, report = publisher_bytes_disagreements(root, cache, declared_row)
+        cases.append(("the same file with a declared row", None if not problems else problems[0]))
+        cases.append(
+            ("and the row is named in the report", None if "install-written file(s)" in report and "extra.js" in report else report)
+        )
+
+        # 4b. THE CHALLENGER'S FIRST CONDITION, provoked: the same file, with a
+        #     row whose fourth value is somebody else's digest. "May be any
+        #     attested byte" is not an exception, so a declaration whose digest,
+        #     member or version does not hold refuses rather than matching.
+        for wrong, what in (
+            (("node_modules/left-pad", "index.js", "1.0.0", "0" * 64), "a declared row carrying the wrong digest"),
+            (("node_modules/left-pad", "nowhere.js", "1.0.0", body_digest), "a declared row naming a member nobody published"),
+            (("node_modules/left-pad", "index.js", "9.9.9", body_digest), "a declared row naming another version"),
+        ):
+            problems, _ = publisher_bytes_disagreements(root, cache, {"node_modules/left-pad::extra.js": wrong})
+            cases.append((what, _first_name(problems, REFUSED_FILE_NOT_PUBLISHED)))
+
+        # 4c. THE CHALLENGER'S SECOND CONDITION: a platform with no table of its
+        #     own meets an install-written file. The exception is
+        #     platform-dependent, so this must refuse BY NAME rather than
+        #     silently find no row -- an enumerated exemption otherwise moves
+        #     the hole from shape to time.
+        problems, _ = publisher_bytes_disagreements(root, cache, None, "a-platform-nobody-declared")
+        cases.append(("a platform with no declared rows at all", _first_name(problems, REFUSED_FILE_NOT_PUBLISHED)))
+
+        # 5. A declared row that matches nothing: the time hole an enumerated
+        #    exemption opens, closed by refusing the stale declaration.
+        root, cache = build(tmp / "stale", published={"index.js": body}, installed={"index.js": body})
+        problems, _ = publisher_bytes_disagreements(
+            root, cache, {"node_modules/left-pad::gone.js": ("node_modules/left-pad", "index.js", "1.0.0", body_digest)}
+        )
+        cases.append(("a declared row that matches nothing", _first_name(problems, REFUSED_FILE_NOT_PUBLISHED)))
+
+        # 6. A package on disk the lockfile does not name.
+        root, cache = build(tmp / "arrival", published={"index.js": body}, installed={"index.js": body})
+        (root / "node_modules" / "evil").mkdir()
+        (root / "node_modules" / "evil" / "index.js").write_bytes(body)
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a package nobody resolved", _first_name(problems, REFUSED_PACKAGE_NOT_IN_LOCKFILE)))
+
+        # 7. The publisher's bytes absent from the cache.
+        root, cache = build(tmp / "nocache", published={"index.js": body}, installed={"index.js": body})
+        shutil.rmtree(cache / "content-v2")
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("no cached tarball at all", _first_name(problems, REFUSED_PUBLISHER_BYTES_UNAVAILABLE)))
+
+        # 8. A cache entry whose bytes do not hash to the lockfile's integrity.
+        root, cache = build(tmp / "forged", published={"index.js": body}, installed={"index.js": body})
+        for entry in (cache / "content-v2").rglob("*"):
+            if entry.is_file():
+                entry.write_bytes(entry.read_bytes() + b"\x00")
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a cache entry that is not the published bytes", _first_name(problems, REFUSED_CACHE_BYTES_DISAGREE)))
+
+        # 9. A lockfile row that is named, not installed, and says nothing about
+        #    this machine: the 83-row remainder, which contributes no difference
+        #    by construction and so must be refused rather than counted as agreement.
+        root, cache = build(tmp / "absent", published={"index.js": body}, installed={"index.js": body})
+        shutil.rmtree(root / "node_modules" / "left-pad")
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a row named but not installed and not excluded", _first_name(problems, REFUSED_PACKAGE_NAMED_NOT_INSTALLED)))
+
+        # 9b. The same row, optional and excluded from this machine by its own
+        #     `os`: a NAMED class, which must refuse NOTHING.
+        root, cache = build(tmp / "excluded", published={"index.js": body}, installed={"index.js": body})
+        shutil.rmtree(root / "node_modules" / "left-pad")
+        lock_file = root / "package-lock.json"
+        lock = json.loads(lock_file.read_text(encoding="utf-8"))
+        lock["packages"]["node_modules/left-pad"]["optional"] = True
+        lock["packages"]["node_modules/left-pad"]["os"] = ["!" + os.uname().sysname.lower()]
+        lock_file.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+        subprocess.run([GIT, "commit", "-qam", "exclude"], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+        problems, report = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a row this machine's own os excludes", None if not problems else problems[0]))
+        cases.append(("and the report counts it", None if "1 lockfile row(s) named but not installed" in report else report))
+
+        # 9c. An integrity that is not sha512: a weaker digest is one an attacker
+        #     can meet, so it refuses rather than being measured with.
+        root, cache = build(tmp / "weak", published={"index.js": body}, installed={"index.js": body})
+        lock_file = root / "package-lock.json"
+        lock = json.loads(lock_file.read_text(encoding="utf-8"))
+        lock["packages"]["node_modules/left-pad"]["integrity"] = "sha1-" + base64.b64encode(b"x" * 20).decode("ascii")
+        lock_file.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+        subprocess.run([GIT, "commit", "-qam", "weak"], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("an integrity that is not sha512", _first_name(problems, REFUSED_INTEGRITY_NOT_SHA512)))
+
+        # 10. A lockfile the working tree edited after the commit: the oracle
+        #    itself, which every figure above rests on.
+        root, cache = build(tmp / "relocked", published={"index.js": body}, installed={"index.js": body})
+        (root / "package-lock.json").write_text(
+            (root / "package-lock.json").read_text(encoding="utf-8").replace("1.0.0", "1.0.1"), encoding="utf-8"
+        )
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a lockfile that is not the committed one", _first_name(problems, REFUSED_LOCKFILE_NOT_COMMITTED)))
+
+        # 11. THE SET's own `else`, provoked. The three dotted classes are
+        #     NAMED on this tree, so each of them has to be exercised as a
+        #     class rather than asserted in a comment, and a fourth dotted
+        #     entry has to refuse.
+        root, cache = build(tmp / "dotted", published={"index.js": body}, installed={"index.js": body})
+        (root / "node_modules" / ".package-lock.json").write_text("{}\n", encoding="utf-8")
+        (root / "node_modules" / ".vite" / "vitest").mkdir(parents=True)
+        (root / "node_modules" / ".vite" / "vitest" / "results.json").write_text("{}\n", encoding="utf-8")
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("the two named dotted records", None if not problems else problems[0]))
+        (root / "node_modules" / ".secret").mkdir()
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a dotted entry in no named class", _first_name(problems, REFUSED_PACKAGE_NOT_IN_LOCKFILE)))
+
+        # 12. `node_modules/.bin`, the three ways it can go. The suite is
+        #     STARTED through these links, so a shim is a program this step
+        #     either bounds or does not.
+        root, cache = build(tmp / "bin", published={"index.js": body}, installed={"index.js": body})
+        binned = root / "node_modules" / ".bin"
+        binned.mkdir()
+        (binned / "honest").symlink_to(root / "node_modules" / "left-pad" / "index.js")
+        problems, report = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a shim into a package the lockfile names", None if not problems else problems[0]))
+        cases.append(("and the report counts the link", None if "1 link(s) under node_modules/.bin" in report else report))
+        (binned / "plain").write_bytes(body)
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a regular file under .bin", _first_name(problems, REFUSED_PACKAGE_NOT_IN_LOCKFILE)))
+        (binned / "plain").unlink()
+        outside = root / "written-by-this-repository.js"
+        outside.write_bytes(body)
+        (binned / "stray").symlink_to(outside)
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a shim resolving outside the named closure", _first_name(problems, REFUSED_PACKAGE_NOT_IN_LOCKFILE)))
+
+        # 13. A lockfile row that is neither a link nor a published package:
+        #     the class defined by ABSENCE, closed. npm writes such rows today
+        #     for a `git+https://` dependency, and this arm refuses nothing on
+        #     this tree -- it catches the first one anybody adds.
+        root, cache = build(tmp / "unclassified", published={"index.js": body}, installed={"index.js": body})
+        lock_file = root / "package-lock.json"
+        lock = json.loads(lock_file.read_text(encoding="utf-8"))
+        lock["packages"]["node_modules/from-a-repository"] = {"version": "1.0.0", "resolved": "git+https://example.invalid/x.git"}
+        lock_file.write_text(json.dumps(lock, indent=2) + "\n", encoding="utf-8")
+        subprocess.run([GIT, "commit", "-qam", "git dep"], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("a row that is neither a link nor a package", _first_name(problems, REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED)))
+
+        # 14. THE ORACLE'S OWN READER, attacked where it is read from. The
+        #     lockfile is compared to `HEAD:package-lock.json`, so an attacker
+        #     who can write `refs/replace/` can hand git a different commit
+        #     for the same name WITHOUT touching a single tracked byte. The
+        #     control below measures that: a plain `git cat-file` on the same
+        #     repository returns the FORGED lockfile, and this reader, which
+        #     passes `--no-replace-objects` and scrubs the environment to
+        #     `GIT_NO_REPLACE_OBJECTS=1`, still refuses by name.
+        root, cache = build(tmp / "replaced", published={"index.js": body}, installed={"index.js": body})
+        lock_file = root / "package-lock.json"
+        original = subprocess.run(
+            [GIT, "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True, env=GIT_ENV, timeout=120
+        ).stdout.strip()
+        lock_file.write_text(lock_file.read_text(encoding="utf-8").replace("1.0.0", "1.0.1"), encoding="utf-8")
+        subprocess.run([GIT, "commit", "-qam", "forged"], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+        forged = subprocess.run(
+            [GIT, "rev-parse", "HEAD"], cwd=str(root), capture_output=True, text=True, env=GIT_ENV, timeout=120
+        ).stdout.strip()
+        for args in (
+            ("update-ref", "refs/heads/fixture", original),
+            ("replace", "-f", original, forged),
+        ):
+            subprocess.run([GIT, *args], cwd=str(root), capture_output=True, env=GIT_ENV, timeout=120)
+        honouring = subprocess.run(
+            [GIT, "cat-file", "blob", "HEAD:package-lock.json"],
+            cwd=str(root),
+            capture_output=True,
+            env={"PATH": "/usr/bin"},
+            timeout=120,
+        ).stdout
+        cases.append(
+            (
+                "a git replace ref that forges the committed lockfile (the attack reproduced)",
+                None if b"1.0.1" in honouring else f"a plain git read returned {honouring[:80]!r}, so the attack did not reproduce",
+            )
+        )
+        problems, _ = publisher_bytes_disagreements(root, cache, {})
+        cases.append(("and this reader reads past the replace ref", _first_name(problems, REFUSED_LOCKFILE_NOT_COMMITTED)))
+
+    agreed = 0
+    for what, wrong in cases:
+        if wrong is None:
+            agreed += 1
+        else:
+            refuse_to.append(
+                f"{REFUSED_ARM_NOT_AS_SPECIFIED}: the publisher-bytes reader was handed {what} and answered "
+                f"{wrong!r}, which is not what this arm specifies"
+            )
+    return f"{agreed}/{len(cases)} publisher-bytes branches as specified"
+
+
+def _first_name(problems: "list[str]", name: str) -> "str | None":
+    """None when some problem begins with `name`; otherwise what was said instead."""
+    for problem in problems:
+        if problem.startswith(name):
+            return None
+    return problems[0] if problems else "nothing at all"
+
+
 def main() -> int:
     # Before anything is created, so a signal arriving between the first
     # mkdtemp and the handler's installation is not a window of its own.
@@ -1036,6 +1824,25 @@ def main() -> int:
     # step is about to RUN, read before it runs it.
     for problem in runner_bytes_disagreements(package, package.parent.parent, runner):
         refuse(problem)
+
+    # ROUND 71, THE COORDINATOR'S R68-C-01 (P3): the rest of the installed
+    # tree, against the bytes its PUBLISHERS shipped rather than against a pin
+    # this repository writes. The cache root is `$HOME/.npm/_cacache` -- npm's
+    # default, and NOT taken from `npm_config_cache`, which the environment
+    # could set; the path is not trusted either way, because every tarball read
+    # from it is re-hashed against the lockfile's own integrity before a byte of
+    # it counts, and a path with nothing there refuses BY NAME.
+    publisher_problems, publisher_report = publisher_bytes_disagreements(
+        package.parent.parent, Path.home() / ".npm" / "_cacache"
+    )
+    for problem in publisher_problems:
+        refuse(problem)
+    branch_problems: list[str] = []
+    branch_report = publisher_bytes_branches(branch_problems)
+    for problem in branch_problems:
+        refuse(problem)
+    print(branch_report)
+    print(publisher_report)
 
     # CD-53-01, first half: Git tracks nothing under either `node_modules`.
     #
