@@ -995,7 +995,7 @@ const REFUSED_NODE_OPTIONS_LOADS_CODE = 'REFUSED-NODE-OPTIONS-LOADS-CODE';
  * the weaker half of the ancestry scan refuses and because naming them is how a
  * reader knows what this arm was built against.
  */
-const KNOWN_CODE_LOADING_FORMS = ['-r', '--require', '--import', '--loader', '--experimental-loader'];
+const KNOWN_CODE_LOADING_FORMS = ['-r', '--require', '--import', '--loader', '--experimental-loader', '-e', '--eval', '-p', '--print'];
 const LOADS_NOTHING = [
   '--max-old-space-size',
   '--max-semi-space-size',
@@ -1023,7 +1023,9 @@ const LOADS_NOTHING = [
  * beside the point: it rewrites `/proc/<pid>/cmdline`, which is the EVIDENCE
  * this scan reads. Measured: `node --title probe <vitest.mjs> run <file>` makes
  * the runner's command line stop naming the script, so the flag region cannot
- * be found and that link falls to the weaker form-list. The `--import` beside
+ * be bounded and that link falls to the unbounded half of this scan (round 68:
+ * the same allow-list over everything that looks like a flag, which is where
+ * the weaker form-list used to be). The `--import` beside
  * it was still refused (by the argv-pin arm, under
  * REFUSED-RUNNER-ARGV-OVERRIDES-THE-FILE), so nothing passed -- but an admitted
  * flag that edits the instrument has no business in a list of flags admitted
@@ -1051,15 +1053,67 @@ const nodeTokenLoadsNothing = (token: string): boolean => LOADS_NOTHING.includes
  * OR it is the VALUE of the admitted flag immediately before it (written
  * without `=`). A bare token standing on its own is still refused.
  */
+const valueOfAnAdmittedFlag = (token: string, previous: string, allowed: (token: string) => boolean): boolean =>
+  !token.startsWith('-') && previous.startsWith('-') && !previous.includes('=') && allowed(previous);
+
 const tokensNotAdmitted = (tokens: readonly string[], allowed: (token: string) => boolean): string[] => {
   const out: string[] = [];
   let previous = '';
   for (const token of tokens) {
-    const isValueOfAnAdmittedFlag = !token.startsWith('-') && previous.startsWith('-') && !previous.includes('=') && allowed(previous);
-    if (!isValueOfAnAdmittedFlag && !allowed(token)) out.push(token);
+    if (!valueOfAnAdmittedFlag(token, previous, allowed) && !allowed(token)) out.push(token);
     previous = token;
   }
   return out;
+};
+
+/**
+ * THE FLAG REGION OF A NODE COMMAND LINE, derived rather than recognised.
+ *
+ * ROUND 68, THE CHALLENGER'S R67-01 (P1), MEASURED BEFORE IT WAS REPORTED AS A
+ * RESULT. Where the region could not be bounded, round 66 fell back to a LIST
+ * OF FORMS, and `-e` and `--print` were not in it -- they need no module path
+ * at all, they ARE the code:
+ *
+ *   node -e 'require("child_process").execSync("npx vitest run <the law>")'
+ *     -> rc 0 on `ed0ce1c`, 31/31 green, arbitrary code in the parent of the
+ *        runner, nothing refused.
+ *
+ * ROUND 68, THE CHALLENGER'S R62-F-1 (P1) in the same breath, and it is the
+ * reason there is now ONE rule here and not two. The bounded half found the
+ * script BY NAME (`endsWith('vitest.mjs')`), and the name is a string the
+ * attacker writes too: a loader called `vitest.mjs` matched FIRST, the region
+ * became `argv.slice(1, 1)`, and the whole command line went unscanned at
+ * 31/31 green with the loader running.
+ *
+ * So neither half survives. The region is derived from node's own parsing:
+ * walk the tokens after the program; a token that looks like a flag is judged
+ * by the allow-list; a token that does not is the VALUE of the admitted flag
+ * before it, or else it is the script -- whatever it is named -- and the
+ * region ends there. No name is matched, so no name can end the region early,
+ * and a flag nobody has heard of is refused with the rest rather than being
+ * absent from a list.
+ *
+ * The one ambiguity node's own parsing has is a flag this list does not admit
+ * whose value is a SEPARATE token: `--conditions dev --import=<loader>` ends
+ * the region at `dev`. It is not a hole, because `--conditions` is itself
+ * refused on the line above and the run reds there; an attacker gains nothing
+ * by hiding a loader behind a flag that already refuses.
+ *
+ * DECLARED, and measured as the reason the region must end at all: tokens
+ * AFTER the script are the SCRIPT's arguments, and the gate's own runner is
+ * spawned with `--no-file-parallelism` among them. Judging those would red
+ * every honest run. What runs inside the process because of them is covered
+ * by the config shape pin and by the runner-program pin, not by this scan.
+ */
+const interpreterFlagRegion = (argv: readonly string[], allowed: (token: string) => boolean): string[] => {
+  const region: string[] = [];
+  let previous = '';
+  for (const token of argv.slice(1)) {
+    if (!token.startsWith('-') && !valueOfAnAdmittedFlag(token, previous, allowed)) break;
+    if (token.startsWith('-')) region.push(token);
+    previous = token;
+  }
+  return region;
 };
 
 const REFUSED_EXEC_ENVIRONMENT_UNREADABLE = 'REFUSED-EXEC-ENVIRONMENT-NOT-READABLE';
@@ -1132,6 +1186,78 @@ const REFUSED_HANDED_DOWN_ENV_EDITED = 'REFUSED-HANDED-DOWN-ENVIRONMENT-EDITED';
  * actor owns the receipt this comparison reads. Same bound as the nonce and the
  * receipt itself, and the same narrowing the marker's claim took in round 64.
  */
+const REFUSED_RUNNER_PROGRAM_UNPINNED = 'REFUSED-RUNNER-PROGRAM-NOT-PINNED';
+const REFUSED_RUNNER_PACKAGE_NOT_LOCKED = 'REFUSED-RUNNER-PACKAGE-NOT-THE-LOCKED-ONE';
+
+/**
+ * THE PROGRAM THE RUNNER IS RUNNING, derived from the chain rather than from a
+ * name this file chose. Walks the ancestors, takes the first link whose
+ * program is a node binary, and returns the first token after its flag region
+ * -- which is the script, by the same construction `interpreterFlagRegion`
+ * uses and for the same reason: a name is a string the attacker writes too.
+ */
+const scriptOfTheRunner = (allowed: (token: string) => boolean, procRoot = '/proc', startPid = process.pid): { script: string; pid: number } | string => {
+  if (!existsSync(join(procRoot, String(startPid), 'status'))) return `this platform has no readable ${procRoot}`;
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch {
+      return `the chain ends at pid ${pid}, which is gone, so the runner's own program cannot be read`;
+    }
+    if (pid !== startPid) {
+      let argv: string[] = [];
+      try {
+        argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
+          .toString('utf8')
+          .split('\0')
+          .filter((word) => word.length > 0);
+      } catch {
+        return `pid ${pid} exists and its command line cannot be read, so the runner's own program cannot be read`;
+      }
+      const program = basename(argv[0] ?? '');
+      if (program === 'node' || /^node[0-9.]*$/.test(program)) {
+        let previous = '';
+        for (const token of argv.slice(1)) {
+          if (!token.startsWith('-') && !valueOfAnAdmittedFlag(token, previous, allowed)) return { script: token, pid };
+          previous = token;
+        }
+        return `pid ${pid} runs node with no script of its own, so this run has no runner program to pin`;
+      }
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent, so the chain cannot be followed to the runner`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return 'no ancestor of this process runs a node program, so the runner cannot be identified';
+};
+
+/**
+ * A directory read as bytes: every file under it, by path relative to it, with
+ * a symbolic link recorded as its TARGET rather than followed. Arrivals and
+ * departures are both visible to the caller, because a census that only
+ * checks the names it already knows fails open on the next file to appear.
+ */
+const bytesUnder = (root: string): Record<string, string> => {
+  const out: Record<string, string> = {};
+  const walk = (dir: string, prefix: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+      const full = join(dir, entry.name);
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`;
+      // A symbolic link is recorded as what it RESOLVES TO and never followed
+      // as a file: the pinned package holds none today, and one that appears
+      // is an ARRIVAL the comparison refuses rather than a file it hashes.
+      if (entry.isSymbolicLink()) out[rel] = `SYMLINK:${realpathSync(full)}`;
+      else if (entry.isDirectory()) walk(full, rel);
+      else out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
+    }
+  };
+  walk(root, '');
+  return out;
+};
+
 const runnerIdentity = (procRoot = '/proc', startPid = process.pid): { path: string; version: string } | string => {
   let pid = startPid;
   for (let hop = 0; hop < 32; hop += 1) {
@@ -1280,41 +1406,18 @@ const codeLoadingAncestry = (
           .filter((word) => word.length > 0);
         const program = basename(argv[0] ?? '');
         if (program === 'node' || /^node[0-9.]*$/.test(program)) {
-          // The ALLOW-LIST applies where a human sets flags FOR THIS RUN: the
-          // ancestor whose command line names the runner. Above it sit shells,
-          // `npx` and the harness, whose honest flags are not this phase's to
-          // enumerate -- an allow-list there would red runs nobody attacked,
-          // and a hardening that causes a false red is not hardening.
-          // DECLARED: on those links a token is refused only when it is one of
-          // the known code-loading forms, which is the weaker half of this arm.
-          // ROUND 66, THE CHALLENGER'S R61-F-1 (P1, a fail-open in the fix for
-          // R60-F-1). This loop used to STOP at the first token without a dash,
-          // and four of the admitted flags take their value as a SEPARATE
-          // token -- so `--conditions dev --import=<loader>` ended the scan
-          // before the loader was read, and the bare suite was 30/30 green with
-          // the module running in the runner. It is the same mistake as
-          // R61-S-2 seen from the other side: a value was read as a flag there
-          // and as a terminator here.
+          // ROUND 66, THE CHALLENGER'S R61-F-1, and ROUND 68, the challenger's
+          // R62-F-1 and R67-01: three defects in two fixes, all of them in the
+          // BOUNDARY of this region rather than in the judgement of its
+          // tokens. The boundary is no longer recognised by name and the
+          // judgement no longer has a weaker half for links the boundary could
+          // not be found on -- `interpreterFlagRegion` derives it, and every
+          // link, runner or ancestor, is judged by the one allow-list.
           //
-          // The region a human writes flags in ends at the SCRIPT, and the
-          // script is the word this loop already looks for. So the region is
-          // argv up to that word, every token in it is judged by `scan`, and
-          // no `break` is left to walk through.
-          const scriptAt = argv.findIndex((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest');
-          if (scriptAt > 0) {
-            scan(argv.slice(1, scriptAt), pid, ' (interpreter flag)');
-          } else {
-            // Not the runner: shells, `npx` and the harness sit here, and an
-            // allow-list over their honest flags would red runs nobody
-            // attacked. DECLARED, as before: these links are refused only on
-            // the known code-loading forms, which is the weaker half -- and
-            // with no `break`, so a form after a value is still seen.
-            for (const token of argv.slice(1)) {
-              if (KNOWN_CODE_LOADING_FORMS.includes(token.split('=', 1)[0] ?? token)) {
-                found.push(`pid ${pid} (interpreter flag): ${token}`);
-              }
-            }
-          }
+          // Which flags a human may honestly write here is the allow-list's
+          // declared cost and not this line's business: an unlisted flag reds,
+          // and the commit that wants it back argues for it.
+          scan(interpreterFlagRegion(argv, allowed), pid, ' (interpreter flag)');
         }
       } catch {
         // A cmdline that cannot be read is reported by the environ branch above
@@ -3863,6 +3966,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       'tools/manifest-digests.py',
       'tools/pack-set.json',
       'tools/reviewer-reports.json',
+      'tools/runner-bytes.json',
       'tools/seal-check-run.py',
       'tools/status-block.py',
       'tsconfig.build.json',
@@ -4393,16 +4497,59 @@ describe('every written invocation of the pack tools is isolated', () => {
     // without the gate and a default config setting `script-shell` went
     // unread. The twin lives here, reading the same two paths by the same
     // rule, and neither file is required to exist.
+    //
+    // ROUND 68, THE CHALLENGER'S R62-S-1 (P2), which asked what these FILE
+    // readers catch that the ENVIRONMENT reader does not, since in the
+    // `npm test` path npm exports every config it reads as `npm_config_*` and
+    // the environment arm speaks first. Measured here rather than argued: with
+    // an `.npmrc` beside this package and the suite started WITHOUT npm
+    // (`npx vitest run <this file>`), the run reds at
+    // REFUSED-NPM-CONFIG-PRESENT naming the file, and the environment holds
+    // three `npm_config_*` keys, none of them a shell. A run npm did not start
+    // exports nothing about a config file that is nonetheless sitting there
+    // for the next npm the suite itself spawns, so the file readers' reach is
+    // their own and this is the measurement that says so.
+    //
+    // ROUND 68, THE COORDINATOR'S R67-C-01 (P2), correcting something I wrote
+    // and the challenger repeated. I explained the non-reproduction by saying
+    // npm puts its own node's directory at the front of the script's PATH. It
+    // does not: on npm 10.9.4 and 11.6.2 it prepends the `node_modules/.bin`
+    // chain and `@npmcli/run-script`'s node-gyp-bin, and nothing else. What
+    // keeps the two anchors together is npm's own launcher, whose first line
+    // is `#!/usr/bin/env node` -- so the node that runs `npm-cli.js` is
+    // resolved from PATH too, and invoking npm by an absolute path does not
+    // pin it. Measured by the coordinator with a shim fronting PATH: the npm
+    // ancestor's own /proc/<pid>/exe WAS the shim, and
+    // `npm config get globalconfig` moved with it.
+    //
     // ROUND 67, THE COORDINATOR'S R65-F-1 (P1, a fail-open). Both readers of
     // npm's DEFAULT global config -- this one and the gate's -- derived the
     // file from the node THEY resolved. The file npm honours is the one beside
-    // the node running NPM, which need not be the same binary. Measured by the
-    // coordinator: with `/opt/node22/etc/npmrc` holding a `script-shell`, one
-    // PATH entry naming a directory inside a pinned prefix holding a COPY of
-    // node made the derived path `/opt/etc/npmrc`, which does not exist; the
-    // run was rc 0, 308 passed, and twelve invocations went through the
-    // attacker's shell. A SYMLINK does not do it, because realpath collapses
-    // it, so the cost is a second real binary inside a pinned prefix.
+    // the node running NPM, which need not be the same binary.
+    //
+    // ROUND 68, THE COORDINATOR'S R67-F-1 (P1, A FALSE MEASURED CLAIM OF MINE,
+    // on its own withdrawal of the exploit that produced it). What stood here
+    // said that one PATH entry made an effective `script-shell` go unread at
+    // rc 0, with twelve invocations through an attacker's shell. It is not
+    // reproducible, and its first clause is false: a bare PATH entry moves
+    // npm's anchor as well, so the two stay together and this law reads the
+    // file npm reads. What IS measured, and what this arm is for:
+    //
+    //   * the divergence is real and reachable when npm's node is pinned
+    //     INDEPENDENTLY of PATH (`node <abs>/npm-cli.js test`, or a launcher
+    //     with an absolute shebang) -- the coordinator's K1, refused by name;
+    //   * a bare PATH entry does NOT reach it (H1: rc 0, 309 passed, one
+    //     anchor), and a symlinked directory does not either (H2);
+    //   * and the HARM such a plant carries is refused independently of this
+    //     arm, through the environment: npm exports every config it honours as
+    //     `npm_config_*`, so an effective `script-shell` is in this run's own
+    //     environment and the arm above refuses it by name. The coordinator's
+    //     K2 -- anchors genuinely divergent, plant genuinely effective -- reds
+    //     on the PREVIOUS head for exactly that reason.
+    //
+    // So this arm is a SECOND READER closing an anchor gap (R67-C-02), not the
+    // thing standing between this phase and an effective shell, and there was
+    // no fail-open on `1fcd9c3`.
     //
     // So the anchor comes from where npm IS: the npm ancestor's own program,
     // read out of /proc/<pid>/exe, which npm cannot choose for itself. Both
@@ -4422,7 +4569,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       const mine = realpathSync(process.execPath);
       expect(
         npmNode.exe === mine ? '' : `npm is running on ${npmNode.exe} (pid ${npmNode.pid}) and this run is on ${mine}`,
-        `${REFUSED_NPM_NODE_IS_NOT_THIS_ONE}: npm reads the config beside ITS OWN node, so two different binaries mean the file this law checked is not the file npm honours -- which is how one PATH entry made an effective script-shell go unread at rc 0. In an honest run there is one node`,
+        `${REFUSED_NPM_NODE_IS_NOT_THIS_ONE}: npm reads the config beside ITS OWN node, so two different binaries mean the file this law checked is not the file npm honours -- which is reachable when npm's node is pinned independently of PATH (a bare PATH entry is not enough: it moves npm's anchor too). This arm is the SECOND reader of that gap -- an effective script-shell is also exported as npm_config_script_shell and refused by the environment arm above. In an honest run there is one node`,
       ).toBe('');
     }
     for (const { what, file } of defaults) {
@@ -4489,6 +4636,179 @@ describe('every written invocation of the pack tools is isolated', () => {
       loaders,
       `${REFUSED_NODE_OPTIONS_LOADS_CODE}: ${loaders.join(', ')} -- read from the exec-time environment of this process and its ancestors, from the runner's own command line, and from process.env. This arm is an ALLOW-LIST: a token is admitted only when this phase has established that it loads no code (${LOADS_NOTHING.length} flags in LOADS_NOTHING), and everything else is refused, a flag newer than this list included. The forms it was built against are ${KNOWN_CODE_LOADING_FORMS.join(', ')}. The variable itself is allowed`,
     ).toStrictEqual([]);
+  });
+
+  it('R67-01: a node link the scan cannot bound by the script is judged by the allow-list, so `-e` and a flag nobody has heard of refuse, and an honest link does not', () => {
+    // ROUND 68, THE CHALLENGER'S R67-01, and the reason it is a CASE and not
+    // just a fix: the hole lived on a path the real chain never takes. Under
+    // `npm test` this container's links are the vitest worker (skipped), `node
+    // node_modules/.bin/vitest run <file>` (bounded by the script), a `sh -c`
+    // and npm with its title rewritten -- measured by walking /proc during a
+    // run. Nothing honest here reaches the unbounded half, so an arm that only
+    // ran in the real path would never have exercised it. An arm with no
+    // reachable positive control is an arm nobody has run, so the function is
+    // handed /proc trees this case builds, one shape at a time.
+    //
+    // The defect it closes was measured on `ed0ce1c` as a whole run:
+    // `node -e 'require("child_process").execSync("npx vitest run <the law>")'`
+    // was rc 0 with 31/31 green and arbitrary code in the parent of the runner.
+    const root = mkdtempSync(join(tmpdir(), 'r68-proc-'));
+    onTestFinished(() => rmSync(root, { recursive: true, force: true }));
+    const tree = (name: string, chain: { pid: number; ppid: number; argv: string[] }[]): string => {
+      const procRoot = join(root, name);
+      mkdirSync(procRoot);
+      for (const node of chain) {
+        const dir = join(procRoot, String(node.pid));
+        mkdirSync(dir);
+        writeFileSync(join(dir, 'status'), `Name:\tx\nPPid:\t${node.ppid}\n`);
+        writeFileSync(join(dir, 'cmdline'), `${node.argv.join('\0')}\0`);
+        writeFileSync(join(dir, 'environ'), '');
+      }
+      return procRoot;
+    };
+    const worker = { pid: 10, ppid: 20, argv: ['node', '--require', 'suppress-warnings.cjs', 'worker'] };
+    for (const [label, chain, expected] of [
+      [
+        'arbitrary code inline on an unbounded link',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '-e', 'require("child_process").execSync("npx vitest run x")'] }],
+        ['pid 20 (interpreter flag): -e'],
+      ],
+      [
+        '`--print`, which the round-66 form-list also missed',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--print', 'process.exit(0)'] }],
+        ['pid 20 (interpreter flag): --print'],
+      ],
+      [
+        'a flag newer than this phase, which a list of FORMS could never hold',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--experimental-whatever-comes-next', 'x.js'] }],
+        ['pid 20 (interpreter flag): --experimental-whatever-comes-next'],
+      ],
+      [
+        'a module loaded after an unadmitted flag, which reds on the flag itself rather than on the module',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--conditions', 'dev', '--import=/tmp/loader.mjs', '/n/vitest.mjs', 'run'] }],
+        ['pid 20 (interpreter flag): --conditions'],
+      ],
+      [
+        'R62-F-1: a loader NAMED like the script, which used to empty the region and hide the whole line',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--import=/tmp/d/vitest.mjs', '/n/vitest.mjs', 'run', 'x.test.ts'] }],
+        ['pid 20 (interpreter flag): --import=/tmp/d/vitest.mjs'],
+      ],
+      [
+        'R62-F-1 again, with the decoy standing where the script would: the name decides nothing now',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--import=/tmp/d2/vitest', '--enable-source-maps', '/n/vitest.mjs', 'run'] }],
+        ['pid 20 (interpreter flag): --import=/tmp/d2/vitest'],
+      ],
+      [
+        "the gate's own runner, whose SCRIPT arguments include flags that are none of node's business",
+        [worker, { pid: 20, ppid: 1, argv: ['node', '/n/vitest.mjs', 'run', 'test/x.test.ts', '--no-file-parallelism'] }],
+        [],
+      ],
+      [
+        'the honest shape this container actually runs: npm reached through its own script path',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '/usr/lib/node_modules/npm/bin/npm-cli.js', 'test'] }],
+        [],
+      ],
+      [
+        'an admitted flag with its value as a separate token, which must not be read as a flag',
+        [worker, { pid: 20, ppid: 1, argv: ['node', '--dns-result-order', 'ipv4first', '/n/vitest.mjs', 'run'] }],
+        [],
+      ],
+      ['a link whose program is not node at all, where these flags mean nothing', [worker, { pid: 20, ppid: 1, argv: ['sh', '-c', 'node -e "x"'] }], []],
+    ] as [string, { pid: number; ppid: number; argv: string[] }[], string[]][]) {
+      const walked = codeLoadingAncestry(nodeTokenLoadsNothing, tree(label.slice(0, 24).replace(/[^a-z]+/gi, '-'), chain), 10);
+      expect(
+        walked.unreadable,
+        `${REFUSED_EXEC_ENVIRONMENT_UNREADABLE}: the fixture for "${label}" is unreadable to the walk, so the case below would measure the wrong thing`,
+      ).toStrictEqual([]);
+      expect(
+        walked.found,
+        `${REFUSED_NODE_OPTIONS_LOADS_CODE}: the ancestry walk over "${label}" answered ${JSON.stringify(walked.found)}. A link the scan cannot bound by the script is judged by the SAME allow-list as a bounded one, and the two cases that expect nothing are what keeps that from redding an honest run`,
+      ).toStrictEqual(expected);
+    }
+  });
+
+  it('R62-F-2: the program the runner RUNS is pinned by its bytes, and the pin is the one the lockfile names', () => {
+    // ROUND 68, THE CHALLENGER'S R62-F-2 (P1). Every arm in this family
+    // defends one thing -- that no code of somebody else's choosing runs
+    // inside this process -- and every one of them reads FLAGS: the
+    // environment, the runner's argv, the ancestors', the npm config. None of
+    // them read the runner's own PROGRAM, and `law-bytes.json` pins fourteen
+    // files, none under `node_modules`. The challenger inserted ONE import
+    // into `node_modules/vitest/vitest.mjs` and measured it on `ed0ce1c`:
+    //
+    //   bare suite, patched runner        rc 0, 31/31 green
+    //   tools/law-ran.py, patched runner  rc 0, full census printed, and the
+    //                                     attacker's module ran INSIDE the run
+    //                                     the gate was certifying
+    //
+    // No flag, no variable, no config key, so nothing in the family saw it.
+    // This arm reads the bytes instead, and so does the gate, independently.
+    //
+    // WHAT IT DOES NOT COVER, measured and not assumed (see the port in the
+    // commit message): the pin is over the RUNNER'S OWN PACKAGE. vitest loads
+    // vite, tinypool and the rest of the installed tree, and the same patch in
+    // one of those is NOT caught here. The attacker this narrows is "anyone
+    // who can write under node_modules"; what is left is "anyone who can write
+    // under node_modules outside this one package", which is most of it.
+    // Measured, both legs restored and re-hashed afterwards: an import added
+    // to `node_modules/vite/dist/node/index.js` ran TWICE inside the run and
+    // the suite was 33/33 green at rc 0, while the same import in the pinned
+    // package reds here and reds the gate at exit code 1. The same sentence
+    // stands in tools/runner-bytes.json, and goes into the pack with this
+    // commit's entry.
+    const repo = join(__dirname, '..', '..', '..');
+    const pinFile = join(__dirname, '..', 'tools', 'runner-bytes.json');
+    expect(
+      existsSync(pinFile),
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: ${pinFile} is absent, and a pin that is not there cannot be the thing that says the runner is honest`,
+    ).toBe(true);
+    const pin = JSON.parse(readFileSync(pinFile, 'utf8')) as {
+      package: string;
+      version: string;
+      lockfile_key: string;
+      lockfile_integrity: string;
+      root: string;
+      files: Record<string, string>;
+    };
+
+    // The pin moves in the commit that moves the lockfile, and this is what
+    // makes that true rather than hoped: an upgrade that re-pins the bytes but
+    // leaves the recorded version or integrity behind refuses by name, and so
+    // does the reverse.
+    const lock = JSON.parse(readFileSync(join(repo, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { version?: string; integrity?: string }>;
+    };
+    const locked = lock.packages[pin.lockfile_key];
+    expect(
+      [locked?.version, locked?.integrity],
+      `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: package-lock.json holds ${JSON.stringify(locked)} for ${pin.lockfile_key}, and tools/runner-bytes.json was pinned against ${pin.version} / ${pin.lockfile_integrity}. A pin against a package the lockfile no longer names is a pin against nothing`,
+    ).toStrictEqual([pin.version, pin.lockfile_integrity]);
+
+    // The program is taken from the CHAIN, not from a path this file writes:
+    // whatever the runner is running is what gets hashed.
+    const runner = scriptOfTheRunner(nodeTokenLoadsNothing);
+    expect(
+      typeof runner,
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: ${typeof runner === 'string' ? runner : ''}. A run whose own runner cannot be identified is not a run shown to be honest, and this arm does not skip what it cannot classify`,
+    ).toBe('object');
+    const script = realpathSync((runner as { script: string; pid: number }).script);
+    const packageRoot = realpathSync(join(repo, pin.root));
+    expect(
+      script.startsWith(`${packageRoot}${sep}`),
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: this run's runner is executing ${script}, which is not inside the pinned package ${packageRoot}. The pin covers one package, and a runner from somewhere else is outside it -- which is a refusal here and not a pass`,
+    ).toBe(true);
+    expect(
+      Object.keys(pin.files),
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the runner's own entry ${relative(packageRoot, script)} is not one of the pinned files`,
+    ).toContain(relative(packageRoot, script));
+
+    // The census refuses ARRIVALS as well as departures and edits: a file that
+    // appears under the package is a file nobody reviewed, and vitest loads
+    // what its own code points at.
+    expect(
+      bytesUnder(packageRoot),
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the installed bytes of ${pin.package}@${pin.version} are not the pinned ones. If the change is intended it moves with package-lock.json, in the same commit, with the reason in the message`,
+    ).toStrictEqual(pin.files);
   });
 
   it("R54-S1/R55-S3: the two digest readers agree over the pack's own names and over names built to break them", () => {

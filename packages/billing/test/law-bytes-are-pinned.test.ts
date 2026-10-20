@@ -105,6 +105,11 @@ const LAW_FILES = [
   // removes the set refusal and the scan then catches the plant on its own,
   // 1 failed | 302 passed -- so it is pinned for the class, not for a hole.
   'tools/pack-set.json',
+  // ROUND 68, THE CHALLENGER'S R62-F-2 (P1). The bytes of the program the
+  // RUNNER executes are pinned in `tools/runner-bytes.json`, and a pin whose
+  // own file is unpinned is a pin anyone can rewrite in the same breath as the
+  // package it covers.
+  'tools/runner-bytes.json',
   // And the tools the law EXECUTES: an edit to one of these changes what the
   // law measures without touching the law.
   'tools/manifest-digests.py',

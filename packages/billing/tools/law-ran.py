@@ -324,6 +324,15 @@ REFUSED_LAW_WROTE_NO_RECEIPT = "REFUSED-LAW-WROTE-NO-RECEIPT"
 # what the report says, so it is pinned by its REAL path and not by what PATH
 # calls it.
 REFUSED_RUNNER_NOT_PINNED = "REFUSED-RUNNER-NOT-A-PINNED-PROGRAM"
+# ROUND 68, THE CHALLENGER'S R62-F-2 (P1). Everything this step pins is about
+# WHICH node starts the suite and WHAT it is handed; nothing read the bytes of
+# the program the runner RUNS. One import inserted into
+# `node_modules/vitest/vitest.mjs` ran inside this step's own run, which
+# printed its full census and exited 0. The law reads the pin too, and this is
+# the second reader: two programs, one definition, neither the other's only
+# witness.
+REFUSED_RUNNER_PROGRAM_UNPINNED = "REFUSED-RUNNER-PROGRAM-NOT-PINNED"
+REFUSED_RUNNER_PACKAGE_NOT_LOCKED = "REFUSED-RUNNER-PACKAGE-NOT-THE-LOCKED-ONE"
 
 # The SET of test files this suite collects, pinned by value. A file arriving
 # or leaving is refused by name; change this list in the same commit that adds
@@ -364,7 +373,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 31,
+    "test/tool-commands-are-isolated.test.ts": 33,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
 # environment comparison -- the fourth rung of round 62's closure -- with a
@@ -375,7 +384,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 309
+EXPECTED_TOTAL_CASES = 311
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -502,13 +511,95 @@ EXPECTED: dict[str, int] = {
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 31,
+    "test/tool-commands-are-isolated.test.ts": 33,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
 
 def refuse(why: str) -> "None":
     raise SystemExit(f"{LAW_NOT_RUN}: {why}")
+
+
+def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[str]:
+    """Every way the installed runner package differs from its pin.
+
+    ROUND 68, THE CHALLENGER'S R62-F-2. The census refuses ARRIVALS as well as
+    departures and edits, because a file that appears under the package is a
+    file nobody reviewed and the runner loads what its own code points at. The
+    pin's recorded version and integrity are compared against
+    `package-lock.json`, so a dependency bump that re-pins the bytes without
+    moving the lockfile row -- or the reverse -- refuses by name.
+
+    DECLARED, in the pin file and in the pack in the same words: this covers
+    the runner's OWN PACKAGE. vitest loads vite, tinypool and the rest of the
+    installed tree, and the same patch in one of those is not caught here.
+    """
+    problems: list[str] = []
+    pin_path = package / "tools" / "runner-bytes.json"
+    try:
+        pin = json.loads(pin_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {pin_path} is absent, so nothing says what the runner's own bytes are"]
+    except (json.JSONDecodeError, OSError) as exc:
+        return [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {pin_path} cannot be read ({exc})"]
+
+    lock_path = root / pin.get("lockfile_path", "package-lock.json")
+    try:
+        locked = json.loads(lock_path.read_text(encoding="utf-8")).get("packages", {}).get(pin.get("lockfile_key"))
+    except (json.JSONDecodeError, OSError) as exc:
+        locked = None
+        problems.append(f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {lock_path} cannot be read ({exc})")
+    if locked is not None and (locked.get("version"), locked.get("integrity")) != (pin.get("version"), pin.get("lockfile_integrity")):
+        problems.append(
+            f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {lock_path} holds "
+            f"{locked.get('version')!r}/{str(locked.get('integrity'))[:24]}... for {pin.get('lockfile_key')}, and the pin "
+            f"was written against {pin.get('version')!r}/{str(pin.get('lockfile_integrity'))[:24]}.... A pin against a "
+            "package the lockfile no longer names is a pin against nothing"
+        )
+    elif locked is None and not problems:
+        problems.append(f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {lock_path} has no row for {pin.get('lockfile_key')!r}")
+
+    base = (root / pin.get("root", "node_modules/vitest")).resolve()
+    try:
+        here = runner.resolve()
+    except OSError as exc:
+        return problems + [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {runner} cannot be resolved ({exc})"]
+    if not str(here).startswith(str(base) + os.sep):
+        problems.append(
+            f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: this step would run {here}, which is not inside the pinned package {base}"
+        )
+
+    pinned: dict = pin.get("files", {})
+    installed: dict[str, str] = {}
+    if not base.is_dir():
+        return problems + [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: the pinned package directory {base} is not there"]
+    for path in sorted(base.rglob("*")):
+        if path.is_symlink():
+            installed[str(path.relative_to(base))] = "SYMLINK:" + str(path.resolve())
+        elif path.is_file():
+            try:
+                installed[str(path.relative_to(base))] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                problems.append(f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {path} cannot be read ({exc})")
+    arrived = sorted(set(installed) - set(pinned))
+    departed = sorted(set(pinned) - set(installed))
+    moved = sorted(name for name in set(pinned) & set(installed) if pinned[name] != installed[name])
+    for label, names in (("not pinned at all", arrived), ("pinned and absent", departed), ("pinned and different", moved)):
+        if names:
+            problems.append(
+                f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: {len(names)} file(s) of the runner's own package are {label}, "
+                f"the first being {names[0]!r}. If the change is intended it moves with {lock_path.name}, in the same "
+                "commit, with the reason in the message"
+            )
+    if not problems:
+        print(
+            f"runner program: {here.relative_to(root)} inside {pin.get('package')}@{pin.get('version')}, "
+            f"{len(pinned)} file(s) pinned and identical -- ACCOUNTED FOR ONE PACKAGE DEEP. What this package "
+            "IMPORTS is not pinned: measured, the same attacker import placed in node_modules/vite ran twice "
+            "with the suite green at rc 0. This line narrows the attacker to one who can write under "
+            "node_modules OUTSIDE this package; it does not say the program that ran is accounted for"
+        )
+    return problems
 
 
 def main() -> int:
@@ -678,6 +769,11 @@ def main() -> int:
     runner = next((c for c in candidates if c.is_file()), None)
     if runner is None:
         refuse("no vitest entry at " + " or ".join(str(c) for c in candidates) + ", so this step could not run the suite at all")
+
+    # ROUND 68, THE CHALLENGER'S R62-F-2 (P1): the bytes of the program this
+    # step is about to RUN, read before it runs it.
+    for problem in runner_bytes_disagreements(package, package.parent.parent, runner):
+        refuse(problem)
 
     # CD-53-01, first half: Git tracks nothing under either `node_modules`.
     #
@@ -872,16 +968,30 @@ def main() -> int:
     # get wrong.
     refuse_if_sets_shell("npm's default global config, anchored on the runner", Path(node).parent.parent / "etc" / "npmrc")
 
-    # ROUND 67, THE COORDINATOR'S R65-F-1 (P1, a fail-open). The anchor above is
-    # the node THIS STEP resolved -- and the file npm actually honours is the one
-    # beside the node running NPM, which need not be the same binary. Measured by
-    # the coordinator: with `/opt/node22/etc/npmrc` holding a `script-shell`, one
-    # PATH entry naming a directory inside a pinned prefix that holds a COPY of
-    # the node binary made this step resolve `/opt/zzshim/node`, derive
-    # `/opt/etc/npmrc` (which does not exist), read nothing, and exit 0 while
-    # twelve invocations went through the attacker's shell. A symlink does not do
-    # it -- realpath collapses it -- so the cost is a second REAL binary inside a
-    # pinned prefix.
+    # ROUND 67, THE COORDINATOR'S R65-F-1, AND ROUND 68, ITS OWN WITHDRAWAL OF
+    # THE EXPLOIT THAT PRODUCED IT (R67-F-1, P1: what stood here was a false
+    # measured claim). The anchor above is the node THIS STEP resolved, and the
+    # file npm honours is the one beside the node running NPM, which need not be
+    # the same binary. That much is real. What this paragraph used to say -- that
+    # one PATH entry made an effective `script-shell` go unread at rc 0, with
+    # twelve invocations through an attacker's shell -- is not reproducible, and
+    # its first clause is false: npm's launcher begins `#!/usr/bin/env node`, so
+    # a bare PATH entry moves npm's own anchor too and the two stay together.
+    #
+    # Measured by the coordinator on the head this walk was written for:
+    #   K1  npm's node pinned independently of PATH (`node <abs>/npm-cli.js`),
+    #       a second REAL node fronting PATH, no plant -> rc 1, refused by name.
+    #   H1  `npm test` by absolute path, the same second node -> rc 0, 309
+    #       passed: ONE anchor, correctly green.
+    #   H2  a symlinked directory fronting PATH -> rc 0, 309 passed.
+    #   K2  anchors divergent AND a plant npm honours -> red on the PREVIOUS
+    #       head already, through `npm_config_script_shell` in the run's own
+    #       environment, which the law refuses by name.
+    #
+    # So this walk is a SECOND reader closing an anchor gap, not the only thing
+    # between this phase and an effective shell (R67-C-02): npm exports every
+    # config it honours as `npm_config_*`, and that channel is what refuses a
+    # plant that actually works. There was no fail-open on the previous head.
     #
     # The anchor must come from where npm IS. This walk reads the npm ancestor's
     # own program out of /proc/<pid>/exe, checks the npmrc beside it, and refuses
