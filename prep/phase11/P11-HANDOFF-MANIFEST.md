@@ -3134,11 +3134,11 @@ then reported that the real run does not name its own refusals.
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      153
-document lines that would red          88
-distinct tokens in them                38
+candidates with the guard deleted      154
+document lines that would red          89
+distinct tokens in them                39
 
-deleting `inline code span` would red 88 document line(s) carrying 38 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 89 document line(s) carrying 39 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -3305,8 +3305,8 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     80
-of them recordings of past runs              56
+files the commit holds under the harness     81
+of them recordings of past runs              57
 skip keys the committed source reads         25
 arms the selftest runs                       152
 ```
@@ -4164,9 +4164,147 @@ none allocated, reserved, examined, exampled, or written in a filename or a
 comment; `OD-P11-07` is the owner's alone; and no CI has ever run this pack, so
 the gate's own authority is `UNMEASURED` outside this container.
 
+## 7.32 ROUND 31 (challenger: NO BLOCKING DEFECT at `ad57c1c`; coordinator diff review of the same head: **`SIGN`**) — a pointer a reader cannot follow, and the sentences a FINDING prints
+
+The independent challenger of `ad57c1c` found **no blocking defect** and
+confirmed each of round 30's closures at the SHA, independently:
+
+| what it checked | what it found |
+|---|---|
+| `C30-S1` | CLOSED — the entity spellings are caught as a renderer resolves them, and it went further than this head claims: **no Unicode codepoint NFKC-expands to a refused control**, so `html.unescape` alone is complete for this question. Double-encoded and named spellings are not deceptive and are correctly not caught |
+| `R30-S1` | CLOSED — blank line, bare `#` and split arguments all caught; the mid-word `echo` split stays the declared limit, for the reason this head gives |
+| the second printed site | ARMED — the refusal composes the pin and is provoked by the arms |
+| the published set | all ten digests MATCH; a clean driver run `EXIT_SCRIPT 0` |
+
+### `R31-S1` — the record that closed `A-30-F1` named an object no reader has
+
+`A-30-F1` was closed by APPENDING the confirming run to this round's
+transcript, and that record named the tree it measured **by its commit**,
+`5665d2bc1318…`. That commit was amended away and never pushed, so it exists
+only in the container that made it: a reader holding this commit cannot check
+the claim that the measured tree is this commit minus the appended block. It is
+the same class as the defect it closes, one level down, and the challenger was
+right to name it.
+
+Closed by naming a **tree** digest instead, with the recipe that reproduces it
+from this commit alone, no other object and no network:
+`fbeace0c5f7938baf7264311fb1cc82d8ed83980` is this commit's tree with exactly
+one path replaced — the transcript truncated to the lines preceding the appended
+block — and the record carries the four git plumbing commands that rebuild it
+and the blob digest they must produce. Measured here before it was written: the
+commands print that digest in a clean clone of the commit.
+
+The challenger verified the attestation another way in the meantime, by
+re-running `ad57c1c` directly and getting the same haystack digest, and noted
+that nothing in the pack READS the record, so it gates nothing. That is why
+this is a residual and not a finding — and it is answered rather than carried,
+because a pointer a reader cannot follow is what `A-30-F1` was.
+
+### The challenger's frozen verdict
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-ad57c1cd9a0526f8eb53e8308df999c22aac5a65.md`, sha256 `ad2642e9fe72fc514a281956c321514e03a18c1d5d8ba38cbca5793c77d45066` |
+| Arabic | the same name with `-AR.md`, sha256 `1dea1d9dd3a2e08114a04e9222525af3ea1c2d7fc657f31a14a3776ed2942172` |
+| evidence | `/mnt/project-files/phase11/challenge-ad57c1c/` |
+| verdict | NO BLOCKING DEFECT at that SHA, `READY_TO_PROMOTE` = NO |
+
+### The coordinator's diff review of the same head — **`SIGN`**
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-ad57c1c.md` |
+| its own sha256 | `0f0ef7d059b21e630db0d12b0794d168c2484dee9b8ebd4143757ee0243ca62c` |
+| verdict | **`SIGN` at `ad57c1cd9a0526f8eb53e8308df999c22aac5a65`** — that SHA only |
+
+So `ad57c1c` is **FULLY SIGNED**: an independent challenger with no blocking
+defect, and the coordinator's diff review signed. It is the second fully signed
+head of this chain and it replaces `3f4b630` as the last one. **Nothing is
+promoted by either signature**, and this commit — the answer to the three
+residuals below — is unsigned by anyone.
+
+### `C31-S1` — the same residual the challenger raised, and the label now says what the number is
+
+The coordinator's ruling on it was that the tree-digest-plus-commands answer
+fits, provided the LABEL says what the number is and a reader holding the
+PUSHED commit can reproduce it. Both are done: the record names it as a git
+tree object digest, says in the same breath that it is neither a commit nor a
+file digest, and prints the commands and the blob digest they must produce. The
+commands were run in a clean clone before they were written.
+
+One more change the coordinator did not ask for and the wording needed: the
+record now names the commit it is a statement about -- `ad57c1c`, which is on
+the remote -- instead of saying "this commit". A record that says "this commit"
+stops being true the moment a later round adds a file, which would have made
+the closure of `A-30-F1` false again one round after it was written, and in the
+same way: a sentence a reader cannot check. Naming the pushed commit is what
+makes it checkable and keeps it checkable.
+
+### `C31-S2` — a reading that strips only the double quotes, and every reading armed
+
+A retired wording that CONTAINS an apostrophe is destroyed by removing `'` from
+the text, so the strongest spelling of round 30's law could not catch such a
+wording split across the arguments of one command. There is now a spelling that
+removes `"` and nothing else, and the four readings are declared in
+`SENTENCE_SPELLINGS` plus the whole-file scope, with `skip` naming any of them.
+
+**Each of the four is armed, one deletion and one red, which is the harder
+half.** These readings are a ladder of over-joins, so a stronger reading
+subsumes a weaker one for most shapes; a world that reds under all four and
+stops redding when exactly ONE is deleted therefore has to be chosen for that
+reading. Each world below was also measured against the deletion of each of the
+other three:
+
+| reading | the shape only it catches |
+|---|---|
+| as written | a retired wording that contains a double quote — no entry of the live tuple does, so the arm plants one, because removing `"` destroys the needle as well as the haystack |
+| the double quotes | an apostrophe-bearing wording split across one command's arguments, which the every-quote spelling cannot see |
+| every quote | the same split made with SINGLE quotes |
+| the whole file | a sentence split across a blank line |
+
+### `C31-S3` — the sentences a FINDING prints were read by nothing
+
+The printed-sentence law read the two refusals the arms provoke. It did not
+read the sentences a reader actually meets when a figure reds, because `_arm`
+ran the scan with `quiet=True`: the findings printed nothing, so four rounds of
+law passed over them. The set is now derived from EXECUTION — every catch arm
+is run loud and every paragraph it prints is collected, with figures, digests
+and quoted tokens normalised away so one shape counts once.
+
+**And the first reading of that set found a live sentence of the defect class.**
+`NOT REQUIRED BY ANY CASE`, the sentence a reader meets when their figure reds,
+stated the criterion in its own words — *"no value case of this run asserted
+that string and passed"* — without quoting the pin. It composes the pin now.
+
+Requiring the pin of every line a run prints would red on a table row, so the
+set it is required of must be decided, and deciding it by a list of sentences
+is the defect this chain has spent six rounds closing. It is decided from the
+PIN'S OWN VOCABULARY: a paragraph that says `this run` and carries three or
+more of the pin's content words is talking about the criterion, and one that
+QUOTES the pin has nothing left to judge. That is an enumeration of WORDS
+rather than of sentences, derived from the pin, so changing the pin changes the
+selector with it — the declared limit is a paragraph that states the criterion
+in words sharing none of the pin's vocabulary.
+
+The derived set is a CENSUS and is pinned by literals, arrivals and departures
+both: six paragraph shapes and two finding names. If the arms ever go quiet
+again — which is how these sentences escaped every law in this file — the
+counts fall and the arm reds rather than passing over an empty set.
+
+### Residuals of this round
+
+| id | `P` | what |
+|---|---|---|
+| `R31-S1` / `C31-S1` | — | CLOSED: a tree digest with the commands that rebuild it from the pushed commit, and a label that says what the number is |
+| `C31-S2` | — | CLOSED: four readings, each deleted on its own and each redding a world only it catches |
+| `C31-S3` | — | CLOSED, and it was not a tidy-up: the finding sentence a reader meets stated the criterion without the pin |
+| `C28-F1` | P1 | OPEN and DECLARED, sized, and measured UNREACHABLE through the existing mutation hook |
+| `R28-S3` / `R27-S1` | P3 | unchanged, on the coordinator's ruling |
+| carried | — | as §7.31, and **no CI has ever run the Phase 11 pack** |
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: the coordinator's diff review signed `3f4b630` (§7.31), which is this phase's last fully signed head, and an independent challenger signed the same head with no blocking defect. Neither is a promotion verdict, neither covers any other SHA, and no one has signed this head.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: the coordinator's diff review signed `3f4b630` (§7.31), which is this phase's last fully signed head, and an independent challenger signed the same head with no blocking defect. `ad57c1c` is FULLY SIGNED too and replaces it as the last signed head: an independent challenger found no blocking defect in it and the coordinator's diff review signed it (§7.32). None of these is a promotion verdict, none covers any other SHA, and no one has signed this head.
 
 ---
 

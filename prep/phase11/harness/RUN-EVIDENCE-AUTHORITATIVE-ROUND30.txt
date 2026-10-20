@@ -1390,11 +1390,39 @@ This block was APPENDED to this file after the run it records, which is the only
 way a transcript can carry a run of the tree that contains it. Read it as a
 record, not as a run of the commit you are holding.
 
-TREE MEASURED: 5665d2bc1318c9589d45d208ed3487ef1621aca9
+TREE MEASURED, AS A GIT TREE OBJECT DIGEST (not a commit, not a file
+digest, and reproducible below from the commit you are holding):
 
-That tree is this commit MINUS these appended lines and nothing else: the
-transcripts, the documents and every byte of the harness are the same in both,
-which `git diff` of the two commits shows as this file alone.
+    fbeace0c5f7938baf7264311fb1cc82d8ed83980
+
+No other object and no network are needed -- the round-31 challenger's
+`R31-S1`, and the coordinator's `C31-S1` after it, which is why this is a tree
+digest and not a commit. The earlier wording named
+the commit `5665d2bc1318c9589d45d208ed3487ef1621aca9`, which exists only in the
+container that made it, so a reader could not check the claim at all: the same
+class of defect as the `A-30-F1` this block closes, one level down.
+
+The tree above is the tree of the PUSHED commit
+`ad57c1cd9a0526f8eb53e8308df999c22aac5a65` with ONE path replaced: this file,
+truncated to the 1383 lines that precede this block. Everything else -- every
+document, every harness file, the probe transcript -- is byte-identical, which
+is what that single replacement proves. The commit is named explicitly rather
+than as "this commit" because a later round adds files and this record must
+stay true: it is a statement about `ad57c1c`, which is on the remote, and a
+reader checks it there. To reproduce it:
+
+    git clone <this repo> w && cd w
+    git checkout ad57c1cd9a0526f8eb53e8308df999c22aac5a65
+    P=prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND30.txt
+    blob=$(git show HEAD:$P | head -n 1383 | git hash-object -w --stdin)
+    git read-tree HEAD^{tree}
+    git update-index --cacheinfo 100644,$blob,$P
+    git write-tree
+
+That prints the tree digest above, and `$blob` is
+e57cb29976e2bfb50a0ec05ccae875b353c0e04a, which is the blob the confirming run
+read. (`git read-tree` writes the clone's index; run it in a throwaway clone,
+not in a tree you are working in.)
 
 Why this block exists at all: the authoritative transcripts of rounds 28 and 29
 opened with the same sentence about a confirming run being recorded at the end

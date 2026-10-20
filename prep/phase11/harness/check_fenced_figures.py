@@ -425,9 +425,11 @@ if not sys.flags.isolated:
 
 import ast
 import atexit
+import contextlib
 import hashlib
 import html
 import inspect
+import io
 import os
 import re
 import shutil
@@ -2553,15 +2555,16 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                 # breath, because a refusal a reader acts on must not claim
                 # more than it checked.
                 print(
-                    "  NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, and no value "
-                    "case of this run asserted that string and passed. Either have a "
-                    "case assert it -- and name that case beside the figure -- or drop "
-                    "it. WHAT THIS CHECKS is that a case of this run asserted the "
-                    "string; what it does NOT check is that the case computed it from "
-                    "the database rather than carrying it as a literal of its own "
-                    "(`C28-F1`, a declared limit: the closure is mutation coverage of "
-                    "every figure-bearing case, which is a round of work and is not "
-                    "here)." % (rel, n, tok, written)
+                    ("  NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, and the "
+                     "haystack here is " + HAYSTACK_SENTENCE + ", which this string "
+                     "is not in: no value case of this run asserted it and passed. "
+                     "Either have a case assert it -- and name that case beside the "
+                     "figure -- or drop it. WHAT THIS CHECKS is that a case of this "
+                     "run asserted the string; what it does NOT check is that the "
+                     "case computed it from the database rather than carrying it as "
+                     "a literal of its own (`C28-F1`, a declared limit: the closure "
+                     "is mutation coverage of every figure-bearing case, which is a "
+                     "round of work and is not here).") % (rel, n, tok, written)
                 )
             elif why == "bidi control":
                 print(
@@ -3311,7 +3314,7 @@ def _world_capture(kind, harness):
     return path
 
 
-def _arm(body, skip=(), relpath="a.md", kind="plain"):
+def _arm(body, skip=(), relpath="a.md", kind="plain", quiet=True):
     """One document line, weighed against one world. `relpath` is under docs.
 
     The world's own capture is installed for the length of the arm and taken
@@ -3327,7 +3330,7 @@ def _arm(body, skip=(), relpath="a.md", kind="plain"):
             docs = os.path.join(d, "docs")
             os.makedirs(docs)
             _write(docs, relpath, body + "\n")
-            return scan(docs, harness, quiet=True, skip=skip)
+            return scan(docs, harness, quiet=quiet, skip=skip)
     finally:
         _RUN_CAPTURE[:] = was
 
@@ -7259,7 +7262,25 @@ def _without_the_declaration(text):
     return "\n".join("" if l in gone else l for l in text.split("\n"))
 
 
-def sentences(text, prefix, name, pins=()):
+SENTENCE_WHOLE_FILE = "the whole file"
+"""The fourth reading's name. A constant, and the parameter that drops a
+reading is called `without` and not `skip`, because `skip` in this file is the
+MATCHER's guard set, which has a census of its own (`R25-S4`) -- and one name
+holding two sets is the defect this pack has a lesson about."""
+
+SENTENCE_SPELLINGS = (
+    ("as written", lambda t: t),
+    ("the double quotes", lambda t: t.replace('"', "")),
+    ("every quote", lambda t: t.replace('"', "").replace("'", "")),
+)
+"""The three SPELLINGS of one paragraph this law reads, declared rather than
+written into the reading loop so that `--selftest` can delete one at a time and
+require an arm to stop redding. With `the whole file` they are the four
+readings of `C31-S2`; each one is the only reading that catches one shape, and
+the selftest proves exactly that, one deletion at a time."""
+
+
+def sentences(text, prefix, name, pins=(), without=()):
     """Every stale or missing sentence about the haystack in `text`, as PROSE.
 
     `C28-F2` and the coordinator's `C29-F1`. What makes a figure legitimate
@@ -7283,29 +7304,48 @@ def sentences(text, prefix, name, pins=()):
     positive pin; the tuple is the net under it.
     """
     out = []
-    # `R30-S1`, the round-30 challenger's residual, closed here. Reading the
-    # file as paragraphs still left two shapes out, and both are shapes these
+    # `R30-S1`, the round-30 challenger's residual, and the coordinator's
+    # `C31-S2` after it. Reading the file as paragraphs left out shapes these
     # files could really be written in: a sentence split ACROSS A BLANK LINE,
     # which ends a paragraph, and a sentence split across the ARGUMENTS of one
-    # command (`printf '%s %s\n' "<the first half of a retired" "sentence>"`),
-    # where the quotes are what hide it. The example is written with
-    # placeholders because this file names a retired rule by its ROUND and
-    # does not spell one -- including inside an example, which is a rule this
-    # very reading caught me breaking. So each paragraph is read twice -- as it stands, and
-    # with every quote character removed -- and the whole file is read once
-    # more as ONE paragraph, which no blank line can break. The last pass is
-    # the strongest over-join in this law: it can only ADD a candidate
-    # sentence, and the two live files are required to report nothing under it.
-    whole = re.sub(r"\s+", " ", " ".join(
-        c for c in (_clean_line(l) for l in text.split("\n")) if c
-    ))
-    readings = [(a, b, para) for a, b, para in _prose(text)]
-    readings += [
-        (a, b, re.sub(r"\s+", " ", para.replace('"', "").replace("'", "")))
-        for a, b, para in list(readings)
+    # command, where the quotes are what hide it. The examples are written with
+    # placeholders because this file names a retired rule by its ROUND and does
+    # not spell one -- including inside an example, which is a rule this very
+    # reading caught me breaking.
+    #
+    # So the text is read under FOUR readings, declared in `SENTENCE_READINGS`,
+    # and `skip` names any of them so the selftest can delete one at a time:
+    #
+    #   as written            the paragraph as a reader reads it
+    #   the double quotes     `"` removed and nothing else -- `C31-S2`: a
+    #                         retired wording that CONTAINS an apostrophe is
+    #                         destroyed by removing `'` from the text, so the
+    #                         reading that removes both cannot catch it split
+    #                         across arguments, and this one can
+    #   every quote           `"` and `'` both removed -- the only reading that
+    #                         catches a split made with SINGLE quotes
+    #   the whole file        every non-blank line joined into ONE paragraph,
+    #                         under each of the three spellings above, which no
+    #                         blank line can break
+    #
+    # The whole-file reading is the strongest over-join in this law: it can
+    # only ADD a candidate sentence, and the two live files are required to
+    # report nothing under all four.
+    spellings = [
+        (nm, fn) for nm, fn in SENTENCE_SPELLINGS if nm not in without
     ]
-    readings.append((1, text.count("\n") + 1, whole))
-    readings.append((1, text.count("\n") + 1, whole.replace('"', "").replace("'", "")))
+    readings = []
+    for nm, fn in spellings:
+        readings += [
+            (a, b, re.sub(r"\s+", " ", fn(para))) for a, b, para in _prose(text)
+        ]
+    if SENTENCE_WHOLE_FILE not in without:
+        whole = re.sub(r"\s+", " ", " ".join(
+            c for c in (_clean_line(l) for l in text.split("\n")) if c
+        ))
+        last = text.count("\n") + 1
+        for nm, fn in spellings:
+            readings.append((1, last, re.sub(r"\s+", " ", fn(whole))))
     seen_already = set()
     for start, end, para in readings:
         low = para.lower()
@@ -7468,7 +7508,145 @@ def driver_sentence_arms():
     return ok
 
 
-def gate_sentences(printed):
+def sentence_reading_arms():
+    """`C31-S2`: each of the four readings deleted on its own, one red each.
+
+    The coordinator asked for a reading that removes ONLY `"`, and for every
+    reading to be armed rather than argued. Both are here, and the second is
+    the harder half: these readings form a ladder of over-joins, so a stronger
+    reading subsumes a weaker one for most shapes. A world that reds under all
+    four and stops redding when ONE is deleted therefore has to be chosen for
+    that reading, and each of the four below is the ONLY reading that catches
+    its shape -- measured, by deleting each of the other three in turn too.
+
+      as written         a retired wording that CONTAINS a double quote. No
+                         entry of the live tuple does, so this arm plants one:
+                         removing `"` from the text destroys the needle as well
+                         as the haystack
+      the double quotes  a retired wording that contains an APOSTROPHE, split
+                         across the arguments of one command. Removing `'` as
+                         well destroys the needle, so the strongest spelling
+                         CANNOT catch this one
+      every quote        the same split made with SINGLE quotes
+      the whole file     a sentence split across a BLANK LINE
+    """
+    global RETIRED_SENTENCES
+    ok = True
+    names = tuple(n for n, _ in SENTENCE_SPELLINGS) + (SENTENCE_WHOLE_FILE,)
+    quoted = 'the "run printed" rule'
+    apostrophe = next((r for r in RETIRED_SENTENCES if "'" in r), None)
+    plain = next((r for r in RETIRED_SENTENCES if "'" not in r), None)
+    if apostrophe is None or plain is None:            # pragma: no cover
+        print("  readings SENTENCE-READING-NO-SUBJECT: the tuple has no wording of "
+              "one of the two shapes -> **SELFTEST FAILED**")
+        return False
+    first, rest = apostrophe.split(" ", 2)[:2], apostrophe.split(" ", 2)[2]
+    worlds = (
+        ("as written", "# %s\n" % quoted, True,
+         "a retired wording containing a double quote"),
+        ("the double quotes",
+         'printf \'%%s %%s\\n\' "%s" "%s"\n' % (" ".join(first), rest), False,
+         "an apostrophe wording split across one command's arguments"),
+        ("every quote",
+         "printf \'%%s %%s\\n\' \'%s \' \'%s\'\n"
+         % (plain.split()[0], " ".join(plain.split()[1:])), False,
+         "the same split made with single quotes"),
+        (SENTENCE_WHOLE_FILE,
+         "# the haystack is %s\n\n# %s\n"
+         % (plain.split()[0], " ".join(plain.split()[1:])), False,
+         "a sentence split across a blank line"),
+    )
+    for name, text, plant, what in worlds:
+        was = RETIRED_SENTENCES
+        if plant:
+            RETIRED_SENTENCES = was + (quoted,)
+        try:
+            whole = len(sentences(text, "X", "x"))
+            mine = len(sentences(text, "X", "x", without=(name,)))
+            others = max(len(sentences(text, "X", "x", without=(o,)))
+                         for o in names if o != name)
+        finally:
+            RETIRED_SENTENCES = was
+        good = whole >= 1 and mine == 0 and others >= 1
+        ok = ok and good
+        print(
+            "  readings %-18s %-52s all=%d without-it=%d without-any-other=%d -> %s"
+            % (name, what, whole, mine, others,
+               "as required" if good else "**SELFTEST FAILED**")
+        )
+    return ok
+
+
+def _states_the_criterion(text):
+    """Does this printed paragraph SAY what makes a figure legitimate here?
+
+    The coordinator's `C31-S3`. The printed-sentence law requires the pin, and
+    requiring it of EVERY line a run prints would red on a table row; so the
+    set it is required of has to be decided, and deciding it by a list of
+    sentences is the defect this whole chain has been closing. It is decided
+    from the PIN'S OWN VOCABULARY instead: a paragraph that says `this run` and
+    carries three or more of the pin's content words is talking about the
+    criterion, and a paragraph that QUOTES the pin has nothing left to judge.
+
+    The limit, declared: a paragraph that states the criterion in words sharing
+    none of the pin's vocabulary is not selected. That is an enumeration of
+    WORDS rather than of sentences, which is one level further out than round
+    29's net, and it is derived from the pin rather than written beside it --
+    change the pin and this selector changes with it.
+    """
+    low = text.lower()
+    if HAYSTACK_SENTENCE.lower() in low:
+        return False
+    stems = sorted({
+        re.sub(r"[^a-z]", "", w.lower()).rstrip("s")
+        for w in HAYSTACK_SENTENCE.split()
+        if len(re.sub(r"[^a-z]", "", w)) > 3
+    })
+    hits = sum(1 for st in stems if re.search(r"\b%ss?\b" % re.escape(st), low))
+    return bool(re.search(r"\bthis run\b", low)) and hits >= 3
+
+
+def printed_finding_sentences():
+    """Every distinct paragraph a FINDING of this gate PRINTS, by running it.
+
+    The coordinator's `C31-S3`. `gate_sentences` read the two refusals the arms
+    provoke, and the arms ran `scan` with `quiet=True`, so the sentences a
+    reader actually meets when a figure reds -- the findings themselves -- were
+    read by nothing. The set is derived here from EXECUTION: every catch arm is
+    run loud and every paragraph it prints is collected, with figures, digests
+    and quoted tokens normalised away so that one shape counts once.
+    """
+    out, seen = [], set()
+    for label, body in CATCH:
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                _arm(body, quiet=False)
+            except Refusal:                                    # pragma: no cover
+                continue
+        for line in buf.getvalue().split("\n"):
+            text = line.strip()
+            if not text:
+                continue
+            key = re.sub(r"`[^`]*`", "`X`", re.sub(r"[0-9]+", "N", text))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(("the finding printed by the arm %r" % label, text))
+    return out
+
+
+def finding_labels(printed):
+    """The distinct NAMES a finding prints, derived from the paragraphs."""
+    names = set()
+    for _, text in printed:
+        hit = re.match(r"^([A-Z][A-Z -]{6,}):", text)
+        if hit:
+            names.add(hit.group(1))
+    return sorted(names)
+
+
+def gate_sentences(printed, rule_statements_only=False):
     """Every stale or missing sentence about the haystack in what a RUN of this
     gate PRINTS, as opposed to what its file says.
 
@@ -7495,6 +7673,8 @@ def gate_sentences(printed):
                     "GATE-SENTENCE-RETIRED: %s prints %r, which describes a rule this "
                     "file no longer holds." % (where, retired)
                 )
+        if rule_statements_only and not _states_the_criterion(msg):
+            continue
         if HAYSTACK_SENTENCE not in msg:
             out.append(
                 "GATE-SENTENCE-UNQUOTED: %s says what the haystack is without quoting "
@@ -7503,6 +7683,71 @@ def gate_sentences(printed):
                 % (where, HAYSTACK_SENTENCE)
             )
     return out
+
+
+def finding_sentence_arms():
+    """`C31-S3`: the sentences a FINDING prints, derived by running the arms.
+
+    The set is a census, so it is pinned by LITERALS and an arrival reds as
+    loudly as a departure: six paragraph shapes and two finding names. If the
+    arms ever go quiet again -- which is how these sentences escaped every law
+    in this file for four rounds -- the counts fall and this arm reds instead
+    of passing over an empty set, which is the vacuity the project's own ruling
+    forbids.
+    """
+    ok = True
+    printed = printed_finding_sentences()
+    labels = finding_labels(printed)
+    found = gate_sentences(printed, rule_statements_only=True)
+    for label, good, said in (
+        ("the live set reports nothing", not found,
+         "%d finding(s)" % len(found)),
+        ("the census of printed shapes", len(printed) == 6,
+         "%d paragraph shape(s), want 6" % len(printed)),
+        ("the census of finding names", labels == [
+            "BIDI-CONTROL-IN-A-CANDIDATE", "NOT REQUIRED BY ANY CASE"],
+         ", ".join(labels) or "none"),
+    ):
+        ok = ok and good
+        print("  findings C31-S3 %-34s %-44s -> %s"
+              % (label, said, "as required" if good else "**SELFTEST FAILED**"))
+    for why in found:
+        print("    " + why)
+    live = next((t for w, t in printed
+                 if t.startswith("NOT REQUIRED BY ANY CASE")), None)
+    if live is None:                                           # pragma: no cover
+        print("  findings C31-S3 the subject sentence is not in the set -> "
+              "**SELFTEST FAILED**")
+        return False
+    retired = RETIRED_SENTENCES[0]
+    worlds = (
+        ("the pin cut out of the live finding sentence",
+         live.replace(HAYSTACK_SENTENCE, "what this gate happens to hold"),
+         "GATE-SENTENCE-UNQUOTED"),
+        ("a retired wording put into it",
+         live.replace(HAYSTACK_SENTENCE, retired),
+         "GATE-SENTENCE-RETIRED"),
+    )
+    for label, planted, want in worlds:
+        names = [f.split(":")[0]
+                 for f in gate_sentences([("the planted finding", planted)],
+                                         rule_statements_only=True)]
+        good = want in names
+        ok = ok and good
+        print("  findings %-44s refused as %-24s (want %s) -> %s"
+              % (label, names[0] if names else "NO REFUSAL", want,
+                 "as required" if good else "**SELFTEST FAILED**"))
+    # The control, and it is what keeps the selector from being a net that reds
+    # every line: a printed paragraph that is NOT about the criterion and does
+    # not quote the pin must pass.
+    other = next((t for w, t in printed if t.startswith("the decision frame")), "")
+    good = not gate_sentences([("the frame line", other)],
+                              rule_statements_only=True)
+    ok = ok and good
+    print("  findings %-44s %-35s -> %s"
+          % ("control: a printed line that states no rule", "0 finding(s)",
+             "as required" if good else "**SELFTEST FAILED**"))
+    return ok
 
 
 def gate_sentence_arms():
@@ -8576,7 +8821,9 @@ def selftest():
     ok = identity_arms_test() and ok
     ok = capture_names_test() and ok
     ok = driver_sentence_arms() and ok
+    ok = sentence_reading_arms() and ok
     ok = gate_sentence_arms() and ok
+    ok = finding_sentence_arms() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
