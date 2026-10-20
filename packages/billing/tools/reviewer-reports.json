@@ -69,7 +69,8 @@
     "P5-COORD-DIFF-REVIEW-c2c77f6.md": "c12ccf61c5975c51fb9d85da5702ceb615461973a00382a4d77a6d2aeacdf719",
     "P5-COORD-DIFF-REVIEW-cb3eb67.md": "9221d28394154abedbd51279df2636903b4f251e6a0f8bb5e99b9859d299567d",
     "P5-COORD-DIFF-REVIEW-e5d3783.md": "dfd19d192d09b9945a131235e6ece66cef517c9b24aed4f456eb80c0eb9bc6ab",
-    "P5-COORD-DIFF-REVIEW-03907d0.md": "5585c8d167e7b7c179674996142ad721b0de7af45c5b4bf67568caafb4e472c6"
+    "P5-COORD-DIFF-REVIEW-03907d0.md": "5585c8d167e7b7c179674996142ad721b0de7af45c5b4bf67568caafb4e472c6",
+    "P5-CHALLENGE-a7d22fe.md": "2dda173e5c159cbd0da852c6479523152af4243babff5266c704419475b00314"
   },
   "_looks_like_reviewer_is_for_MESSAGES_and_detection_only": "ROUND 30, the challenger's F-53 (P2). This pattern must NEVER decide an exemption — that is B-10, and `reviewer_reports` above is the only thing that exempts. It decides WORDING: a file whose name has this shape but is absent from the list is an UNENUMERATED reviewer report, not an author-owned document, and telling the author to edit it routes them to the one repair the pack forbids for a reviewer's frozen bytes. Both instruments read this one pattern so the two messages cannot drift apart.",
   "looks_like_reviewer": "^P5-(CHALLENGE|COORD-DIFF-REVIEW)-[0-9a-fA-F]{6,40}(-[A-Za-z0-9]+)*\\.md$",
