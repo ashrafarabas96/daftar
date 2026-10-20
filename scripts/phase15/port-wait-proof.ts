@@ -17,8 +17,11 @@
  *   W4  a value that is not a port REFUSES instead of polling it for the whole
  *       budget and then reporting a held port that never existed
  *
- * It starts listeners of its own on ports in the 55900 block, which no
- * instrument in the pack declares, so running this never contends with one.
+ * It starts listeners of its own on 55901 and 55902. Round 22's F-R22-11 fix
+ * made the port reader derive the declared set from the pack's own numeric
+ * literals, so these two ARE declared now -- by this file. What keeps the
+ * proof from contending is narrower than the sentence that stood here: no
+ * CLUSTER instrument binds either port, and no other file writes them.
  */
 import { spawn } from 'node:child_process';
 import net from 'node:net';

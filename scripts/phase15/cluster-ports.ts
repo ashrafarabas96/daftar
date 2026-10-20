@@ -68,8 +68,9 @@ const PORT_POLL_MS = 500;
  * READ FROM THE SYNTAX TREE, NOT FROM THE TEXT (round 22, F-R22-11). A regex
  * over the bytes got this wrong in both directions at once, and the challenger
  * measured both in the pack's own source: it admitted **55900**, which nothing
- * binds and which appears only inside two COMMENTS -- one of them the sentence
- * saying no instrument declares that block -- and it lost **55901** and
+ * binds and which appeared only inside two COMMENTS -- one of them the sentence
+ * claiming no instrument declares that block, a claim this fix made false and
+ * round 23 rewrote -- and it lost **55901** and
  * **55902**, which `port-wait-proof.ts` really does bind, because they are
  * written `55_901` and `55_902` and `\b55\d{3}\b` does not match across a
  * numeric separator. A comment is prose and a separator is formatting; a

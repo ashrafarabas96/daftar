@@ -172,7 +172,9 @@ const PACK_BOUND = '  for (const id of imported.ids) seed.add(id);';
  * what reports it is the line that asks whether the callee MENTIONS a
  * producer at all. Measured when it was added: with it removed the whole plant
  * set still behaved, which is how a rule becomes decorative — so two plants
- * exist for it, and this section is what says the line does the work.
+ * exist for it, and this section is what says the line does the work. Round 23
+ * measured a THIRD arm on it: X60, a conditional of returners in callee
+ * position, written for a rule one frame in and caught here instead.
  */
 const FALLBACK_BOUND = '      else if (mentionsProducer(c, p)) out.push(n);';
 const FALLBACK_BLIND = '      else if (false) out.push(n);';
@@ -305,16 +307,95 @@ function sweepFile(script: string, pack: string, file: string): { readonly ran: 
 /**
  * ONE DELETION PER RULE, EACH WITH THE ARMS IT MUST BLIND AND NO OTHERS.
  *
- * Round 21 added three rules and round 22 added four, and until now none of
- * them had a deletion of its own: the plants went red, and nothing said WHICH
- * rule turned them red. A rule no plant depends on is decorative, and a plant
- * no deletion attributes is a smoke test. Each row below replaces exactly one
- * line of the sweep and pins, by name, the arms that must go blind. The arm
- * lists are not guesses: they were read off the stripped copies and then
- * written down, so a later change that moves the blast radius fails here.
+ * Round 21 added three rules and round 22 added four, and until round 22 none
+ * of them had a deletion of its own: the plants went red, and nothing said
+ * WHICH rule turned them red. A rule no plant depends on is decorative, and a
+ * plant no deletion attributes is a smoke test. Each row below replaces exactly
+ * one line of the sweep and pins, by name, the arms that must go blind.
+ *
+ * THE ARM LISTS ARE MEASURED, NOT EXPECTED. Every one was read off the stripped
+ * copy and then written down, and this instrument has now twice rejected lists
+ * its author wrote from expectation — two in round 22 and ten in round 23,
+ * three of them rules whose deletion blinded no arm at all. A list equal to
+ * what the deletion moves is the attribution; a list written from what the
+ * author believes it moves is a claim about a run nobody made. A later change
+ * that moves the blast radius fails here, by design.
  */
 const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string; readonly blind: string; readonly arms: readonly string[] }[] = [
-  { label: 'the conservative callee fallback', bound: FALLBACK_BOUND, blind: FALLBACK_BLIND, arms: ['X44', 'X45'] },
+  { label: 'the conservative callee fallback', bound: FALLBACK_BOUND, blind: FALLBACK_BLIND, arms: ['X44', 'X45', 'X60'] },
+  {
+    label: "round 23's cut flag TRAVELLING with the value, on the IMPORT edge",
+    bound: '      if (read.degraded) cut = true;\n      const from = read.surface;\n      for (const m of from.members) members.add(m);',
+    blind: '      const from = read.surface;\n      for (const m of from.members) members.add(m);',
+    // MEASURED, and it corrected the arm this section was written with: X56
+    // carries its producer outward by RE-EXPORT, so the floor it depends on is
+    // the one on the re-export walk and this deletion left X56 red. X67 is the
+    // same cycle with import edges only, which is the copy this line owns.
+    arms: ['X67'],
+  },
+  {
+    label: "round 23's namespace import in an outside module",
+    bound: '      if (nb !== undefined && ts.isNamespaceImport(nb)) {',
+    blind: '      if (false && nb !== undefined && ts.isNamespaceImport(nb)) {',
+    arms: ['X57'],
+  },
+  {
+    label: "round 23's local alias of a free object",
+    bound: '    return ts.isIdentifier(root) && (!declared.has(root.text) || aliasesFree.has(root.text));',
+    blind: '    return ts.isIdentifier(root) && !declared.has(root.text);',
+    arms: ['X58', 'X63'],
+  },
+  {
+    label: "round 23's scope-walking key resolver",
+    bound:
+      '  const constAt = (node: ts.Node, name: string): string | null => {\n    for (let cur: ts.Node | undefined = node; cur !== undefined; cur = cur.parent) {',
+    blind:
+      '  const constAt = (node: ts.Node, name: string): string | null => {\n    void node;\n    let flat: string | null = null;\n    const scanFlat = (q: ts.Node): void => {\n      if (ts.isVariableDeclaration(q) && ts.isIdentifier(q.name) && q.name.text === name && q.initializer !== undefined) {\n        const i = unwrap(q.initializer);\n        flat = ts.isStringLiteral(i) || ts.isNoSubstitutionTemplateLiteral(i) ? i.text : null;\n      }\n      q.forEachChild(scanFlat);\n    };\n    scanFlat(sf);\n    return flat;\n    for (let cur: ts.Node | undefined = node; cur !== undefined; cur = cur.parent) {',
+    arms: ['X59'],
+  },
+  {
+    label: "round 23's conditional of returners in callee position",
+    bound: '  if (ts.isConditionalExpression(c)) return isReturnerExpr(c.whenTrue, p) || isReturnerExpr(c.whenFalse, p);',
+    blind: '  if (ts.isConditionalExpression(c)) return false;',
+    // MEASURED: X60 puts the conditional in CALLEE position, where the
+    // conservative fallback reports the call anyway, so X60 attributed this
+    // rule to nothing. X66 hands the same conditional over as an ARGUMENT to a
+    // callee that mentions no producer, which only this split can reach.
+    arms: ['X66'],
+  },
+  {
+    label: "round 23's reflective write forms",
+    bound: "      if ((callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    blind: "      if (false && (callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    arms: ['X61'],
+  },
+  {
+    label: "round 23's refusal of an unresolved relative import",
+    bound: "    if (resolved === null && spec.startsWith('.') && !PACK_PRODUCER_EXPORTS.has(specKey(spec))) {",
+    blind: "    if (false && resolved === null && spec.startsWith('.') && !PACK_PRODUCER_EXPORTS.has(specKey(spec))) {",
+    arms: ['X62'],
+  },
+  {
+    label: "round 22's conditional assignment operators, given a plant in round 23",
+    bound: '    ts.SyntaxKind.QuestionQuestionEqualsToken,',
+    blind: '    ts.SyntaxKind.EqualsToken,',
+    arms: ['X63'],
+  },
+  {
+    label: "round 22's Object.assign branch, given a plant in round 23",
+    bound: "      if (callee === 'Object.assign' && n.arguments.length > 1 && destFree) {",
+    blind: "      if (false && callee === 'Object.assign' && n.arguments.length > 1 && destFree) {",
+    arms: ['X64'],
+  },
+  {
+    label: "round 22's extra resolver candidates, given a plant in round 23",
+    bound: "    join(base, 'index.tsx'),",
+    blind: "    join(base, 'index-not-tried.tsx'),",
+    // X65 stayed RED with the candidate removed, because the specifier then
+    // resolves to nothing and F-R23-13 refuses it BY NAME. The arm now reads
+    // the SITE rather than the file, so what it measures is this candidate.
+    arms: ['X65'],
+  },
   // Round 22 measured BOTH of these here, by running them and reading which
   // arms moved. The first list was written from what I expected -- X49 for the
   // hand-over rule -- and this proof reported X36, X41 and X42 instead, because
@@ -324,19 +405,23 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
     label: "the returner call read as a VALUE in a binding's region",
     bound: '  if (ts.isCallExpression(x) && isReturnerCall(x, p)) return true;',
     blind: '  if (ts.isCallExpression(x) && isReturnerCall(x, p) && false) return true;',
-    arms: ['X36', 'X41', 'X42'],
+    arms: ['X36', 'X41', 'X42', 'X60'],
   },
   {
     label: "round 22's returner-call HAND-OVER",
     bound: '      if (ts.isCallExpression(x) && isReturnerCall(x, p)) {\n        found = true;\n        return;\n      }',
     blind: '      if (ts.isCallExpression(x) && isReturnerCall(x, p) && false) {\n        found = true;\n        return;\n      }',
-    arms: ['X49'],
+    // X66 hands a returner call over as an argument, so it needs BOTH this
+    // rule and the conditional split one frame in; measured, not expected.
+    arms: ['X49', 'X66'],
   },
   {
     label: "round 21's pack-wide escaped keys",
     bound: '  for (const k of PACK_ESCAPED_KEYS) members.add(k);',
     blind: '  for (const k of PACK_ESCAPED_KEYS) void k;',
-    arms: ['X47', 'X50'],
+    // Seven arms, all measured: every plant whose producer is published under
+    // a pack-wide escaped key depends on this line, and round 23 added four.
+    arms: ['X47', 'X50', 'X58', 'X59', 'X61', 'X63', 'X64'],
   },
   {
     label: "round 22's refusal of a key nobody can name",
@@ -352,19 +437,19 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
   },
   {
     label: "round 22's re-export walk in an outside module",
-    bound:
-      '      if (!ts.isExportDeclaration(st) || st.moduleSpecifier === undefined || !ts.isStringLiteral(st.moduleSpecifier)) continue;\n      const next = resolveOutside(dirname(abs), st.moduleSpecifier.text);\n      if (next === null) continue;\n      if (OUTSIDE_ON_STACK.has(next) || depth + 1 > OUTSIDE_MAX_DEPTH) cut = true;\n      const from = outsideSurface(next, depth + 1);\n      const ids = new Set<string>(surface0.ids);',
-    blind:
-      '      if (!ts.isExportDeclaration(st) || st.moduleSpecifier === undefined || !ts.isStringLiteral(st.moduleSpecifier)) continue;\n      const next = resolveOutside(dirname(abs), st.moduleSpecifier.text);\n      if (next === null) continue;\n      if (OUTSIDE_ON_STACK.has(next) || depth + 1 > OUTSIDE_MAX_DEPTH) cut = true;\n      const from = EMPTY_SURFACE;\n      const ids = new Set<string>(surface0.ids);',
-    // X54's cycle reaches its producer through a RE-EXPORT too, so this
-    // deletion legitimately blinds both. Measured, not assumed.
-    arms: ['X52', 'X54'],
+    // Re-anchored in round 23 after `outsideSurface` was rewritten to return
+    // `{surface, degraded}`; the old anchor stopped matching, and the new
+    // uniqueness preflight reported it as 0 occurrences rather than letting
+    // the section pass on a replacement that changed nothing.
+    bound: '      if (read.degraded) cut = true;\n      const from = read.surface;\n      const ids = new Set<string>(surface0.ids);',
+    blind: '      if (read.degraded) cut = true;\n      const from = EMPTY_SURFACE;\n      const ids = new Set<string>(surface0.ids);',
+    arms: ['X52', 'X54', 'X56'],
   },
   {
     label: "round 22's refusal to memoise a surface computed while a cycle was cut",
     bound: '  if (!cut) OUTSIDE_SURFACE.set(abs, surface);',
     blind: '  OUTSIDE_SURFACE.set(abs, surface);',
-    arms: ['X54'],
+    arms: ['X54', 'X56', 'X67'],
   },
 ];
 
@@ -381,6 +466,34 @@ function main(): number {
     console.log('EXIT 2 — UNMEASURED. A guard-deletion proof that cannot find the guard proves nothing.');
     return 2;
   }
+  /**
+   * EVERY ANCHOR MUST OCCUR EXACTLY ONCE (round 23, F-R23-10).
+   *
+   * Every deletion here is a `String.replace`, which replaces the FIRST
+   * occurrence and says nothing about the rest. `OBJECT_BOUND` was
+   * byte-identical to a line in `mentionsProducer`, so the copy that was
+   * blinded was not the copy the section is about, and the attribution was to
+   * the wrong rule. An anchor that matches twice is a measurement of something
+   * nobody chose, and an anchor that matches zero times measures nothing, so
+   * both are UNMEASURED rather than a pass.
+   */
+  const anchors: readonly { readonly label: string; readonly text: string }[] = [
+    { label: 'the provenance requirement', text: GUARD },
+    { label: 'the swept-set construction', text: SELF_BOUND },
+    { label: 'the require-bound producer rule', text: REQUIRE_BOUND },
+    { label: 'the pack-level producer rule', text: PACK_BOUND },
+    { label: 'the callee-object exception', text: OBJECT_BOUND },
+    ...RULE_DELETIONS.map((r) => ({ label: r.label, text: r.bound })),
+  ];
+  const ambiguous = anchors.map((a) => ({ ...a, n: me.split(a.text).length - 1 })).filter((a) => a.n !== 1);
+  if (ambiguous.length > 0) {
+    for (const a of ambiguous) console.log(`  ${a.label}: its anchor occurs ${String(a.n)} time(s) in the sweep, and a deletion needs exactly one.`);
+    console.log('');
+    console.log('EXIT 2 — UNMEASURED. A deletion that cannot say WHICH line it removed attributes nothing.');
+    return 2;
+  }
+  console.log(`  ${String(anchors.length)} deletion anchor(s), each matching exactly one line of the sweep — checked before anything was removed.`);
+
   const tmp = mkdtempSync(join(tmpdir(), 'p15-guard-'));
   try {
     const pack = join(tmp, 'phase15');
@@ -671,13 +784,18 @@ function main(): number {
     console.log('  the SAME bytes in one file stay visible.');
     console.log(`  ${String(RULE_DELETIONS.length)} rules carry a deletion of their own, each pinned to the arms it owns and no others:`);
     for (const r of RULE_DELETIONS) console.log(`    ${r.label} \u2014 ${r.arms.join(', ')}`);
-    console.log('  Two of those arm lists were WRONG when first written, and this instrument said so:');
-    console.log("  round 22's hand-over rule was anchored to the wrong one of two lines that call the");
-    console.log('  same helper, and the cycle-cut rule blinded NO arm at all, because the plant written');
-    console.log('  for it did not depend on it. Both were corrected against what the deletions actually');
-    console.log('  moved, which is what this file is for.');
+    console.log('  TEN of those arm lists were WRONG when first written, and this instrument said so.');
+    console.log('  In round 22: the hand-over rule was anchored to the wrong one of two lines calling');
+    console.log('  the same helper, and the cycle-cut rule blinded NO arm, because the plant written for');
+    console.log('  it did not depend on it. In round 23, on the first run over its own answer: three');
+    console.log('  rules blinded NO arm at all \u2014 one because the conservative fallback already caught');
+    console.log('  the plant, one because the plant used the OTHER copy of a two-copy line, and one');
+    console.log('  because a removed resolver candidate turns into a NAMED REFUSAL rather than a miss');
+    console.log('  \u2014 and six blinded MORE arms than the list claimed. Two plants were built and one arm');
+    console.log('  tightened to answer that, and every list here is now the MEASURED set.');
     console.log('  The two rules round 20 added carry their own deletions: the conservative callee');
-    console.log('  fallback, removed, blinds exactly X44 and X45 and nothing else; and the one exception');
+    console.log('  fallback, removed, blinds X44, X45 and X60 \u2014 X60 was written for another rule and');
+    console.log('  this is the rule that actually catches it; and the one exception');
     console.log('  to the callee rule \u2014 reading the OBJECT of a method call \u2014 removed, stops the sweep');
     console.log('  following a producer a container handed out, attributed at the SITE because the');
     console.log('  planted FILE is named in both arms. The apparatus is read on a sixth shape too: its');

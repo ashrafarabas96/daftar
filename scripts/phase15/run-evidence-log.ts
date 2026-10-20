@@ -340,8 +340,10 @@ const INSTRUMENTS: readonly Instrument[] = [
   {
     script: 'verify:port-wait:prove',
     what: 'whether the cluster-port wait is a mechanism or a comment: a real holder in a real other process, held and then released',
-    // It binds ports in the 55900 block, which no instrument in this
-    // inventory declares, so it never contends with one of them.
+    // It binds 55901 and 55902. Since F-R22-11 the port reader derives the
+    // declared set from numeric literals, so those two are declared -- by the
+    // proof itself. No CLUSTER instrument binds them, which is what makes it
+    // safe to run this one without a cluster of its own.
     cluster: false,
     nonZeroMeans:
       'the wait returned before a held port was free, or did not end when one was released, or polled a value that is not a port instead of refusing it \u2014 any of which makes the gap before a cluster instrument a comment rather than a guarantee',
