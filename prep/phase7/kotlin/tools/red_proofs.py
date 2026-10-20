@@ -62,7 +62,21 @@ import os
 # refusal above still runs first, so `-I` is guaranteed here and `os` cannot be
 # a file dropped beside this one. Nothing between them spawns anything.
 _DEPTH_READ = (os.environ.get("P7_HARNESS_SPAWN_DEPTH", "0") or "0").strip()
-if not _DEPTH_READ.lstrip("+").isdigit():
+try:
+    _DEPTH = int(_DEPTH_READ)
+    _DEPTH_IS_READABLE = True
+except ValueError:
+    _DEPTH = 0
+    _DEPTH_IS_READABLE = False
+
+# R20-04, the twentieth challenge, and the coordinator's F-N: the guard here was
+# `_DEPTH_READ.lstrip("+").isdigit()`, and `isdigit()` is true for Unicode digits
+# that `int()` refuses -- so `³` brought back the very traceback this refusal
+# was written to remove, one character away, and the arm could not see it
+# because the arm was a LIST OF FIVE NAMES. A classification where this lane's
+# rule is construction. The readable set is now exactly the set `int()` accepts,
+# because `int()` is what decides it, and no list is involved at all.
+if not _DEPTH_IS_READABLE:
     # R19-03, the nineteenth challenge. This was `int(...)` unguarded, so a
     # value like `abc` or `3.0` ended the harness in a TRACEBACK. Fail-closed,
     # so it hid nothing — but this lane refuses BY NAME, and a traceback is not
@@ -76,7 +90,7 @@ if not _DEPTH_READ.lstrip("+").isdigit():
     )
     raise SystemExit(2)
 
-if int(_DEPTH_READ) > 2:
+if _DEPTH > 2:
     print(
         f"REFUSED-P7-HARNESS-SPAWNED-ITSELF: this process is "
         f"{_DEPTH_READ} spawns deep and the deepest legitimate "
@@ -2336,31 +2350,60 @@ def kotlin_code_only(text: str) -> str:
 
     R19-05, the nineteenth challenge: the census matched any QUOTED id anywhere
     in the file, a comment included, and the challenger built the withdrawal an
-    author would actually write — delete the law, keep its id in a comment so
+    author would actually write -- delete the law, keep its id in a comment so
     the history reads. Both files read as twenty ids with `P7-L14` present. The
     census's own sentence is about what the kernel DECLARES, and a comment
-    declares nothing, so the comments go before the regex runs. Line comments
-    and block comments both, and a `//` inside a string literal is left alone,
-    because removing one would make the census blind to a real declaration.
+    declares nothing.
+
+    R20-05 and the coordinator's F-J: the first version of this knew `"`,
+    backslash escapes, `//` and block comments, and nothing else. A char
+    literal holding a quote (`'"'`) flipped the string state, and a raw string
+    (a triple-quote delimiter) with an odd number of plain quotes inside did the
+    same, so a later
+    comment was not stripped -- measured on the real `Laws.kt` with law twenty
+    withdrawn, census OK at 20. Raw strings and char literals are therefore
+    tracked here as well. Both are scanned rather than enumerated: there is no
+    list of constructs to fall behind.
     """
     out, i, n = [], 0, len(text)
-    in_string = False
     while i < n:
         c = text[i]
-        if in_string:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if c == '"':
-                in_string = False
-            i += 1
+        if text.startswith('"""', i):
+            # A raw string: nothing inside it ends it but the closing triple,
+            # and backslashes are not escapes there.
+            j = text.find('"""', i + 3)
+            out.append(text[i:n] if j == -1 else text[i:j + 3])
+            i = n if j == -1 else j + 3
             continue
         if c == '"':
-            in_string = True
             out.append(c)
             i += 1
+            while i < n:
+                out.append(text[i])
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == '"':
+                    i += 1
+                    break
+                i += 1
+            continue
+        if c == "'":
+            # A char literal, which is what F-J walked in through: `'"'` is one
+            # character and not the start of a string.
+            out.append(c)
+            i += 1
+            while i < n:
+                out.append(text[i])
+                if text[i] == "\\" and i + 1 < n:
+                    out.append(text[i + 1])
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    i += 1
+                    break
+                i += 1
             continue
         if text.startswith("//", i):
             j = text.find("\n", i)
@@ -2802,6 +2845,19 @@ def self_test() -> int:
             )
         ),
     )
+    # R20-01's arm. The shebang is the line the old rule dropped, so it gets an
+    # arm of its own: changing the program that interprets the file is a
+    # difference, and the two prose arms above must still be green, which is
+    # what makes the first-line exception positional rather than another shape.
+    expect(
+        "an edited SHEBANG is a refusal, because line one decides what runs (R20-01)",
+        not the_wrapper_pin_holds(
+            wrapper_text.replace("#!/usr/bin/env -S bash -p", "#!/tmp/not-the-pinned-shell", 1)
+        )
+        and not the_wrapper_pin_holds(
+            wrapper_text.replace("#!/usr/bin/env -S bash -p", "#!/usr/bin/env bash", 1)
+        ),
+    )
     expect(
         "the pinned assignment REMOVED is a refusal, so the pin is not vacuous (R18-02)",
         not the_wrapper_pin_holds(wrapper_text.replace("PY=/usr/bin/python3\n", "", 1)),
@@ -2817,12 +2873,15 @@ def self_test() -> int:
     # that closed F-G: one tree is planted under EVERY prefix the tuple
     # declares, and the census must return all of them. A prefix the census
     # cannot see therefore reds here, rather than on a disk nobody is watching.
-    # These are planted with `mkdtemp` directly and not through `a_tree`,
-    # because `a_tree` registers a tree as THIS run's and the census excludes
-    # this run's trees by design; what is measured here is which PREFIXES the
-    # census recognises. They are scrubbed immediately, and never registered,
-    # so they cannot be counted as either made or left.
-    planted_one_each = [tempfile.mkdtemp(prefix=prefix) for prefix in TREE_PREFIXES]
+    # These go through `an_arms_tree` and not through `a_tree`, because
+    # `a_tree` registers a tree as THIS run's and the census excludes this
+    # run's trees by design; what is measured here is which PREFIXES the
+    # census recognises. `an_arms_tree` therefore keeps them visible to the
+    # census while still registering them for scrubbing, which is R20-03's
+    # correction of five sites that used to call `mkdtemp` with nothing
+    # tracking the result. They are scrubbed immediately and are counted as
+    # neither made nor left.
+    planted_one_each = [an_arms_tree(prefix) for prefix in TREE_PREFIXES]
     censused = set(strays_from_earlier_runs())
     for stray in planted_one_each:
         scrub(stray)
@@ -2848,6 +2907,14 @@ def self_test() -> int:
     # of each is armed here, including the ones that must stay SILENT, because a
     # verdict that refuses when nothing is wrong is a false red and this
     # harness's own rule is that a hardening causing one is not hardening.
+    #
+    # Coord F-Q, recorded rather than papered over: the three prediction arms
+    # below are fed `one_runs_worth_of_trees()`'s OWN output as their expected
+    # figure, so what they certify is the COMPARISON and its refusal name, not
+    # the figure. An arm fed the derivation's own output cannot contradict the
+    # derivation. The figure itself is bounded by the real run, where the same
+    # function's value is compared against a count of trees LISTED on disk, and
+    # by review of the one line that derives it — not by anything below.
     _one_run = one_runs_worth_of_trees()
     _some = [f"/tmp/p7-proof-{i}-x" for i in range(_one_run)]
     expect(
@@ -2899,7 +2966,7 @@ def self_test() -> int:
     # process — so it is measured as a control outside the self-test and
     # recorded in the evidence. What IS armed here is each mechanism the fix
     # rests on: the stop flag, and a listing that sees a tree whoever made it.
-    _not_this_runs = tempfile.mkdtemp(prefix="p7-proof-not-this-runs-")
+    _not_this_runs = an_arms_tree("p7-proof-not-this-runs-")
     expect(
         "the directory listing sees a tree this run never registered (R19-02)",
         _not_this_runs in trees_on_disk() and _not_this_runs not in TREES_THIS_RUN,
@@ -2909,6 +2976,13 @@ def self_test() -> int:
         "and stops seeing it once it is gone, so the listing is a listing (R19-02)",
         _not_this_runs not in trees_on_disk(),
     )
+
+    def how_a_tree_refuses() -> str:
+        try:
+            a_tree("p7-census-arm-")
+        except CannotRead as exc:
+            return str(exc)
+        return ""
 
     def a_tree_after_the_end() -> str:
         _NO_MORE_TREES.set()
@@ -2997,16 +3071,175 @@ def self_test() -> int:
         ),
     )
     expect(
-        "a `//` inside a STRING is not treated as a comment, so a real declaration survives "
-        "(R19-05)",
+        "a `//` inside a STRING is not treated as a comment, so a declaration AFTER it on the "
+        "same line survives (R19-05, armed properly per F-K)",
+        # F-K, the coordinator's review of `72e6af4`: the first version of this
+        # arm put the id BEFORE the `//`, so deleting the string tracking left
+        # the arm green -- an arm that passes without the branch it names. The
+        # id is now the second argument, AFTER a `//` inside the first string,
+        # so without the tracking the rest of the line is read as a comment,
+        # the count falls to nineteen and the census refuses.
         len(
             law_ids_the_kernel_declares(
                 laws_kt_text(
                     "object P7Laws {\n" + _nineteen
-                    + '\n    val L20 = Law("P7-L20-A-LAW-WHOSE-TEXT-HOLDS-A-SLASH", "see http://x")\n}\n'
+                    + '\n    val L20 = Law("see http://x // and here", "P7-L20-DECLARED-AFTER-A-SLASH-SLASH")\n}\n'
                 )
             )
         ) == 20,
+    )
+    expect(
+        "an id inside a BLOCK comment declares nothing either, so that branch is armed too "
+        "(F-K)",
+        "pinned to" in how_the_census_refuses(
+            "object P7Laws {\n" + _nineteen
+            + '\n    /* withdrawn: "P7-L20-THE-WITHDRAWN-ONE" */\n}\n'
+        ),
+    )
+    expect(
+        "a CHAR LITERAL holding a quote does not flip the string state, so a comment after it "
+        "is still stripped (R20-05 / F-J)",
+        "pinned to" in how_the_census_refuses(
+            "object P7Laws {\n" + _nineteen
+            + '\n    val quote = \'"\'\n    // withdrawn: "P7-L20-THE-WITHDRAWN-ONE"\n}\n'
+        ),
+    )
+    expect(
+        "a RAW STRING with an odd number of plain quotes inside does not flip it either "
+        "(R20-05 / F-J)",
+        "pinned to" in how_the_census_refuses(
+            "object P7Laws {\n" + _nineteen
+            + '\n    val raw = """a " b"""\n    // withdrawn: "P7-L20-THE-WITHDRAWN-ONE"\n}\n'
+        ),
+    )
+    expect(
+        "and a declaration INSIDE a raw string is still a declaration, so none of the three "
+        "above is a false red (R20-05)",
+        len(
+            law_ids_the_kernel_declares(
+                laws_kt_text(
+                    "object P7Laws {\n" + _nineteen
+                    + '\n    val L20 = Law("P7-L20-DECLARED-BESIDE-A-RAW-STRING", """a " b""")\n}\n'
+                )
+            )
+        ) == 20,
+    )
+    # F-L's arms. Until this round the signal handler's three mechanisms were
+    # armed and its CALLER was not: three one-line edits to the handler -- the
+    # figure taken from the list again, the stop flag deleted, the lock removed
+    # -- each left the self-test green. `stop_then_scrub_and_report` is a
+    # function for exactly this reason, and these read what it returns.
+    _handler_mine = a_tree("p7-census-arm-")
+    # This one stays deliberately UNregistered: the arm below measures that the
+    # handler leaves alone a tree that is not this run's, and registering it
+    # would make it this run's and destroy the thing being measured. The
+    # residual that buys, named rather than hidden: a signal arriving between
+    # this line and the `scrub` after the arms leaves this one tree behind. The
+    # handler's own report then counts it on disk and attributes it correctly to
+    # nobody, which is the outcome R19-02 asked for, so what is lost is one
+    # directory, not a figure.
+    _handler_foreign = tempfile.mkdtemp(prefix="p7-proof-someone-elses-")
+    _handler_said = stop_then_scrub_and_report(15)
+    _NO_MORE_TREES.clear()
+    expect(
+        "the signal report counts the DIRECTORY, not the list it was handed (F-L / R19-02)",
+        f"holds {len(trees_on_disk())} tree(s)" in _handler_said,
+    )
+    expect(
+        "it computes ownership rather than asserting it, and names both numbers (R20-03)",
+        "of which 0 are this run's and 1 are not" in _handler_said,
+    )
+    expect(
+        "it removed the tree this run had registered, including an arm's own (F-L / R20-03)",
+        not os.path.exists(_handler_mine),
+    )
+    expect(
+        "it did NOT remove a tree that is not this run's, which is not its to delete (F-L)",
+        os.path.exists(_handler_foreign),
+    )
+    expect(
+        "and it stopped the creators, so a tree asked for after it is refused (F-L)",
+        (lambda: (
+            _NO_MORE_TREES.set(),
+            "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED" in how_a_tree_refuses(),
+            _NO_MORE_TREES.clear(),
+        )[1])(),
+    )
+    scrub(_handler_foreign)
+
+    # R20-02's arms. The subject here is the SHELL, not this file, so each one
+    # runs the wrapper as a child with a hijacked environment and reads what
+    # comes back. `--isolation-probe` is used rather than `--self-test`, because
+    # the self-test spawning its own wrapper is the recursion F-H exists to
+    # refuse. The hijack is the challenge's own: a function named after the
+    # builtin the wrapper uses to hand over to Python.
+    hijack_function = 'exec() { echo P7-HIJACKED-EXEC-RAN; }'
+    wrapper_path = os.path.join(os.path.dirname(me), "red-proofs.sh")
+
+    def through_the_wrapper(argv: list[str], **env: str) -> str:
+        run = subprocess.run(
+            argv, capture_output=True, text=True,
+            cwd=os.path.dirname(me), env=dict(os.environ, **env),
+        )
+        return run.stdout + run.stderr
+
+    # First: that the hijack WORKS in this container, against a wrapper written
+    # the way this one used to be. Without this the three arms below could all
+    # be passing because the mechanism does nothing here.
+    _plain = os.path.join(a_tree("p7-census-arm-"), "unhardened.sh")
+    open(_plain, "w", encoding="utf-8").write(
+        "#!/usr/bin/env bash\nexec /usr/bin/python3 -I %s --isolation-probe\n" % me
+    )
+    expect(
+        "the environment hijack DOES take effect on a wrapper that does not defend itself, "
+        "so the arms below are not vacuous (R20-02)",
+        "P7-HIJACKED-EXEC-RAN" in through_the_wrapper(
+            ["bash", _plain], **{"BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"}
+        ),
+    )
+    expect(
+        "an exported function named after a builtin cannot reach the wrapper run as a program "
+        "(R20-02)",
+        (lambda out: "P7-ISOLATION-PROBE: isolated" in out and "P7-HIJACKED-EXEC-RAN" not in out)(
+            through_the_wrapper(
+                [wrapper_path, "--isolation-probe"],
+                **{"BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"},
+            )
+        ),
+    )
+    expect(
+        "run as `bash <path>`, which the shebang cannot govern, the wrapper REFUSES by name "
+        "rather than running unprivileged (R20-02)",
+        (lambda out: "REFUSED-P7-WRAPPER-NOT-PRIVILEGED" in out
+         and "P7-HIJACKED-EXEC-RAN" not in out)(
+            through_the_wrapper(
+                ["bash", wrapper_path, "--isolation-probe"],
+                **{"BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"},
+            )
+        ),
+    )
+    _bash_env = os.path.join(a_tree("p7-census-arm-"), "sourced.sh")
+    open(_bash_env, "w", encoding="utf-8").write(hijack_function + "\n")
+    expect(
+        "BASH_ENV, which the shell sources before the script, is REFUSED by name (R20-02)",
+        (lambda out: "REFUSED-P7-WRAPPER-" in out and "P7-HIJACKED-EXEC-RAN" not in out)(
+            through_the_wrapper(["bash", wrapper_path, "--isolation-probe"], BASH_ENV=_bash_env)
+        ),
+    )
+    expect(
+        "and with BASH_ENV set, the program invocation refuses rather than ignoring it quietly "
+        "(R20-02)",
+        (lambda out: "REFUSED-P7-WRAPPER-ENVIRONMENT-SOURCES-A-FILE" in out
+         and "P7-HIJACKED-EXEC-RAN" not in out)(
+            through_the_wrapper([wrapper_path, "--isolation-probe"], BASH_ENV=_bash_env)
+        ),
+    )
+    expect(
+        "with no hijack at all the wrapper still answers, so none of the above is a false red "
+        "(R20-02)",
+        "P7-ISOLATION-PROBE: isolated" in through_the_wrapper(
+            [wrapper_path, "--isolation-probe"]
+        ),
     )
     expect(
         "no module file sits beside this harness where it could shadow the standard library",
@@ -3153,14 +3386,24 @@ def too_deep_to_be_anything_but_a_fork() -> str | None:
 
 
 def wrapper_code_lines(wrapper_text: str) -> list[str]:
-    """The wrapper's CODE lines.
+    """The wrapper's CODE lines, with line ONE always among them.
 
     Not its prose: a "must not contain" over the whole file trips on a comment
     that quotes the very mistake it describes, which is a false red, and a
     hardening that causes a false red is not hardening.
+
+    R20-01, the twentieth challenge, and the coordinator's F-R: the shebang
+    starts with `#`, so the comment rule dropped it -- and it is the one line in
+    the file that decides which program interprets the rest. One edit to it ran
+    a forged shell that printed `ALL 105 RED PROOFS SATISFIED` at rc 0, while
+    this pin, asked in that same tree, said the wrapper was byte-for-byte
+    intact. So line one is taken by POSITION and the comment rule applies from
+    line two onward. Positional and not another shape rule, because the two
+    arms that add prose add it BELOW line one and must stay green.
     """
-    return [
-        line for line in wrapper_text.split("\n")
+    lines = wrapper_text.split("\n")
+    return lines[:1] + [
+        line for line in lines[1:]
         if line.strip() and not line.lstrip().startswith("#")
     ]
 
@@ -3186,13 +3429,48 @@ def wrapper_code_lines(wrapper_text: str) -> list[str]:
 # Where this regress stops, said rather than left implied: the literal below is
 # bounded by REVIEW, exactly as the guard-branch count is. It cannot be bounded
 # from inside the file, because a check whose expectation is read out of the
-# subject is the subject checking itself. What the literal does buy is that no
-# EDIT to the wrapper is invisible, and the challenger measured the alternative
-# it would have recommended and found it worthless: a shim that `exec`s the
-# pinned interpreter leaves nothing of itself in the surviving process, so
-# `sys.executable` is identical under the plant and the clean tree. A
-# PROJECTION is not an IDENTITY.
+# subject is the subject checking itself.
+#
+# What the literal buys, stated as narrowly as it was measured, and NOT as the
+# earlier sentence here put it: every CODE line of the wrapper differs from the
+# pin if it is edited, so none of the three plants above survives a run whose
+# output the reader is reading. Two kinds of edit are invisible to it and the
+# reader should know both. The first is an edit confined to COMMENTS: they are
+# excluded by construction, for the false-red reason given above, so wrapper
+# prose can be made to lie while this pin stays green — which is why every
+# claim the wrapper's comments make is itself bounded by review, not by this
+# check. The second is the forging plant that does not edit the wrapper at all:
+# the pin is read by the harness the wrapper EXECs, so anything that replaces
+# what runs at `/usr/bin/python3` runs BEFORE the pin is ever read and may print
+# whatever it likes, this sentence included. That hole cannot be closed from
+# inside this file at all; it is closed, if anywhere, by the shebang's
+# privileged mode and by the reader trusting the interpreter path, and it is a
+# named residual here, not a thing this literal covers.
+#
+# The challenger also measured the alternative it would have recommended and
+# found it worthless: a shim that `exec`s the pinned interpreter leaves nothing
+# of itself in the surviving process, so `sys.executable` is identical under the
+# plant and the clean tree. A PROJECTION is not an IDENTITY.
 WRAPPER_CODE_PINNED: tuple[str, ...] = (
+    '#!/usr/bin/env -S bash -p',
+    'unset -f exec echo exit cd pwd set test [ unset command builtin printf 2>/dev/null',
+    'case $- in',
+    '  *p*) ;;',
+    '  *)',
+    '    echo "REFUSED-P7-WRAPPER-NOT-PRIVILEGED: this script was started without privileged mode,"',
+    '    echo "so an inherited shell function named after a builtin it uses could run in its place"',
+    '    echo "and forge a verdict with no file edited. Run it as ./tools/red-proofs.sh, which uses"',
+    '    echo "the pinned shebang, or as: bash -p tools/red-proofs.sh"',
+    '    exit 3',
+    '    ;;',
+    'esac',
+    'if [ -n "${BASH_ENV:-}" ] || [ -n "${ENV:-}" ]; then',
+    '  echo "REFUSED-P7-WRAPPER-ENVIRONMENT-SOURCES-A-FILE: BASH_ENV or ENV is set, which names a"',
+    '  echo "file the shell sources before this script. Privileged mode ignores it, and this refuses"',
+    '  echo "rather than running with it set, because a verdict should not depend on which of the two"',
+    '  echo "the reader has to know about."',
+    '  exit 3',
+    'fi',
     'set -uo pipefail',
     'PY=/usr/bin/python3',
     'if [ ! -x "$PY" ]; then',
@@ -3212,7 +3490,7 @@ def the_wrapper_pin_holds(wrapper_text: str) -> bool:
 
 # The number of guard branches this harness's self-test declares. Pinned, not
 # derived: see the census in `self_test`.
-GUARD_BRANCHES_THIS_HARNESS_DECLARES = 62
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 78
 
 # F-I, the coordinator's actual-diff review of `9809db1`, a P1 fail-open that
 # needed no edit to reach: the stray census recognised trees by an ENUMERATED
@@ -3250,9 +3528,15 @@ TREES_THIS_RUN: list[str] = []
 # `mkdtemp` followed by `append` is not atomic — a worker interrupted between
 # them leaves a tree this list never knew about at all.
 #
-# Three things close it, and all three are needed:
+# Three things, and F-M is the coordinator's correction of my claim that all
+# three are needed for the PRINTED FIGURE: it removed the lock and four of four
+# signalled runs still printed a figure the directory confirmed. Load-bearing
+# for the figure are the stop flag and the listing. The lock closes a different
+# defect, which is why it stays:
 #   * creation and registration happen together, under this lock, so no tree
-#     exists unregistered even for an instant;
+#     exists unregistered even for an instant -- R20-03's companion half, for
+#     which the arms' own trees now go through `an_arms_tree` rather than
+#     bypassing registration altogether;
 #   * a STOP flag the creation path reads inside that same lock, so once the
 #     handler has set it no further tree can be made;
 #   * the printed figure comes from LISTING the directory afterwards, which is
@@ -3262,6 +3546,16 @@ TREES_THIS_RUN: list[str] = []
 # arriving while it holds the lock would otherwise deadlock the handler.
 _TREE_BOOKKEEPING = threading.RLock()
 _NO_MORE_TREES = threading.Event()
+
+# R20-03, the twentieth challenge's companion half. Five sites made trees with
+# `mkdtemp` directly, bypassing `a_tree`, because a tree registered as this
+# run's is EXCLUDED from the census and these are the arms that measure the
+# census. The author knew and said so, but what they needed was not to bypass
+# registration: it was to be registered for SCRUBBING while staying visible to
+# the census. That is this list. `scrub_all` empties it with the other, and a
+# signal during one of those arms therefore no longer leaves up to four trees
+# that nothing was tracking.
+ARM_TREES_THIS_RUN: list[str] = []
 
 
 def trees_on_disk() -> list[str]:
@@ -3275,6 +3569,29 @@ def trees_on_disk() -> list[str]:
         os.path.join(tmp, name) for name in names
         if name.startswith(TREE_PREFIXES) and os.path.isdir(os.path.join(tmp, name))
     ]
+
+
+def an_arms_tree(prefix: str) -> str:
+    """A tree the CENSUS must still see, and that cleanup must still remove.
+
+    Same lock and same stop flag as `a_tree`, so nothing is created unregistered
+    and nothing is created after a signal has ended the run; it is only the
+    census's own exclusion set that this stays out of (R20-03).
+    """
+    if not prefix.startswith(TREE_PREFIXES) and not prefix.startswith("p7-proof-"):
+        raise CannotRead(
+            f"REFUSED-P7-TREE-PREFIX-NOT-CENSUSED: an arm asked for a tree under {prefix!r}, "
+            f"which no prefix in TREE_PREFIXES covers, so the census could never see it."
+        )
+    with _TREE_BOOKKEEPING:
+        if _NO_MORE_TREES.is_set():
+            raise CannotRead(
+                "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED: an arm asked for a tree after a "
+                "signal ended this run."
+            )
+        tree = tempfile.mkdtemp(prefix=prefix)
+        ARM_TREES_THIS_RUN.append(tree)
+    return tree
 
 
 def a_tree(prefix: str) -> str:
@@ -3309,9 +3626,13 @@ def scrub(tree: str) -> None:
 
 
 def scrub_all() -> list[str]:
-    """Remove every tree this run made and RETURN the ones still there."""
+    """Remove every tree this run made and RETURN the ones still there.
+
+    Both lists: the trees registered as this run's, and the arms' trees, which
+    the census must see but cleanup must still remove (R20-03).
+    """
     left = []
-    for tree in TREES_THIS_RUN:
+    for tree in list(TREES_THIS_RUN) + list(ARM_TREES_THIS_RUN):
         scrub(tree)
         if os.path.exists(tree):
             left.append(tree)
@@ -3334,23 +3655,48 @@ def scrub_all() -> list[str]:
 # discover: a run killed with -9 leaves its trees, and the next run reports them
 # as strays, which is why that report is a refusal above a threshold and no
 # longer a note.
-def _scrub_on_signal(signum: int, _frame: object) -> None:
-    # R19-02. Order matters and is the whole fix: stop the creators FIRST, so
-    # the number about to be printed cannot be overtaken; then scrub; then LIST
-    # the directory and say what the listing says, not what the list says.
+def stop_then_scrub_and_report(signum: int) -> str:
+    """Stop the creators, scrub, LIST the directory, and say what the listing says.
+
+    R19-02 is why the figure is a listing and not a count of a list other
+    threads append to. The coordinator's F-L is why this is a function and not
+    three statements inside a signal handler: a signal handler re-raises the
+    signal and ends the process, so no arm could ever reach it, and the
+    mechanisms were armed while the CALLER was not. Three one-line edits to it
+    -- the figure taken from the list again, the stop flag deleted, the lock
+    removed -- each left the self-test at 62 of 62. Now each reds an arm.
+
+    R20-03 is why ownership is COMPUTED. The sentence used to read "Not all of
+    these are this run's" whenever the directory was not empty, which is emitted
+    identically when every leftover IS this run's -- false in the direction that
+    stops a reader acting. Both numbers are printed now.
+
+    F-M is why the comment above `_TREE_BOOKKEEPING` no longer says all three
+    things are needed: the coordinator removed the lock and four of four
+    signalled runs still printed a figure the directory confirmed. The lock
+    closes a different defect -- a tree existing unregistered between `mkdtemp`
+    and `append` -- and that is what it is for.
+    """
     _NO_MORE_TREES.set()
     with _TREE_BOOKKEEPING:
-        asked = len(TREES_THIS_RUN)
+        registered = len(TREES_THIS_RUN) + len(ARM_TREES_THIS_RUN)
+        known = set(TREES_THIS_RUN) | set(ARM_TREES_THIS_RUN)
         left = scrub_all()
     on_disk = trees_on_disk()
-    print(
-        f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; {asked - len(left)} of {asked} "
-        f"tree(s) this run had registered were removed, and the temp directory now holds "
-        f"{len(on_disk)} tree(s) under this harness's prefixes — confirmed by LISTING it "
-        f"after the creators were stopped, not by counting a list other threads append to. "
-        f"{'Not all of these are this run\'s: ' if on_disk else ''}{on_disk[:5]}",
-        flush=True,
+    mine = [tree for tree in on_disk if tree in known]
+    others = [tree for tree in on_disk if tree not in known]
+    return (
+        f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; {registered - len(left)} of "
+        f"{registered} tree(s) this run had registered were removed, and the temp directory now "
+        f"holds {len(on_disk)} tree(s) under this harness's prefixes, of which {len(mine)} "
+        f"are this run's and {len(others)} are not — confirmed by LISTING the directory "
+        f"after the creators were stopped, and by computing the two sets rather than guessing "
+        f"which. This run's: {mine[:5]}. Not this run's: {others[:5]}."
     )
+
+
+def _scrub_on_signal(signum: int, _frame: object) -> None:
+    print(stop_then_scrub_and_report(signum), flush=True)
     signal.signal(signum, signal.SIG_DFL)
     os.kill(os.getpid(), signum)
 
@@ -3758,7 +4104,17 @@ def main() -> int:
 if __name__ == "__main__":
     arm_the_signal_handlers()
     _am_the_self_test_child = "--self-test" in sys.argv
-    _code = self_test() if _am_the_self_test_child else main()
+    try:
+        _code = self_test() if _am_the_self_test_child else main()
+    except CannotRead as _refusal:
+        # F-O, the coordinator's review of `72e6af4`: `a_tree`'s own prefix
+        # refusal reached the operator as an uncaught traceback with the name
+        # buried in it. This lane refuses BY NAME, and a name at the end of a
+        # traceback is not one. Only CannotRead: it is this harness's own
+        # refusal type, and catching anything wider would swallow the bugs a
+        # traceback is the right answer to.
+        print(f"{_refusal}", flush=True)
+        _code = 1
     _earlier = strays_from_earlier_runs()
     _left = scrub_all()
 
