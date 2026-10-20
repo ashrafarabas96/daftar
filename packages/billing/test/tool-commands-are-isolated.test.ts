@@ -68,9 +68,23 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, relative, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 
 import { describe, expect, it, onTestFinished } from 'vitest';
 
@@ -1240,6 +1254,63 @@ const scriptOfTheRunner = (allowed: (token: string) => boolean, procRoot = '/pro
  * departures are both visible to the caller, because a census that only
  * checks the names it already knows fails open on the next file to appear.
  */
+// ROUND 70, THE CHALLENGER'S SECOND CAUTION, measured rather than assumed and
+// it diverged: a dangling target whose own INTERIOR components are symlinked
+// directories that DO exist. Resolving the link's parent is not enough, because
+// the rest of the target is then joined lexically while the gate's
+// `Path.resolve()` resolves every component it can. MEASURED, on
+// `link -> a/b/missing.js` with `a/b` itself a link:
+//
+//   the GATE -> SYMLINK:BROKEN:real/deep/missing.js
+//   the LAW  -> SYMLINK:BROKEN:a/b/missing.js        (before this function)
+//
+// and the gate's answer is the right one: a link target is read relative to the
+// directory the link sits in, so `a/b` must be followed. So this resolves what
+// the gate's reader resolves, by the same rule: follow every component that IS
+// a link, append lexically what does not exist, and on a link CYCLE keep the
+// cycling component literally instead of throwing -- which is what CPython's
+// non-strict `realpath` does, measured here as `SYMLINK:BROKEN:loop1` and
+// `SYMLINK:BROKEN:loop1/x` in both readers. A definition two readers compute
+// differently measures nothing together, however each one reads alone.
+const realpathNonStrict = (path: string): string => {
+  let parts = resolve(path)
+    .split(sep)
+    .filter((part) => part !== '');
+  const beingResolved = new Set<string>();
+  let out = '';
+  while (parts.length > 0) {
+    const part = parts.shift() as string;
+    if (part === '.') continue;
+    if (part === '..') {
+      out = out === '' ? '' : dirname(out);
+      if (out === sep) out = '';
+      continue;
+    }
+    const candidate = `${out}${sep}${part}`;
+    let link: string | undefined;
+    try {
+      if (lstatSync(candidate).isSymbolicLink()) link = readlinkSync(candidate);
+    } catch {
+      // Absent: nothing below it can be a link, so the rest is lexical.
+    }
+    if (link === undefined) {
+      out = candidate;
+      continue;
+    }
+    if (beingResolved.has(candidate)) return [candidate, ...parts].join(sep);
+    beingResolved.add(candidate);
+    const absolute = link.startsWith(sep) ? link : `${out}${sep}${link}`;
+    parts = [
+      ...resolve(absolute)
+        .split(sep)
+        .filter((piece) => piece !== ''),
+      ...parts,
+    ];
+    out = '';
+  }
+  return out === '' ? sep : out;
+};
+
 const bytesUnder = (root: string, repoRoot: string): Record<string, string> => {
   const out: Record<string, string> = {};
   const walk = (dir: string, prefix: string): void => {
@@ -1264,14 +1335,42 @@ const bytesUnder = (root: string, repoRoot: string): Record<string, string> => {
       //     the repository root;
       //   * a target outside the repository -> absolute, because a link into
       //     /opt or /usr IS a different tree in any sense that matters.
+      //
+      // ROUND 70, THE CHALLENGER'S R64-S-1 (P3). Its eight-row fixture found
+      // the one row where this reader and the gate's disagreed: a DANGLING
+      // link. `realpathSync` THREW a raw ENOENT out of here -- a stack trace
+      // where this law owes a named refusal -- while the gate resolved the
+      // path lexically and carried on. Both now resolve it lexically and mark
+      // it `BROKEN:`, so the row is legible, the two readers agree, and the
+      // comparison refuses it as an arrival BY NAME.
       if (entry.isSymbolicLink()) {
-        const target = realpathSync(full);
+        let target: string;
+        let broken = false;
+        try {
+          target = realpathSync(full);
+        } catch {
+          // ROUND 70, THE CHALLENGER'S CAUTION BEFORE THE PUSH, and it was
+          // right: a BROKEN row has no `realpath` to appeal to, so its zone is
+          // decided by whatever each reader does with a path it cannot walk to
+          // the end. MEASURED on a nine-row fixture: resolving nothing, a
+          // dangling link under a symlinked directory was
+          // `SYMLINK:BROKEN:dirlink/missing2.js` here and
+          // `SYMLINK:BROKEN:real-dir/missing2.js` in the gate. Resolving only
+          // the link's PARENT fixed those nine rows and still diverged on the
+          // shape its second caution named -- an interior component that is
+          // itself a link -- so the rule is not 'resolve the parent' but
+          // 'resolve what can be resolved', which is `realpathNonStrict`
+          // above, by the same rule the gate's reader follows. All thirteen rows
+          // now agree in both readers.
+          broken = true;
+          target = realpathNonStrict(full);
+        }
         const zone = target.startsWith(`${root}${sep}`)
           ? relative(root, target)
           : target.startsWith(`${repoRoot}${sep}`)
             ? `repo:${relative(repoRoot, target)}`
             : target;
-        out[rel] = `SYMLINK:${zone}`;
+        out[rel] = `SYMLINK:${broken ? 'BROKEN:' : ''}${zone}`;
       } else if (entry.isDirectory()) walk(full, rel);
       else out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
     }
@@ -4840,11 +4939,35 @@ describe('every written invocation of the pack tools is isolated', () => {
     mkdirSync(join(scratch, 'inner'));
     writeFileSync(join(scratch, 'inner', 'real.js'), 'x\n');
     symlinkSync(join(scratch, 'inner', 'real.js'), join(scratch, 'link-inside'));
+    // The three shapes the challenger's eight-row fixture had and mine did
+    // not, each pinning a decision this code makes implicitly: `..` settled by
+    // realpath, a link whose target is another link, and -- the one it most
+    // wanted kept -- a link to a DIRECTORY, which must be ONE ROW and not
+    // walked into, because that is the difference between a bounded census and
+    // an unbounded walk if somebody later plants a link to `/`.
+    symlinkSync(join(scratch, 'inner', '..', 'inner', 'real.js'), join(scratch, 'link-dotdot'));
+    symlinkSync(join(scratch, 'link-inside'), join(scratch, 'link-to-link'));
+    symlinkSync(join(scratch, 'inner'), join(scratch, 'link-to-dir'));
+    // And the two rows its caution asked for, which are what closes the
+    // lexical change by measurement instead of by argument.
+    symlinkSync(join(scratch, 'inner', '..', 'inner', 'missing.js'), join(scratch, 'link-dangling-dotdot'));
+    mkdirSync(join(scratch, 'real-dir'));
+    symlinkSync(join(scratch, 'real-dir'), join(scratch, 'dirlink'));
+    symlinkSync('missing2.js', join(scratch, 'real-dir', 'under-link'));
+    // ROUND 70, ITS SECOND CAUTION: a dangling target whose own INTERIOR
+    // component is a link that DOES exist, and a link CYCLE. Both were
+    // measured rather than assumed, and the first diverged until the rule
+    // became `realpathNonStrict`.
+    symlinkSync(join(scratch, 'dirlink', 'missing3.js'), join(scratch, 'link-dangling-interior'));
+    symlinkSync(join(scratch, 'cycle-b'), join(scratch, 'cycle-a'));
+    symlinkSync(join(scratch, 'cycle-a'), join(scratch, 'cycle-b'));
+    symlinkSync(join(scratch, 'cycle-a', 'x'), join(scratch, 'link-through-the-cycle'));
     const outside = join(tmpdir(), `r69-outside-${process.pid}`);
     writeFileSync(outside, 'y\n');
     onTestFinished(() => rmSync(outside, { force: true }));
     symlinkSync(outside, join(scratch, 'link-outside'));
     symlinkSync(join(realpathSync(repo), 'package.json'), join(scratch, 'link-in-the-repo'));
+    symlinkSync(join(scratch, 'inner', 'missing.js'), join(scratch, 'link-dangling'));
     const rows = bytesUnder(realpathSync(scratch), realpathSync(repo));
     expect(
       rows['link-inside'],
@@ -4854,6 +4977,31 @@ describe('every written invocation of the pack tools is isolated', () => {
       rows['link-in-the-repo'],
       'a link into the REPOSITORY but outside the pinned package must be recorded relative to the repository root: its absolute target differs between any two clones, and that is not a difference',
     ).toBe('SYMLINK:repo:package.json');
+    expect(
+      [rows['link-dotdot'], rows['link-to-link']],
+      "`..` and a link whose target is another link are both settled by realpath, so they record the final target: the challenger's rows, kept so the next editor cannot change this by accident",
+    ).toStrictEqual([`SYMLINK:${join('inner', 'real.js')}`, `SYMLINK:${join('inner', 'real.js')}`]);
+    expect(
+      rows['link-to-dir'],
+      'a link to a DIRECTORY is ONE ROW and is not walked into, which is the difference between a bounded census and an unbounded walk if somebody plants a link to `/`',
+    ).toBe('SYMLINK:inner');
+    expect(
+      [rows['link-dangling-dotdot'], bytesUnder(join(realpathSync(scratch), 'real-dir'), realpathSync(repo))['under-link']],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: a BROKEN row has no realpath to appeal to, so these two shapes are where a lexical join can part company with the gate's. Measured: with the link's parent resolved first, both readers answer these; without it, the second was \`dirlink/missing2.js\` here and \`real-dir/missing2.js\` there`,
+    ).toStrictEqual([`SYMLINK:BROKEN:${join('inner', 'missing.js')}`, 'SYMLINK:BROKEN:missing2.js']);
+    expect(
+      rows['link-dangling'],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: a DANGLING link must be recorded as a legible BROKEN row in the package's own zone, not thrown as a raw ENOENT: the gate records one and these two readers have to agree`,
+    ).toBe(`SYMLINK:BROKEN:${join('inner', 'missing.js')}`);
+    expect(
+      [rows['link-dangling-interior'], rows['cycle-a'], rows['cycle-b'], rows['link-through-the-cycle']],
+      `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the challenger's second caution, measured: a dangling target through an EXISTING directory link must be resolved through it (the gate's \`Path.resolve()\` does), and a link CYCLE must keep the cycling component literally instead of throwing. Before \`realpathNonStrict\` the first was \`a/b/missing.js\`-shaped here and fully resolved there`,
+    ).toStrictEqual([
+      `SYMLINK:BROKEN:${join('real-dir', 'missing3.js')}`,
+      'SYMLINK:BROKEN:cycle-a',
+      'SYMLINK:BROKEN:cycle-b',
+      `SYMLINK:BROKEN:${join('cycle-a', 'x')}`,
+    ]);
     expect(
       rows['link-outside'],
       'a link pointing out of the REPOSITORY keeps its absolute target, because a link into /opt or /usr is a different tree in any sense that matters',

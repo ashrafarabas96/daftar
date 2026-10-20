@@ -520,6 +520,114 @@ def refuse(why: str) -> "None":
     raise SystemExit(f"{LAW_NOT_RUN}: {why}")
 
 
+def symlink_row(path: Path, base: Path, root: Path) -> str:
+    """How a symbolic link under the pinned package is recorded.
+
+    ROUND 69, THE CHALLENGER'S R63-S-1 (P4, latent), in THREE zones: an
+    ABSOLUTE target is a property of the CHECKOUT and not of the package, and
+    two zones were not enough, because a link inside the package pointing
+    elsewhere in the REPOSITORY has an absolute target under the checkout root
+    -- which differs between any two clones and is not a difference. Inside the
+    package -> relative to it; elsewhere in the repository -> `repo:` and
+    relative to the repository root; outside the repository -> absolute,
+    because a link into /opt or /usr IS a different tree.
+
+    ROUND 70, THE CHALLENGER'S R64-S-1 (P3). Its eight-row fixture found the
+    one row where this reader and the law's disagreed: a DANGLING link. This
+    one resolved it lexically and carried on; the law's `realpathSync` threw a
+    raw ENOENT, so the two readers neither agreed nor refused by the same name.
+    Both now mark it `BROKEN:` and keep the zone, so the row is legible, the
+    two readers agree, and the comparison refuses it as an arrival by name
+    rather than as a stack trace.
+    """
+    target = path.resolve()
+    try:
+        zone = str(target.relative_to(base))
+    except ValueError:
+        try:
+            zone = "repo:" + str(target.relative_to(root))
+        except ValueError:
+            zone = str(target)
+    return "SYMLINK:" + ("" if target.exists() else "BROKEN:") + zone
+
+
+def symlink_zone_branches(refuse_to: list[str]) -> str:
+    """Every branch of `symlink_row`, exercised on a tree built here.
+
+    ROUND 70, THE CHALLENGER'S R64-S-1, second half: there are zero symlinks
+    under the pinned package, so until this function existed NONE of the
+    branches above ran in this program -- the law had a case for its own copy
+    and this reader had none. A branch nobody reaches is a branch nobody has
+    measured, which is this phase's own rule about arms, applied to the arm's
+    twin. Nothing here touches the installed tree.
+    """
+    with tempfile.TemporaryDirectory(prefix="law-ran-zones-") as tmp:
+        repo = Path(tmp) / "repo"
+        pkg = repo / "node_modules" / "vitest"
+        (pkg / "inner").mkdir(parents=True)
+        (pkg / "inner" / "real.js").write_text("x\n", encoding="utf-8")
+        (repo / "package.json").write_text("{}\n", encoding="utf-8")
+        outside = Path(tmp) / "outside.js"
+        outside.write_text("y\n", encoding="utf-8")
+        (pkg / "link-inside").symlink_to(pkg / "inner" / "real.js")
+        (pkg / "link-in-the-repo").symlink_to(repo / "package.json")
+        (pkg / "link-outside").symlink_to(outside)
+        (pkg / "link-dangling").symlink_to(pkg / "inner" / "missing.js")
+        # The challenger's three extra shapes, each pinning a decision this
+        # rule makes implicitly rather than a defect: `..` settled by realpath,
+        # a link whose target is another link, and a link to a DIRECTORY --
+        # which must be ONE ROW and not walked into, or a link to `/` turns a
+        # bounded census into an unbounded walk.
+        (pkg / "link-dotdot").symlink_to(pkg / "inner" / ".." / "inner" / "real.js")
+        (pkg / "link-to-link").symlink_to(pkg / "link-inside")
+        (pkg / "link-to-dir").symlink_to(pkg / "inner")
+        # And the two rows its caution before the push asked for: a BROKEN row
+        # has no realpath to appeal to, so these are where a lexical join can
+        # part company with the law's. Measured: with the link's parent
+        # resolved first they agree; without it the law answered
+        # `dirlink/missing2.js` where this reader answers `real-dir/...`.
+        (pkg / "link-dangling-dotdot").symlink_to(pkg / "inner" / ".." / "inner" / "missing.js")
+        (pkg / "real-dir").mkdir()
+        (pkg / "dirlink").symlink_to(pkg / "real-dir")
+        (pkg / "real-dir" / "under-link").symlink_to("missing2.js")
+        # ROUND 70, its SECOND caution: a dangling target whose INTERIOR
+        # component is an existing link, and a link CYCLE. This reader resolves
+        # every component it can and keeps a cycling one literally; the law's
+        # `realpathNonStrict` was written to the same rule after the first of
+        # these diverged.
+        (pkg / "link-dangling-interior").symlink_to(pkg / "dirlink" / "missing3.js")
+        (pkg / "cycle-a").symlink_to(pkg / "cycle-b")
+        (pkg / "cycle-b").symlink_to(pkg / "cycle-a")
+        (pkg / "link-through-the-cycle").symlink_to(pkg / "cycle-a" / "x")
+        want = {
+            "link-inside": "SYMLINK:inner/real.js",
+            "link-in-the-repo": "SYMLINK:repo:package.json",
+            "link-outside": "SYMLINK:" + str(outside.resolve()),
+            "link-dangling": "SYMLINK:BROKEN:inner/missing.js",
+            "link-dotdot": "SYMLINK:inner/real.js",
+            "link-to-link": "SYMLINK:inner/real.js",
+            "link-to-dir": "SYMLINK:inner",
+            "link-dangling-dotdot": "SYMLINK:BROKEN:inner/missing.js",
+            "real-dir/under-link": "SYMLINK:BROKEN:real-dir/missing2.js",
+            "link-dangling-interior": "SYMLINK:BROKEN:real-dir/missing3.js",
+            "cycle-a": "SYMLINK:BROKEN:cycle-a",
+            "cycle-b": "SYMLINK:BROKEN:cycle-b",
+            "link-through-the-cycle": "SYMLINK:BROKEN:cycle-a/x",
+        }
+        agreed = 0
+        for name, expected in want.items():
+            got = symlink_row(pkg / name, pkg.resolve(), repo.resolve())
+            if got == expected:
+                agreed += 1
+            else:
+                refuse_to.append(
+                    f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: this step's own symlink rule answered {got!r} for "
+                    f"{name!r} where the law's answers {expected!r}. Two readers of one definition that "
+                    "disagree measure nothing together"
+                )
+    return f"{agreed}/{len(want)} symlink zone branches as specified"
+
+
 def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[str]:
     """Every way the installed runner package differs from its pin.
 
@@ -575,24 +683,7 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
         return problems + [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: the pinned package directory {base} is not there"]
     for path in sorted(base.rglob("*")):
         if path.is_symlink():
-            # ROUND 69, THE CHALLENGER'S R63-S-1 (P4, latent), in THREE zones:
-            # an ABSOLUTE target is a property of the CHECKOUT and not of the
-            # package, and two zones were not enough because a link inside the
-            # package pointing elsewhere in the REPOSITORY has an absolute
-            # target under the checkout root, which differs between any two
-            # clones and is not a difference. Inside the package -> relative to
-            # it; elsewhere in the repository -> `repo:` and relative to the
-            # repository root; outside the repository -> absolute, because a
-            # link into /opt or /usr IS a different tree.
-            target = path.resolve()
-            try:
-                zone = str(target.relative_to(base))
-            except ValueError:
-                try:
-                    zone = "repo:" + str(target.relative_to(root.resolve()))
-                except ValueError:
-                    zone = str(target)
-            installed[str(path.relative_to(base))] = "SYMLINK:" + zone
+            installed[str(path.relative_to(base))] = symlink_row(path, base, root.resolve())
         elif path.is_file():
             try:
                 installed[str(path.relative_to(base))] = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -609,6 +700,7 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
                 "commit, with the reason in the message"
             )
     if not problems:
+        print(symlink_zone_branches(problems))
         print(
             f"runner program: {here.relative_to(root)} inside {pin.get('package')}@{pin.get('version')}, "
             f"{len(pinned)} file(s) pinned and identical -- ACCOUNTED FOR ONE PACKAGE DEEP. What this package "
