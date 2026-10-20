@@ -57,14 +57,36 @@
 #
 # THE BOUNDS, both of them:
 #
-#   * A shell whose `echo`, `exit`, `unset` or `declare` are ALREADY functions
-#     when this file is read cannot be defended from inside this file -- the
-#     refusal itself would be the hijacked command. That is why the shebang, and
-#     not this block, is the primary defence.
+#   * R22-06, a correction of this very sentence, which used to read `or`: any
+#     ONE of `echo`, `exit`, `unset` or `declare` already being a function IS
+#     defended -- `unset -f` removes it, or the capture above reports it and this
+#     script refuses. The breach needs `declare` AND `unset` hijacked together --
+#     so that the capture lies and the removal does nothing -- plus a third
+#     function, `exec`, to do the forging. That state cannot be
+#     defended from inside this file, because the refusal itself would be the
+#     hijacked command, and it is why the shebang and not this block is the
+#     primary defence.
 #   * If `/bin/bash` ITSELF is replaced, nothing written here runs at all, and no
-#     check inside this file or inside the harness can see it. That bound is the
-#     same class as a forged `/usr/bin/python3`, and it is closed, if anywhere,
-#     by the reader trusting the two absolute paths this file names.
+#     check inside this file or inside the harness can see it. The same holds for
+#     `/usr/bin/python3`, and for the DYNAMIC LOADER's own search path -- the
+#     loader has mapped what it was told to map before any code in this file or
+#     that interpreter runs, so `/etc/ld.so.conf`, `/etc/ld.so.preload` and the
+#     loader itself are outside every check here. Those three absolute paths and
+#     that search path are what a reader is trusting; nothing in this repository
+#     measures them.
+#
+# Coord F-W, P1 and again with NO EDIT: the two paragraphs above are about what
+# the SHELL reads. Nothing here touched what the C runtime reads when `exec`
+# starts Python, and `LD_PRELOAD` naming a forging shared library printed a
+# complete green verdict at rc 0 under both invocations -- reproduced here, with
+# `git status --porcelain` empty. `python3 -I` isolates Python's own surface and
+# says nothing about the loader, which has already mapped the library before
+# `main`; `bash -p` restricts what bash imports, and the loader ignores
+# `LD_PRELOAD` only for set-uid processes, which neither of these is. The
+# handover therefore goes through `env -i` with a NAMED ALLOW-LIST, which closes
+# `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` and every future sibling in one
+# move: naming today's three would invite the next one, and a refusal that
+# enumerates names is the shape this lane has closed twice already.
 #
 # `SHELLOPTS` is deliberately NOT refused on presence, unlike `BASH_ENV` and
 # `ENV`: a privileged bash EXPORTS its own option list, so this harness's own
@@ -92,7 +114,7 @@ case $- in
     echo "REFUSED-P7-WRAPPER-NOT-PRIVILEGED: this script was started without privileged mode,"
     echo "so an inherited shell function named after a builtin it uses could run in its place"
     echo "and forge a verdict with no file edited. Run it as ./tools/red-proofs.sh, which uses"
-    echo "the pinned shebang, or as: bash -p tools/red-proofs.sh"
+    echo "the pinned shebang, or as: /bin/bash -p tools/red-proofs.sh"
     exit 3
     ;;
 esac
@@ -113,5 +135,24 @@ if [ ! -x "$PY" ]; then
   echo "search PATH for a substitute: the interpreter is part of the command being pinned."
   exit 3
 fi
-echo "P7 RED PROOFS: interpreter $PY ($("$PY" -V 2>&1)), isolated mode -I"
-exec "$PY" -I "$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"
+HERE="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)"
+LANG="${LANG:-C.utf8}"
+KEEP="HOME TMPDIR PATH LANG JAVA_HOME P7_TOOLS_DIR KOTLIN_VERSION JUNIT_VERSION"
+KEEP="$KEEP http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"
+KEEP="$KEEP SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE"
+HANDOVER=()
+for NAME in $KEEP; do
+  if [ -n "${!NAME:-}" ]; then
+    HANDOVER+=("$NAME=${!NAME}")
+  fi
+done
+# The VERSION PROBE runs through the same clean environment as the handover,
+# and the reason is measured, not tidiness: while it was a plain `"$PY" -V` it
+# was the one Python this wrapper started with the caller's environment intact,
+# and a forging `LD_PRELOAD` library printed its fake summary INSIDE this line --
+# `interpreter /usr/bin/python3 (ALL 105 RED PROOFS SATISFIED ...), isolated mode
+# -I`. The harness itself was clean and the log still carried the sentence a
+# reader greps for. One environment for both, so the line cannot say more than
+# the run does.
+echo "P7 RED PROOFS: interpreter $PY ($(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)), isolated mode -I"
+exec /usr/bin/env -i "${HANDOVER[@]}" "$PY" -I "$HERE/red_proofs.py" "$@"

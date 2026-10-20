@@ -117,6 +117,21 @@ if _DEPTH > 2:
     )
     raise SystemExit(2)
 
+TREE_REPORT_FD_ENV = "P7_TREE_REPORT_FD"
+_REPORT_FD_READ = os.environ.get(TREE_REPORT_FD_ENV, "").strip()
+# R22-04: a new environment input validated BY NAME rather than by traceback,
+# which is what `F-N`, `R19-03` and `F-T` closed for its sibling. The string
+# validated is the string used.
+if _REPORT_FD_READ and not all(c in "0123456789" for c in _REPORT_FD_READ):
+    print(
+        f"REFUSED-P7-TREE-REPORT-FD-UNREADABLE: {TREE_REPORT_FD_ENV} is "
+        f"{_REPORT_FD_READ!r}, which is not a descriptor number. This harness will not guess "
+        f"which descriptor to report its trees down: a report written to the wrong one is a "
+        f"report nothing reads."
+    )
+    raise SystemExit(2)
+MY_REPORT_FD = int(_REPORT_FD_READ) if _REPORT_FD_READ else -1
+
 if "--isolation-probe" in sys.argv:
     # Reached only WITH -I, because the refusal above exits first without it.
     # The isolation arms below spawn THIS rather than `--self-test`: the first
@@ -131,6 +146,11 @@ if "--isolation-probe" in sys.argv:
     # environment.
     print("P7-ISOLATION-PROBE: isolated, so no file beside this one is importable")
     print("P7-ISOLATION-PROBE: PATH=%s" % os.environ.get("PATH", ""))
+    # Coord F-W: the probe reports the NAMES of every variable it was handed,
+    # values excluded on purpose -- a log is read by people and a value can be a
+    # token. What the arms read is which names survived the handover, which is
+    # the property `env -i` with an allow-list establishes.
+    print("P7-ISOLATION-PROBE: ENV=%s" % ",".join(sorted(os.environ)))
     raise SystemExit(0)
 
 import re
@@ -3092,6 +3112,30 @@ def self_test() -> int:
         "and `-0` is zero, not a negative, so the refusal is not a false red (F-T)",
         "P7-ISOLATION-PROBE: isolated" in depth_run("-0").stdout,
     )
+    # R22-04's arm. The tree-report descriptor is an environment input like the
+    # depth, and it got the same treatment: a named refusal over the string
+    # actually used, placed above every mode that exits. The second half is the
+    # false-red half -- an unset variable is not an unreadable one.
+    def fd_run(value: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-I", me, "--isolation-probe"],
+            capture_output=True, text=True,
+            env=dict(os.environ, **{TREE_REPORT_FD_ENV: value}),
+        )
+
+    expect(
+        "a tree-report descriptor that is not a number is REFUSED by name, not a traceback "
+        "(R22-04)",
+        all(
+            "REFUSED-P7-TREE-REPORT-FD-UNREADABLE" in fd_run(bad).stdout
+            and "Traceback" not in fd_run(bad).stderr
+            for bad in ("abc", "3/x", "\u0663", "-1", "3.0")
+        ),
+    )
+    expect(
+        "and an unset one is read as no channel at all, not refused (R22-04)",
+        "P7-ISOLATION-PROBE: isolated" in fd_run("").stdout,
+    )
 
     # R19-05's arm. The id is in a comment, where nothing is declared, so the
     # census must read nineteen and refuse — and the control beside it is the
@@ -3191,10 +3235,6 @@ def self_test() -> int:
     # nobody, which is the outcome R19-02 asked for, so what is lost is one
     # directory, not a figure.
     _handler_foreign = tempfile.mkdtemp(prefix="p7-proof-someone-elses-")
-    # R21-04: a tree named the way this run's self-test child names its own.
-    # Unregistered here on purpose -- the point is attribution by the NONCE this
-    # process issued, not by a registry it could have consulted.
-    _childs_tree = tempfile.mkdtemp(prefix="p7-proof-" + THE_TAG_I_HAND_MY_CHILD + "-")
     _handler_said = stop_then_scrub_and_report(15)
     # R21-03 / coord F-U: the flag the handler set stays SET across the arms
     # below, because one of them reads it. It used to be cleared here, one line
@@ -3236,11 +3276,44 @@ def self_test() -> int:
         os.path.basename(_handler_foreign) in _handler_said
         and "Neither: [" in _handler_said,
     )
+    # R22-01 and R22-02's arms. The one they replace planted a tree whose NAME
+    # carried the nonce, in the parent, and then checked that the classifier
+    # believed it -- so it measured the classifier, left the PRODUCER unarmed
+    # (returning "" from it kept the self-test at 92 of 92), and demonstrated
+    # the fail-open it was written to prove absent: any process could mint that
+    # name. The arm runs a REAL CHILD now, through the same helper the
+    # authoritative run uses, and the child's own tree is what has to arrive.
+    _probe = a_child_that_reports(
+        [sys.executable, "-I", me, "--tree-report-probe"]
+    )
+    _probe_said = [
+        line.split("=", 1)[1].strip()
+        for line in _probe.stdout.splitlines()
+        if line.startswith("P7-TREE-REPORT-PROBE-MADE=")
+    ]
     expect(
-        "a tree carrying the nonce this run handed its self-test child is attributed to the "
-        "CHILD and not to a stranger (R21-04)",
-        (lambda report: f"The self-test child's: ['{_childs_tree}']" in report)(
-            stop_then_scrub_and_report(15)
+        "a real child of this harness REPORTS the tree it made, down a descriptor it "
+        "inherited and nothing else can name (R22-01 / R22-02)",
+        _probe.returncode == 0
+        and len(_probe_said) == 1
+        and _probe_said[0] in WHAT_MY_CHILD_REPORTED,
+    )
+    expect(
+        "and the parent attributes a tree to its child ONLY because the child reported it, "
+        "not because of anything written in the tree's name (R22-02)",
+        (lambda minted: (lambda report: (
+            minted not in WHAT_MY_CHILD_REPORTED
+            and minted in report.split("Neither:", 1)[-1]
+            and minted not in report.split("The self-test child's:", 1)[-1].split(
+                "Neither:", 1
+            )[0]
+        ))(stop_then_scrub_and_report(15)))(
+            # The stranger's move, with the stranger's whole advantage granted:
+            # this name is minted in the parent, after reading what a child's
+            # trees look like, which is what `ls` on a world-writable /tmp buys
+            # anyone. It is attributed to NOBODY, where the nonce version called
+            # it the child's.
+            tempfile.mkdtemp(prefix="p7-proof-a-stranger-imitating-a-child-")
         ),
     )
     expect(
@@ -3269,7 +3342,9 @@ def self_test() -> int:
     )
     _NO_MORE_TREES.clear()
     scrub(_handler_foreign)
-    scrub(_childs_tree)
+    for _minted in trees_on_disk():
+        if "a-stranger-imitating-a-child" in _minted:
+            scrub(_minted)
 
     # R20-02's arms. The subject here is the SHELL, not this file, so each one
     # runs the wrapper as a child with a hijacked environment and reads what
@@ -3446,6 +3521,96 @@ def self_test() -> int:
             [wrapper_path, "--isolation-probe"], PATH=_poisoned
         ),
     )
+    # Coord F-W's arms. The subject is the DYNAMIC LOADER's environment, which
+    # neither `bash -p` nor `python3 -I` touches: the loader maps `LD_PRELOAD`
+    # before any code in either runs. Reproduced before fixing, both
+    # invocations, rc 0 with a full green verdict and nothing in the repository
+    # edited.
+    #
+    # The first arm reads the PROPERTY the fix establishes, and it derives the
+    # allow-list from the wrapper's own PINNED text rather than keeping a second
+    # copy of it here: a copy would drift, and the pin already makes that text
+    # byte-equal to what runs.
+    _allowed_names = {
+        name
+        for line in WRAPPER_CODE_PINNED if line.startswith("KEEP=")
+        for name in line.split("=", 1)[1].strip('"').replace("$KEEP", "").split()
+    }
+    _probe_env = through_the_wrapper(
+        [wrapper_path, "--isolation-probe"],
+        LD_PRELOAD="/nonexistent/forge.so",
+        LD_LIBRARY_PATH="/nonexistent/lib",
+        LD_AUDIT="/nonexistent/audit.so",
+    )
+    _handed = [
+        line.split("=", 1)[1].strip()
+        for line in _probe_env.splitlines()
+        if line.startswith("P7-ISOLATION-PROBE: ENV=")
+    ]
+    expect(
+        "no LD_* variable survives the handover, and every name that does is one the pinned "
+        "allow-list names (F-W)",
+        len(_handed) == 1
+        and _allowed_names
+        and all(
+            name and not name.startswith("LD_") and name in _allowed_names
+            for name in _handed[0].split(",")
+        ),
+    )
+    # The second arm measures the ATTACK, not only the property, and needs a C
+    # compiler to build the forging library. Where there is none the attack half
+    # is UNMEASURED and says so rather than passing quietly; the property arm
+    # above still holds, and an arm that reds for want of a compiler would be a
+    # false red, which this harness's own rule forbids.
+    _cc = next((c for c in ("/usr/bin/cc", "/usr/bin/gcc") if os.access(c, os.X_OK)), None)
+    if _cc is None:
+        print(
+            "  UNMEASURED-P7-NO-C-COMPILER: the forging-library half of F-W's arm needs a C "
+            "compiler and this container has none; the property arm above still ran."
+        )
+        _forged_through_the_wrapper = False
+        _forged_without_it = True
+    else:
+        _lib_dir = a_tree("p7-census-arm-")
+        _source = os.path.join(_lib_dir, "forge.c")
+        _library = os.path.join(_lib_dir, "forge.so")
+        open(_source, "w", encoding="utf-8").write(
+            "#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n"
+            "__attribute__((constructor)) static void forge(void) {\n"
+            "  char comm[64] = {0};\n"
+            "  FILE *f = fopen(\"/proc/self/comm\", \"r\");\n"
+            "  if (f) { if (!fgets(comm, sizeof comm, f)) comm[0] = 0; fclose(f); }\n"
+            "  if (strstr(comm, \"python\") == NULL) return;\n"
+            "  puts(\"P7-FORGED-BY-A-PRELOADED-LIBRARY\");\n"
+            "  fflush(stdout);\n"
+            "  _exit(0);\n"
+            "}\n"
+        )
+        subprocess.run(
+            [_cc, "-shared", "-fPIC", "-o", _library, _source],
+            capture_output=True, text=True, check=False,
+        )
+        _forged_through_the_wrapper = "P7-FORGED-BY-A-PRELOADED-LIBRARY" in (
+            through_the_wrapper([wrapper_path, "--isolation-probe"], LD_PRELOAD=_library)
+        )
+        # The vacuity closer: the same library against a Python this wrapper did
+        # NOT clean the environment for. Without this the arm above could be
+        # green because the library does nothing in this container.
+        _forged_without_it = "P7-FORGED-BY-A-PRELOADED-LIBRARY" in subprocess.run(
+            [sys.executable, "-I", me, "--isolation-probe"],
+            capture_output=True, text=True,
+            env=dict(os.environ, LD_PRELOAD=_library),
+        ).stdout
+    expect(
+        "a preloaded library that forges from inside the interpreter DOES forge when the "
+        "environment reaches it, so the arm below is not vacuous (F-W)",
+        _forged_without_it,
+    )
+    expect(
+        "and it does NOT reach the interpreter through this wrapper, whose handover drops "
+        "every variable outside the allow-list (F-W)",
+        not _forged_through_the_wrapper,
+    )
     expect(
         "with no hijack at all the wrapper still answers, so none of the above is a false red "
         "(R20-02)",
@@ -3576,16 +3741,38 @@ SPAWN_DEPTH_ENV = "P7_HARNESS_SPAWN_DEPTH"
 #
 # The child cannot be attributed by its paths, because at the moment the parent
 # is signalled the child has printed nothing and its registry lives in another
-# process. So the parent issues the child a NONCE and the child puts it in every
-# tree name it creates. Attribution is then derived from the name the parent
-# itself handed down: no file another writer could append to -- which would let a
-# foreign tree read as ours, the fail-open direction -- and no guess. THE BOUND:
-# a tree whose name carries the nonce is this run's child's as far as anything
-# here can tell, and someone who knows the nonce could mint one; the nonce is
-# fresh per run and never printed before the attribution is made.
-TREE_TAG_ENV = "P7_TREE_TAG"
-MY_TREE_TAG = os.environ.get(TREE_TAG_ENV, "")
-THE_TAG_I_HAND_MY_CHILD = "c" + os.urandom(6).hex()
+# process.
+#
+# R22-02, the twenty-second challenge, P1 and FAIL-OPEN: the first answer to
+# that was a NONCE the parent issued and the child spelled into every tree name.
+# A nonce written into directory names is PUBLISHED in the namespace the
+# attribution then reads -- `/tmp` is `drwxrwxrwt` here -- so a stranger who ran
+# `ls` learned it, created a tree carrying it, and the parent's own report
+# called that tree its child's and said nothing was foreign. The hole is visible
+# in the ARM that was written for it: the arm minted the name itself, in the
+# parent, and the classifier believed it. A token readable in the namespace it
+# classifies cannot attribute anything in that namespace.
+#
+# What replaces it is a channel with NO NAME in any namespace: the parent opens
+# a pipe, hands the child the WRITE END as an inherited descriptor, and the
+# child writes each tree it makes down it as it makes it. A reader thread in the
+# parent appends what arrives, so at the instant a signal lands the parent holds
+# exactly the trees the child had reported by then, and nothing else can be in
+# that list -- there is no path, name or token for a stranger to guess or read.
+# The direction of every residual error is fail-CLOSED: a tree the child made
+# but had not yet reported reads as nobody's, which over-counts strangers and
+# never under-counts them.
+#
+# THE BOUND, named rather than implied: a process that can read this process's
+# descriptors (the same user, through /proc) can write down that pipe. That is
+# strictly more than the stranger this closes, who needed only `ls` on a
+# world-readable directory.
+# The channel's descriptor and its validation live ABOVE every mode that exits,
+# next to the spawn-depth refusals: see the block below `--isolation-probe` for
+# why the channel exists at all. Placement, not wording, is what gives a refusal
+# reach -- measured here rather than assumed, because the first version of this
+# sat four thousand lines down, below the probe's own `raise SystemExit`, and
+# `P7_TREE_REPORT_FD=abc` sailed past it exactly as F-H's depth refusal once did.
 DEEPEST_LEGITIMATE_SPAWN = 2
 
 
@@ -3601,8 +3788,48 @@ def env_for_a_child() -> dict[str, str]:
     """This process's environment with the spawn depth incremented."""
     env = dict(os.environ)
     env[SPAWN_DEPTH_ENV] = str(spawn_depth() + 1)
-    env[TREE_TAG_ENV] = THE_TAG_I_HAND_MY_CHILD
+    env.pop(TREE_REPORT_FD_ENV, None)
     return env
+
+
+def a_child_that_reports(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run a child of this harness with a pipe it reports its trees down.
+
+    R22-02's mechanism, and the only place it is built, so the arm that
+    measures it exercises the same code the authoritative run does rather than a
+    second implementation of it.
+
+    The write end is inherited by the child and named to it only as a
+    descriptor NUMBER in its own environment; it has no name in the filesystem,
+    so no process that did not inherit it can write down it. A reader thread
+    appends each line as it arrives, because the parent is otherwise blocked in
+    `subprocess.run` and a report that arrives during the child's life is
+    exactly the one the signal handler needs.
+    """
+    read_end, write_end = os.pipe()
+    env = env_for_a_child()
+    env[TREE_REPORT_FD_ENV] = str(write_end)
+
+    def drain() -> None:
+        with os.fdopen(read_end, "r", encoding="utf-8") as reports:
+            for line in reports:
+                tree = line.strip()
+                if tree:
+                    with _TREE_BOOKKEEPING:
+                        WHAT_MY_CHILD_REPORTED.append(tree)
+
+    reader = threading.Thread(target=drain, daemon=True)
+    reader.start()
+    try:
+        return subprocess.run(
+            argv, capture_output=True, text=True, env=env, pass_fds=(write_end,),
+        )
+    finally:
+        # The parent's copy of the write end has to go, or the reader never sees
+        # end-of-file and this join would hang for ever. A guard that cannot
+        # finish is the same class of thing as a guard that cannot be run.
+        os.close(write_end)
+        reader.join(timeout=10)
 
 
 def too_deep_to_be_anything_but_a_fork() -> str | None:
@@ -3703,7 +3930,7 @@ WRAPPER_CODE_PINNED: tuple[str, ...] = (
     '    echo "REFUSED-P7-WRAPPER-NOT-PRIVILEGED: this script was started without privileged mode,"',
     '    echo "so an inherited shell function named after a builtin it uses could run in its place"',
     '    echo "and forge a verdict with no file edited. Run it as ./tools/red-proofs.sh, which uses"',
-    '    echo "the pinned shebang, or as: bash -p tools/red-proofs.sh"',
+    '    echo "the pinned shebang, or as: /bin/bash -p tools/red-proofs.sh"',
     '    exit 3',
     '    ;;',
     'esac',
@@ -3721,8 +3948,19 @@ WRAPPER_CODE_PINNED: tuple[str, ...] = (
     '  echo "search PATH for a substitute: the interpreter is part of the command being pinned."',
     '  exit 3',
     'fi',
-    'echo "P7 RED PROOFS: interpreter $PY ($("$PY" -V 2>&1)), isolated mode -I"',
-    'exec "$PY" -I "$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"',
+    'HERE="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    'LANG="${LANG:-C.utf8}"',
+    'KEEP="HOME TMPDIR PATH LANG JAVA_HOME P7_TOOLS_DIR KOTLIN_VERSION JUNIT_VERSION"',
+    'KEEP="$KEEP http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY"',
+    'KEEP="$KEEP SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE"',
+    'HANDOVER=()',
+    'for NAME in $KEEP; do',
+    '  if [ -n "${!NAME:-}" ]; then',
+    '    HANDOVER+=("$NAME=${!NAME}")',
+    '  fi',
+    'done',
+    'echo "P7 RED PROOFS: interpreter $PY ($(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)), isolated mode -I"',
+    'exec /usr/bin/env -i "${HANDOVER[@]}" "$PY" -I "$HERE/red_proofs.py" "$@"',
 )
 
 
@@ -3733,7 +3971,7 @@ def the_wrapper_pin_holds(wrapper_text: str) -> bool:
 
 # The number of guard branches this harness's self-test declares. Pinned, not
 # derived: see the census in `self_test`.
-GUARD_BRANCHES_THIS_HARNESS_DECLARES = 92
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 98
 
 # F-I, the coordinator's actual-diff review of `9809db1`, a P1 fail-open that
 # needed no edit to reach: the stray census recognised trees by an ENUMERATED
@@ -3800,18 +4038,32 @@ _NO_MORE_TREES = threading.Event()
 # that nothing was tracking.
 ARM_TREES_THIS_RUN: list[str] = []
 
+# R22-02: every tree this run's child reported down the pipe it inherited, in
+# arrival order, appended by the reader thread in `a_child_that_reports`. Read
+# by the signal handler, which is why it is a module-level list and not a local
+# of `main`: a handler cannot be handed anything.
+WHAT_MY_CHILD_REPORTED: list[str] = []
 
-def tag_for_my_trees() -> str:
-    """The nonce this process was handed, as a name fragment, or nothing.
 
-    R21-04: a child of this harness puts the parent's nonce in every tree name,
-    so the PARENT can attribute those trees when it is signalled while the child
-    is still alive -- the one moment at which the child's own registry is in
-    another process and its output has not been written yet. The top-level run
-    is handed no nonce and adds none, which keeps its tree names what every
-    earlier round measured.
+def tell_my_parent_about(tree: str) -> None:
+    """Report a tree down the descriptor this process's parent handed it.
+
+    R22-02: this replaces a nonce spelled into the tree's NAME, which published
+    the token in the world-readable namespace the attribution then read. A
+    descriptor has no name: a process that did not inherit it cannot write down
+    it, so nothing a stranger does can enter the parent's list.
+
+    A failed write is swallowed, and the direction matters: a tree this process
+    made but could not report reads to the parent as NOBODY's, which over-counts
+    strangers and never under-counts them. A cleanup failure must not eat a
+    verdict, and neither must a closed pipe.
     """
-    return MY_TREE_TAG + "-" if MY_TREE_TAG else ""
+    if MY_REPORT_FD < 0:
+        return
+    try:
+        os.write(MY_REPORT_FD, (tree + "\n").encode("utf-8"))
+    except OSError:
+        pass
 
 
 def trees_on_disk() -> list[str]:
@@ -3845,8 +4097,9 @@ def an_arms_tree(prefix: str) -> str:
                 "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED: an arm asked for a tree after a "
                 "signal ended this run."
             )
-        tree = tempfile.mkdtemp(prefix=prefix + tag_for_my_trees())
+        tree = tempfile.mkdtemp(prefix=prefix)
         ARM_TREES_THIS_RUN.append(tree)
+        tell_my_parent_about(tree)
     return tree
 
 
@@ -3871,8 +4124,9 @@ def a_tree(prefix: str) -> str:
                 "ended this run and its trees were scrubbed. Making one now would leave a tree "
                 "behind that nothing is left to remove."
             )
-        tree = tempfile.mkdtemp(prefix=prefix + tag_for_my_trees())
+        tree = tempfile.mkdtemp(prefix=prefix)
         TREES_THIS_RUN.append(tree)
+        tell_my_parent_about(tree)
     return tree
 
 
@@ -3955,7 +4209,7 @@ def stop_then_scrub_and_report(signum: int) -> str:
     mine = [tree for tree in on_disk if tree in known]
     childs = [
         tree for tree in on_disk
-        if tree not in known and THE_TAG_I_HAND_MY_CHILD in os.path.basename(tree)
+        if tree not in known and tree in set(WHAT_MY_CHILD_REPORTED)
     ]
     others = [tree for tree in on_disk if tree not in known and tree not in childs]
     return (
@@ -4103,9 +4357,8 @@ def main() -> int:
     # inside the set it measures runs as a subprocess, never imported: an
     # imported self-test shares this process's globals, and this process is the
     # thing being tested.
-    probe = subprocess.run(
-        [sys.executable, "-I", os.path.abspath(__file__), "--self-test"],
-        capture_output=True, text=True, env=env_for_a_child(),
+    probe = a_child_that_reports(
+        [sys.executable, "-I", os.path.abspath(__file__), "--self-test"]
     )
     sys.stdout.write(marked_as_the_childs(probe.stdout))
     sys.stdout.write(marked_as_the_childs(probe.stderr))
@@ -4382,7 +4635,11 @@ def main() -> int:
     print("     disposition, so the exit status is the signal's own. SIGKILL CANNOT be closed")
     print("     from inside — nothing of this process runs after it — so a run killed")
     print("     with -9 leaves its trees, and the next run refuses above one whole run's worth")
-    print(f"    ({one_runs_worth_of_trees()}, derived from the proof count, not written down)")
+    print(f"    ({one_runs_worth_of_trees()}, derived from the proof count AND compared against")
+    print(f"     the literal {ONE_RUNS_TREES_DECLARED} declared for it, which is what F-Q asked for: an arm fed a")
+    print("     derivation's own output cannot contradict the derivation, so the figure has an")
+    print("     external pin and the self-test reds when the two disagree. R22-05 is that this")
+    print("     line used to say `not written down` twelve lines after it was written down)")
     print("     rather than noting them and exiting 0. Every prefix this harness creates under is")
     print("     in ONE tuple that the census reads and that `a_tree` refuses to go outside, so")
     print("     the sentence above is true of all four and not of three (F-I).")
@@ -4391,6 +4648,19 @@ def main() -> int:
 
 if __name__ == "__main__":
     arm_the_signal_handlers()
+    # R22-01's mode. A real child that makes ONE tree through the ordinary
+    # creator and prints where it put it, so the arm in the self-test can ask
+    # whether the PRODUCER reported it rather than minting a name itself. It is
+    # a mode and not an import because the reporting descriptor belongs to a
+    # child process; an imported copy would report down its parent's pipe and
+    # measure nothing. `--self-test` is deliberately not used here: a self-test
+    # spawning a self-test is the recursion `F-H` exists to refuse.
+    if "--tree-report-probe" in sys.argv:
+        _reported = a_tree("p7-proof-tree-report-probe-")
+        print(f"P7-TREE-REPORT-PROBE-MADE={_reported}", flush=True)
+        scrub(_reported)
+        TREES_THIS_RUN.remove(_reported)
+        raise SystemExit(0)
     _am_the_self_test_child = "--self-test" in sys.argv
     try:
         _code = self_test() if _am_the_self_test_child else main()
