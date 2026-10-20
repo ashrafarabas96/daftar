@@ -300,7 +300,8 @@ echo "MANIFEST_PINNED   : yes   (compared with the literal in this script, \`C27
 # The coordinator's `C27-S6`: one digest over the DECIDING SET, so a recording
 # of this run names the instrument bytes it measured and a reader can recompute
 # the set this transcript is about rather than taking the tree's word for it.
-echo "DECIDING_SET_SHA256: $($PY -I $H/check_harness_bytes.py --digests | sha256sum | cut -d' ' -f1)   (over the second reader's own digest listing of every deciding file)"
+echo "DECIDING_SET_SHA256: $($PY -I $H/check_harness_bytes.py --digests | sha256sum | cut -d' ' -f1)   (over the second reader's own digest listing of every deciding file, FIRST LINE INCLUDED -- that line names this commit, so two heads with byte-identical instruments print different values here)"
+echo "DECIDING_SET_BODY_SHA256: $($PY -I $H/check_harness_bytes.py --digests | tail -n +2 | sha256sum | cut -d' ' -f1)   (the same listing WITHOUT its first line, which is the value two heads can compare directly -- the coordinator's C28-S1)"
 echo "BOOTSTRAP_SHA256  : $(sha256sum $REPO/infrastructure/database/bootstrap.sql | cut -d' ' -f1)"
 echo "PACK_A_DDL_SHA256 : $(sha256sum $REPO/prep/phase11/ddl/p11-pack-a-apparel.sql | cut -d' ' -f1)"
 echo "PACK_B_DDL_SHA256 : $(test -f $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql && sha256sum $REPO/prep/phase11/ddl/p11-pack-b-lot-expiry.sql | cut -d' ' -f1 || echo 'absent at this SHA — Pack B is not on the branch yet, and the run below skips it by name rather than silently')"
@@ -319,8 +320,8 @@ echo
 # ── 0c. the deciding files against the commit ───────────────────────────────
 # `R26-S1`: this step was "the documents' quoted figures" until this round, and
 # the scan, `--check-blocks` and the gate's own selftest have moved to step 7b,
-# because their haystack is now what this run prints and at this point it has
-# printed the identity block and nothing else. What stays here is the one check
+# because their haystack is now the expectations the value cases of this run
+# REQUIRED and at this point no case has run. What stays here is the one check
 # that must precede everything which reads the harness: the deciding files
 # against the commit's own blobs.
 # Round 10 rejected a head over a figure shown as output that no instrument
@@ -593,7 +594,7 @@ echo "tree differs from the commit, after the run: $AFTER_STATE   (by the bytes 
 rm -f /var/tmp/p11-after.$$
 echo "MIGRATIONS_SHA256 after the run: $(cat $(ls -1 $REPO/infrastructure/database/migrations/*.sql | sort) | sha256sum | cut -d' ' -f1)"
 echo
-echo "=== 7b. the quoted figures, against WHAT THIS RUN PRINTED ==="
+echo "=== 7b. the quoted figures, against the expectations the value cases of this run REQUIRED ==="
 # The gate's own red proof runs first, as it always has -- and HERE rather than
 # at step 0c, because `blocks_test` runs the generators and the generators read
 # the haystack, which is this run's output. A selftest of the figure gate that
@@ -654,8 +655,8 @@ echo "EXIT_PROOFS_A_RUN2: $RC_PROOFS2  (the same file, the same database -- idem
 echo "EXIT_PROOFS_B_RUN2: $RC_B2  (the same file, the same database -- idempotence)"
 echo "EXIT_PACK_DDL     : $RC_PACK_DDL  (prep/phase11/harness/check_harness_bytes.py --pack-ddl, run at step 0c-1: the applied pack DDL against the external byte pins this law and P11-CONSERVATION-LAWS-AND-RED-PROOFS.md both carry)"
 echo "EXIT_HARNESS_BYTES: $RC_HARNESS_BYTES  (prep/phase11/harness/check_harness_bytes.py, run at step 0c-0 before anything that reads the harness: every deciding file's bytes against the blob the resolved commit holds, by a reader that shares no code with the checker)"
-echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 7b beside the figure scan, against this run'\''s own output)"
-echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 7b: after the proofs and the races, because its haystack is what this run printed)"
+echo "EXIT_GENERATED_BLOCKS: $RC_BLOCKS  (prep/phase11/harness/check_fenced_figures.py --check-blocks, run at step 7b beside the figure scan, against a fresh run of each generator)"
+echo "EXIT_FENCED_FIGURES: $RC_FIGURES  (prep/phase11/harness/check_fenced_figures.py, run at step 7b: after the proofs and the races, because its haystack is the expectations the value cases of this run REQUIRED -- not what this script echoes and not what psql prints)"
 echo "EXIT_RACES        : $RCR  (prep/phase11/harness/races.py)"
 echo "EXIT_RACES_B      : $RCRB  (prep/phase11/harness/races_b.py)"
 echo "EXIT_SCRIPT       : $RC  (0 means every step above returned 0)"

@@ -1,0 +1,79 @@
+P11 — ROUND 28'S OWN SHAPES, DRIVEN ON COMMITTED CLONES
+=======================================================
+
+WHAT THIS IS. Six worlds, each a throwaway clone of this branch checked out at
+
+    853889c03a5f7ab8562756b4a59dba5af76d54ed
+
+with ONE line appended and COMMITTED, so every row is measured on a CLEAN tree
+by the gate run from inside that clone (`work tree clean: 0 entries` is printed
+for each). The subject commit is this commit's tree minus this file,
+`RUN-EVIDENCE-AUTHORITATIVE-ROUND28.txt`, the regenerated block figures that
+counting them moves, and the §7.29 lines naming them.
+
+THE SINK EACH WORLD IS GIVEN is the real authoritative run's own sink with its
+`RUN_HEAD` retargeted to that world's commit — what someone who can write a
+file would do, and the point of every red row is that retargeting a sink puts no
+ROW into it.
+
+WHAT EACH ROW MEASURES.
+  * world 1 is `R28-F1` in the direction that makes it a blocker: a figure a case
+    of this run really required, cited correctly, with a combining mark between
+    the value's first digit and the rest. At `056e188` the gate weighed the
+    required figure and PASSED while the reader saw a different one; here it
+    weighs what the reader sees and reds, printing both spellings.
+  * world 2 is the key side, where `NFKC` composes the mark into the letter and
+    the line was not a candidate at all.
+  * world 3 is a mark inside the value of a fabricated figure, which redded
+    before too — on the WRONG figure.
+  * worlds 4 and 5 are the pass direction, and world 5 is the coordinator's
+    `C28-S2`: `axes=2` was required only by a prose-titled case and therefore
+    unwritable in any document until this commit gave those cases identifiers.
+  * world 6 is `C28-F2`: a retired sentence put back into the driver, measured
+    by the gate's own selftest, which reds by name. The one arm that reports
+    FAILED there is the arm that reads the LIVE driver, which is the point.
+
+THE PROBE FOLLOWS, VERBATIM AND COMPLETE.
+
+P11 - ROUND 28'S OWN SHAPES, DRIVEN ON COMMITTED CLONES
+======================================================
+
+subject commit : 853889c03a5f7ab8562756b4a59dba5af76d54ed
+real sink      : p11-run-capture-3XLln431 (230 rows, sha256 d125d2cb7a9288e6)
+each world: one line APPENDED and COMMITTED, clean tree, gate run from the clone.
+
+--- world 1: R28-F1 the decisive shape: a mark truncating a value a case required, cited correctly (the reader sees deleted=042)
+    committed 371f5bc5c2dd36b1c38cabf774cfdc60f6af5b45, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink1.txt, 230 rows from 43 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 371f5bc5c2dd), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `deleted=042` (written as `deleted=0́42  [PA9-P1]`), and no value case of this run asserted that string and passed. Either have a case assert it -- and name that case beside the figure -- or drop it. WHAT THIS CHECKS is that a case of this run asserted the string; what it does NOT check is that the case computed it from the database rather than carrying it as a literal of its own (`C28-F1`, a declared limit: the closure is mutation coverage of every figure-bearing case, which is a round of work and is not here).
+--- world 2: R28-F1 the key side, where NFKC composes the mark into the letter
+    committed 8edaa6d0289724d22d261c7c76998b2f355e0d45, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink2.txt, 230 rows from 43 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 8edaa6d02897), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `live=4242` (written as `livé=4242`), and no value case of this run asserted that string and passed. Either have a case assert it -- and name that case beside the figure -- or drop it. WHAT THIS CHECKS is that a case of this run asserted the string; what it does NOT check is that the case computed it from the database rather than carrying it as a literal of its own (`C28-F1`, a declared limit: the closure is mutation coverage of every figure-bearing case, which is a round of work and is not here).
+--- world 3: R28-F1 a mark inside the value of a fabricated figure
+    committed 03c3f177b8cc36fd2952c38859a72c6d1aea2aba, work tree clean: 0 entries
+    scan rc=1
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink3.txt, 230 rows from 43 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 03c3f177b8cc), 10 candidate figures, 1 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+        NOT REQUIRED BY ANY CASE: P11-OPEN-DECISIONS.md:64 reports `probe28_mid=999` (written as `probe28_mid=9́99  [PA9-P1]`), and no value case of this run asserted that string and passed. Either have a case assert it -- and name that case beside the figure -- or drop it. WHAT THIS CHECKS is that a case of this run asserted the string; what it does NOT check is that the case computed it from the database rather than carrying it as a literal of its own (`C28-F1`, a declared limit: the closure is mutation coverage of every figure-bearing case, which is a round of work and is not here).
+--- world 4: the PASS direction: the same required figure with no mark
+    committed ff3add5d28778bbadfa513723569516a972ba06f, work tree clean: 0 entries
+    scan rc=0
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink4.txt, 230 rows from 43 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD ff3add5d2877), 10 candidate figures, 0 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+--- world 5: C28-S2 the pass direction for a value that was unwritable until this commit
+    committed 9a1ab6232312dd071079fda858dfeef150be3c95, work tree clean: 0 entries
+    scan rc=0
+      quoted figures: 9 documents, haystack from the expectations the value cases of this run REQUIRED (sink5.txt, 230 rows from 43 case(s), sha256 86d9078d0f75 of the text weighed, RUN_HEAD 9a1ab6232312), 10 candidate figures, 0 not emitted
+        the decision frame was parsed before this verdict: four functions, no refusal
+--- world 6: C28-F2 a retired sentence put back into the driver, measured by the gate's own selftest
+    committed dfc172ac83c9e239db2f271535f435d90a4cd56b, work tree clean: 0 entries
+    selftest rc=1
+        sentences C28-F2 the driver quotes the gate's own sentence in both places and carries no retired one: 1 finding(s) -> **SELFTEST FAILED**
+        sentences C28-F2 a retired sentence put back            refused as DRIVER-SENTENCE-RETIRED      (want DRIVER-SENTENCE-RETIRED) -> as required
+        sentences C28-F2 the exit description stops quoting it  refused as DRIVER-SENTENCE-RETIRED      (want DRIVER-SENTENCE-UNQUOTED) -> as required
+DONE

@@ -220,7 +220,7 @@ case("a zero overlay delta", txn(adjust(5,V_LOT,M(3))+ov(LA,0)),
      "stock_lot_movements_qty_ck")
 
 # ── 3. conservation, at COMMIT (C-LOT-01) ─────────────────────────────────
-case("the happy path: a lot-tracked movement whose allocation sums exactly",
+case("PB10-01 the happy path: a lot-tracked movement whose allocation sums exactly",
      txn(adjust(10,V_LOT,M(4))+ov(LA,6,idem=True)+ov(LB,4,idem=True))
      +f"SELECT count(*)::text FROM stock_lot_movements lm JOIN stock_movements m ON m.business_id=lm.business_id AND m.id=lm.stock_movement_id"
       f" WHERE lm.business_id='{A}' AND m.source_id='{M(4)}';",
@@ -273,7 +273,7 @@ case("the per-lot cache cannot disagree with the stock key's on-hand",
            SET on_hand=EXCLUDED.on_hand, last_movement_seq=EXCLUDED.last_movement_seq;
        COMMIT;""",
      "inventory.lot_level_conservation_violated")
-case("and it commits when it does agree",
+case("PB10-02 and it commits when it does agree",
      INT+f"""BEGIN;
        UPDATE stock_levels SET on_hand=10 WHERE business_id='{A}' AND warehouse_id='{WH}' AND variant_id='{V_LOT}';
        INSERT INTO stock_lot_levels (tenant_id,business_id,warehouse_id,variant_id,lot_id,on_hand,last_movement_seq)
@@ -287,7 +287,7 @@ case("a negative per-lot on-hand", INT+f"UPDATE stock_lot_levels SET on_hand=-1 
      "stock_lot_levels_on_hand_ck")
 
 # ── 6. the fold, and its scope guard ─────────────────────────────────────
-case("the fold reports the lot's own quantity from the movements, not the cache",
+case("PB10-03 the fold reports the lot's own quantity from the movements, not the cache",
      f"SELECT on_hand::text FROM inventory_lot_fold('{A}','{WH}','{V_LOT}','{LA}');", "6", kind="value")
 case("the fold refuses a key outside the transaction's business",
      f"SELECT * FROM inventory_lot_fold('{B}','{WH}','{V_LOT}','{LA}');", "inventory.scope_mismatch")
@@ -453,12 +453,12 @@ case("P3 and the inventory principal cannot rewrite a lot fact at all, by the gr
 # that CREATES a row another section counts makes that other section's
 # expected number depend on the order the suite runs in, which is the defect
 # the Pack A round paid for twice.
-case("P3 but a lot no movement names is still correctable, because a receipt typo is real",
+case("PB10-04 P3 but a lot no movement names is still correctable, because a receipt typo is real",
      f"UPDATE stock_lots SET expiry_date='2027-04-30' WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';"
      +f"SELECT expiry_date::text FROM stock_lots WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';"
      +f"UPDATE stock_lots SET expiry_date='2027-03-31' WHERE business_id='{A}' AND id='a8000000-0000-0000-0000-0000000000a8';",
      "2027-04-30", kind="value")
-case("P3 and the status of a lot is NOT a fact of the goods: a quarantine is still allowed",
+case("PB10-05 P3 and the status of a lot is NOT a fact of the goods: a quarantine is still allowed",
      f"UPDATE stock_lots SET status='blocked' WHERE business_id='{A}' AND id='{LA}';"
      +f"UPDATE stock_lots SET status='active' WHERE business_id='{A}' AND id='{LA}';"
      +f"SELECT status FROM stock_lots WHERE business_id='{A}' AND id='{LA}';",

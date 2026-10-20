@@ -123,7 +123,7 @@ V=lambda vid,attrs,base='false': f"INSERT INTO product_variants (business_id,id,
 IDEM = " ON CONFLICT DO NOTHING;"
 
 # 1 happy path, and WHERE the canonical form actually comes from
-case("happy path: a registered combination is accepted",
+case("PA10-01 happy path: a registered combination is accepted",
      V('f0000001-0000-0000-0000-000000000001','{"size":"s","color":"red"}').replace(";",IDEM)+
      f"SELECT attributes::text FROM product_variants WHERE id='f0000001-0000-0000-0000-000000000001';",
      '{"size": "s", "color": "red"}', kind="value")
@@ -235,7 +235,7 @@ case("a value no variant names is still archivable (the guard refuses removal, n
      f"UPDATE product_attribute_values SET status='archived' WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';"
      f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';",
      "archived", kind="value")
-case("and un-archiving it is not a removal either",
+case("PA10-02 and un-archiving it is not a removal either",
      f"UPDATE product_attribute_values SET status='active' WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';"
      f"SELECT status FROM product_attribute_values WHERE business_id='{A}' AND axis_code='size' AND value_code='{ARCHIVABLE}';",
      "active", kind="value")
@@ -716,7 +716,7 @@ case("P1-01/5 a DELETE committed by a session that is no longer the writing sess
      f"RESET app.tenant_id;\n"
      f"COMMIT;",
      "catalog.matrix_grid_unverifiable")
-case("P1-01/5 and the delete was rolled back: the fixture product keeps both axes",
+case("PA10-03 P1-01/5 and the delete was rolled back: the fixture product keeps both axes",
      f"SELECT 'axes=' || count(*)::text FROM product_matrix_axes WHERE business_id='{A}' AND product_id='{PE}';",
      "axes=2", kind="value")
 # And the arm is specific, not a blanket refusal of anything unusual: the same
@@ -1284,7 +1284,7 @@ case("P2-07 and Pack A leaves product_variants' policy set exactly as it found i
 
 # 8 RLS, attacked from the application role with another business's context
 rls_pre=f"SET app.tenant_id='{TB}'; SET app.business_id='{B}';"
-case("as daftar_app in business B, business A's axes are invisible",
+case("PA10-04 as daftar_app in business B, business A's axes are invisible",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
      "0", role="daftar_app", pre=rls_pre, kind="value")
 case("as daftar_app in business B, inserting an axis FOR business A is refused",
@@ -1301,7 +1301,7 @@ case("as daftar_app in business B, business A's matrix rows are invisible",
 # writes is a case that will pass for the wrong reason one day; this one has
 # had to be re-derived three times now, which is the cost of that honesty and
 # worth paying.
-case("with business A's own context the same rows ARE visible (the read is not broken, it is scoped)",
+case("PA10-05 with business A's own context the same rows ARE visible (the read is not broken, it is scoped)",
      f"SELECT count(*)::text FROM product_attribute_axes WHERE business_id='{A}';",
      "6", role="daftar_app", pre=f"SET app.tenant_id='{TA}'; SET app.business_id='{A}';", kind="value")
 case("business A's context with the WRONG tenant sees nothing (tenant_membership, not only business_isolation)",

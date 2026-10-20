@@ -98,9 +98,28 @@ candidate, and the exact token must be one **A CASE OF THIS RUN REQUIRED** --
 an expectation of a `kind="value"` case in `proofs.py` or `proofs_b.py` that
 PASSED, recorded by `case()` itself in the figure sink the driver creates and
 handed here as `--run-capture PATH`. Not in a file under the harness, and not
-merely in the run's output: in the set of values this run would have FAILED
-on if they had been different. And the document must NAME THE CASE, in
-brackets on the same line, because a figure is a figure of something.
+merely in the run's output: in the set of expectations the run's own cases
+asserted. And the document must NAME THE CASE, in brackets on the same line,
+because a figure is a figure of something.
+
+WHAT THAT DOES NOT CHECK, first rather than last, because the sentence it
+replaces claimed it (`C28-F1`). This gate measures THAT A CASE ASSERTED the
+string and passed. It does NOT measure that the case computed the value from
+the database: a value case whose subject is a literal --
+`SELECT '<figure>'::text` -- passes, writes its row, and legitimises the
+figure, and the coordinator drove exactly that to `EXIT_SCRIPT 0` twice with
+two different fabricated numbers. So the gate does not promise that anything
+would have failed if the number were different; it promises that a case of
+this run asserted it, that the case is named beside it, and that the figure
+weighed is the one displayed. THE CLOSURE IS KNOWN AND IS NOT HERE: a
+figure-bearing case is credible exactly when it REDS under a mutation that
+changes the quantity, and this pack already carries `mutations/M*.sql` for
+laws. Requiring mutation coverage of every figure-bearing case would make the
+claim measured instead of asserted; it is a round of work, it is declared as a
+residual at the place the claim is made -- here, the live refusal, and the
+conservation row -- and until it exists the price of the attack is a value
+case committed into a byte-pinned deciding file, which is what a reviewer
+reads in the diff.
 
 `R27-F1` and `R27-F2` are why, and the sentence that stood here until this
 round -- "the exact token must appear in WHAT THIS RUN PRINTED" -- is the rule
@@ -126,8 +145,26 @@ asserts it (`C26-S2` is withdrawn with the rule it was about). The discharge is
 the one the refusal names: have a case assert it, so the case fails when it
 changes, and name that case beside the figure.
 
-NORMALISATION, in six steps, in this order, each one separately deletable and
-separately measured:
+THE PRECONDITION THE SINK RULE RESTS ON, stated because round 28 measured it
+and it was unstated (`R28-S1`). The sink is a file, and the claim this rule
+makes is that a COMMIT alone no longer legitimises a figure -- that writing a
+row needs access to the measuring host. A committed fixture reaches process
+execution on that host: `world.sql` is applied as a superuser, so
+`COPY ... TO PROGRAM` runs a shell carrying the server's environment, which
+holds `$P11_RUN_CAPTURE`. Round 28 committed exactly that and NO figure was
+forged, for two reasons that are both outside this file: the driver creates the
+sink with `mktemp` as its own user, mode 0600 (measured: owner `root`, mode
+600), and the database server runs as a different OS user which cannot write
+it; and the failed `COPY` aborts the fixture under `ON_ERROR_STOP` before the
+gate runs. So the rule holds under the precondition THE SINK'S OWNER IS NOT THE
+DATABASE'S OS USER, and a deployment that ran the driver as the database's own
+user, or left the sink group-writable, would have the row written and weighed.
+That is a precondition, not a closure, and `R27-S5` still stands beneath it:
+what ties a row to the `case()` call that wrote it is the driver's process
+lineage, which nothing executable here can verify.
+
+NORMALISATION, in seven steps, in this order, each one separately deletable
+and separately measured:
 
   0. **HTML CHARACTER REFERENCES RESOLVED**, first, so a reference TO a
      full-width `=` is resolved and then folded by the step below.
@@ -144,9 +181,26 @@ separately measured:
      changed.
   1. **NFKC**, which maps the full-width `＝` and the compatibility forms of
      the digits to their ASCII spellings.
-  2. **Format characters deleted** (Unicode category `Cf`), which is where
+  2. **EVERY COMBINING MARK DROPPED, WHEREVER IT SITS** (`Mn` and `Me`, after a
+     canonical decomposition, so a mark already composed into its letter is
+     reached too). `R28-F1`: a mark adds no grapheme of its own, so
+     `axes=3` + U+0301 + `00` RENDERS as `axes=300` and the matcher weighed
+     `axes=3` -- a figure a case really did require, correctly cited, on a line
+     displaying a hundred times it. Round 27 had closed only the marks that
+     TOUCH the `=` (the coordinator's `C27-S1`, where NFKC leaves a space and a
+     mark), which was an enumerated exemption BY POSITION: it moved the hole to
+     mid-value and to the key side, where NFKC composes the mark into the letter
+     and the key class then refuses the line altogether. The rule has no
+     position in it now, and the cost is disclosed: an accented word is weighed
+     as its unaccented spelling, so `livé=4242` is a candidate -- which is the
+     direction to fail in, since a figure weighed and found legitimate is an
+     outcome while one never weighed is a fail-open. Measured cost on this
+     pack's nine documents before the fix was claimed: 9 candidates either way,
+     no document differing. Four arms: the mark that truncates a value a case
+     required, inside the value, on the key side of the `=`, and inside the key.
+  3. **Format characters deleted** (Unicode category `Cf`), which is where
      U+200B ZERO WIDTH SPACE goes. NFKC does not remove it.
-  3. **WHITESPACE THAT TOUCHES THE `=` DELETED**, by Unicode category (`Zs`,
+  4. **WHITESPACE THAT TOUCHES THE `=` DELETED**, by Unicode category (`Zs`,
      `Zl`, `Zp`, `Cc`, `Cf`) and not as a list of characters. `R26-F1`: the
      matcher required the key, the `=` and the value to be ADJACENT, so
      `rows = 81737` was not weighed at all, and three fabricated figures in
@@ -165,16 +219,16 @@ separately measured:
      columns now and writes no `=` at all; the generator does not depend on a
      hole any more. One arm per spelling: space, tab, both sides, no-break
      space, narrow no-break space, `&nbsp;`, and the padded shape.
-  4. **Arabic-Indic and Extended Arabic-Indic digits mapped to ASCII**, which
+  5. **Arabic-Indic and Extended Arabic-Indic digits mapped to ASCII**, which
      NFKC also does not do: U+0669 has no compatibility decomposition. The
      owner's Arabic report writes every figure he reads in these digits, so
      this is the spelling the documents actually use, not an exotic one.
-  5. **The boolean set, closed**: `true`, `false`, `t`, `f`, in any case, and
+  6. **The boolean set, closed**: `true`, `false`, `t`, `f`, in any case, and
      nothing else. `t` and `f` are what `psql` prints, which is what these
      documents transcribe, and the previous class claimed booleans while
      admitting one spelling of two.
 
-Steps 1-4 are the same cause as **Phase 6's open `G-A`**, where a mistyped key,
+Steps 1-5 are the same cause as **Phase 6's open `G-A`**, where a mistyped key,
 U+200B and U+FF1A are all accepted. Two phases, one cause; raised to the
 coordinator rather than solved twice, and `OD-P6-09` stays with the owner.
 
@@ -471,26 +525,45 @@ EXEMPT = ("port=55512", "migrations=87")
 # SHAPE to TIME on the fifth, which is this phase's own standing lesson.
 WHITESPACE_CATEGORIES = ("Zs", "Zl", "Zp", "Cc", "Cf")
 
-# `C27-S1`, the coordinator's diff review of `fc3f845`: the class above closed
-# the characters that ARE whitespace, and the compatibility characters that
-# FOLD INTO whitespace arrived one layer out. `NFKC` is applied before this
-# step, and it expands `U+00B4` ACUTE ACCENT, `U+00A8` DIAERESIS, `U+00AF`
-# MACRON, `U+00B8` CEDILLA, `U+02D8` BREVE and some fifty more into A SPACE
-# FOLLOWED BY A COMBINING MARK. The space beside the `=` was then deleted and
-# the MARK was not, so `total=\u00b455` normalised to the three codepoints
-# `=`, `U+0020`, `U+0301` before the value, the space was deleted, THE MARK
-# STAYED between the `=` and the value, and the line was NOT A CANDIDATE AT
-# ALL -- not weighed and found legitimate, not weighed, which is round 26's
-# own `R26-F1` shape repeating in the residue of a normalisation this file
-# performs itself.
+# `R28-F1`. The marks that render as part of the character before them and add
+# no grapheme of their own: nonspacing (`Mn`) and enclosing (`Me`). As a
+# category pair rather than a list of marks, for the reason every class in this
+# file is a category.
+COMBINING_CATEGORIES = ("Mn", "Me")
+
+# `R28-F1`, and it is `C27-S1` MEASURED AGAIN FROM THE OTHER SIDE. The
+# coordinator's residual was that `NFKC` expands some fifty compatibility
+# characters -- `U+00B4` ACUTE ACCENT, `U+00A8` DIAERESIS, `U+00AF` MACRON --
+# into a space AND A COMBINING MARK, and that round 27 deleted the space beside
+# the `=` and left the mark, so a figure written with one of them was not a
+# candidate at all. Round 27 answered it by widening the class deleted BESIDE
+# THE `=` to include the marks, and round 28 measured that fix and rejected it:
 #
-# The class is therefore not "whitespace" but WHAT ADVANCES NO WIDTH beside an
-# `=`: whitespace within a line, and the nonspacing (`Mn`) and enclosing (`Me`)
-# marks a compatibility fold leaves behind. Stated as two more CATEGORIES
-# rather than as the fifty codepoints whose expansion begins with a space,
-# because a list of fifty reopens on the fifty-first -- the same reason the
-# whitespace class above is a category class.
-PADDING_CATEGORIES = WHITESPACE_CATEGORIES + ("Mn", "Me")
+#     axes=3<U+0301>00   cited correctly   the reader sees `axes=300`
+#                                          the matcher weighed `axes=3`
+#                                          -- which a case really did require
+#
+# A mark that does not TOUCH the `=` was never deleted, and the value class
+# holds no mark, so the match stopped at the first digit: the gate passed a
+# document displaying a figure a hundred times the one any case required, with
+# the right case named beside it. The same from the key side, where `NFKC`
+# COMPOSES the mark into the letter (`live` + `U+0301` -> `livé`) and the key
+# class refuses it, so the line was not weighed at all.
+#
+# So the round-27 fix was AN ENUMERATED EXEMPTION BY POSITION: it closed the
+# position beside the `=` and moved the hole to mid-value and key-side, which is
+# this phase's own lesson about moving a hole rather than closing it, and
+# `R28-F1` is `a PROJECTION is not an IDENTITY` reopened one position over --
+# the string weighed was a projection of the string SEEN, made equal to it at
+# the `=` alone.
+#
+# What replaces it has no position in it: the line is decomposed canonically and
+# EVERY nonspacing (`Mn`) and enclosing (`Me`) mark is dropped WHEREVER IT SITS,
+# before anything decides what a candidate is, so the figure the gate weighs is
+# the grapheme string a reader sees. The whitespace class above goes back to
+# whitespace: with the marks gone before it runs, adding them to it would red
+# nothing, and a guard that reds nothing is deleted or armed with no third
+# option.
 
 
 def _breaks_a_line(c):
@@ -509,6 +582,31 @@ def _breaks_a_line(c):
 # on) over the whole range the terminators live in, rather than written out as
 # a list of six that reopens on the seventh.
 LINE_TERMINATORS = frozenset(c for c in map(chr, range(0x3000)) if _breaks_a_line(c))
+
+
+def _drop_marks(s):
+    """The line with every combining mark gone, wherever it sat.
+
+    `R28-F1`. The figure the gate weighs must be the grapheme string a reader
+    SEES, and a nonspacing mark is exactly a character that adds no grapheme of
+    its own: `axes=3` + `U+0301` + `00` renders as `axes=300` and matched
+    `axes=3`. The line is decomposed canonically FIRST, because a mark may
+    already be composed into its letter -- `NFKC` turns `live` + `U+0301` into
+    the single codepoint `livé`, which is how the key-side variant escaped
+    weighing entirely -- and `Mn` and `Me` are then dropped by CATEGORY, with no
+    position in the rule and no list of marks to reopen on the next one.
+
+    The cost is that an accented word is weighed as its unaccented spelling, so
+    `livé=4242` is a candidate. That is the direction this gate should fail in:
+    a reader seeing `livé=4242` reads a figure, and a figure that is weighed and
+    found legitimate is the outcome, while one that is never weighed is the
+    fail-open this finding was.
+    """
+    return "".join(
+        c
+        for c in unicodedata.normalize("NFD", s)
+        if unicodedata.category(c) not in COMBINING_CATEGORIES
+    )
 
 
 def _close_equals(s):
@@ -557,12 +655,12 @@ def _close_equals(s):
     keep = [True] * n
 
     def padding(c):
-        # What advances no width WITHIN a line -- whitespace, and the
-        # combining marks a compatibility fold leaves beside the `=` (`C27-S1`).
-        # A line terminator is not padding, because deleting one would join two
-        # lines into a figure neither of them carries.
+        # Whitespace WITHIN a line. The combining marks `C27-S1` put here for
+        # one round are gone from this class and dropped everywhere instead
+        # (`R28-F1`). A line terminator is not padding, because deleting one
+        # would join two lines into a figure neither of them carries.
         return (
-            unicodedata.category(c) in PADDING_CATEGORIES
+            unicodedata.category(c) in WHITESPACE_CATEGORIES
             and c not in LINE_TERMINATORS
         )
 
@@ -604,6 +702,7 @@ def _fold_digits(s):
 MATCHER_GUARDS = (
     "html character references",
     "nfkc",
+    "combining marks",
     "format characters",
     "whitespace around the equals",
     "non-ascii digits",
@@ -849,6 +948,8 @@ def _strip(line, skip=()):
         s = html.unescape(s)
     if "nfkc" not in skip:
         s = unicodedata.normalize("NFKC", s)
+    if "combining marks" not in skip:
+        s = _drop_marks(s)
     if "format characters" not in skip:
         s = "".join(c for c in s if unicodedata.category(c) != "Cf")
     if "whitespace around the equals" not in skip:
@@ -1139,6 +1240,37 @@ _RUN_CAPTURE = []
 # capture is a FILE, and what ties it to a RUN is the process lineage of the
 # driver that wrote it, which nothing executable here can verify.
 RUN_HEAD_LINE = re.compile(r"^RUN_HEAD\s*:\s*([0-9a-f]{40})\s*$", re.M)
+
+# `C28-F2`. THE ONE SENTENCE THAT SAYS WHAT THE HAYSTACK IS, as a literal.
+#
+# Four rounds running, the rule moved and a live sentence about the rule did
+# not: round 25's "a published evidence file", round 26's "an instrument under
+# the harness emits", round 27's "what this run printed" each stayed somewhere
+# after the rule they described was gone. The coordinator's `C28-F2` found two
+# of them in `rebuild_and_prove.sh` -- the step-7b header and the
+# `EXIT_FENCED_FIGURES` description -- printing "what this run printed" four
+# lines from the gate's own correct line, and a reader whose figure reds and
+# believes the driver adds the `print` this round abolished.
+#
+# A sweep is not an answer to a class of defect, so the sentence is a LITERAL
+# here, the verdict prints it, and `driver_sentences` requires the driver to
+# QUOTE IT BY BYTES in both places. That is the enrolment `--check-blocks`
+# already does for figures, applied to the sentences that describe the rule.
+HAYSTACK_SENTENCE = "the expectations the value cases of this run REQUIRED"
+
+# The sentences rules of this file RETIRED, refused anywhere in the driver. It
+# is an enumeration and it is DECLARED as one: it cannot name the wording
+# nobody has written yet, so it catches the stale sentence a rule change leaves
+# behind and a reviewer adds the next entry when the next rule moves. The pin
+# above is what actually binds; this is the net under it.
+RETIRED_SENTENCES = (
+    "what this run printed",
+    "what this run prints",
+    "this run's own output",
+    "no instrument under the harness emits",
+    "an instrument under the harness emits",
+    "appears in a published evidence file",
+)
 
 # `R27-F1`. One row per expectation of a value case that PASSED, written by
 # `case()` in `proofs.py` and `proofs_b.py`: the suite, the case's own
@@ -1474,7 +1606,7 @@ def haystack(root, skip=()):
         cases = sorted({c for _s, c, _f in rows})
         digest = hashlib.sha256(text.encode("utf-8", "surrogateescape")).hexdigest()
         label = (
-            "the expectations the value cases of this run REQUIRED (%s, %d rows from "
+            HAYSTACK_SENTENCE + " (%s, %d rows from "
             "%d case(s), sha256 %s of the text weighed, RUN_HEAD %s)"
             % (
                 os.path.basename(os.path.realpath(capture)), len(rows), len(cases),
@@ -2316,12 +2448,26 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                 # was satisfied by anything that PRINTED -- a fixture's
                 # `RAISE NOTICE`, an `echo` in the driver. What passing means is
                 # stated exactly now.
+                # `C28-F1`. The clause that stood here -- "nothing anywhere
+                # would have failed if the number were different" -- was a
+                # PROMISE this gate cannot keep, and the coordinator measured
+                # it: a value case whose subject is a literal
+                # (`SELECT '<figure>'::text`) passes, writes a row, and
+                # legitimises the figure, so something DID assert it and
+                # nothing would have failed either. What is measured is stated
+                # exactly now, and what is not measured is named in the same
+                # breath, because a refusal a reader acts on must not claim
+                # more than it checked.
                 print(
                     "  NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, and no value "
-                    "case of this run required that string: nothing anywhere would "
-                    "have failed if the number were different. Either have a case "
-                    "assert it -- so the case fails when it changes -- and name that "
-                    "case beside the figure, or drop it." % (rel, n, tok, written)
+                    "case of this run asserted that string and passed. Either have a "
+                    "case assert it -- and name that case beside the figure -- or drop "
+                    "it. WHAT THIS CHECKS is that a case of this run asserted the "
+                    "string; what it does NOT check is that the case computed it from "
+                    "the database rather than carrying it as a literal of its own "
+                    "(`C28-F1`, a declared limit: the closure is mutation coverage of "
+                    "every figure-bearing case, which is a round of work and is not "
+                    "here)." % (rel, n, tok, written)
                 )
             elif why == "no case named":
                 print(
@@ -2469,6 +2615,16 @@ CATCH = [
     ("C27-S1 an acute accent before the value", "fabricated_count=\u00b4999"),
     ("C27-S1 a diaeresis before the value", "fabricated_count=\u00a8999"),
     ("C27-S1 a bare combining mark before the value", "fabricated_count=\u0301999"),
+    # `R28-F1`, round 28's blocker, and the arms that make the rule
+    # position-free. The first is the decisive one: `deleted=0` is a figure a
+    # case of this run really does require and the cite is the right one, so
+    # the only thing wrong with the line is that a reader sees `deleted=04`.
+    # Round 27's class deleted marks beside the `=` alone and weighed
+    # `deleted=0`, which passed.
+    ("R28-F1 a mark truncating a value a case required", "deleted=0\u03014 [FA-02]"),
+    ("R28-F1 a mark inside the value", "fabricated_count=9\u030199"),
+    ("R28-F1 a mark on the key side of the equals", "fabricated_count\u0301=999"),
+    ("R28-F1 a mark inside the key", "fabricated_co\u0301unt=999"),
     # Measured consequence of the step above, and the reason these two arms
     # exist: deleting whitespace that touches the `=` also deletes a format
     # character there, so round 14's own arm (a zero-width space BEFORE the
@@ -5170,6 +5326,21 @@ PROVENANCE = {
     "C27-S1 a bare combining mark before the value": (
         None, "`U+0301` written on its own, which is the residue the fold leaves and "
               "the thing the widened class actually deletes"),
+    "R28-F1 a mark truncating a value a case required": (
+        None, "round 28's blocker, in the direction that makes it one: a figure a case "
+              "of this run required, cited correctly, with a mark between the value's "
+              "first digit and the rest -- so the matcher weighed the required figure "
+              "and the reader saw a different one"),
+    "R28-F1 a mark inside the value": (
+        None, "the same shape with a fabricated figure, which reds either way but "
+              "under the old class redded the WRONG figure"),
+    "R28-F1 a mark on the key side of the equals": (
+        None, "a mark that touches the `=` from the left, where round 27's class did "
+              "reach but NFKC had already composed it into the letter"),
+    "R28-F1 a mark inside the key": (
+        None, "a mark in the middle of the key, which the old class never reached: the "
+              "positive scan found a shorter figure there and the reader saw a longer "
+              "key"),
     # `R27-F1` and `R27-F2`, round 27's two blockers. Both challengers quote
     # their plants verbatim in their reports; the entries here are DESCRIPTIONS
     # for the reason the `R24-F1` entries give -- an arm body's figures are
@@ -6870,6 +7041,99 @@ def frame_gate_test():
     return good
 
 
+def driver_sentences(text):
+    """Every stale or missing sentence about the haystack in the driver's text.
+
+    `C28-F2`. The driver is the file a reviewer reads the verdict in, so the two
+    places it SAYS what the figure gate weighs -- the step header and the
+    `EXIT_FENCED_FIGURES` description -- must quote `HAYSTACK_SENTENCE` by
+    bytes, and no sentence a rule of this file retired may stand anywhere in it.
+
+    It takes TEXT rather than a path so the selftest can plant a retired
+    sentence and read the refusal, which is this pack's rule about a check
+    nobody runs against a world that breaks it.
+
+    The limit, declared: the pin is byte equality with this file's own literal,
+    and the retired list is an ENUMERATION that cannot name a wording nobody
+    has written yet. It catches the sentence a rule change leaves behind, which
+    is the defect four rounds running produced; it does not catch a sentence
+    somebody invents that contradicts the rule in new words.
+    """
+    out = []
+    for n, line in enumerate(text.split("\n"), 1):
+        low = line.lower()
+        for retired in RETIRED_SENTENCES:
+            if retired.lower() in low:
+                out.append(
+                    "DRIVER-SENTENCE-RETIRED: rebuild_and_prove.sh:%d says %r, which "
+                    "describes a rule this gate no longer holds. The sentence that "
+                    "says what the haystack is lives in check_fenced_figures.py as "
+                    "HAYSTACK_SENTENCE, and this file must quote it." % (n, retired)
+                )
+    for what, need in (
+        ("the step header of the figure gate", "=== 7b."),
+        ("the EXIT_FENCED_FIGURES description", "EXIT_FENCED_FIGURES:"),
+    ):
+        lines = [l for l in text.split("\n") if need in l and "echo" in l]
+        if not lines:
+            out.append(
+                "DRIVER-SENTENCE-ABSENT: no line of rebuild_and_prove.sh echoes %s "
+                "(looked for %r), so there is nothing to hold to the rule."
+                % (what, need)
+            )
+            continue
+        if not any(HAYSTACK_SENTENCE in l for l in lines):
+            out.append(
+                "DRIVER-SENTENCE-UNQUOTED: %s does not quote HAYSTACK_SENTENCE "
+                "(%r). A sentence about the rule that is not the rule's own words "
+                "is the defect C28-F2 named." % (what, HAYSTACK_SENTENCE)
+            )
+    return out
+
+
+def driver_sentence_arms():
+    """The driver's sentences, and the world where a retired one comes back."""
+    ok = True
+    path = os.path.join(_harness_dir(), "rebuild_and_prove.sh")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            real = fh.read()
+    except OSError as why:
+        print("  sentences DRIVER-UNREADABLE: %s -> **SELFTEST FAILED**" % why)
+        return False
+    found = driver_sentences(real)
+    good = not found
+    ok = ok and good
+    print(
+        "  sentences C28-F2 the driver quotes the gate's own sentence in both places "
+        "and carries no retired one: %d finding(s) -> %s"
+        % (len(found), "as required" if good else "**SELFTEST FAILED**")
+    )
+    for why in found:
+        print("    " + why)
+    for label, planted, want in (
+        (
+            "a retired sentence put back",
+            real + '\necho "the haystack is what this run printed"\n',
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
+            "the exit description stops quoting it",
+            real.replace(HAYSTACK_SENTENCE, "something else entirely", 1),
+            "DRIVER-SENTENCE-UNQUOTED",
+        ),
+    ):
+        names = [f.split(":")[0] for f in driver_sentences(planted)]
+        good = want in names
+        ok = ok and good
+        print(
+            "  sentences C28-F2 %-38s refused as %-28s (want %s) -> %s"
+            % (label, names[0] if names else "NO REFUSAL", want,
+               "as required" if good else "**SELFTEST FAILED**")
+        )
+    return ok
+
+
 def capture_names_test():
     """`R26-S6`: four capture refusals and three older ones, read BY NAME.
 
@@ -7860,6 +8124,7 @@ def selftest():
     )
     ok = identity_arms_test() and ok
     ok = capture_names_test() and ok
+    ok = driver_sentence_arms() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
