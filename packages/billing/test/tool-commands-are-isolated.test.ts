@@ -287,6 +287,69 @@ const REFUSED_NONCE_NOT_AS_SPECIFIED = 'REFUSED-NONCE-NOT-AS-SPECIFIED';
 // handed no digest has had its environment edited between the two, and that is
 // a refusal of its own rather than the shared-pack path.
 const REFUSED_GATE_HANDED_DOWN_NOTHING = 'REFUSED-GATE-HANDED-DOWN-NOTHING';
+// ROUND 62b, THE COORDINATOR'S R61-C-03 (P3). Two of the eleven settings are
+// absent from the worker's resolved config, so for those two the arm reads the
+// FILE -- and `vitest run --dangerously-ignore-unhandled-errors` is rc 0 over a
+// planted rejection with no refusal name. The gate closes them by FORCING both
+// on its own argv, which defends `npm test` and nothing else. The run's own
+// command line is readable from /proc, the kernel reports it and no JavaScript
+// module can rewrite it, so the positive form of either flag is refused by name
+// wherever the run came from.
+const REFUSED_RUNNER_ARGV_OVERRIDES_THE_FILE = 'REFUSED-RUNNER-ARGV-OVERRIDES-THE-FILE';
+const UNDEFENDED_FLAGS = ['--dangerously-ignore-unhandled-errors', '--file-parallelism'] as const;
+
+/**
+ * The flags the RUN was started with, read from the nearest ancestor whose argv
+ * names the runner. Returns the offending flags, or '' for "none", or a reason
+ * it cannot say -- and the caller refuses on a reason, because a run that
+ * cannot say what it was started with is the same shape as a run that cannot
+ * say who started it.
+ */
+const undefendedFlagsOfThisRun = (procRoot = '/proc', startPid = process.pid): string[] | string => {
+  if (!existsSync(join(procRoot, String(startPid), 'status'))) {
+    return `this platform has no readable ${procRoot}, so the command line this run was started with cannot be read`;
+  }
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let argv: string[] = [];
+    try {
+      argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
+        .toString('utf8')
+        .split('\0')
+        .filter((word) => word.length > 0);
+    } catch {
+      // Keep walking: the ancestor that names the runner is what matters.
+    }
+    if (argv.some((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest')) {
+      // The gate passes the NEGATIVE form of both, which is the defence, so
+      // only the positive form is an offence -- and a later positive form
+      // would win, so the LAST occurrence of each decides.
+      return UNDEFENDED_FLAGS.filter((flag) => {
+        // `findLastIndex` needs a newer lib target than this package pins, so
+        // the last index is computed by hand: the same answer, and no tsconfig
+        // change riding on an unrelated commit.
+        let lastValued = -1;
+        argv.forEach((word, at) => {
+          if (word.startsWith(`${flag}=`)) lastValued = at;
+        });
+        const last = Math.max(argv.lastIndexOf(flag), lastValued);
+        const lastNegative = argv.lastIndexOf(flag.replace('--', '--no-'));
+        return last > lastNegative;
+      });
+    }
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch (error) {
+      return `the parent chain stopped at pid ${pid}, which cannot be read (${String(error)})`;
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent, so the chain cannot be followed`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return 'no ancestor of this process names the runner, so the command line this run was started with cannot be read';
+};
 const GATE_NONCE_PREFIX = 'law-ran-nonce-';
 
 /**
@@ -3548,6 +3611,19 @@ describe('every written invocation of the pack tools is isolated', () => {
       'sequence',
       'testTimeout',
     ]);
+    // ROUND 62b, THE COORDINATOR'S §1 CLOSING NOTE: "the next round should
+    // enumerate the class rather than close one member of it, because an
+    // enumerated exemption moves the hole from shape to time". The six settings
+    // it named are `setupFiles`, `globalSetup`, `environment`, `alias`,
+    // `define` and `plugins`, and they do not all live in the same place:
+    // `define` and `plugins` are VITE settings, outside `test` entirely, so a
+    // shape pinned on the test section alone would have let two of the six
+    // through. The config's TOP LEVEL is pinned too, at one key.
+    const wholeModule = ((await import('../vitest.config')) as { default?: Record<string, unknown> }).default ?? {};
+    expect(
+      Object.keys(wholeModule).sort(),
+      `${REFUSED_TEST_WITHOUT_LAW_GATE}: vitest.config.ts's default export does not hold exactly the keys this law pins. \`define\` and \`plugins\` are vite settings that live HERE and not under \`test\`, and either one can run code or rewrite what the subject reads -- so a shape pinned only on the test section would admit two of the six settings the coordinator's round-61 review named`,
+    ).toStrictEqual(['test']);
     expect(
       { include: fromModule.include, exclude: fromModule.exclude, sequence: Object.keys(moduleSequence).sort() },
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: the config's two collection settings and the shape of its \`sequence\` are not what this law pins. \`include\` and \`exclude\` decide which files are collected at all, which is the rung above every value pinned here`,
@@ -3555,6 +3631,13 @@ describe('every written invocation of the pack tools is isolated', () => {
     // And the same key by the OTHER route: a config shape nobody can edit is
     // no help if the command line carries the file instead. `setupFiles` is
     // absent from the pinned shape above, so the run must not have any.
+    // And the two the resolved config does not carry, read from the COMMAND
+    // LINE rather than from the file -- the coordinator's R61-C-03.
+    const flagsOfThisRun = undefendedFlagsOfThisRun();
+    expect(
+      flagsOfThisRun,
+      `${REFUSED_RUNNER_ARGV_OVERRIDES_THE_FILE}: this run's own command line carries a setting the config file cannot see. \`--dangerously-ignore-unhandled-errors\` turns an unhandled rejection from rc 1 into rc 0, and \`--file-parallelism\` runs this file's arms beside their neighbours; neither appears in the worker's resolved config, so until this read they were pinned only in a FILE the command line overrides. The gate forces the negative form of both, which defends \`npm test\` and nothing else`,
+    ).toStrictEqual([]);
     expect(
       (resolved.setupFiles ?? []) as unknown[],
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: this RUN has setup files, which the pinned config shape does not allow. A setup file runs before every test file and can edit the environment this law reads`,
@@ -4488,13 +4571,47 @@ describe('every written invocation of the pack tools is isolated', () => {
       const nonceWhy = nonceNotAsSpecified(gateAncestor.pid);
       expect(
         nonceWhy,
-        `${REFUSED_NONCE_NOT_AS_SPECIFIED}: this run was handed a pack digest in P5_PACK_DIGEST, so tools/law-ran.py started it and wrote a per-run nonce for it to read, and ${nonceWhy}. A captured environment from an earlier gate run satisfies the ancestry check above and fails here`,
+        `${REFUSED_NONCE_NOT_AS_SPECIFIED}: this run was handed a pack digest in P5_PACK_DIGEST, so tools/law-ran.py started it and wrote a per-run nonce for it to read, and ${nonceWhy}. An environment captured from ANOTHER gate run satisfies the ancestry check above and fails here, whichever way that run ended: one that reached its own cleanup left no file to point at, one that was killed left a file whose writer is not this run's ancestor (the coordinator's R61-C-01, measured), and a live one's file belongs to a pid that is not this run's ancestor either. What this does NOT reach is a DESCENDANT of THIS run, which inherits this very environment by definition -- the coordinator's R61-C-02, open and carried forward here so no later round reads the nonce as closing it; the census and the content scan are what stop a descendant producing a false green`,
       ).toBe('');
     }
     expect(
       handedDown === '' || handedDown === digestAtEntry,
       `${REFUSED_PACK_MOVED}: the gate that started this run measured the pack at ${handedDown} and this run reads ${digestAtEntry}, so the figures this run produces and the set the gate checked are two different instants`,
     ).toBe(true);
+    // ROUND 62b, AND IT CLOSES A HOLE THIS AUTHOR DECLARED RATHER THAN ONE A
+    // REVIEWER FOUND. Round 62 reads provenance from /proc instead of from the
+    // environment, which refuses a stripped environment -- ON A PLATFORM THAT
+    // HAS /proc. Where /proc cannot be read the walk can only say "cannot
+    // say", so a stripped environment there took the shared-pack path and
+    // nothing refused. A verdict this run throws away cannot be recovered
+    // inside it: the regress ends OUTSIDE, in the program that started the run.
+    //
+    // So the four checks above write a RECEIPT, and `tools/law-ran.py` refuses
+    // by name when it does not arrive or does not describe that run. The names
+    // are written HERE, at the point each check has passed, which is why the
+    // list is a literal and not a loop over a list of names: a name produced by
+    // the same data that produces the check proves nothing.
+    //
+    // What this does NOT buy, and it is the same bound as the nonce's: code
+    // executing inside the run -- a setup file is exactly that -- has this same
+    // environment and can write a receipt of its own. A forger who runs code
+    // still forges it. What moves is ABSENCE: it now reds on every platform.
+    const receiptPath = (process.env.P5_LAW_RECEIPT ?? '').trim();
+    if (handedDown !== '') {
+      expect(
+        receiptPath,
+        `${REFUSED_GATE_HANDED_DOWN_NOTHING}: this run was handed a pack digest and NO receipt path, and tools/law-ran.py hands both down together or neither. One arriving without the other is an environment somebody edited between the gate and here`,
+      ).not.toBe('');
+      writeFileSync(
+        receiptPath,
+        JSON.stringify({
+          digest: handedDown,
+          nonce: (process.env.P5_PACK_NONCE ?? '').trim(),
+          gate_pid: gateAncestor.pid,
+          checks: ['pack-privacy', 'gate-ancestry', 'per-run-nonce', 'pack-not-moved'],
+        }),
+      );
+    }
     const exempt = reviewerOwned();
     const shaped = looksLikeReviewer();
     const offences: string[] = [];

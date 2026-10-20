@@ -294,6 +294,21 @@ REFUSED_TEST_FILE_SET_MOVED = "REFUSED-TEST-FILE-SET-MOVED"
 # the challenger measured at round 57 -- and what stops such a run from
 # producing a false GREEN is the census and the content scan, not this nonce.
 REFUSED_NONCE_NOT_AS_SPECIFIED = "REFUSED-NONCE-NOT-AS-SPECIFIED"
+# ROUND 62b, AND IT CLOSES A HOLE THIS AUTHOR DECLARED RATHER THAN ONE A
+# REVIEWER FOUND. Round 62 made the law read provenance from /proc instead of
+# from the environment, which refuses a stripped environment -- ON A PLATFORM
+# THAT HAS /proc. Where /proc cannot be read the walk can only say "cannot
+# say", so a stripped environment there took the shared-pack path with nothing
+# refusing. The regress has to end OUTSIDE the run: this step hands down a
+# RECEIPT path, the law writes what it measured into it, and an ABSENT or
+# DISAGREEING receipt is refused HERE -- by the program the config cannot edit.
+#
+# What it buys: ABSENCE now refuses, on every platform, which is what the
+# declared hole was. What it does not buy, said plainly: code executing inside
+# the run (a setup file is exactly that) can write a receipt of its own from
+# the same environment, so a forger who runs code still forges it. That is the
+# bound already declared for the nonce and it has not moved.
+REFUSED_LAW_WROTE_NO_RECEIPT = "REFUSED-LAW-WROTE-NO-RECEIPT"
 
 # The SET of test files this suite collects, pinned by value. A file arriving
 # or leaving is refused by name; change this list in the same commit that adds
@@ -831,7 +846,11 @@ def main() -> int:
         pinned_pack = pack_digest(pack_snapshot)
 
 
+    receipt_text: str | None = None
+    receipt_why = ""
     nonce_dir: Path | None = None
+    receipt_dir: Path | None = None
+    receipt_file: Path | None = None
     nonce_value = ""
     try:
         nonce_dir = Path(tempfile.mkdtemp(prefix="law-ran-nonce-")).resolve()
@@ -848,9 +867,14 @@ def main() -> int:
         # being caught, four gates later, by the census.
         nonce_file.write_text(f"{os.getpid()} {nonce_value}")
         nonce_file.chmod(0o600)
+        receipt_dir = Path(tempfile.mkdtemp(prefix="law-ran-receipt-")).resolve()
+        _TEMPORARY.append(receipt_dir)
+        receipt_file = receipt_dir / "receipt.json"
     except OSError as exc:
         if nonce_dir is not None:
             shutil.rmtree(nonce_dir, ignore_errors=True)
+        if receipt_dir is not None:
+            shutil.rmtree(receipt_dir, ignore_errors=True)
         shutil.rmtree(pack_snapshot, ignore_errors=True) if pack_snapshot is not None else None
         refuse(
             f"{REFUSED_NONCE_NOT_AS_SPECIFIED}: this step could not write the per-run nonce the law reads "
@@ -926,6 +950,15 @@ def main() -> int:
                     if pinned_pack and nonce_dir is not None
                     else {}
                 ),
+                # The receipt the law writes and this step reads back. Handed
+                # down under the same condition as the digest, so the law's own
+                # rule -- a digest without a receipt path, or a receipt path
+                # without a digest, is an edited environment -- is exact.
+                **(
+                    {"P5_LAW_RECEIPT": str(receipt_file)}
+                    if pinned_pack and receipt_file is not None
+                    else {}
+                ),
             },
         )
         # The challenger's R55-S1: the law no longer refuses when the SHARED
@@ -962,6 +995,17 @@ def main() -> int:
             report = json.loads(out.read_text())
         except json.JSONDecodeError as exc:
             refuse(f"the suite's report is not JSON: {exc}")
+        # Read while the directory still exists; judged after the cleanup, so
+        # that one refusal is not two code paths.
+        if pinned_pack and receipt_file is not None:
+            try:
+                receipt_text = receipt_file.read_text()
+            except OSError as exc:
+                # LEFT AS None, not as a string saying it could not be read:
+                # the branch below would then have called a MISSING file "not a
+                # JSON object", which is a true red carrying a false sentence --
+                # the defect class this phase has spent four rounds on.
+                receipt_why = str(exc)
     finally:
         if out.is_file():
             out.unlink()
@@ -973,6 +1017,9 @@ def main() -> int:
         if nonce_dir is not None:
             shutil.rmtree(nonce_dir, ignore_errors=True)
             _forget_temporary(nonce_dir)
+        if receipt_dir is not None:
+            shutil.rmtree(receipt_dir, ignore_errors=True)
+            _forget_temporary(receipt_dir)
 
     if not isinstance(report, dict) or not isinstance(report.get("testResults"), list):
         refuse("the report has no testResults list, so nothing in it says what ran")
@@ -988,6 +1035,45 @@ def main() -> int:
             "rejection, an error thrown in a hook after a case ended, or a worker that dies once the report is "
             f"written all look like this. Last stderr: {done.stderr.strip()[-400:]!r}"
         )
+    # The receipt, judged. Every branch is a refusal: an absent receipt is the
+    # hole this closes, and a receipt that disagrees with what this step knows
+    # is worse than an absent one.
+    if pinned_pack and receipt_file is not None:
+        want = {"digest": pinned_pack, "nonce": nonce_value, "gate_pid": os.getpid()}
+        if receipt_text is None:
+            problems.append(
+                f"{REFUSED_LAW_WROTE_NO_RECEIPT}: the law wrote no receipt at all. This step handed "
+                f"{receipt_file} down beside the pack digest, and the law writes into it once privacy, "
+                "ancestry, the per-run nonce and the pack-movement check have all run. Nothing arrived, so "
+                "either those checks did not run or something between this step and the run removed the path "
+                f"-- a setup file, a wrapper, an environment filter. Reading it said: {receipt_why or 'nothing'}"
+            )
+        else:
+            try:
+                said = json.loads(receipt_text)
+            except (json.JSONDecodeError, TypeError):
+                said = None
+            if not isinstance(said, dict):
+                problems.append(
+                    f"{REFUSED_LAW_WROTE_NO_RECEIPT}: the receipt at {receipt_file} is not a JSON object: "
+                    f"{receipt_text[:200]!r}"
+                )
+            else:
+                disagrees = {k: said.get(k) for k, v in want.items() if said.get(k) != v}
+                if disagrees:
+                    problems.append(
+                        f"{REFUSED_LAW_WROTE_NO_RECEIPT}: the receipt disagrees with what this step knows: "
+                        f"it says {disagrees} where this step has "
+                        f"{ {k: want[k] for k in disagrees} }. A receipt that does not describe THIS run says "
+                        "nothing about whether the law's checks ran in it"
+                    )
+                elif said.get("checks") != ["pack-privacy", "gate-ancestry", "per-run-nonce", "pack-not-moved"]:
+                    problems.append(
+                        f"{REFUSED_LAW_WROTE_NO_RECEIPT}: the receipt names the checks "
+                        f"{said.get('checks')!r}, not the four this step requires. The names are written by the "
+                        "law at the point each check has PASSED, so a missing name is a check that did not run"
+                    )
+
     for relative, expected in EXPECTED.items():
         matches = [r for r in report["testResults"] if str(r.get("name", "")) == str(package / relative)]
         if len(matches) != 1:
@@ -1080,19 +1166,39 @@ def main() -> int:
         )
 
     # The coordinator's item 2: the SET of files that ran, by value.
-    collected = sorted(
-        {
-            str(Path(str(result.get("name", ""))).relative_to(package))
-            for result in report["testResults"]
-            if str(result.get("name", "")).startswith(str(package))
-        }
-    )
+    # ROUND 62b, THE COORDINATOR'S R61-C-04 (P4), recorded by it as
+    # UNMEASURED-at-runtime and fixed here anyway because it is two lines and
+    # the shape is the one R60-C-03 removed from the provenance check: a name
+    # that did not start with the package path was DROPPED IN SILENCE, and a
+    # name starting with it without being under it (a sibling directory whose
+    # name extends the package's) would have raised ValueError inside the
+    # comprehension instead of refusing by name. Classification is by PATH now,
+    # and a name this step cannot classify refuses.
+    collected_names = set()
+    unclassifiable = []
+    for result in report["testResults"]:
+        reported = str(result.get("name", ""))
+        try:
+            here = Path(reported)
+            if here.is_relative_to(package):
+                collected_names.add(str(here.relative_to(package)))
+            else:
+                unclassifiable.append(reported)
+        except (OSError, ValueError):
+            unclassifiable.append(reported)
+    if unclassifiable:
+        refuse(
+            f"{REFUSED_TEST_FILE_SET_MOVED}: the report names a test file this step cannot place inside "
+            f"{package}: {unclassifiable[:8]}. A name it cannot classify is not a name it may ignore -- "
+            "dropping it would subtract that file from the census in silence"
+        )
+    collected = sorted(collected_names)
     missing = [name for name in EXPECTED_TEST_FILES if name not in collected]
     arrived = [name for name in collected if name not in EXPECTED_TEST_FILES]
     ran_cases = {
         str(Path(str(result.get("name", ""))).relative_to(package)): len(result.get("assertionResults") or [])
         for result in report["testResults"]
-        if str(result.get("name", "")).startswith(str(package))
+        if Path(str(result.get("name", ""))).is_relative_to(package)
     }
     moved = [
         f"{name}: {ran_cases.get(name)} cases, not the {pinned} this step pins"
