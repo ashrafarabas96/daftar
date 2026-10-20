@@ -55,6 +55,19 @@ P=${PG_PORT:-55438}
 # where an operator supplied one.
 RUN=${RUN_ID:-P8-RUN-$(date -u +%Y%m%dT%H%M%SZ)}
 OUT=$D/$RUN
+# ROUND 31, the coordinator's §6 and C-3's R-7, which it hit by accident and
+# which is a real hole: `say` appends with `tee -a`, and the census judges
+# every prefixed line in the log whatever run id it carries. A re-run under a
+# RUN_ID whose directory already holds a log therefore measures the UNION of
+# two runs. It failed closed in the shape the coordinator hit — an aborted
+# run's `BASELINE BUILD FAILED` line, refused as an unknown arm — and the
+# per-identity counts stop the opposite direction, because a complete second
+# run doubles every count. Neither is a reason to leave it unstated: a figure
+# computed over two runs is a figure about neither.
+if [ -e "$OUT" ] && [ -n "$(ls -A "$OUT" 2>/dev/null)" ]; then
+  printf '[%s] ABORT: the run directory %s already holds files, so this run would APPEND to another run'"'"'s log and every figure below would be computed over the union of the two. Use a fresh RUN_ID\n' "$RUN" "$OUT" >&2
+  exit 2
+fi
 mkdir -p "$OUT"
 FAILED=0
 
@@ -2270,17 +2283,17 @@ wl_sub_ctl(){      # wl_sub_ctl <arm> <probe> <needle> <repl> <expect: pass|refu
      && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
                   -f "$WB/sub.sql" >"$WB/sub-load.log" 2>&1; then
     if "$B/psql" -h "$D" -p "$P" -U daftar_worker -d daftar -v ON_ERROR_STOP=1 \
-                 -f "$WB/$f" >"$WB/sub-ctl.log" 2>&1; then
-      if [ "$want" = "pass" ] && grep -qF "$lneedle" "$WB/sub-ctl.log"; then
+                 -f "$WB/$f" >"$WB/$arm-ctl.log" 2>&1; then
+      if [ "$want" = "pass" ] && grep -qF "$lneedle" "$WB/$arm-ctl.log"; then
         say "$arm: with that one change undone the same case PASSES again — $sentence"
       else
-        say "$arm: FAIL — with the change undone the case did not land where this control says: rc=0 $(head -2 "$WB/sub-ctl.log" | tr '\n' ' ')"
+        say "$arm: FAIL — with the change undone the case did not land where this control says: rc=0 $(head -2 "$WB/$arm-ctl.log" | tr '\n' ' ')"
         FAILED=1
       fi
-    elif [ "$want" = "refuse" ] && grep -qF "$lneedle" "$WB/sub-ctl.log"; then
+    elif [ "$want" = "refuse" ] && grep -qF "$lneedle" "$WB/$arm-ctl.log"; then
       say "$arm: with that one change undone the same case is REFUSED again by $lneedle — $sentence"
     else
-      say "$arm: FAIL — with the change undone the case did not land where this control says: $(head -2 "$WB/sub-ctl.log" | tr '\n' ' ')"
+      say "$arm: FAIL — with the change undone the case did not land where this control says: $(head -2 "$WB/$arm-ctl.log" | tr '\n' ' ')"
       FAILED=1
     fi
   else
@@ -2305,19 +2318,29 @@ wl_sub_ctl "WITNESS-HANDLER-CTL" handler.sql \
   "  IF bare ~* '(^|[^a-z_])exception([^a-z_]|\$)' THEN" "  IF false THEN" \
   refuse "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
   "the text ban is gone and the same statement is caught by the condition BEHIND it, which reads the arriving exception's context instead of the statement (N-3 closed twice, and round 30 learned why: the text test is the one that can be spelled around)"
+# TWO controls, because round 31 added a second law over the same attack and a
+# control that leaves the other one standing attributes nothing. The first
+# deletes round 30's law alone and requires round 31's to name the case; the
+# second undoes the one line round 30's fix was, and requires round 31's to
+# name it for a different reason — the denial no longer arrives as 42501 at
+# all. Each law is therefore shown to hold without the other.
 wl_sub_ctl "WITNESS-LAUNDER-CTL" launder.sql \
+  "    IF NOT witnessed AND sst = '42501'" "    IF false AND sst = '42501'" \
+  refuse "THE REFUSAL CAME FROM THIS PACK" \
+  "with round 30's arriving-SQLSTATE law deleted ALONE the laundered denial is named by round 31's pack rule instead, so the two bound it independently (W-4, C-2)"
+wl_sub_ctl "WITNESS-LAUNDER-CTL2" launder.sql \
   "      USING ERRCODE = sst;" "      ;" \
-  pass "PASS refused by FAIL: REFUSED, and it should not be" \
-  "the laundered permission denial passes the witness law again — the state the twentieth challenge measured (W-4)"
+  refuse "THE REFUSAL CAME FROM THIS PACK" \
+  "with the USING ERRCODE deleted ALONE the denial arrives as P0001, so round 30's law cannot see it and round 31's pack rule is what names it — which is why that single line was a fix at all (W-4)"
 wl_sub_ctl "WITNESS-DYNSQL-CTL" dynsql.sql \
   "  IF bare ~* '(^|[^a-z_])execute([^a-z_]|\$)' THEN" "  IF false THEN" \
   refuse "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
   "the ban on building SQL is gone and the laundered refusal is caught by the arriving context instead — the two conditions bound the same attack from the text side and from the server side, and only the second cannot be re-spelled (W-4, F-3)"
 wl_sub_ctl "WITNESS-LITERAL-CTL" literal.sql \
-  "  bare := p8.strip_sql_strings(p8.strip_sql_comments(stmt));" \
-  "  bare := p8.strip_sql_comments(stmt);" \
+  "  bare := p8.sql_scan(stmt, 'dollar');" \
+  "  bare := p8.sql_scan(stmt, 'exec');" \
   refuse "THE STATEMENT CARRIES AN EXCEPTION HANDLER" \
-  "the honest case is reddened by its own payload again, which is why the literals are stripped (W-4)"
+  "with the handler ban reading the statement with its literals KEPT, the honest case is reddened by its own payload again, which is why the scanner blanks them (W-4)"
 
 # ---------------------------------------------------------------------
 # ROUND 30, the coordinator's F-1, F-2 and F-3: three TEXT checks standing in
@@ -2391,19 +2414,235 @@ wb_probe block.sql  "WITNESS-BLOCK"  "THE REFUSAL CAME FROM THE STATEMENT'S OWN 
   "a statement whose own anonymous block raises the refusal the case then reads, with no handler keyword anywhere in it (F-3)"
 
 wl_sub_ctl "WITNESS-REACH-CTL" reach.sql \
-  "  IF position('@KEY@' in p8.strip_sql_comments(stmt)) > 0 THEN" \
+  "  IF position('@KEY@' in p8.sql_scan(stmt)) > 0 THEN" \
   "  IF false THEN" \
   refuse "THE STATEMENT IS NOT A DECLARED ROW SHAPE" \
   "the placeholder ban is gone and the same case is caught by the row shape law instead, so the two bound the same attack independently (F-1)"
 wl_sub_ctl "WITNESS-REACH2-CTL" reach2.sql \
   "  IF bad IS NOT NULL THEN" "  IF false THEN" \
-  refuse "refused, but NOT by" \
-  "with both text conditions gone the statement cannot even be FORMED — the form appends its own predicate beside the case's and the server rejects the result — which is the construction the two conditions sit on top of (F-1)"
+  refuse "A ROW CASE REFUSED BY SOMETHING NO AUTHORITY DECIDED" \
+  "with both text conditions gone the statement cannot even be FORMED — the form appends its own predicate beside the case's and the server rejects the result as a syntax error, which round 31's arriving-class rule then names, so the construction and the class rule catch it from two sides (F-1, C-2)"
 wl_sub_ctl "WITNESS-BLOCK-CTL" block.sql \
-  "    IF coalesce(ctx,'') ~ 'inline_code_block' THEN" \
+  "    IF split_part(coalesce(ctx,''), E'\\n', 1) ~ 'inline_code_block' THEN" \
   "    IF false THEN" \
   pass "PASS refused by denied for table notifications" \
   "a block that reports its own refusal passes the law again, against a row that does not exist — the state the coordinator's F-3 measured, in a spelling no regex reads"
+
+# ---------------------------------------------------------------------
+# ROUND 31, SCANNER-AGREE. The keystone of this round, and the reason it is
+# an arm rather than a comment.
+# ---------------------------------------------------------------------
+# The defect two reviewers measured was not that a regex was wrong. It was
+# that the gate's reading of SQL had DRIFTED from the server's, and nothing in
+# the gate could notice. The answer is a scanner that follows the server's own
+# lexing — but there are two of them now, one in plpgsql and one in Python,
+# and two implementations of one language that can drift apart are two
+# languages. So both read the same corpus, in all three modes, and their
+# outputs must be byte-identical. The corpus leads with every attack the two
+# reviews measured on this head's parent; input and output are hex, so no
+# escaping convention sits between the two readings being compared.
+SCAN=$OUT/scan; mkdir -p "$SCAN"
+if python3 -I "$HERE/p8-case-net.py" --scan "$HERE/p8-scanner-corpus.txt" >"$SCAN/py.txt" 2>"$SCAN/py.err"; then
+  {
+    echo "\pset tuples_only on"
+    echo "\pset format unaligned"
+    printf '%s\n' "\\pset fieldsep '\\t'"
+    echo "CREATE TEMP TABLE corpus(line TEXT);"
+    printf '%s\n' "\\copy corpus FROM PROGRAM 'grep -v \"^#\" $HERE/p8-scanner-corpus.txt | grep -v \"^\$\"' WITH (FORMAT csv, DELIMITER E'\\b', QUOTE E'\\f')"
+    cat <<'SQL'
+SELECT split_part(line, E'\t', 1), m,
+       encode(convert_to(p8.sql_scan(convert_from(decode(split_part(line, E'\t', 2), 'hex'), 'UTF8'), m), 'UTF8'), 'hex')
+FROM corpus, unnest(ARRAY['strip','dollar','exec']) AS m
+ORDER BY ctid, array_position(ARRAY['strip','dollar','exec'], m);
+SQL
+  } > "$SCAN/sql.sql"
+  if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+               -f "$SCAN/sql.sql" >"$SCAN/sql.txt" 2>"$SCAN/sql.err"; then
+    SCAN_N=$(grep -c . "$SCAN/py.txt")
+    if diff -q "$SCAN/py.txt" "$SCAN/sql.txt" >/dev/null 2>&1; then
+      say "SCANNER-AGREE: the Python scanner and p8.sql_scan return byte-identical output for all $SCAN_N readings of the corpus — every line of it in all three modes, led by the five attacks the twenty-first round measured — so the gate has ONE reading of SQL and not two that can drift"
+    else
+      say "SCANNER-AGREE: FAIL — the two scanners disagree: $(diff "$SCAN/py.txt" "$SCAN/sql.txt" | head -2 | tr '\n' ' ')"
+      FAILED=1
+    fi
+  else
+    say "SCANNER-AGREE: PLANT NOT ESTABLISHED — the corpus could not be read in the database: $(tail -1 "$SCAN/sql.err")"
+    FAILED=1
+  fi
+else
+  say "SCANNER-AGREE: PLANT NOT ESTABLISHED — the corpus could not be read by the Python scanner: $(tail -1 "$SCAN/py.err")"
+  FAILED=1
+fi
+# The control. One mode's dollar-quote handling reverted to round 30's regex in
+# a COPY of the SQL side alone, and the two readings must then DIFFER — because
+# an arm that compares two things is only a measurement if a difference reds.
+if python3 -I "$PATCHDIR/wl-sub.py" "$HERE/p8-case-helpers.sql" "$SCAN/drift.sql" \
+     "          k := position(tag in substr(t, i + length(tag)));" \
+     "          k := 0;" >"$SCAN/drift-patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$SCAN/drift.sql" \
+   && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+                -f "$SCAN/drift.sql" >"$SCAN/drift-load.log" 2>&1 \
+   && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+                -f "$SCAN/sql.sql" >"$SCAN/drift.txt" 2>&1; then
+  if diff -q "$SCAN/py.txt" "$SCAN/drift.txt" >/dev/null 2>&1; then
+    say "SCANNER-AGREE-CTL: FAIL — the SQL scanner's dollar-quote handling was changed in a copy and the comparison still reported agreement, so SCANNER-AGREE measures nothing"
+    FAILED=1
+  else
+    say "SCANNER-AGREE-CTL: with the SQL side's dollar-quote scan broken ALONE in a copy the two readings DIFFER and the arm above reds, so the agreement it reports is a comparison and not a sentence"
+  fi
+else
+  say "SCANNER-AGREE-CTL: PLANT NOT ESTABLISHED — that one change could not be made in a copy: $(tail -1 "$SCAN/drift-patch.log")"
+  FAILED=1
+fi
+if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+             -f "$HERE/p8-case-helpers.sql" >"$SCAN/restore.log" 2>&1; then
+  :
+else
+  say "FAIL: the real case helpers could not be loaded back after SCANNER-AGREE-CTL — $(tail -1 "$SCAN/restore.log")"
+  FAILED=1
+fi
+
+# ---------------------------------------------------------------------
+# ROUND 31. Two reviewers, independently, on the same head, measured the same
+# defect one layer under round 30's: a TEXT check that MIS-PARSES the language
+# is weaker than no check, because it reports on a statement it did not read.
+#
+#   * one apostrophe inside a dollar-quoted body blinded the single regex that
+#     three laws read through — the row shape law, the relation shape law and
+#     the handler ban — and the whole gate ran green over a tree whose case
+#     W-2 touched no row;
+#   * appending `WHERE …` to a statement is not composing one: a trailing `--`
+#     put the form's own predicate inside a comment, and a `;` gave it to a
+#     second statement. Both ran the mutation against EVERY row;
+#   * a ROW case was never asked what CLASS of error arrived, so
+#     `SELECT 1/0 FROM @REL@` passed as a refusal.
+#
+# The scanner, `assert_single_statement` and `assert_arriving_class` answer
+# those. The arms below measure each of them, and the first three measure
+# BEHAVIOUR rather than text: a bench where the predicate's applying or not
+# decides whether anything refuses at all.
+# ---------------------------------------------------------------------
+# The bench. Two rows; a BEFORE UPDATE trigger that refuses with 42501 only for
+# the row the cases do NOT declare. A case whose composed predicate APPLIES
+# touches only row W, nothing refuses, and the case ends in `FAIL: ACCEPTED`.
+# A case whose predicate was detached touches row X too and PASSES. So "did the
+# predicate apply" is read off the outcome instead of off the statement's text.
+# Its trigger lives OUTSIDE schema p8, because `assert_arriving_class` refuses
+# a refusal raised inside a p8 helper and this trigger must be allowed to
+# speak; and the relation is unqualified, because `p8.quoted_ident` quotes what
+# it is given as ONE identifier.
+"$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 >"$WB/bench.log" 2>&1 <<'SQL'
+CREATE TABLE IF NOT EXISTS public.p8bench_reach(k TEXT PRIMARY KEY, v INT NOT NULL);
+TRUNCATE public.p8bench_reach;
+INSERT INTO public.p8bench_reach VALUES ('W', 1), ('X', 1);
+CREATE OR REPLACE FUNCTION public.p8bench_trap() RETURNS trigger LANGUAGE plpgsql AS $t$
+BEGIN
+  IF NEW.k = 'X' THEN
+    RAISE EXCEPTION 'permission denied for table reach: DENIED-BY-THE-OTHER-ROW'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_trap ON public.p8bench_reach;
+CREATE TRIGGER p8bench_trap BEFORE UPDATE ON public.p8bench_reach
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_trap();
+GRANT SELECT, UPDATE ON public.p8bench_reach TO daftar_worker;
+SQL
+if [ -s "$WB/bench.log" ] && grep -qi error "$WB/bench.log"; then
+  say "REACH-BENCH: PLANT NOT ESTABLISHED — the reach bench could not be built: $(tail -1 "$WB/bench.log")"
+  FAILED=1
+else
+  say "REACH-BENCH: two rows and a trigger that refuses with 42501 for the row no case declares, so whether the composed predicate APPLIES decides whether anything refuses — the three arms below read a behaviour and not a text"
+fi
+
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-honest the predicate applies and nothing refuses',
+  $q$UPDATE @REL@ SET v = 2$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-honest.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-comment the statement ends in a line comment',
+  $q$UPDATE @REL@ SET v = 2 --$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-comment.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-semi the statement is two statements',
+  $q$UPDATE @REL@ SET v = 2; SELECT 1 FROM @REL@$q$,
+  'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-semi.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-dollar a predicate of its own behind one apostrophe',
+  $q$UPDATE @REL@ SET v = 2, k = $n$a'b$n$ WHERE k = 'X'$q$,
+  'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-dollar.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-class an error the statement computed for itself',
+  $q$SELECT 1/0 FROM @REL@$q$, 'division by zero', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-class.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-pack a refusal this pack raised for the case',
+  $q$SELECT p8.assert_no_handler('RB-pack','exception') FROM @REL@$q$,
+  'THE STATEMENT CARRIES AN EXCEPTION HANDLER', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-pack.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('RB-shape ON CONFLICT hidden behind one apostrophe', $q$
+  INSERT INTO @REL@ (business_id, attempt_key, outcome, provider, created_at)
+  VALUES ('bbbbbbbb-0000-4000-8000-000000000001','k',$n$x rejected'$n$,'p','now')
+  ON CONFLICT (business_id, attempt_key) DO UPDATE SET outcome = 'rejected'
+$q$, 'permission denied', 'notification_attempts');
+ROLLBACK;
+SQL
+} > "$WB/rb-shape.sql"
+
+# The honest case and the comment case must now land in the SAME place, and that
+# place is `ACCEPTED`: the predicate applied, only row W was touched, and
+# nothing refused. Before this round the comment case PASSED.
+wb_probe rb-honest.sql  "ROW-REACH"         "FAIL: ACCEPTED" \
+  "an honest row case whose composed predicate applies touches only the declared row, so nothing refuses"
+wb_probe rb-comment.sql "ROW-REACH-COMMENT" "FAIL: ACCEPTED" \
+  "a row case ending in a line comment lands in the same place as the honest one, because the form now RUNS the scanner's text and the comment is gone before the predicate is appended (C-1a)"
+wb_probe rb-semi.sql    "ROW-REACH-SEMI"    "MORE THAN ONE STATEMENT" \
+  "a row case that is two statements, where the appended predicate joined the SECOND one and the first ran against every row (C-1b)"
+wb_probe rb-dollar.sql  "ROW-REACH-DOLLAR"  "THE STATEMENT IS NOT A DECLARED ROW SHAPE" \
+  "a row case writing its own WHERE behind an apostrophe in a dollar-quoted body, which the old stripper deleted from the text every law read (the coordinator's F-1b)"
+wb_probe rb-class.sql   "ROW-CLASS"         "A ROW CASE REFUSED BY SOMETHING NO AUTHORITY DECIDED" \
+  "a row case whose statement computes its own error — SELECT 1/0 expecting a division by zero — which passed because the arriving-class rule was applied to the relation form alone (C-2)"
+wb_probe rb-pack.sql    "ROW-PACK"          "THE REFUSAL CAME FROM THIS PACK" \
+  "a case that calls one of this pack's own helpers to raise the message it then reads, so the case chose both the error and its wording (C-2)"
+wb_probe rb-shape.sql   "WITNESS-SHAPE-DOLLAR" "THE STATEMENT IS NOT A DECLARED RELATION SHAPE" \
+  "ON CONFLICT … DO UPDATE SET hidden from the keyword law by one apostrophe in a dollar-quoted value (the coordinator's F-2)"
+
+# One control per law, each deleting that law ALONE and requiring the measured
+# fail-open to come back. These are the states the two reviews measured.
+wl_sub_ctl "ROW-REACH-COMMENT-CTL" rb-comment.sql \
+  "  stmt2 := replace(p8.sql_scan(stmt, 'exec'), '@REL@', p8.quoted_ident(relation))" \
+  "  stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation))" \
+  pass "PASS refused by DENIED-BY-THE-OTHER-ROW" \
+  "with the form appending to the RAW statement again the comment swallows the predicate, the mutation runs against every row, and the case reports the refusal the OTHER row decided — the exact state both reviews measured on this head's parent (C-1a)"
+wl_sub_ctl "ROW-REACH-SEMI-CTL" rb-semi.sql \
+  "  IF position(';' in bare) > 0 THEN" "  IF false THEN" \
+  pass "PASS refused by DENIED-BY-THE-OTHER-ROW" \
+  "with the single-statement law deleted the second statement takes the appended predicate and the first runs unbounded, which carries only keywords the row form declares and so no keyword law could ever catch it (C-1b)"
+wl_sub_ctl "ROW-CLASS-CTL" rb-class.sql \
+  "  IF kind = 'row' AND NOT (sst = '42501' OR left(sst, 2) = '23' OR sst = 'P0001') THEN" \
+  "  IF false THEN" \
+  pass "PASS refused by division by zero" \
+  "with the row form's arriving-class rule deleted, four characters of arithmetic are a refusal again (C-2)"
+wl_sub_ctl "ROW-PACK-CTL" rb-pack.sql \
+  "                      ~* ('function (p8\\.)?' || pr.proname || '\\(.*at RAISE')) THEN" \
+  "                      ~* 'nothing matches this') THEN" \
+  pass "PASS refused by THE STATEMENT CARRIES AN EXCEPTION HANDLER" \
+  "with that one condition deleted a case can call this pack's own helpers to manufacture the message it reads (C-2)"
 
 # ---------------------------------------------------------------------
 # ROUND 30, F-4: the net over every SQL file the run LOADS, and its byte pin
@@ -2462,6 +2701,21 @@ net_plant "CORE-NET-FIX" "p8-real-fixtures.sql" \
   "CREATE OR REPLACE FUNCTION p8.case_refuses_sneaky(l TEXT, s TEXT, e TEXT) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM 1; END \$f\$;" \
   "A FUNCTION CREATED" \
   "a wrapper created in a fixtures file, which build() and cases() both run and the glob never covered (F-4b)"
+# ROUND 31, the coordinator's §3(a) and (b). The three rules above all read
+# ONE stripper, and one apostrophe inside a dollar-quoted body blinded it:
+# `CREATE OR REPLACE FUNCTION`, the body and the body's literal core call were
+# all inside a single pseudo-literal at once, and the program printed "none
+# names the core helper, builds SQL or creates a function" about a file that
+# did all three. For the literal spelling that made this reader measurably
+# WEAKER than round 29's `grep -lIF`, which cannot be fooled by quoting
+# because it does not parse. So two things changed: the scanner follows the
+# server's own lexing, and the literal is read BOTH ways — scanned AND raw —
+# because a reader that replaces an older check inherits that check's floor.
+net_plant "CORE-NET-DOLLAR" "p8-real-fixtures-owner.sql" \
+  "SELECT \$n\$a'\$n\$; CREATE OR REPLACE FUNCTION p8.case_refuses_sneaky(l TEXT) RETURNS void LANGUAGE plpgsql AS \$f\$ BEGIN PERFORM p8.case_refuses_core(l,'SELECT 1','denied','x','row'); END \$f\$;" \
+  "A DIRECT CORE CALL" \
+  "a wrapper in a FIXTURES file hidden behind one apostrophe in a dollar-quoted body, which blinded all three rules at once and which round 29's grep still caught (the coordinator's section 3)"
+
 # And the completeness direction: a case file beside the loaded ones that the
 # runner names nowhere.
 CORE_STRAY=$NETBOX/stray
@@ -3954,10 +4208,27 @@ src, base, dst = sys.argv[1], sys.argv[2], sys.argv[3]
 s = open(src, encoding="utf-8").read()
 # Every `say "…"` with a static first token. A double-quoted shell literal ends
 # at the first unescaped quote, which is what this reads.
-lits = re.findall(r'(?m)^[\t ]*say "((?:[^"\\]|\\.)*)"', s)
-sites = len(re.findall(r'(?m)^[\t ]*say ', s))
-runtime = [t for t in lits if t.startswith("$")]
-static = [t for t in lits if not t.startswith("$")]
+#
+# ROUND 31, C-3 and the coordinator's §6, measured the same thing: this reader
+# anchored at the START OF A LINE and the runner has say-sites after `&&`, `||`
+# and `;`. Twenty of them, two printed in EVERY run, and they were in none of
+# the three figures — not the classified set, not the run-time-substituted set,
+# and not the total that was supposed to BOUND the claim. So the gap was a
+# silence, which is the exact shape of W-1 and the exact thing this arm exists
+# to make impossible. The anchor is gone: a say-site is a say-site wherever it
+# sits on its line.
+# A say-site is one in COMMAND position: the start of a line, or straight
+# after `;`, `&&`, `||`, `{` or `(`. Bare whitespace is deliberately not a
+# separator — this file embeds Python that itself contains the text `say "…"`
+# inside a regex, and reading those as say-sites would be the mirror of the
+# defect this round answers: a reader that cannot tell code from a string.
+SAY = r'(?:^|[;{(]|&&|\|\|)[\t ]*say '
+lits = re.findall(SAY + r'"((?:[^"\\]|\\.)*)"', s, re.M)
+sites = len(re.findall(SAY, s, re.M))
+# A sentence whose first non-blank character is substituted at run time has no
+# identity until it runs; `lstrip` because a leading space is still no prefix.
+runtime = [t for t in lits if t.lstrip().startswith("$")]
+static = [t for t in lits if not t.lstrip().startswith("$")]
 subst = re.compile(r'\$\((?:[^()]|\([^()]*\))*\)|\$\{[^}]*\}|\$[A-Za-z_][A-Za-z_0-9]*')
 lines = [subst.sub("X", t) for t in static]
 with open(dst, "w", encoding="utf-8") as out:
@@ -3969,17 +4240,28 @@ with open(dst, "w", encoding="utf-8") as out:
 # token is substituted at run time (their identity is only knowable from a run,
 # and the census reads it there), and the total number of say-sites, so a
 # sentence this reader cannot see is visible as a difference rather than as a
-# silence.
+# silence. ROUND 31: that sentence was FALSE while the reader anchored at the
+# start of a line, because the TOTAL was derived from the same anchor, so the
+# twenty sites it could not see were missing from both sides of the comparison.
+# It is true of the reader below, whose two patterns differ only in what
+# follows `say `.
+# FOUR figures, because three left a remainder. A say-site whose argument is
+# not a double-quoted literal at all — `say $MSG`, a concatenation — is in
+# neither `lits` set, so it is counted and named here rather than absorbed
+# into the total. The arm's claim is bounded by the first figure and the
+# other three say exactly what it is not about.
 sys.stderr.write("PATHS: %d static sentences classified, %d skipped as "
-                 "run-time-substituted, %d say-sites in the runner\n"
-                 % (len(lines), len(runtime), sites))
+                 "run-time-substituted, %d not a quoted literal, "
+                 "%d say-sites in the runner\n"
+                 % (len(lines), len(runtime), sites - len(lits), sites))
 PY
 then
   PATHS_N=$(sed -n 's/^PATHS: \([0-9]*\) static.*/\1/p' "$CEN/paths-build.log")
   PATHS_ALL=$(sed -n 's/^PATHS: .*, \([0-9]*\) say-sites.*/\1/p' "$CEN/paths-build.log")
+  PATHS_NQ=$(sed -n 's/^PATHS: .*, \([0-9]*\) not a quoted literal.*/\1/p' "$CEN/paths-build.log")
   PATHS_RT=$(sed -n 's/^PATHS: [0-9]* static sentences classified, \([0-9]*\) skipped.*/\1/p' "$CEN/paths-build.log")
   if _mk_census "$CEN/paths.log" "$CEN/paths.py"; then
-    say "CENSUS-PATHS: every one of the $PATHS_N static sentences this runner can print — in EVERY configuration, including the paths this container does not take — is classified by the census, so an undeclared line of an untaken path reds here (W-1); of $PATHS_ALL say-sites in the runner the other $PATHS_RT begin with a value substituted at run time, so their identity is knowable only from a run and the census reads it there"
+    say "CENSUS-PATHS: every one of the $PATHS_N static sentences this runner can print — in EVERY configuration, including the paths this container does not take — is classified by the census, so an undeclared line of an untaken path reds here (W-1); of $PATHS_ALL say-sites in the runner the other $PATHS_RT begin with a value substituted at run time, so their identity is knowable only from a run and the census reads it there, and $PATHS_NQ are not a quoted literal at all; the three remainders are STATED because round 30's reader anchored at the start of a line and the twenty sites it could not see were missing from its total as well, so the gap was a silence (C-3)"
   else
     say "CENSUS-PATHS: FAIL — a sentence the runner can print is classified by nothing: $(tail -1 "$CEN/paths.py.decl.err")"
     FAILED=1

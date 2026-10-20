@@ -1,0 +1,31 @@
+# ROUND 31. The corpus SCANNER-AGREE reads, and the reason it is hex.
+#
+# Two implementations of one language that can drift apart are two languages,
+# and a reading that had drifted from the server's own lexing is the defect
+# this round answers. So `p8-case-net.py` and `p8.sql_scan` are run over this
+# file and their outputs compared byte for byte.
+#
+# Each data line is `<label><TAB><input as UTF-8 hex><TAB><comment>`, and the
+# OUTPUT is hex too. Hex because any readable escaping convention would be a
+# third reading of the same text sitting between the two being compared: a
+# backslash or a quote would have to mean the same thing to a shell, to
+# Python and to psql, and that is the class of assumption this arm exists to
+# refuse. Hex has one meaning everywhere.
+coord-F1b	555044415445204052454c4020534554206f626c69676174696f6e5f6b6579203d20246e24612762246e24205748455245206964203d202730666666666666662d646561642d343030302d383030302d30303030303030306465616427202d2d	the coordinator's F-1(b): one apostrophe in a dollar body deleted WHERE
+coord-F2	494e5345525420494e544f204052454c402028612c62292056414c5545532028312c246e247820666978747572652072656a656374656427246e2429204f4e20434f4e464c4943542028612920444f205550444154452053455420623d31	the coordinator's F-2: the same character hid ON CONFLICT ... DO UPDATE SET
+packB-C1a	555044415445204052454c40205345542076203d2032202d2d	C-1(a): a trailing comment swallows the predicate the form appends
+packB-C1b	555044415445204052454c40205345542076203d20323b2053454c45435420312046524f4d204052454c40	C-1(b): a second statement takes the appended predicate
+coord-net	53454c454354202466242070382e636173655f726566757365735f636f7265202466242046524f4d204052454c402057484552452078203d202761276227	the core helper's name inside a dollar body beside a stray quote
+honest-lit	555044415445204052454c4020534554206f626c69676174696f6e5f6b6579203d202742317c657863657074696f6e206e6f74656427	W-4: an honest payload carrying the word exception must NOT red
+handler	444f2024642420424547494e20455843455054494f4e205748454e206f7468657273205448454e204e554c4c3b20454e4420246424	the handler ban needs the dollar BODY visible in 'dollar' mode
+quotes	53454c4543542027697427277327202c204527615c276227202c202424706c61696e2424202c202474616724626f64792474616724	doubled quote, backslash escape, anonymous and tagged dollar quotes
+nested	53454c454354202f2a206f75746572202f2a20696e6e6572202a2f207374696c6c202a2f2031202d2d207461696c0a53454c4543542032	PostgreSQL nests block comments; one regex does not
+ident	53454c454354202277652769726422202c20277827202c202264712222696e73696465222046524f4d2074	an apostrophe inside a quoted identifier desyncs everything after it
+backslash	53454c4543542045275c5c27202c20276e657874272046524f4d2074	an E-literal ending in an escaped backslash
+params	53454c45435420312057484552452061203d20243120414e442062203d202432	positional parameters are not dollar quotes
+dollar-q	53454c454354202424656e6473207769746820272424202c2027616674657227	a dollar body that ends with a quote
+unterm-s	53454c4543542027756e7465726d696e61746564	unterminated literal: may hide text, never reveal it
+unterm-d	53454c45435420247124756e7465726d696e61746564	unterminated dollar quote
+unterm-c	53454c454354202f2a20756e7465726d696e61746564	unterminated block comment
+empty		the empty input
+spaces	202020	whitespace only

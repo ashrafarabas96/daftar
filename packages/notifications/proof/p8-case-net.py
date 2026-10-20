@@ -64,17 +64,120 @@ DYNAMIC = re.compile(r'(^|[^a-z_])execute([^a-z_]|$)', re.I)
 CREATES = re.compile(r'(^|[^a-z_])create\s+(or\s+replace\s+)?function($|[^a-z_])', re.I)
 
 
-def strip_sql(t):
-    t = re.sub(r'/\*.*?\*/', ' ', t, flags=re.S)
-    t = re.sub(r'--[^\n]*', ' ', t)
-    t = re.sub(r"'(''|[^'])*'", ' ', t)
-    # Dollar-quoted bodies are deliberately NOT stripped. A case file passes its
-    # statements as `$q$ … $q$`, and a plant hides in exactly such a block: the
-    # first version of this reader stripped them and let the coordinator's own
-    # F-4a plant through, measured on the first run that carried this arm. The
-    # cost is that a dollar-quoted PAYLOAD containing one of these words would
-    # red; no live file has one, and if one ever does it gets a declaration.
-    return t
+DOLLAR_TAG = re.compile(r'\$(?:[A-Za-z_\x80-￿][A-Za-z0-9_\x80-￿]*)?\$')
+
+
+def sql_scan(t, keep_dollar=False, keep_strings=False):
+    """Remove comments and blank out literals the way PostgreSQL LEXES them.
+
+    ROUND 31, the coordinator's blocking finding. Every text law in this gate
+    read its statement through one regex over single quotes,
+    `'(''|[^'])*'`, and PostgreSQL has more than one string syntax. One
+    apostrophe inside a DOLLAR-QUOTED body is read by that regex as the START
+    of a literal, so everything from it to the next quote vanishes from the
+    text the law reads: measured, `UPDATE n SET k = $n$a'b$n$ WHERE id = '…'`
+    strips to `UPDATE n SET k = $n$a 0fff-dead'` and the law never sees WHERE.
+    Three laws were blind at once, because three laws read one stripper.
+
+    So the regress ends where it has ended before in this phase: in the thing
+    itself. This is a character scanner that follows the same five rules the
+    server's own lexer follows — `--` to end of line, `/* */` NESTED, `'…'`
+    with doubled quotes, `E'…'` with backslash escapes, and `$tag$…$tag$` —
+    and consumes each construct whole, so no shift inside one can change where
+    another begins. A quoted "identifier" is consumed and KEPT, because it
+    names a thing rather than carrying a value, and an apostrophe inside one
+    would otherwise desync everything after it.
+
+    With keep_strings every literal is kept verbatim and only comments go:
+    that is what the row form RUNS, so the statement executed is the statement
+    the laws read. With keep_dollar, dollar-quoted BODIES are kept. The
+    handler ban needs them: `DO $d$ … EXCEPTION … $d$` carries its handler inside dollar
+    quotes, and that is the shape the ban exists for. Every other law blanks
+    them, because to those a dollar-quoted body is a VALUE. The delimiters are
+    consumed identically either way, which is the part that was wrong.
+
+    An unterminated construct consumes to end of input. That can only hide
+    text from a law, never reveal it, so it can only make a refusal more
+    likely — and `assert_balanced` below refuses it outright.
+    """
+    out = []
+    i, n = 0, len(t)
+    while i < n:
+        c = t[i]
+        if c == '-' and t.startswith('--', i):
+            j = t.find('\n', i)
+            out.append(' ')
+            i = n if j < 0 else j
+            continue
+        if c == '/' and t.startswith('/*', i):
+            depth, i = 1, i + 2
+            while i < n and depth:
+                if t.startswith('/*', i):
+                    depth, i = depth + 1, i + 2
+                elif t.startswith('*/', i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+            out.append(' ')
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if t[j] == '"':
+                    if t.startswith('""', j):
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(t[i:j])
+            i = j
+            continue
+        if c == "'" or (c in 'Ee' and t.startswith("'", i + 1)
+                        and not (i and (t[i - 1].isalnum() or t[i - 1] == '_'))):
+            esc = c in 'Ee'
+            j = i + 2 if esc else i + 1
+            while j < n:
+                if esc and t[j] == '\\':
+                    j += 2
+                    continue
+                if t[j] == "'":
+                    if t.startswith("''", j):
+                        j += 2
+                        continue
+                    j += 1
+                    break
+                j += 1
+            out.append(t[i:j] if keep_strings else ' ')
+            i = j
+            continue
+        if c == '$':
+            m = DOLLAR_TAG.match(t, i)
+            if m:
+                tag = m.group(0)
+                k = t.find(tag, m.end())
+                if k < 0:
+                    out.append(t[i:] if keep_strings else ' ')
+                    i = n
+                    continue
+                if keep_strings:
+                    out.append(t[i:k + len(tag)])
+                elif keep_dollar:
+                    # ROUND 31: the body is RE-SCANNED with the same rules, not
+                    # copied. A kept body that is not read the way the top
+                    # level is read is a second reading again: the statement
+                    # `DO $d$ … EXECUTE 'DO $x$ … EXCEPTION … $x$' … $d$` must
+                    # show the handler ban its EXECUTE and must NOT show it the
+                    # word inside that literal, which is a payload. Nested
+                    # dollar bodies stay visible, which is what the ban is for.
+                    out.append(' %s ' % sql_scan(t[m.end():k], keep_dollar=True))
+                else:
+                    out.append(' ')
+                i = k + len(tag)
+                continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
 
 
 def sha(path):
@@ -117,6 +220,26 @@ def read_set(runner):
 
 
 def main(argv):
+    # ROUND 31, SCANNER-AGREE. Two implementations of one language that can
+    # drift apart are two languages, and the defect this round answers is a
+    # reading that had drifted from the server's own lexing. This mode prints
+    # the scanner's three readings of every corpus line; the gate runs the
+    # same corpus through `p8.sql_scan` in the database and requires the two
+    # outputs to be byte-identical. Input and output are hex, so that no
+    # escaping convention sits between the two readings being compared.
+    if len(argv) == 3 and argv[1] == "--scan":
+        for line in open(argv[2], encoding="utf-8"):
+            line = line.rstrip("\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            lab, t = parts[0], bytes.fromhex(parts[1]).decode("utf-8")
+            for mode, out in (("strip", sql_scan(t)),
+                              ("dollar", sql_scan(t, keep_dollar=True)),
+                              ("exec", sql_scan(t, keep_strings=True))):
+                sys.stdout.write("%s\t%s\t%s\n"
+                                 % (lab, mode, out.encode("utf-8").hex()))
+        return 0
     if len(argv) == 3 and argv[1] == "--pin":
         runner, want = argv[2], None
     elif len(argv) == 4 and argv[1] == "--pin":
@@ -163,10 +286,31 @@ def main(argv):
         subject = n.startswith("p8-real-cases-") or n.startswith("p8-real-fixtures")
         if not subject:
             continue
-        text = strip_sql(open(os.path.join(here, n), encoding="utf-8").read())
-        if CORE in text:
+        raw = open(os.path.join(here, n), encoding="utf-8").read()
+        # The scan keeps DOLLAR-QUOTED bodies (re-scanned, not copied),
+        # because a plant hides in exactly such a block: the first version
+        # of this reader stripped them and let the coordinator's own F-4a
+        # plant through, measured on the first run that carried this arm.
+        text = sql_scan(raw, keep_dollar=True)
+        # ROUND 31, the coordinator's §3(a). Round 30 replaced round 29's
+        # `grep -lIF` with this reader, and for the LITERAL spelling the
+        # replacement was measurably WEAKER than what it replaced: one
+        # apostrophe inside a dollar-quoted body hid the name from the
+        # stripper, and the program printed "none names the core helper"
+        # about a file that named it. The grep could not be fooled that way,
+        # because a literal substring search does not parse at all.
+        #
+        # So the literal is read BOTH ways and either one refuses. The raw
+        # reading cannot be blinded by any quoting; the scanned reading is
+        # what lets a payload mention the name in a comment without a false
+        # red. A reader that replaces an older check inherits the older
+        # check's floor.
+        if CORE in text or CORE in raw:
             bad.append("A DIRECT CORE CALL in %s: the core helper is named in a "
-                       "file the run loads as a case or fixture" % n)
+                       "file the run loads as a case or fixture%s" %
+                       (n, "" if CORE in text else " (found in the raw bytes; the "
+                        "scanned reading did not see it, so the file is quoting "
+                        "around the net)"))
         if DYNAMIC.search(text):
             bad.append("DYNAMIC SQL in %s: a case or fixtures file may not build "
                        "SQL, because a built name is a name this net cannot read "

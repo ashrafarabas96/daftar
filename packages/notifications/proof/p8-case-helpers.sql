@@ -96,11 +96,29 @@ DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 --       the form APPENDS `WHERE <key_column>::text = <key_value>` to the
 --       statement and builds the witness `SELECT 1 FROM <relation> WHERE
 --       <key_column> = <key_value>` from the same two values, which must return
---       at least one row and no row for the sentinel key. The statement and the
---       witness therefore read the same row because one expression produces
---       both predicates — and that, not the reading of the row, is what makes
---       vacuity impossible. ROUND 30, F-1: when the predicate was the case's own
---       text, the row was read and the refusal was still about an empty set.
+--       at least one row and no row for the sentinel key.
+--
+--       ROUND 31 corrects what this paragraph used to claim. It said the
+--       statement and the witness "read the same row because one expression
+--       produces both predicates", and that appending made the attack
+--       "unwritable". Both were FALSE, and two reviewers measured it on the
+--       same day from different directions: appending text to a statement is
+--       not composing one, because the case controls what the appended text is
+--       appended TO. `… SET v = 2 --` put the predicate inside a comment and
+--       `… SET v = 2; SELECT 1 FROM @REL@` gave it to a second statement; in
+--       both the mutation ran against every row and the case reported the
+--       refusal a DIFFERENT row decided. Separately, one apostrophe inside a
+--       dollar-quoted body blinded the stripper every law read through, so a
+--       predicate the case wrote itself was invisible too.
+--
+--       What is true now is narrower and is a list of refusals rather than an
+--       argument: the appended predicate applies because the statement may not
+--       end in a comment (the form runs the scanner's 'exec' text), may not be
+--       more than one statement (`assert_single_statement`), and may not carry
+--       `where` or `@KEY@` of its own (the keyword law, reading through a
+--       scanner that follows the server's own lexing). Each of those three is
+--       refused BY NAME and each has an arm and a control. Reach is bounded by
+--       those three refusals together, not by the shape of one expression.
 --
 --   case_refuses_relation(label, stmt, expect, relation)
 --       The refusal is about a RELATION. The statement must carry @REL@ and may
@@ -119,33 +137,140 @@ DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 -- say what its own evidence is.
 DROP FUNCTION IF EXISTS p8.case_refuses(TEXT, TEXT, TEXT, TEXT, TEXT);
 
--- Comments are stripped before any binding test (the coordinator's N-2 ruling).
--- U-3 was a subject's text inside a comment; the same hole run the other way is
--- a PLACEHOLDER inside a comment satisfying the requirement that the statement
--- carry one. Neither survives reading the statement without its comments.
-CREATE OR REPLACE FUNCTION p8.strip_sql_comments(t TEXT) RETURNS TEXT
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT regexp_replace(regexp_replace(t, '/\*.*?\*/', ' ', 'gs'), '--[^\n]*', ' ', 'g')
-$$;
-
--- ROUND 30, W-4 (second half). The handler ban below reads the statement's
--- text, and the twentieth challenge measured the price of reading text that
--- includes the payload: `SET obligation_key = 'B1|exception noted'` was refused
--- as carrying a handler. There is no handler in that statement — the word is
--- inside a string literal — and a hardening that reds an honest case is not
--- hardening.
+-- ROUND 31, the coordinator's BLOCKING finding, and it is one finding under
+-- three of this round's closures. Every text law here read its statement
+-- through two regexes:
 --
--- So SINGLE-QUOTED literals are removed before the handler test, and
--- DOLLAR-QUOTED bodies are deliberately NOT: a `DO $d$ … EXCEPTION … $d$` block
--- carries its handler inside dollar quotes, and that is the shape the ban
--- exists for (the coordinator's N-3). Stripping those would hide exactly what
--- must stay visible. Doubled quotes inside a literal are consumed with it; an
--- unbalanced quote leaves the text in place, which can only make the test
--- stricter.
-CREATE OR REPLACE FUNCTION p8.strip_sql_strings(t TEXT) RETURNS TEXT
-LANGUAGE sql IMMUTABLE AS $f$
-  SELECT regexp_replace(t, $re$'(''|[^'])*'$re$, ' ', 'g')
-$f$;
+--     regexp_replace(t, '/\*.*?\*/', ' ', 'gs')  -- and '--[^\n]*'
+--     regexp_replace(t, $re$'(''|[^'])*'$re$, ' ', 'g')
+--
+-- and PostgreSQL has more than one string syntax. An apostrophe inside a
+-- DOLLAR-QUOTED body is read by that second regex as the START of a literal,
+-- so everything from it to the next quote is deleted from the text the law
+-- reads. Measured by the coordinator on a real cluster:
+--
+--     UPDATE @REL@ SET obligation_key = $n$a'b$n$ WHERE id = '0fff…dead' --
+--   strips to
+--     UPDATE @REL@ SET obligation_key = $n$a 0fff…dead'
+--
+-- WHERE is gone. The ROW shape law declares `where` nowhere and passed it; so
+-- did the handler ban and the @KEY@ ban; and the same character hid
+-- `ON CONFLICT … DO UPDATE SET` from the RELATION shape law. Three laws were
+-- blind at once because three laws read ONE stripper, and the whole gate ran
+-- green — FAILED=0, 178 of 178 arms, 101 cases — over a tree whose case W-2
+-- touched no row at all.
+--
+-- The regress ends where it has ended before in this phase: in the thing
+-- itself. Below is a character scanner that follows the same five rules the
+-- server's own lexer follows — `--` to end of line, `/* */` NESTED, a literal
+-- with doubled quotes, an E-literal with backslash escapes, and
+-- `$tag$…$tag$` — and consumes each construct WHOLE, so no shift inside one
+-- can move where another begins. `p8-case-net.py` carries the same scanner in
+-- Python, and `SCANNER-AGREE` runs a declared corpus through both and
+-- requires the two outputs to be byte-identical, because two readings of one
+-- language that can drift apart are two languages.
+--
+-- Three modes, and each caller's choice is a claim about what it is reading:
+--   'strip'  comments gone, EVERY literal blanked. The shape laws and the
+--            binding tests: to them a literal is a value, not text.
+--   'dollar' comments gone, single-quoted and E-literals blanked,
+--            dollar-quoted BODIES kept. The handler ban alone, because
+--            `DO $d$ … EXCEPTION … $d$` carries its handler inside dollar
+--            quotes and that is the shape the ban exists for.
+--   'exec'   comments gone, every literal kept verbatim. What the form RUNS,
+--            so that the statement executed is the statement the laws read.
+--
+-- A quoted "identifier" is consumed and kept in every mode: it names a thing
+-- rather than carrying a value, and an apostrophe inside one would otherwise
+-- desync everything after it. An unterminated construct consumes to the end of
+-- the input, which can only hide text from a law and never reveal it.
+CREATE OR REPLACE FUNCTION p8.sql_scan(t TEXT, mode TEXT DEFAULT 'strip')
+RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $fn$
+DECLARE
+  out TEXT := '';
+  i INT := 1;
+  n INT := length(t);
+  j INT; k INT; depth INT; tag TEXT; esc BOOLEAN; c TEXT; prev TEXT;
+BEGIN
+  IF mode NOT IN ('strip', 'dollar', 'exec') THEN
+    RAISE EXCEPTION 'p8.sql_scan: unknown mode %', mode;
+  END IF;
+  WHILE i <= n LOOP
+    c := substr(t, i, 1);
+    IF substr(t, i, 2) = '--' THEN
+      j := position(E'\n' in substr(t, i));
+      out := out || ' ';
+      i := CASE WHEN j = 0 THEN n + 1 ELSE i + j - 1 END;
+    ELSIF substr(t, i, 2) = '/*' THEN
+      depth := 1; i := i + 2;
+      WHILE i <= n AND depth > 0 LOOP
+        IF substr(t, i, 2) = '/*' THEN depth := depth + 1; i := i + 2;
+        ELSIF substr(t, i, 2) = '*/' THEN depth := depth - 1; i := i + 2;
+        ELSE i := i + 1;
+        END IF;
+      END LOOP;
+      out := out || ' ';
+    ELSIF c = '"' THEN
+      j := i + 1;
+      WHILE j <= n LOOP
+        IF substr(t, j, 1) = '"' THEN
+          IF substr(t, j, 2) = '""' THEN j := j + 2; CONTINUE; END IF;
+          j := j + 1; EXIT;
+        END IF;
+        j := j + 1;
+      END LOOP;
+      out := out || substr(t, i, j - i);
+      i := j;
+    ELSE
+      prev := CASE WHEN i > 1 THEN substr(t, i - 1, 1) ELSE '' END;
+      esc := c IN ('E','e') AND substr(t, i + 1, 1) = '''' AND prev !~ '[A-Za-z0-9_]';
+      IF c = '''' OR esc THEN
+        j := CASE WHEN esc THEN i + 2 ELSE i + 1 END;
+        WHILE j <= n LOOP
+          IF esc AND substr(t, j, 1) = '\' THEN j := j + 2; CONTINUE; END IF;
+          IF substr(t, j, 1) = '''' THEN
+            IF substr(t, j, 2) = '''''' THEN j := j + 2; CONTINUE; END IF;
+            j := j + 1; EXIT;
+          END IF;
+          j := j + 1;
+        END LOOP;
+        out := out || CASE WHEN mode = 'exec' THEN substr(t, i, j - i) ELSE ' ' END;
+        i := j;
+      ELSE
+        tag := CASE WHEN c = '$'
+               THEN (SELECT m[1] FROM regexp_matches(substr(t, i),
+                       '^(\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$)') AS m)
+               ELSE NULL END;
+        IF tag IS NOT NULL THEN
+          k := position(tag in substr(t, i + length(tag)));
+          IF k = 0 THEN
+            out := out || CASE WHEN mode = 'exec' THEN substr(t, i) ELSE ' ' END;
+            i := n + 1;
+          ELSE
+            out := out || CASE
+                   WHEN mode = 'exec'   THEN substr(t, i, length(tag) + k - 1 + length(tag))
+                   -- ROUND 31: the body is RE-SCANNED, not copied. A kept body that is
+                   -- not read the way the top level is read is a second reading again.
+                   WHEN mode = 'dollar'
+                     THEN ' ' || p8.sql_scan(substr(t, i + length(tag), k - 1), 'dollar') || ' '
+                   ELSE ' ' END;
+            i := i + length(tag) + k - 1 + length(tag);
+          END IF;
+        ELSE
+          out := out || c;
+          i := i + 1;
+        END IF;
+      END IF;
+    END IF;
+  END LOOP;
+  RETURN out;
+END $fn$;
+
+-- The two broken readers are REMOVED rather than left beside the scanner. A
+-- caller that can still reach the old stripper is a caller that can still be
+-- blinded, and the arms below would then be measuring one of two readings.
+DROP FUNCTION IF EXISTS p8.strip_sql_comments(TEXT);
+DROP FUNCTION IF EXISTS p8.strip_sql_strings(TEXT);
 
 -- A case statement may not carry its own exception handler (the coordinator's
 -- N-3). The witness law is derived from the SQLSTATE that ARRIVES, and a
@@ -156,7 +281,7 @@ CREATE OR REPLACE FUNCTION p8.assert_no_handler(label TEXT, stmt TEXT) RETURNS v
 LANGUAGE plpgsql AS $$
 DECLARE bare TEXT;
 BEGIN
-  bare := p8.strip_sql_strings(p8.strip_sql_comments(stmt));
+  bare := p8.sql_scan(stmt, 'dollar');
   IF bare ~* '(^|[^a-z_])exception([^a-z_]|$)' THEN
     RAISE EXCEPTION '% FAIL: THE STATEMENT CARRIES AN EXCEPTION HANDLER — the witness law is '
                     'derived from the SQLSTATE that arrives, and a handler can re-raise a '
@@ -207,7 +332,7 @@ DECLARE bad TEXT;
 BEGIN
   SELECT string_agg(DISTINCT w, ', ' ORDER BY w) INTO bad
     FROM (SELECT lower(m[1]) AS w
-            FROM regexp_matches(p8.strip_sql_strings(p8.strip_sql_comments(stmt)),
+            FROM regexp_matches(p8.sql_scan(stmt),
                                 '[A-Za-z_][A-Za-z_0-9]*', 'g') AS m) t
     JOIN pg_get_keywords() k ON k.word = t.w
    WHERE NOT (t.w = ANY (allowed));
@@ -228,7 +353,7 @@ CREATE OR REPLACE FUNCTION p8.assert_statement_built(label TEXT, stmt TEXT, what
 LANGUAGE plpgsql AS $$
 DECLARE bare TEXT;
 BEGIN
-  bare := p8.strip_sql_comments(stmt);
+  bare := p8.sql_scan(stmt);
   IF position('@REL@' in bare) = 0 THEN
     RAISE EXCEPTION '% FAIL: THE STATEMENT IS NOT BUILT FROM ITS SUBJECT — it does not carry @REL@ '
                     'outside a comment, so it is not a product of the declared subject "%" and the '
@@ -289,6 +414,7 @@ BEGIN
                     'itself as its key', label;
   END IF;
   PERFORM p8.assert_no_handler(label, stmt);
+  PERFORM p8.assert_single_statement(label, stmt);
   PERFORM p8.assert_statement_built(label, stmt, relation || '.' || key_column, true);
   -- ROUND 30, F-1. `@KEY@` used to be substituted into a predicate the CASE
   -- wrote, and the form required only that it OCCUR. The coordinator's review
@@ -299,12 +425,15 @@ BEGIN
   --
   -- So the predicate is no longer the case's to write. The case supplies the
   -- mutation and nothing else; this form appends `WHERE <key_column>::text =
-  -- <key_value>` from the same two values the witness is built from. Reach is
-  -- then bounded by CONSTRUCTION rather than by a check: the statement and the
-  -- witness read the same row because one expression produces both. The
-  -- keywords the mutation may carry are declared, so a second predicate cannot
-  -- be smuggled in beside the composed one.
-  IF position('@KEY@' in p8.strip_sql_comments(stmt)) > 0 THEN
+  -- <key_value>` from the same two values the witness is built from.
+  --
+  -- ROUND 31: appending is not composing, and the sentence that used to stand
+  -- here said it was. The case still controls what the appended text is
+  -- appended TO, and two spellings carrying neither `@KEY@` nor `where`
+  -- detached it — a trailing comment and a second statement. Both are refused
+  -- by name now, and the third way, a predicate of the case's own, is refused
+  -- by a keyword law that can finally see `where`.
+  IF position('@KEY@' in p8.sql_scan(stmt)) > 0 THEN
     RAISE EXCEPTION '% FAIL: A ROW CASE MAY NOT WRITE ITS OWN PREDICATE — this form appends '
                     'WHERE %::text = % to the statement itself, from the same values the witness '
                     'is built from, so the statement and the witness cannot aim at different rows '
@@ -320,7 +449,12 @@ BEGIN
         || p8.quoted_ident(key_column) || '::text = ' || quote_literal(p8.sentinel_subject());
   PERFORM p8.assert_witness(label, relation || ' keyed by ' || key_column || ' = ' || key_value,
                             wq, sq);
-  stmt2 := replace(stmt, '@REL@', p8.quoted_ident(relation))
+  -- ROUND 31, C-1(a). This used to append to the RAW statement, so a trailing
+  -- `--` put the form's own predicate inside a comment and the UPDATE ran
+  -- against every row. What is appended to now is the statement the laws read:
+  -- comments removed by the scanner, literals untouched, so the text that
+  -- EXECUTES is the text that was checked.
+  stmt2 := replace(p8.sql_scan(stmt, 'exec'), '@REL@', p8.quoted_ident(relation))
            || ' WHERE ' || p8.quoted_ident(key_column) || '::text = '
            || quote_literal(key_value);
   PERFORM p8.case_refuses_core(label, stmt2, expect, key_value, 'row');
@@ -430,6 +564,101 @@ END $$;
 -- a direct call and reds by name, with a control that plants one. REVOKE is not
 -- available here: the wrappers are not SECURITY DEFINER, so the case-running
 -- roles need EXECUTE on this function either way.
+-- ROUND 31, C-1 (the second challenge pack). Round 30 said of the row form's
+-- appended predicate: "the attack is not refused, it is unwritable". It was
+-- writable, in two spellings that carry neither `@KEY@` nor a `WHERE`:
+--
+--     UPDATE @REL@ SET v = 2 --                     -> the predicate is inside the comment
+--     UPDATE @REL@ SET v = 2; SELECT 1 FROM @REL@   -> the predicate joins a SECOND statement
+--
+-- Both ran the UPDATE with no predicate at all, and the second carries only
+-- keywords the row form declares, so no keyword law could ever see it.
+-- Appending text to a statement is not composition: the case controls what the
+-- appended text is appended TO. There are exactly three ways to detach it — a
+-- trailing comment, a second statement, and a predicate of the case's own —
+-- and this round closes each one by name rather than arguing the list is
+-- complete:
+--
+--   * the comment: the form now RUNS `p8.sql_scan(stmt, 'exec')`, so what
+--     executes is the statement the laws read, with its comments already gone;
+--   * the second statement: the law below;
+--   * its own predicate: the keyword law, which can see `where` again now that
+--     the scanner is not blinded by one apostrophe.
+CREATE OR REPLACE FUNCTION p8.assert_single_statement(label TEXT, stmt TEXT) RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE bare TEXT;
+BEGIN
+  bare := rtrim(p8.sql_scan(stmt));
+  IF right(bare, 1) = ';' THEN
+    bare := rtrim(left(bare, length(bare) - 1));
+  END IF;
+  IF position(';' in bare) > 0 THEN
+    RAISE EXCEPTION '% FAIL: MORE THAN ONE STATEMENT — this form composes a predicate and appends '
+                    'it, so a second statement takes the predicate and leaves the first one '
+                    'unbounded: `UPDATE @REL@ SET v = 2; SELECT 1 FROM @REL@` ran the UPDATE '
+                    'against every row and reported the refusal a different row decided (C-1). '
+                    'A case is one statement', label;
+  END IF;
+END $$;
+
+-- ROUND 31, C-2. The arriving-class derivation existed and was applied to the
+-- RELATION form alone, so a ROW case passed on any error its own statement
+-- could provoke: `SELECT 1/0 FROM @REL@` expecting 'division by zero' passed,
+-- and so did a statement that called one of this pack's own helpers to raise a
+-- P0001 of its choosing. The case chose the error and the server merely
+-- reported it, which is the F-3 principle with the subject changed.
+--
+-- The rule is derived from what ARRIVED, like its relation-form twin. A row
+-- case's refusal must be one a row-level authority can decide: a grant or
+-- row-level security decision (42501), an integrity constraint (class 23), or
+-- a trigger's own RAISE. Everything else — a data exception the expression
+-- computed (class 22), a syntax or type error (class 42 other than 42501), an
+-- undefined object — is the statement failing, not an authority refusing.
+--
+-- And in every form: a refusal raised inside one of THIS PACK's functions is
+-- the pack reporting on itself. `p8-case-net.py` bans the core helper by name
+-- in the case files; this bans every helper at the place the error arrives,
+-- where no spelling can get around it.
+CREATE OR REPLACE FUNCTION p8.assert_arriving_class(label TEXT, kind TEXT, sst TEXT,
+                                                    msg TEXT, ctx TEXT) RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+  -- The INNERMOST frame only. The exception context is a stack, and this
+  -- pack is always somewhere in it — `case_refuses_core` is the frame that
+  -- ran the statement — so a match anywhere would red every case ever
+  -- written. The first line names where the error was RAISED, which is the
+  -- only frame that says who decided. The names come from the catalogue
+  -- rather than from a list written here, because a helper added later is a
+  -- helper a hand-written list would not know; and the schema prefix is
+  -- optional in the match because the context prints the name as the
+  -- search_path resolves it.
+  --
+  -- And the frame must be `at RAISE`. `case_refuses_core` is a p8 function and
+  -- it is the frame that EXECUTEs the case statement, so for an error the
+  -- STATEMENT caused before it became a statement — a syntax error — the
+  -- innermost frame is this pack's own EXECUTE. Without `at RAISE` this rule
+  -- attributed the server's syntax error to the pack, which is the same kind
+  -- of false sentence the coordinator's section 5 named one layer up.
+  IF EXISTS (SELECT 1 FROM pg_proc pr JOIN pg_namespace nsp ON nsp.oid = pr.pronamespace
+              WHERE nsp.nspname = 'p8'
+                AND split_part(coalesce(ctx,''), E'\n', 1)
+                      ~* ('function (p8\.)?' || pr.proname || '\(.*at RAISE')) THEN
+    RAISE EXCEPTION '% FAIL: THE REFUSAL CAME FROM THIS PACK — the error this case reads was '
+                    'raised inside a p8 helper called by the statement itself (context: %), so the '
+                    'case chose both the error and its wording. A case states what the SCHEMA '
+                    'refuses (C-2). Got [%] %',
+                    label, split_part(coalesce(ctx,''), E'\n', 1), sst, msg;
+  END IF;
+  IF kind = 'row' AND NOT (sst = '42501' OR left(sst, 2) = '23' OR sst = 'P0001') THEN
+    RAISE EXCEPTION '% FAIL: A ROW CASE REFUSED BY SOMETHING NO AUTHORITY DECIDED — what arrived '
+                    'is [%] %, and a row-level refusal is a grant or row-level security decision '
+                    '(42501), an integrity constraint (class 23) or a trigger''s own RAISE '
+                    '(P0001). Any other class is the statement failing rather than the schema '
+                    'refusing, so `SELECT 1/0 FROM @REL@` would otherwise pass as a refusal the '
+                    'case chose (C-2)', label, sst, msg;
+  END IF;
+END $$;
+
 CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT, kind TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
@@ -440,6 +669,7 @@ BEGIN
   -- laundering attack used. The three new forms check it too; checking it twice
   -- costs nothing and means no future caller can arrive without it.
   PERFORM p8.assert_no_handler(label, stmt);
+  PERFORM p8.assert_single_statement(label, stmt);
   IF witnessed AND position(quote_literal(subject) in stmt) = 0
             AND position(p8.quoted_ident(subject) in stmt) = 0 THEN
     RAISE EXCEPTION '% FAIL: THE SUBJECT IS NOT BOUND INTO THE STATEMENT — this form was given '
@@ -466,7 +696,12 @@ BEGIN
     -- `DO` in the statement compiles to — is the statement reporting on itself,
     -- whatever it spelled. A trigger or a function names itself in the context
     -- and is untouched, which is why this does not red the ladder cases.
-    IF coalesce(ctx,'') ~ 'inline_code_block' THEN
+    -- ROUND 31, the coordinator's section 5. This matched the context
+    -- ANYWHERE, including a frame ABOVE the statement, so a refusal the
+    -- SERVER decided inside a case that happens to run in a block was
+    -- reported as one the statement decided — a sentence false of the case it
+    -- was printed about. The innermost frame is the one that says who raised.
+    IF split_part(coalesce(ctx,''), E'\n', 1) ~ 'inline_code_block' THEN
       RAISE EXCEPTION '% FAIL: THE REFUSAL CAME FROM THE STATEMENT''S OWN BLOCK — the error this '
                       'case reads was raised inside an anonymous block in the statement '
                       '(context: %), so what the law sees is what the statement chose to say and '
@@ -518,6 +753,13 @@ BEGIN
                       'decided by the row rather than by a grant. Use case_refuses_row and declare '
                       'the key the refusal is about (W-3)', label, subject, sst, msg;
     END IF;
+    -- ROUND 31, C-2, and it runs HERE rather than at the top of the handler:
+    -- the two rules above already name the attacks they were built for, and a
+    -- new rule that renamed their refusals would make their arms measure
+    -- something else. This one catches what neither of them looks at — a row
+    -- case refused by an error its own statement computed, and any case
+    -- refused by this pack's own helpers.
+    PERFORM p8.assert_arriving_class(label, kind, sst, msg, ctx);
     IF position(expect in coalesce(cons,'') || ' ' || coalesce(msg,'')) = 0 THEN
       RAISE EXCEPTION '% FAIL: refused, but NOT by "%" — got [%] % (constraint %)',
         label, expect, sst, msg, coalesce(cons,'none');

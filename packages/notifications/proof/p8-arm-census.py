@@ -193,6 +193,28 @@ ARM_LABELS = (
     "CORE-NET-STRAY",
     "CORE-PIN",
     "CORE-PIN-CTL",
+    # ROUND 31. The coordinator's diff review and a second challenge pack, on
+    # the same head, measured one defect under three of round 30's closures: a
+    # text law that MIS-PARSES the language is weaker than the check it
+    # replaced. These are the arms that bound it, and the three ROW-REACH ones
+    # read a BEHAVIOUR — whether the composed predicate applied — instead of a
+    # text.
+    "SCANNER-AGREE",
+    "SCANNER-AGREE-CTL",
+    "REACH-BENCH",
+    "ROW-REACH",
+    "ROW-REACH-COMMENT",
+    "ROW-REACH-COMMENT-CTL",
+    "ROW-REACH-SEMI",
+    "ROW-REACH-SEMI-CTL",
+    "ROW-REACH-DOLLAR",
+    "ROW-CLASS",
+    "ROW-CLASS-CTL",
+    "ROW-PACK",
+    "ROW-PACK-CTL",
+    "WITNESS-SHAPE-DOLLAR",
+    "WITNESS-LAUNDER-CTL2",
+    "CORE-NET-DOLLAR",
     "HATCH",
     "BASELINE",
     "I1-conc",
@@ -262,6 +284,16 @@ NOT_ARM_PREFIXES = (
     "cluster restored to the baseline",
     "migrations applied = ",
     "role daftar_",
+    # ROUND 31. The CENSUS-PATHS reader anchored at the start of a line, and
+    # twenty say-sites after `&&`, `||`, `;` or `{` were in NEITHER the
+    # classified set nor the total that was supposed to bound it, so the gap
+    # was a silence — the shape of W-1 itself. With the anchor gone two more
+    # sentences became visible and each is declared rather than re-hidden: the
+    # role line as the paths reader substitutes it, and the abort the
+    # coordinator hit by re-using a RUN_ID, which is arm-shaped and is not an
+    # arm.
+    "role X super/bypassrls",
+    "BASELINE BUILD FAILED",
     "server_version=",
     "the frozen boundary is anchored to ",
     # ROUND 30, W-1 (P1), found by the twentieth challenge and the defect this
@@ -347,6 +379,7 @@ EXPECTED_ARMS = (
     ("CORE-NET", 1),
     ("CORE-NET y22", 1),
     ("CORE-NET-CTL y23", 1),
+    ("CORE-NET-DOLLAR", 1),
     ("CORE-NET-DYN", 1),
     ("CORE-NET-FIX", 1),
     ("CORE-NET-SET", 1),
@@ -426,13 +459,26 @@ EXPECTED_ARMS = (
     ("MUT 8b", 1),
     ("MUT 9", 1),
     ("MUT 9b", 1),
+    ("REACH-BENCH", 1),
     ("RETIREMENT n1", 1),
     ("RETIREMENT n2", 1),
     ("RETIREMENT n3", 1),
     ("RETIREMENT-NET y19", 1),
+    ("ROW-CLASS", 1),
+    ("ROW-CLASS-CTL", 1),
+    ("ROW-PACK", 1),
+    ("ROW-PACK-CTL", 1),
+    ("ROW-REACH", 1),
+    ("ROW-REACH-COMMENT", 1),
+    ("ROW-REACH-COMMENT-CTL", 1),
+    ("ROW-REACH-DOLLAR", 1),
+    ("ROW-REACH-SEMI", 1),
+    ("ROW-REACH-SEMI-CTL", 1),
     ("SANDBOX y24", 1),
     ("SANDBOX y25", 1),
     ("SANDBOX-CTL y26", 1),
+    ("SCANNER-AGREE", 1),
+    ("SCANNER-AGREE-CTL", 1),
     ("SHALLOW s12", 1),
     ("SHALLOW s8", 1),
     ("VACUITY a", 1),
@@ -460,6 +506,7 @@ EXPECTED_ARMS = (
     ("WITNESS-KEY-CTL", 1),
     ("WITNESS-LAUNDER", 1),
     ("WITNESS-LAUNDER-CTL", 1),
+    ("WITNESS-LAUNDER-CTL2", 1),
     ("WITNESS-LITERAL", 1),
     ("WITNESS-LITERAL-CTL", 1),
     ("WITNESS-MERGE", 1),
@@ -474,11 +521,12 @@ EXPECTED_ARMS = (
     ("WITNESS-SENTINEL", 1),
     ("WITNESS-SHAPE", 1),
     ("WITNESS-SHAPE-CTL", 1),
+    ("WITNESS-SHAPE-DOLLAR", 1),
     ("WITNESS-SPLIT", 1),
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "bc58e937529d5b62b8412e408e4323367b33df63f864c51e567f1e74fb5c9687"
+EXPECTED_SEAL = "a28f6a773df0523d23cc44f79d8fb2af609e2aafef4246a5fb351ad2712e8df3"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
