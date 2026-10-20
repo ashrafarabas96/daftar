@@ -1,0 +1,49 @@
+Phase 11, round 30 -- the probe worlds
+Each world is a COMMIT on a clean clone. The subject of worlds 1-3 and 5-6 is
+9db13a571bb8; world 4 is the PREVIOUS head 3f4b63022713.
+The capture is the authoritative run's own FIGURE SINK with its RUN_HEAD line
+substituted to the world's commit -- the author's disclosed `R26-S5` limit used
+as an INSTRUMENT, the same instrument both reviewers used in round 30.
+
+world 1-entity-hex             commit 6d083ae3b8d2  base 9db13a571bb8
+  what it is        : a document figure with the HEX entity for U+202E before its value
+  want              : BIDI-CONTROL-IN-A-CANDIDATE
+  rc                : 1
+  observed          : BIDI-CONTROL-IN-A-CANDIDATE: P11-PROBE-ROUND30.md:4 reports `deleted=0` (written as `deleted=&#x202e;0 [FA-02]`) and carries U+202E, an explicit bidi formatting character. It is invisible and it REORDERS what follows, so the figure this gate weighs and the figure a reader sees need not be the same n
+  verdict           : as required
+
+world 2-entity-decimal         commit 0a87fb13e257  base 9db13a571bb8
+  what it is        : the same with the DECIMAL entity for the same character
+  want              : BIDI-CONTROL-IN-A-CANDIDATE
+  rc                : 1
+  observed          : BIDI-CONTROL-IN-A-CANDIDATE: P11-PROBE-ROUND30.md:4 reports `deleted=0` (written as `deleted=&#8238;0 [FA-02]`) and carries U+202E, an explicit bidi formatting character. It is invisible and it REORDERS what follows, so the figure this gate weighs and the figure a reader sees need not be the same nu
+  verdict           : as required
+
+world 3-entity-clean-control   commit 0f13f9dc9f29  base 9db13a571bb8
+  what it is        : the control: the same shape with no control at all, which must PASS
+  want              : (no finding)
+  rc                : 0
+  observed          : rc 0
+  verdict           : as required
+
+world 4-the-previous-head      commit 3bf912bcce37  base 3f4b63022713
+  what it is        : THE FLIP: world 1's document against the SIGNED previous head, where the raw-character guard existed and the entity spelling walked past it
+  want              : (no finding)
+  rc                : 0
+  observed          : rc 0
+  verdict           : as required
+
+world 5-bare-hash-sentence     commit 801f263292f2  base 9db13a571bb8
+  what it is        : the coordinator's first P4 note: a retired sentence split by a BARE `#` LINE
+  want              : DRIVER-SENTENCE-RETIRED
+  rc                : 1
+  observed          : DRIVER-SENTENCE-RETIRED: rebuild_and_prove.sh, in the paragraph at lines 1-673, says 'what this run printed', which describes a rule this gate no longer holds. The sentence that says what the haystack is lives in check_fenced_figures.py as HAYSTACK_SENTENCE; quote it, or name the retired rule by its round instead of spelling it.
+  verdict           : as required
+
+world 6-sink-refusal-unpinned  commit 733412a006ff  base 9db13a571bb8
+  what it is        : the coordinator's second P4 note: the PREVIOUS head's own wording of FIGURE-SINK-HAS-NO-ROWS put back, which says what the haystack is without quoting the pin
+  want              : GATE-SENTENCE-UNQUOTED
+  rc                : 1
+  observed          : GATE-SENTENCE-UNQUOTED: the FIGURE-SINK-HAS-NO-ROWS refusal says what the haystack is without quoting HAYSTACK_SENTENCE ('the expectations the value cases of this run REQUIRED'). This file printed such a sentence for three rounds while checking the driver for it.
+  verdict           : as required
+

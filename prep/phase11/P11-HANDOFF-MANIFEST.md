@@ -1107,7 +1107,7 @@ key class                  reds  2 arm(s): named: UPPERCASE key, key boundary: a
 boolean case folding       reds  1 arm(s): R14-S1 boolean True
 named exemptions           reds  2 arm(s): R14-S2 exempt port=55512, R14-S2 exempt migrations=87
 planted tokens             reds  1 arm(s): R15-S4 a planted token is not its own evidence
-bidi controls              reds  2 arm(s): C29-S1 a bidi override before a value a case required, C29-S1 a bidi isolate before a value a case required
+bidi controls              reds  4 arm(s): C29-S1 a bidi override before a value a case required, C29-S1 a bidi isolate before a value a case required, C30-S1 a bidi override written as a hex HTML entity +1 more
 only an asserted case emits reds  7 arm(s): R27-F1 a RAISE NOTICE in a fixture requires nothing, R27-F1 an echo in the driver requires nothing, R27-F1 a printed plant with no case named requires nothing +4 more
 only a run emits           reds 12 arm(s): R26-S1 a comment in an instrument emits nothing, R26-S1 a committed .py nothing runs emits nothing, R26-S1 an unapplied mutation world emits nothing +9 more
 the same spelling on both sides reds  1 arm(s): R26-F1 a padded figure in the output is the same figure
@@ -1286,7 +1286,7 @@ The counts in this section and the two blocks in §7.14 are generated:
 <!-- BEGIN GENERATED arm-counts: /usr/bin/python3 -I prep/phase11/harness/check_fenced_figures.py --emit arm-counts --run-capture $P11_RUN_CAPTURE -->
 
 ```text
-90 catch arms, 16 skip arms, 2 pass arms, 42 others
+92 catch arms, 16 skip arms, 2 pass arms, 42 others
 ```
 
 <!-- END GENERATED arm-counts -->
@@ -3305,10 +3305,10 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     78
-of them recordings of past runs              54
+files the commit holds under the harness     80
+of them recordings of past runs              56
 skip keys the committed source reads         25
-arms the selftest runs                       150
+arms the selftest runs                       152
 ```
 
 <!-- END GENERATED pack-counts -->
@@ -4026,9 +4026,147 @@ allocated, reserved, examined, exampled, or written in a filename or a comment;
 `OD-P11-07` is the owner's alone; and no CI has ever run this pack, so the
 gate's own authority is `UNMEASURED` outside this container.
 
+## 7.31 ROUND 30 (challenger: NO BLOCKING DEFECT at `3f4b630`, one `P2` residual; coordinator diff review of the same head: **`SIGN`**) — the first fully signed head since `24f6ebe`, and an entity is a SPELLING of a character
+
+Both links of the chain closed on `3f4b630`. The independent challenger found no
+blocking defect and raised one residual, `R30-S1`. The coordinator's diff review
+of the same head returned **`SIGN`** — the first signature in nineteen rounds of
+this instrument — with one `P2` residual (`C30-S1`) and two `P4` notes. The
+review is enrolled below. This commit answers all four and is itself UNSIGNED.
+
+### The signature enrolled
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-3f4b630.md` |
+| its own sha256 | `3c860d4388d4f0bfcbc7baa7d1f4906458fa695c088f2367341cd1a394395fe1` |
+| range | `acfe049..3f4b63022713c55a222fd60232c7b78bd8ffac10`, one commit, 9 files, 2,109+/77− |
+| verdict | **`SIGN` at `3f4b63022713c55a222fd60232c7b78bd8ffac10`** — that SHA only |
+| what it re-derived rather than took | the 76 value cases, by parsing both suites' syntax trees; `30 of 76` and `46`; `M21` redding both cited cases, with the deleted-row figure moving from zero to fifty-three and the presence flag from true to false; the guard-matrix summary and the catch-arm count -- whose figures live in their generated blocks and are not restated here -- from its own run; the three repo-gate worlds, with `G6` reproduced at the merge-base |
+| what it tried and could not break | the prose law from the other side (one `echo`, two, three, wrapped), the printed-sentence law's reach by enumerating all twenty-three `Refusal()` sites, and the arm counts the documents quote |
+
+A signature covers ONE SHA, and this head is not that SHA. `3f4b630` is now the
+last fully signed head of this phase, replacing `24f6ebe`; promotion is a
+separate question and is still **NO**.
+
+### `R30-S1` (the challenger's residual) — a blank line and a command's ARGUMENTS also split a sentence
+
+Round 29's law reads prose as paragraphs. Two shapes these files could really be
+written in still escaped it: a sentence split across a BLANK LINE, which ends a
+paragraph, and a sentence split across the ARGUMENTS of one command, where the
+quotes hide it. `_clean_line` is extracted so the whole-file reading cleans a
+line exactly as a paragraph does; each paragraph is now read twice, as it stands
+and with every quote character removed; and the whole file is read once more as
+ONE paragraph, which no blank line can break. That last pass is the strongest
+over-join in this law and the direction is the safe one: it can only ADD a
+candidate sentence. Two arms, one per shape, both refused by name.
+
+**Found by the same reading, and worth recording because it is the second time
+this round the instrument caught its own author:** the comment introducing this
+fix SPELLED a retired sentence inside its own example, which is precisely the
+discipline `C29-F1` set. The example now uses placeholders.
+
+### `C30-S1` (the coordinator's `P2`) — the bidi scan read the RAW line
+
+`C29-S1` closed the explicit bidi formatting characters by refusal. The scan
+asked the question of the raw line, while every other character question in that
+file is asked after `html.unescape` — so an axis figure written with the hex entity for `U+202E` before its digits,
+which a Markdown reader renders as the character itself, was weighed by
+nothing. The coordinator
+measured it end to end.
+
+The question is now asked of `html.unescape(line)`, and the codepoint list the
+refusal prints is read from the unescaped text too, so the refusal names the
+character a reader would get rather than the ampersand that spells it. Two arms,
+one for the hex spelling and one for the decimal, and both flip when the guard is
+dropped:
+
+| world: the arm world's own figure, with... | guard held | guard skipped |
+|---|---|---|
+| the HEX entity for `U+202E` before its value | 1 finding | 0 |
+| the DECIMAL entity for the same character | 1 finding | 0 |
+| the raw character (round 29's arm) | 1 finding | 0 |
+| nothing before its value | 0 | 0 |
+
+The guard now reds four arms where it redded two, and the generated matrix says
+so.
+
+### The two `P4` notes — one is CLOSED and ARMED, the other is measured and stays declared
+
+The first note was that a sentence interrupted by a bare `#` line becomes two
+paragraphs and escapes, which the coordinator called the shape an author could
+stumble into. **It was already closed by the `R30-S1` work** — the whole-file
+pass joins across a bare `#` line as readily as across a blank one — and it is
+now ARMED rather than merely true, as a world of its own, so a later change that
+removed the whole-file pass would red here and not silently.
+
+The second note was the printed-sentence law's reach: the set of sites is the set
+the arms PROVOKE, and the coordinator enumerated all twenty-three `Refusal()`
+sites to find the one other refusal that states what makes a figure legitimate —
+`FIGURE-SINK-HAS-NO-ROWS` — judging its wording the live rule and the exposure
+nil. **Provoking it says otherwise, and that is why a `P4` note was worth
+running rather than reading.** The second site is now provoked by the arms, by
+handing `haystack` a capture that carries this commit's own `RUN_HEAD` and not
+one `FIGURE` row, and the law's first verdict on it was
+`GATE-SENTENCE-UNQUOTED`: the refusal said what the haystack is **in its own
+words**, without quoting `HAYSTACK_SENTENCE`. That is `C29-F1`'s defect class,
+alive at this head, in the one site the coordinator had read but not run. It now
+composes the pin, so the string a reader is handed in that world is the rule's
+own words. The exposure was not nil; it is nil now, and it is measured.
+
+### Residuals
+
+| id | `P` | what |
+|---|---|---|
+| `R30-S1` | — | CLOSED and armed: a blank line, a command's arguments, and (from the `P4` note) a bare `#` line all join. The limit is unchanged in kind: a split MID-WORD across two `echo`s still escapes, and escapes the reader too, because `echo` ends the line — what a reader sees is `…run p` / `rinted`, measured |
+| `C30-S1` | — | CLOSED at the cause: the question is asked after `html.unescape`, like every other character question in the file, with an arm per spelling |
+| `P4` note 1 | — | CLOSED and armed |
+| `P4` note 2 | — | CLOSED, and it was not the no-op it looked like: provoking the second site found it unpinned and it is pinned now |
+| `A-29-S1` | P3 | unchanged in kind and narrower by one site: the set of the gate's PRINTED sentences is the set the arms provoke, and both sites that state the rule are now provoked. A refusal written in new words in a new place is still caught only if it spells a retired wording |
+| `C28-F1` | P1 | OPEN and DECLARED, SIZED last round, and this round measured UNREACHABLE THROUGH THE EXISTING HOOK: a mutation of the DATA is refused as a no-op before any suite runs, because the hook's no-op guard digests the DDL-visible state. A real deletion of a row of `product_matrix_axes` produced byte-identical digests and `rc 4` with zero cases executed. The closure needs a SECOND declared kind of mutation with its own no-op guard over the rows — not a widened DDL digest, which would make one digest serve two doctrines |
+| `A-30-F1` | P2 | CLOSED for this round by appending the confirming run to the transcript, and recorded here because it stood in two heads, one of them signed. The class is round 25's `C25-F2`: a sentence about WHERE the evidence is, is a claim, and nothing in this pack reads those sentences |
+| `R28-S3` / `R27-S1` (first report) | P3 | the render-blank characters in no whitespace category stay a named residual on the coordinator's ruling |
+| carried | — | `R28-S1`, `R28-S2`, `R27-S5` through `R27-S8`, `R26-S5` (the capture is unsigned — used as an instrument by both reviewers and by this round's probe, and disclosed), `R26-S7`, `R25-S1` (deferred), `R17-S3`, the substring haystack, the two named exemptions, `G6` — reproduced by the coordinator at the merge-base, so not of this diff |
+| standing | — | **no CI has ever run the Phase 11 pack** |
+
+### `A-30-F1`, found by writing this round's transcript — a header that told a reader where the confirming run is, and it was not there
+
+Self-reported, `P2`, and it is a defect of the two previous heads including the
+signed one. The authoritative transcript of round 28 and of round 29 both open
+with *"The confirming run of the FINAL tree is recorded at the end of this
+file"*, and in both files it is not: each holds ONE run, whose `RUN_ID` appears
+twice because the driver prints it at the start and at the end. The confirming
+run was really made and its verdict is stated in the round's own section and in
+its published index, so no measurement here is false -- what is false is the
+pointer, and a reader who followed it would read the SUBJECT's run as the
+confirming one and so take the measured tree to be the final tree. That is a
+reader acting differently, which is this chain's test.
+
+Closed for this round in the only way that makes the sentence true: the
+confirming run of the final tree is APPENDED to this round's transcript, marked
+as a record added after that run and naming by SHA the tree it measured. The
+final commit's tree is therefore that tree plus the appended lines and nothing
+else, which is stated in the appended block itself.
+
+### The evidence this head carries, and the commit it measures
+
+`harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND30.txt` is the whole driver run from
+zero on a fresh clone, and `harness/RUN-EVIDENCE-PROBE-ROUND30.txt` is the
+committed worlds this round planted. Both name their subject by its full SHA,
+which is this commit's tree minus those two files, the regenerated block figures
+that counting them moves, and these lines.
+
+**WHAT THIS HEAD CLAIMS, AND WHAT IT DOES NOT.** No signature on THIS head, and
+none is claimed: `3f4b630` is signed, this commit is the answer to the residuals
+raised against it, and it is owed a challenger round and a coordinator diff
+review of its own. `READY_TO_PROMOTE` = **NO**; **no migration number exists** --
+none allocated, reserved, examined, exampled, or written in a filename or a
+comment; `OD-P11-07` is the owner's alone; and no CI has ever run this pack, so
+the gate's own authority is `UNMEASURED` outside this container.
+
 ## 8. Coordinator state
 
-**No coordinator signature.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. The coordinator's involvement so far has been to relay the two directives and to ask that the per-phase one be applied here; no verdict has been signed on this phase by anyone.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: the coordinator's diff review signed `3f4b630` (§7.31), which is this phase's last fully signed head, and an independent challenger signed the same head with no blocking defect. Neither is a promotion verdict, neither covers any other SHA, and no one has signed this head.
 
 ---
 

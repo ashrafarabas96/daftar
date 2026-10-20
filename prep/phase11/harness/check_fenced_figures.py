@@ -1652,10 +1652,13 @@ def haystack(root, skip=()):
         rows = FIGURE_ROW.findall(data)
         if not rows:
             raise Refusal(
-                "FIGURE-SINK-HAS-NO-ROWS: %s carries this commit's `RUN_HEAD` and "
-                "not one `FIGURE` row, so no case in this run required any value. "
-                "A gate whose haystack is empty passes nothing and must not "
-                "report that as a pass." % os.path.basename(os.path.realpath(capture))
+                ("FIGURE-SINK-HAS-NO-ROWS: %s carries this commit's `RUN_HEAD` "
+                 "and not one `FIGURE` row, so the haystack -- "
+                 + HAYSTACK_SENTENCE
+                 + " -- is EMPTY: no case of this run required any value. A "
+                 "gate whose haystack is empty passes nothing and must not "
+                 "report that as a pass.")
+                % os.path.basename(os.path.realpath(capture))
             )
         bound = {}
         for suite, case_id, figure in rows:
@@ -2458,9 +2461,19 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
             # reader cannot check, and it is refused by name.
             with open(path, encoding="utf-8") as fh:
                 for n, line in enumerate(fh, 1):
-                    if not any(c in line for c in BIDI_CONTROLS):
+                    # The coordinator's `C30-S1`. The question is asked of the
+                    # line AFTER `html.unescape`, like every other character
+                    # question in this file: `&#x202e;` and `&#8238;` are
+                    # SPELLINGS of `U+202E`, a Markdown renderer turns them
+                    # into the control, and round 29 asked this one question
+                    # of the raw line -- so the entity spelling was invisible
+                    # to the guard that had just closed the character.
+                    seen_line = html.unescape(line)
+                    if not any(c in seen_line for c in BIDI_CONTROLS):
                         continue
-                    bare = "".join(c for c in line if c not in BIDI_CONTROLS)
+                    bare = "".join(
+                        c for c in seen_line if c not in BIDI_CONTROLS
+                    )
                     for tok in figures_on(bare.rstrip("\n"), skip):
                         seen += 1
                         findings.append(
@@ -2561,7 +2574,9 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                     "set is derived by running `unicodedata.bidirectional` over every "
                     "`Cf` codepoint, not listed)."
                     % (rel, n, tok, written,
-                       ", ".join("U+%04X" % ord(c) for c in raw if c in BIDI_CONTROLS))
+                       ", ".join("U+%04X" % ord(c)
+                                  for c in html.unescape(raw)
+                                  if c in BIDI_CONTROLS))
                 )
             elif why == "no case named":
                 print(
@@ -2729,6 +2744,14 @@ CATCH = [
      "deleted=\u202e0 [FA-02]"),
     ("C29-S1 a bidi isolate before a value a case required",
      "deleted=\u20660 [FA-02]"),
+    # `C30-S1`. The same control written as an HTML entity, hex and decimal.
+    # Before the scan asked `html.unescape` these two were invisible: not a
+    # candidate, no finding, rc 0, while a renderer showed the reader a
+    # reordered number.
+    ("C30-S1 a bidi override written as a hex HTML entity",
+     "deleted=&#x202e;0 [FA-02]"),
+    ("C30-S1 a bidi override written as a decimal HTML entity",
+     "deleted=&#8238;0 [FA-02]"),
     ("R28-F1 a mark inside the value", "fabricated_count=9\u030199"),
     ("R28-F1 a mark on the key side of the equals", "fabricated_count\u0301=999"),
     ("R28-F1 a mark inside the key", "fabricated_co\u0301unt=999"),
@@ -5439,6 +5462,13 @@ PROVENANCE = {
               "`U+202E` -- deleted with the rest of `Cf` since round 14, so without "
               "this guard the line PASSES while a reader is shown the digits in "
               "another order"),
+    "C30-S1 a bidi override written as a hex HTML entity": (
+        None, "the coordinator's `C30-S1`: an entity is a SPELLING of the character, "
+              "and this one question was asked of the raw line while every other "
+              "character question in this file is asked after `html.unescape`"),
+    "C30-S1 a bidi override written as a decimal HTML entity": (
+        None, "the decimal spelling of the same codepoint, so the arm pair is about "
+              "the unescaping step and not about one entity's text"),
     "C29-S1 a bidi isolate before a value a case required": (
         None, "the same, with `U+2066`, so the arm pair is not one codepoint's "
               "behaviour: the set is derived by running `unicodedata.bidirectional` "
@@ -7158,6 +7188,22 @@ def frame_gate_test():
     return good
 
 
+def _clean_line(line):
+    """One line as a reader reads it: no comment marker, no `echo` prefix, no
+    trailing quote or continuation. `R30-S1` moved this out of `_prose` so the
+    whole-file reading cleans its lines the same way, which is what lets a
+    sentence split across a BLANK LINE be read as the sentence it is."""
+    body = line.strip()
+    body = re.sub(r"^#+\s*", "", body)
+    hit = re.match(r'^echo\s+"(.*)$', body)
+    if hit:
+        body = hit.group(1)
+    body = body.rstrip("\\").rstrip()
+    if body.endswith('"'):
+        body = body[:-1]
+    return body.rstrip()
+
+
 def _prose(text):
     """The file's SENTENCES, not its lines: `(first line number, paragraph)`.
 
@@ -7182,14 +7228,7 @@ def _prose(text):
     """
     paras, cur, start, last = [], [], None, None
     for n, line in enumerate(text.split("\n"), 1):
-        body = line.strip()
-        body = re.sub(r"^#+\s*", "", body)
-        hit = re.match(r'^echo\s+"(.*)$', body)
-        if hit:
-            body = hit.group(1)
-        body = body.rstrip("\\").rstrip()
-        if body.endswith('"'):
-            body = body[:-1]
+        body = _clean_line(line)
         if not body:
             if cur:
                 paras.append((start, last, " ".join(cur)))
@@ -7244,10 +7283,35 @@ def sentences(text, prefix, name, pins=()):
     positive pin; the tuple is the net under it.
     """
     out = []
-    for start, end, para in _prose(text):
+    # `R30-S1`, the round-30 challenger's residual, closed here. Reading the
+    # file as paragraphs still left two shapes out, and both are shapes these
+    # files could really be written in: a sentence split ACROSS A BLANK LINE,
+    # which ends a paragraph, and a sentence split across the ARGUMENTS of one
+    # command (`printf '%s %s\n' "<the first half of a retired" "sentence>"`),
+    # where the quotes are what hide it. The example is written with
+    # placeholders because this file names a retired rule by its ROUND and
+    # does not spell one -- including inside an example, which is a rule this
+    # very reading caught me breaking. So each paragraph is read twice -- as it stands, and
+    # with every quote character removed -- and the whole file is read once
+    # more as ONE paragraph, which no blank line can break. The last pass is
+    # the strongest over-join in this law: it can only ADD a candidate
+    # sentence, and the two live files are required to report nothing under it.
+    whole = re.sub(r"\s+", " ", " ".join(
+        c for c in (_clean_line(l) for l in text.split("\n")) if c
+    ))
+    readings = [(a, b, para) for a, b, para in _prose(text)]
+    readings += [
+        (a, b, re.sub(r"\s+", " ", para.replace('"', "").replace("'", "")))
+        for a, b, para in list(readings)
+    ]
+    readings.append((1, text.count("\n") + 1, whole))
+    readings.append((1, text.count("\n") + 1, whole.replace('"', "").replace("'", "")))
+    seen_already = set()
+    for start, end, para in readings:
         low = para.lower()
         for retired in RETIRED_SENTENCES:
-            if retired.lower() in low:
+            if retired.lower() in low and (retired, start) not in seen_already:
+                seen_already.add((retired, start))
                 out.append(
                     "%s-SENTENCE-RETIRED: %s, in the paragraph at lines %d-%d, says "
                     "%r, which describes a rule this gate no longer holds. The "
@@ -7348,6 +7412,24 @@ def driver_sentence_arms():
             "DRIVER-SENTENCE-RETIRED",
         ),
         (
+            "R30-S1 split across a BLANK LINE",
+            real + "\n# the haystack is %s\n\n# %s\n" % (
+                retired.split()[0], " ".join(retired.split()[1:])),
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
+            "C30 the coordinator's P4 note: split across a BARE `#` LINE",
+            real + "\n# the haystack is %s\n#\n# %s\n" % (
+                retired.split()[0], " ".join(retired.split()[1:])),
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
+            "R30-S1 split across one command's ARGUMENTS",
+            real + "\nprintf '%%s %%s\\n' \"%s\" \"%s\"\n" % (
+                retired.split()[0], " ".join(retired.split()[1:])),
+            "DRIVER-SENTENCE-RETIRED",
+        ),
+        (
             "the exit description stops quoting it",
             real.replace(HAYSTACK_SENTENCE, "something else entirely", 1),
             "DRIVER-SENTENCE-UNQUOTED",
@@ -7434,6 +7516,31 @@ def gate_sentence_arms():
     except Exception as why:                                   # pragma: no cover
         print("  sentences GATE-SENTENCE-NOT-REFUSED: %r -> **SELFTEST FAILED**" % why)
         return False
+    # The coordinator's round-30 note on this law's reach: it enumerated every
+    # `Refusal()` in this file -- twenty-three -- and found exactly TWO that
+    # state what makes a figure legitimate. The other is
+    # `FIGURE-SINK-HAS-NO-ROWS`, whose wording is the live rule, so it is
+    # PROVOKED here too rather than read: a sink carrying this commit's own
+    # `RUN_HEAD` and not one row.
+    try:
+        top = _subject_top(_harness_dir(), False)
+        sha = _commit_of(top)
+        with tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as fh:
+            fh.write("RUN_HEAD : %s\n" % sha)
+            empty = fh.name
+        was = list(_RUN_CAPTURE)
+        _RUN_CAPTURE[:] = [empty]
+        try:
+            haystack(_harness_dir())
+        finally:
+            _RUN_CAPTURE[:] = was
+            os.unlink(empty)
+    except Refusal as why:
+        live.append(("the FIGURE-SINK-HAS-NO-ROWS refusal", str(why)))
+    except Exception as why:                                   # pragma: no cover
+        print("  sentences GATE-SINK-REFUSAL-NOT-PROVOKED: %r" % why)
     if not live:
         print(
             "  sentences GATE-SENTENCE-NOT-PROVOKED: a missing capture did not refuse, "
