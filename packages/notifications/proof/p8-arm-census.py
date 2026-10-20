@@ -264,6 +264,22 @@ ARM_LABELS = (
     "RELATION-EXPLAIN-ISOLATE",
     "RELATION-EXPLAIN-CTL",
     "GATE-STDERR",
+    # ROUND 36, R26-F-1: the three statements that defeat any privilege set
+    # derived from the case's own text, the coordinator's two, the
+    # challenger's own control, and a one-deletion control on the reach term
+    # for each of them.
+    "ATTRIB-W1",
+    "ATTRIB-W2",
+    "ATTRIB-W3",
+    "ATTRIB-W3C",
+    "ATTRIB-Z1",
+    "ATTRIB-Z2",
+    "REACH-W1-CTL",
+    "REACH-W2-CTL",
+    "REACH-W3-CTL",
+    "REACH-W3C-CTL",
+    "REACH-Z1-CTL",
+    "REACH-Z2-CTL",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
     # each term has an arm that measures what the behaviour test admits or
@@ -386,8 +402,13 @@ NOT_ARM_PREFIXES = (
 # arm the gate is expected to print, and the census refuses when the run's set
 # differs from it in EITHER direction, naming which identities moved.
 #
-# `EXPECTED_SEAL` is the SHA-256 of "\n".join(EXPECTED_ARMS) + "\n", and it is
-# checked before the log is read. Its job is narrow and worth stating: it does
+# `EXPECTED_SEAL` is what `seal_of` computes, and ROUND 36 (R26-S-5) corrects
+# this line: it used to say the SHA-256 of `"\n".join(EXPECTED_ARMS) + "\n"`,
+# which round 30 superseded when the seal was widened to all FOUR declarations
+# and which no longer computes the committed value — a reader running the
+# published recipe would have concluded the seal was broken. The recipe is the
+# one in `seal_of`'s own docstring: the four declarations, each as its own
+# tab-delimited block. It is checked before the log is read. Its job is narrow and worth stating: it does
 # not stop an author from editing the list — nothing can — it stops the list
 # being edited WITHOUT NOTICING, by a patcher, a merge, or a hand reaching for
 # one line. Regenerate both together with `--seal` and commit them together.
@@ -421,11 +442,17 @@ EXPECTED_ARMS = (
     ("ATTRIB-KIND-CTL", 1),
     ("ATTRIB-KIND-ISOLATE", 1),
     ("ATTRIB-PRIV-CTL", 1),
+    ("ATTRIB-W1", 1),
+    ("ATTRIB-W2", 1),
+    ("ATTRIB-W3", 1),
+    ("ATTRIB-W3C", 1),
     ("ATTRIB-X1", 1),
     ("ATTRIB-X2", 1),
     ("ATTRIB-X3", 1),
     ("ATTRIB-X4", 1),
     ("ATTRIB-X5", 1),
+    ("ATTRIB-Z1", 1),
+    ("ATTRIB-Z2", 1),
     ("BASELINE CASE", 1),
     ("CENSUS-BASE", 1),
     ("CENSUS-LOSS", 1),
@@ -546,6 +573,12 @@ EXPECTED_ARMS = (
     ("MUT 9", 1),
     ("MUT 9b", 1),
     ("REACH-BENCH", 1),
+    ("REACH-W1-CTL", 1),
+    ("REACH-W2-CTL", 1),
+    ("REACH-W3-CTL", 1),
+    ("REACH-W3C-CTL", 1),
+    ("REACH-Z1-CTL", 1),
+    ("REACH-Z2-CTL", 1),
     ("RELATION-ATTRIB-CTL", 1),
     ("RELATION-ATTRIB-FN", 1),
     ("RELATION-ATTRIB-NAMED", 1),
@@ -630,7 +663,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "cfb4963032fa234804518cf750c6523a6d2234e1f4dbbc1a34ff3d6f932eb247"
+EXPECTED_SEAL = "a450d4c174a5f2b98225a3a3db3919ed6551ce4e2a151603baa519309ffd6dcf"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not

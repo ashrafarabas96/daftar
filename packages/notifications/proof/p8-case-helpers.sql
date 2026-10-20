@@ -995,12 +995,90 @@ BEGIN
   END IF;
 END $$;
 
+-- ROUND 36, R26-F-1 and the coordinator's ruling on `d418171`. THE REACH
+-- TERM, and it is the direction R25's 4.4 put third and nobody had built.
+--
+-- Rounds 34 and 35 asked the catalogue a question DERIVED FROM THE CASE'S OWN
+-- TEXT — which privileges the statement's keywords imply — and a set derived
+-- from text the case writes is a set the case CHOOSES. R26 measured three
+-- ways to choose it, against the head that shipped round 35:
+--
+--   W1 'SELECT 1 AS truncate FROM @REL@, p8other.p8bench_rel'     → PASS rc 0
+--   W2 the row form with 'AS delete'                              → PASS rc 0
+--   W3 'INSERT INTO p8other.p8bench_ro SELECT k FROM @REL@'       → PASS rc 0
+--
+-- `W1` and `W2` carry one extra DECLARED keyword as a column label, which
+-- makes the conjunction smaller and switches the term off. `W3` needs no
+-- trick at all and defeats the leading-keyword reading too: it needs SELECT
+-- on the declared relation, which the role HOLDS, and INSERT on the twin,
+-- which it lacks — so every reading of the case's text is silent, while the
+-- refusal the case reads is about the twin. And the twin's message is
+-- byte-identical, because the server names no schema.
+--
+-- So the set is taken FROM THE SERVER instead. `EXPLAIN (FORMAT JSON)` of the
+-- same statement lists every relation the plan touches; the plan is produced
+-- through a SECURITY DEFINER helper owned by the migrator, so a role that
+-- holds everything does the planning and no ACL hides a relation from the
+-- list. The statement must reach EXACTLY the declared relation and nothing
+-- else. A statement that reaches a second relation cannot be evidence about
+-- the first, whatever the server's message says and whatever privileges
+-- anyone holds.
+--
+-- DECLARED BOUNDS of the reach term:
+--   * the plan is what a non-ANALYZE EXPLAIN shows, so a relation reached by
+--     a TRIGGER at run time is not in it. That is deliberate and it is the
+--     EXPLAIN construction's question, not this one's: `Y1` plans as exactly
+--     its declared relation and is refused by the construction.
+--   * the helper pins `search_path` to `p8, public`, which is what every case
+--     file in this pack sets. A session that sets a different one resolves
+--     its declared relation differently from the plan, and the comparison
+--     reds — fail-closed, by construction.
+--   * a statement the planner cannot plan at all is refused by name here
+--     rather than being admitted unmeasured.
+CREATE OR REPLACE FUNCTION p8.plan_nodes(node JSONB) RETURNS SETOF JSONB
+LANGUAGE plpgsql IMMUTABLE AS $fn$
+DECLARE child JSONB; k TEXT;
+BEGIN
+  IF node IS NULL THEN RETURN; END IF;
+  IF jsonb_typeof(node) = 'array' THEN
+    FOR child IN SELECT jsonb_array_elements(node) LOOP
+      RETURN QUERY SELECT * FROM p8.plan_nodes(child);
+    END LOOP;
+    RETURN;
+  END IF;
+  IF jsonb_typeof(node) <> 'object' THEN RETURN; END IF;
+  RETURN NEXT node;
+  -- Every nested plan the server can hang off a node, named explicitly so a
+  -- key this reader does not know cannot hide a relation: `Plans` carries
+  -- children, InitPlan and SubPlan alike.
+  FOREACH k IN ARRAY ARRAY['Plans', 'Plan'] LOOP
+    IF node ? k THEN
+      RETURN QUERY SELECT * FROM p8.plan_nodes(node -> k);
+    END IF;
+  END LOOP;
+END $fn$;
+
+CREATE OR REPLACE FUNCTION p8.plan_relations(stmt TEXT) RETURNS OID[]
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = p8, public, pg_temp AS $fn$
+DECLARE j JSONB; oids OID[];
+BEGIN
+  EXECUTE 'EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ' || stmt INTO j;
+  SELECT array_agg(DISTINCT o) INTO oids FROM (
+    SELECT to_regclass(quote_ident(n ->> 'Schema') || '.'
+                       || quote_ident(n ->> 'Relation Name'))::oid AS o
+      FROM p8.plan_nodes(j) n
+     WHERE n ? 'Relation Name' AND n ? 'Schema'
+  ) t WHERE t.o IS NOT NULL;
+  RETURN coalesce(oids, ARRAY[]::OID[]);
+END $fn$;
+
 CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT,
                                                 kind TEXT, relation TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
         eplan BOOLEAN; esst TEXT; emsg TEXT; servergrant BOOLEAN; named BOOLEAN;
-        relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[];
+        relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[]; leadkw TEXT; scanned TEXT;
+        reach OID[];
 BEGIN
   witnessed := subject IS NOT NULL;
   -- ROUND 29, N-3. Every path into this function passes through here, including
@@ -1248,20 +1326,26 @@ BEGIN
     --       `view`, `materialized view`, `foreign table`, `sequence`,
     --       `function` — so a refusal about a FUNCTION wearing the declared
     --       relation's name no longer arrives, which is what the bare token
-    --       test could not see.
+    --       test could not see. ROUND 36, R26-S-3: the MAP below covers the
+    --       first four of those kinds only (`relkind` r/p/v/m/f). A declared
+    --       SEQUENCE is refused by name as a kind this form cannot read out
+    --       of the message, and a `function` is not a relation and cannot be
+    --       declared at all — both fail-closed, and no case in this pack is
+    --       either.
     --   (b) BY CONSTRUCTION, from the catalogue, the NEGATION and not the
-    --       complement: the privileges the statement needs are DERIVED from
-    --       the keywords it DECLARES (SELECT, INSERT, UPDATE, DELETE,
-    --       TRUNCATE — the five whose table privilege is the keyword's own,
-    --       out of the set `assert_shape` has already bounded), and the role
-    --       must NOT hold all of them on the declared relation. A role that
-    --       holds every privilege the statement needs cannot have been
+    --       complement: the privilege the statement needs is derived from its
+    --       LEADING keyword (SELECT, INSERT, UPDATE, DELETE, TRUNCATE — the
+    --       five whose table privilege is the keyword's own), plus UPDATE
+    --       where the statement carries an `ON CONFLICT … DO UPDATE`, and the
+    --       role must NOT hold all of them on the declared relation. A role
+    --       that holds every privilege the statement needs cannot have been
     --       refused BY A GRANT on that relation, so the refusal is about
     --       something else — which is what catches the cross-schema twin,
     --       whose message is BYTE-IDENTICAL to the one the declared relation
-    --       would produce. The coordinator's ruling said to derive this from
-    --       the LEADING keyword; the gate's own `FB-f` probe measures why it
-    --       reads all of them, and the reason is written at the term itself.
+    --       would produce. The derivation is POSITIONAL on purpose: round 35
+    --       read every keyword PRESENT, and one declared keyword carried as a
+    --       column label switched the term off (Z1, Z2 — the reason is
+    --       written at the term itself).
     --
     -- Measured consequence of (b)'s semantics, and the reason it is the right
     -- question: `has_table_privilege(…, 'UPDATE')` answers FALSE for a role
@@ -1292,19 +1376,29 @@ BEGIN
                       AND position('row-level security policy' in lower(coalesce(msg,''))) = 0
                       AND split_part(coalesce(ctx,''), E'\n', 1) !~ 'PL/pgSQL function .* at RAISE');
       IF servergrant THEN
-        IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
-          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
-                          'relation "%" is not a plain lower-case identifier, so neither the '
-                          'kind-qualified test on the server''s message nor the catalogue lookup '
-                          'can be evaluated for it, and this form will not pass a refusal it '
-                          'cannot attribute (R25-F-1)', label, relation;
-        END IF;
+          -- (0) BY REACH, FROM THE SERVER, and it runs FIRST of the three:
+          -- a statement that touches a second relation is not evidence about
+          -- the first, whatever the server's message says and whatever
+          -- privileges anyone holds. The prose above `p8.plan_relations` says
+          -- why the set is taken from the plan and not from the case's own
+          -- keywords.
+          --
+          -- DECLARED BOUND on its placement: it sits inside the grant-decision
+          -- condition with the other two terms, so a case refused by something
+          -- the server did not decide as a GRANT — a trigger's RAISE, a
+          -- constraint, an error the statement computed for itself — is not
+          -- reach-checked. Those are what `assert_arriving_class`, the handler
+          -- ban and the EXPLAIN construction bound, and the measurement that
+          -- put it here is `RB-class`: `SELECT 1/0 FROM @REL@` is folded by the
+          -- PLANNER, so EXPLAIN raises 22012 and a reach term outside this
+          -- condition refused an honest probe for a reason that has nothing to
+          -- do with reach.
         relid := to_regclass(p8.quoted_ident(relation));
         IF relid IS NULL THEN
           RAISE EXCEPTION '% FAIL: THE DECLARED RELATION DOES NOT RESOLVE — "%" is not visible as '
-                          'a relation in this session''s search_path, so the catalogue cannot be '
-                          'asked what kind of object it is or what privileges the role holds on '
-                          'it (R25-F-1)', label, relation;
+                          'a relation in this session''s search_path, so neither the statement''s '
+                          'reach nor the catalogue can be compared against it (R26-F-1)',
+            label, relation;
         END IF;
         SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
                               WHEN 'm' THEN 'materialized view' WHEN 'f' THEN 'foreign table'
@@ -1315,6 +1409,55 @@ BEGIN
                           'relation "%" is not a kind this form knows how to read out of the '
                           'server''s refusal, so the arrival term cannot be evaluated (R25-F-1)',
             label, relation;
+        END IF;
+        BEGIN
+          reach := p8.plan_relations(stmt);
+        EXCEPTION WHEN others THEN
+          GET STACKED DIAGNOSTICS esst = RETURNED_SQLSTATE, emsg = MESSAGE_TEXT;
+          -- DECLARED BOUND, and it is the one case the gate's own `FB-i` probe
+          -- forced: the declared relation may be one the OWNER itself may not
+          -- touch. `FB-i` declares `pg_class` and updates it, and only a
+          -- superuser can, so EXPLAIN refuses for the definer too — with a
+          -- kind-qualified grant refusal ABOUT THE DECLARED RELATION, the same
+          -- sqlstate the case itself read. Where the PLAN and the RUN agree
+          -- that the refusal is a grant decision about the declared relation,
+          -- the reach is left UNREAD and the case continues on the other two
+          -- terms; any other planning failure refuses by name. What is
+          -- unmeasured in that window is a second relation reached beyond the
+          -- point where the planner stopped, and the window is exactly "a
+          -- declared relation the owner may not touch".
+          IF esst = '42501' AND sst = '42501'
+             AND lower(coalesce(emsg,'')) ~ ('permission denied for (' || kindword
+                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)')
+             AND lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
+                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)') THEN
+            reach := ARRAY[relid];
+          ELSE
+            RAISE EXCEPTION '% FAIL: THIS FORM CANNOT BOUND THE STATEMENT''S REACH — the server '
+                            'answered [%] % when asked to PLAN this statement for a role that '
+                            'holds everything, so the set of relations it touches cannot be read '
+                            'out of the plan, and this form will not pass a refusal whose subject '
+                            'it cannot bound (R26-F-1)', label, esst, emsg;
+          END IF;
+        END;
+        IF reach <> ARRAY[relid] THEN
+          RAISE EXCEPTION '% FAIL: THE STATEMENT REACHES MORE THAN THE DECLARED RELATION — this '
+                          'case declares "%" (oid %) and the server''s own plan for this statement '
+                          'touches %, so whatever was refused, the evidence is not about "%" alone. '
+                          'A second relation the statement reaches can be the one the refusal is '
+                          'about, and its message is byte-identical when it wears the same name '
+                          '(R26-F-1 W1/W2/W3, the coordinator''s Z1/Z2)',
+            label, relation, relid,
+            (SELECT coalesce(string_agg(r::regclass::text, ', ' ORDER BY r::regclass::text),
+                             'nothing at all') FROM unnest(reach) AS r),
+            relation;
+        END IF;
+        IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
+                          'relation "%" is not a plain lower-case identifier, so neither the '
+                          'kind-qualified test on the server''s message nor the catalogue lookup '
+                          'can be evaluated for it, and this form will not pass a refusal it '
+                          'cannot attribute (R25-F-1)', label, relation;
         END IF;
         named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
                  || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)');
@@ -1328,34 +1471,58 @@ BEGIN
                           '(R25-F-1, the coordinator''s 3.2)',
             label, kindword, relation, sst, msg, kindword, relation;
         END IF;
-        -- The privileges the statement DECLARES it needs, read out of the
-        -- keywords `assert_shape` has already bounded. The coordinator's
-        -- ruling said to derive this from the statement's LEADING keyword;
-        -- what runs here reads EVERY declared keyword, because the leading
-        -- one alone is not what the statement needs and the gate's own
-        -- `FB-f` probe is the measurement: `INSERT INTO … ON CONFLICT DO
-        -- UPDATE` leads with INSERT, which the worker HOLDS on
-        -- `notification_attempts`, and the refusal it gets is a genuine one
-        -- about that relation, for the UPDATE it lacks. Read by the leading
-        -- keyword alone the term would red that case — a fail-closed
-        -- over-refusal, but one that would also take away
-        -- `WITNESS-SHAPE-CTL`'s attribution. Reading all of them asks the
-        -- whole question: could a grant on THIS relation have refused this
-        -- statement at all?
-        SELECT array_agg(DISTINCT pr ORDER BY pr) INTO needprivs
-          FROM (SELECT lower(m[1]) AS w
-                  FROM regexp_matches(p8.sql_scan(stmt),
-                                      '[A-Za-z_][A-Za-z_0-9]*', 'g') AS m) t
-          JOIN LATERAL (SELECT CASE t.w WHEN 'select' THEN 'SELECT' WHEN 'insert' THEN 'INSERT'
-                                        WHEN 'update' THEN 'UPDATE' WHEN 'delete' THEN 'DELETE'
-                                        WHEN 'truncate' THEN 'TRUNCATE' END AS pr) p ON p.pr IS NOT NULL;
+        -- ROUND 36, the coordinator's 3.1 and 3.2 (P1), and it REPLACES round
+        -- 35's reading of this term. Round 35 read EVERY privilege-bearing
+        -- keyword the scanned statement carried and required the role to hold
+        -- ALL of them. That conjunction gets SMALLER as the statement gets
+        -- longer: one extra keyword whose privilege the role lacks turns it
+        -- false and takes the term out of the law. Both forms DECLARE a
+        -- privilege-bearing keyword no statement of that form needs, and a
+        -- column label is enough to carry it — measured on 16.15 against the
+        -- head that shipped round 35:
+        --
+        --   Z1 case_refuses_relation(… 'SELECT 1 AS truncate FROM @REL@, other.rela' …, 'rela')
+        --     → PASS refused by permission denied [42501], rc 0
+        --   Z2 the row form with 'AS delete'                              → PASS, rc 0
+        --   SELECT count(*) FROM rela → 1, so the claim is FALSE of the subject
+        --
+        -- The guard's monotonicity was backwards. What runs now derives the
+        -- privilege from POSITION, which a column label can never occupy: the
+        -- statement's LEADING keyword, plus UPDATE where the statement really
+        -- carries an `ON CONFLICT … DO UPDATE`. That reds Z1 and Z2, leaves
+        -- X2, X3, X5 and T6 exactly as they were, and still answers {INSERT,
+        -- UPDATE} for the `FB-f` shape, so `WITNESS-SHAPE-CTL` keeps its
+        -- attribution. (`\y` is PostgreSQL's word boundary; `\b` is a
+        -- backspace, which matches nothing here and would fail silently.)
+        --
+        -- ROUND 35's JUSTIFICATION FOR READING EVERY KEYWORD IS WITHDRAWN. It
+        -- said `FB-f` reds under the leading-keyword reading. `FB-f` never
+        -- reaches this term: `assert_shape` refuses it first, for the
+        -- keywords `conflict, do, on, set, update`, which the relation form
+        -- does not declare — measured. It reaches this term only inside
+        -- `WITNESS-SHAPE-CTL`, which deletes that guard on purpose. The
+        -- sentence presented a live over-refusal and there was none; what was
+        -- really at stake was a control's attribution, and trading a
+        -- fail-open in the law for an attribution in a control is backwards.
+        scanned := p8.sql_scan(stmt);
+        leadkw := lower(coalesce((regexp_match(scanned, '^[^A-Za-z]*([A-Za-z]+)'))[1], ''));
+        needprivs := CASE leadkw WHEN 'select' THEN ARRAY['SELECT']
+                                 WHEN 'insert' THEN ARRAY['INSERT']
+                                 WHEN 'update' THEN ARRAY['UPDATE']
+                                 WHEN 'delete' THEN ARRAY['DELETE']
+                                 WHEN 'truncate' THEN ARRAY['TRUNCATE'] END;
+        IF needprivs IS NOT NULL
+           AND scanned ~* '\yon\s+conflict\y.*\ydo\s+update\y'
+           AND NOT ('UPDATE' = ANY (needprivs)) THEN
+          needprivs := array_append(needprivs, 'UPDATE');
+        END IF;
         IF needprivs IS NULL THEN
-          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT DERIVE THE PRIVILEGE THE STATEMENT NEEDS — the '
-                          'statement carries none of the five keywords whose table privilege is '
-                          'the keyword''s own (SELECT, INSERT, UPDATE, DELETE, TRUNCATE), so the '
-                          'catalogue cannot be asked the question that attributes the refusal, '
-                          'and this form will not pass a refusal it cannot attribute (R25-F-1)',
-            label;
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT DERIVE THE PRIVILEGE THE STATEMENT NEEDS — it '
+                          'leads with "%", which is not one of the five keywords whose table '
+                          'privilege is the keyword''s own (SELECT, INSERT, UPDATE, DELETE, '
+                          'TRUNCATE), so the catalogue cannot be asked the question that '
+                          'attributes the refusal, and this form will not pass a refusal it '
+                          'cannot attribute (R25-F-1, the coordinator''s 3.5)', label, leadkw;
         END IF;
         BEGIN
           SELECT bool_and(has_table_privilege(current_user, relid, pr)) INTO holdspriv
@@ -1371,7 +1538,7 @@ BEGIN
         IF holdspriv THEN
           RAISE EXCEPTION '% FAIL: THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS ON THE '
                           'DECLARED RELATION — this case says a grant refuses % on "%", the '
-                          'statement declares the keywords that need %, and the catalogue says '
+                          'statement leads with a keyword needing %, and the catalogue says '
                           'the role HOLDS all of them on it. Whatever [%] % was about, it was not '
                           'a grant on this relation: the message names no schema, so a same-named '
                           'relation in another schema produces a byte-identical one '

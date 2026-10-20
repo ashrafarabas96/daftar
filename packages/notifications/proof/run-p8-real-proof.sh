@@ -2366,8 +2366,8 @@ wl_ctl "WITNESS-SHAPE-CTL" shape.sql \
 # probe of its own, `RELATION-BIND-ISOLATE`, instead of a sentence.
 wl_sub_ctl "WITNESS-BIND-CTL" bind.sql \
   "  IF position('@REL@' in bare) = 0 THEN" "  IF false THEN" \
-  refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
-  "with the text test deleted ALONE this particular statement, which reads a DIFFERENTLY-named relation, is caught by the arrival term behind it; a statement reading a SAME-named relation in another schema is not, and that case is 'RELATION-BIND-ISOLATE' below (U-3, R25's 2.5)"
+  refuse "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "with the text test deleted ALONE the statement is caught by the REACH term behind it, which round 36 added: the server's own plan for it touches a relation the case did not declare. That is the term R25's 2.5 said was missing, and it does not care whether the other relation wears the declared name (U-3)"
 wl_sub_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
   "    IF kind = 'relation' AND rowlevel THEN" "    IF false THEN" \
   refuse "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
@@ -3339,8 +3339,20 @@ CREATE OR REPLACE FUNCTION public.p8bench_rel() RETURNS INT LANGUAGE sql AS 'SEL
 REVOKE ALL ON FUNCTION public.p8bench_rel() FROM PUBLIC;
 CREATE SCHEMA IF NOT EXISTS p8other;
 GRANT USAGE ON SCHEMA p8other TO daftar_worker;
-CREATE TABLE IF NOT EXISTS p8other.p8bench_rel(k TEXT PRIMARY KEY);
+-- The twin's column is named `j` on purpose: the row form composes its own
+-- WHERE on the declared key, and a twin carrying the same column name would
+-- make that predicate ambiguous instead of letting the attack through.
+CREATE TABLE IF NOT EXISTS p8other.p8bench_rel(j TEXT PRIMARY KEY);
 REVOKE ALL ON p8other.p8bench_rel FROM PUBLIC;
+-- ROUND 36, R26-F-1. `W3` needs no trick: it reaches the declared relation
+-- for SELECT, which the role HOLDS, and a twin for INSERT, which it lacks —
+-- so every privilege set derived from the case's own text is silent, and the
+-- twin's refusal is byte-identical because it wears the declared name.
+-- `p8bench_twin` is the same shape aimed at a relation that does NOT wear
+-- that name, which is what separates the reach term from the arrival term.
+CREATE TABLE IF NOT EXISTS p8other.p8bench_ro(k TEXT);
+CREATE TABLE IF NOT EXISTS p8other.p8bench_twin(k TEXT);
+REVOKE ALL ON p8other.p8bench_ro, p8other.p8bench_twin FROM PUBLIC;
 -- A relation the role may READ and may not WRITE, plus a function it may not
 -- execute: the probe that isolates the ARRIVAL term, because the role
 -- genuinely lacks the privilege the statement needs and the catalogue term is
@@ -3412,9 +3424,9 @@ SELECT p8.case_refuses_relation('T4 a refusal that NAMES the declared relation a
 ROLLBACK;
 SQL
 } > "$WB/t4.sql"
-wb_probe t1.sql "RELATION-ATTRIB-REL" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+wb_probe t1.sql "RELATION-ATTRIB-REL" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "a relation case whose statement names a second relation the role may not touch, so the 42501 the server takes is relation-level and about the OTHER one, while the role may do the very thing the case says it may not (the coordinator's section 4.1)"
-wb_probe t2.sql "ROW-ATTRIB-REL" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+wb_probe t2.sql "ROW-ATTRIB-REL" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "the same substitution in the row form, which the coordinator's 4.2 measured passing with no second table needed beyond the one the statement reaches"
 wb_probe t3.sql "RELATION-ATTRIB-FN" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "a relation case refused because the role may not EXECUTE a function the statement calls — the class is not two tables, it is any plan-time 42501 the statement can provoke about anything (the coordinator's 4.2)"
@@ -3488,24 +3500,106 @@ SQL
 } > "$WB/y1.sql"
 wb_probe x1.sql "ATTRIB-X1" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "R25-F-1 X1, which passed at rc 0 on this head's parent: the role HOLDS SELECT on the declared relation and the 42501 is about a function wearing its name"
-wb_probe x2.sql "ATTRIB-X2" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+wb_probe x2.sql "ATTRIB-X2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R25-F-1 X2: the refusal is about a same-named relation in another schema and its message is byte-identical to one about the declared relation, so the ARRIVAL term is satisfied and the derived-privilege term is what refuses it"
-wb_probe x3.sql "ATTRIB-X3" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+wb_probe x3.sql "ATTRIB-X3" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R25-F-1 X3, the cross-schema twin in the row form, which the coordinator's 3.2 measured passing with the key and the witness both satisfied"
 wb_probe x4.sql "ATTRIB-X4" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "R25-F-1 X4, the function wearing the declared name in the row form"
-wb_probe x5.sql "ATTRIB-X5" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+wb_probe x5.sql "ATTRIB-X5" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R25-F-1 X5, the case that closes the door on every cheap fix: 'expect' spells 'permission denied for table p8bench_rel' IN FULL and the refusal about the OTHER schema's relation satisfies it exactly, because the server's message carries no schema"
 wb_probe t5.sql "ATTRIB-KIND-ISOLATE" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "the probe that isolates the ARRIVAL term: the role genuinely lacks INSERT on the declared relation, so the derived-privilege term is SILENT, and only the kind-qualified reading of the server's words sees that the refusal is about a function"
 wb_probe t6.sql "RELATION-BIND-ISOLATE" "THE STATEMENT IS NOT BUILT FROM ITS SUBJECT" \
   "the probe that isolates the BIND law, which round 34's withdrawal of WITNESS-BIND-CTL left with none: the refusal IS about the declared relation, with its own kind and name, the role lacks the privilege the statement needs and the plan refuses too, so every other law is satisfied and only the bind test refuses it (the coordinator's section 4)"
 wb_probe y1.sql "RELATION-EXPLAIN-ISOLATE" "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
-  "R25-S-1, and the probe that isolates the EXPLAIN construction, which round 34's withdrawal of RELATION-ROWTRAP-CTL left with none: the refusal NAMES the declared relation with its own kind and the role HOLDS the INSERT the statement needs, so both attribution terms are satisfied and only the construction sees that a row decided it"
-wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \
-  "        IF holdspriv THEN" "        IF false THEN" \
+  "R25-S-1, and the probe that isolates the EXPLAIN construction, which round 34's withdrawal of RELATION-ROWTRAP-CTL left with none: the refusal NAMES the declared relation with its own kind, the plan reaches that relation and nothing else, and the role's INSERT here is COLUMN-scoped, so has_table_privilege answers FALSE and the privilege term is silent — every other term is satisfied and only the construction sees that a row decided it (round 36 corrects this sentence; it used to state that the role HOLDS the INSERT the statement needs, which is what the term asks and is not what the role has)"
+# ---------------------------------------------------------------------
+# ROUND 36. R26-F-1 and the coordinator's ruling on `d418171`: the three
+# statements that defeat ANY privilege set derived from the case's own text,
+# and the coordinator's two that defeat the every-keyword reading alone.
+# ---------------------------------------------------------------------
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('W1 one declared keyword as a column label, and the term goes silent',
+  $q$SELECT 1 AS truncate FROM @REL@, p8other.p8bench_rel$q$,
+  'permission denied for table p8bench_rel', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/w1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('W2 the same word in the row form',
+  $q$SELECT (SELECT count(*) FROM p8other.p8bench_rel) AS delete FROM @REL@$q$,
+  'permission denied for table p8bench_rel', 'p8bench_rel', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/w2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('W3 no trick at all — the privilege the role lacks is on the OTHER relation',
+  $q$INSERT INTO p8other.p8bench_ro SELECT k FROM @REL@$q$,
+  'permission denied', 'p8bench_ro');
+ROLLBACK;
+SQL
+} > "$WB/w3.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('W3C the same shape aimed at a relation that does NOT wear the declared name',
+  $q$INSERT INTO p8other.p8bench_twin SELECT k FROM @REL@$q$,
+  'permission denied', 'p8bench_ro');
+ROLLBACK;
+SQL
+} > "$WB/w3c.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('Z1 the coordinator''s column label, relation form',
+  $q$SELECT 1 AS truncate FROM @REL@, p8other.p8bench_rel$q$, 'permission denied', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/z1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('Z2 the coordinator''s column label, row form',
+  $q$SELECT 1 AS delete FROM @REL@, p8other.p8bench_rel$q$,
+  'permission denied', 'p8bench_rel', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/z2.sql"
+wb_probe w1.sql "ATTRIB-W1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "R26-F-1 W1, which passed at rc 0 on this head's parent: X2 with ONE extra DECLARED keyword as a column alias, which made the privilege conjunction smaller and took the term out of the law — and 'expect' spells the declared relation's name in full, so nothing in the case's wording is doing the work"
+wb_probe w2.sql "ATTRIB-W2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "R26-F-1 W2, the same move in the row form with the declared keyword 'delete'"
+wb_probe w3.sql "ATTRIB-W3" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "R26-F-1 W3, which needs no trick and defeats EVERY reading of the case's text, the leading-keyword one included: the role HOLDS the SELECT this statement needs on the declared relation and lacks the INSERT it needs on the twin, so any privilege set derived from the statement is silent while the refusal is about the twin"
+wb_probe w3c.sql "ATTRIB-W3C" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "R26-F-1's own control, W3-CTL: the same shape aimed at a relation that does NOT wear the declared name. The reach term refuses it for the same reason as W3 — reach is about the statement, not the message — and 'REACH-W3C-CTL' below shows the arrival term behind it catches this one and not W3"
+wb_probe z1.sql "ATTRIB-Z1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "the coordinator's Z1 at 'd418171', the same column-label attack carrying 'expect' as a bare phrase"
+wb_probe z2.sql "ATTRIB-Z2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
+  "the coordinator's Z2, the row form of the same"
+wl_sub_ctl "REACH-W1-CTL" w1.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "with the reach term deleted W1 is still refused, by the derived-privilege term behind it: round 36 also made that derivation POSITIONAL, so a declared keyword carried as a column LABEL no longer dilutes it. The term is corroboration and it covers this shape; W3 is the one it cannot see (R26-F-1)"
+wl_sub_ctl "REACH-W2-CTL" w2.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "with the reach term deleted W2 is still refused by the positional privilege term, the same way as W1, so the row form is covered twice over and reach is not what this shape needs"
+wl_sub_ctl "REACH-W3-CTL" w3.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   pass "PASS refused by permission denied" \
-  "with the derived-privilege term deleted ALONE the cross-schema twin passes again, which is what the arrival term cannot see at any strength, because the message it reads carries no schema (R25-F-1 X2/X5)"
+  "with the reach term deleted ALONE W3 passes again, and this is the one that matters most: no privilege question asked of the DECLARED relation can ever see it, because the privilege the role lacks is on the other one"
+wl_sub_ctl "REACH-W3C-CTL" w3c.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "with the reach term deleted the same shape aimed at a DIFFERENTLY-named relation is still refused, by the arrival term behind it — which is exactly the difference between W3 and this one, and why the reach term is not redundant with the kind-qualified arrival"
+wl_sub_ctl "REACH-Z1-CTL" z1.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "with the reach term deleted the coordinator's Z1 is still refused by the positional privilege term — which is the fix the coordinator's 3.5 ruled for, kept here as corroboration beneath the reach term that supersedes it"
+wl_sub_ctl "REACH-Z2-CTL" z2.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "with the reach term deleted the coordinator's Z2 is still refused by the positional privilege term, the row form of the same"
+wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \
+  "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
+  refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "with the reach term deleted the cross-schema twin is still refused by the derived-privilege term behind it — which is why that term is kept as CORROBORATION. It is necessary and not sufficient: W3 is the same class and no privilege question about the declared relation can see it (R26-F-1 2.4)"
 wl_sub_ctl "ATTRIB-KIND-CTL" t5.sql \
   "        IF NOT named THEN" "        IF false THEN" \
   pass "PASS refused by permission denied" \
@@ -5208,16 +5302,21 @@ def _declared_not_a_site(off):
 # ROUND 35: the comment class moves 31 -> 32. The line that arrived is the
 # prologue comment at the top of this file explaining why the runner's own
 # stderr is now a file (R25-S-3); it writes this token inside a comment, and
-# nothing else moved. The quote-parity class stays at 12: the GATE-STDERR
-# sentence this round adds was first written with an apostrophe that made its
-# quote count odd, which would have made a REAL site invisible to this reader
-# — exactly the class this count exists to catch — and it was rewritten
-# rather than declared away. The quote-parity class still moves 12 -> 13, for
-# a different and declared reason: that same sentence QUOTES this token inside
-# its own text, and an occurrence behind an opening double quote is what this
-# rule is for. The GATE-STDERR site itself is PLACED, which is the thing that
-# matters, and it is the arm that now reads whatever the shell writes.
-EXCL_EXPECT = {"comment": 32, "own-pattern": 2, "definition": 1, "quote-parity": 13}
+# nothing else moved. The quote-parity class moves 12 -> 13, and ROUND 36
+# (R26-S-4) replaces the two sentences that used to stand here, because they
+# contradicted each other — one said the class stayed at 12 and the next said
+# it moved to 13. It MOVES, and the one reason is that the GATE-STDERR
+# sentence quotes this token inside its own text, so the occurrence sits
+# behind an opening double quote, which is precisely what this rule is for.
+# (That sentence was also first written with an apostrophe that made its quote
+# count odd and would have made the REAL site invisible; it was rewritten
+# rather than declared away, and the site itself is PLACED.)
+# ROUND 36: the comment class moves 32 -> 35. The three that arrived are all
+# in one place — the DECLARED BOUND written beside the GATE-STDERR arm for
+# R26-S-2, which names the three sentence sites that fall outside that arm's
+# reach and therefore writes this token three times inside a comment. Nothing
+# else moved, and no site left.
+EXCL_EXPECT = {"comment": 35, "own-pattern": 2, "definition": 1, "quote-parity": 13}
 excluded = {k: 0 for k in EXCL_EXPECT}
 unplaced = []
 for o in occurrences:
@@ -5353,13 +5452,27 @@ fi
 # back into CENSUS_OUT with 2>&1 and judged there, so nothing it writes is
 # unread either. The replay to the real stderr keeps the lines visible to an
 # operator; the arm is what makes them a verdict.
+#
+# DECLARED BOUND, R26-S-2: the restore `exec 2>&3 3>&-` happens before the
+# count, so THREE say sites are outside this arm's reach — the two census
+# lines and the final `RUN=… FAILED=…`. Each carries a command substitution
+# whose stderr goes to the restored stream, which is R25-S-3's exact
+# mechanism in the three places this arm cannot see. None of the three
+# carries a backtick today. Counting after the last `say` is not available
+# while the verdict is itself a `say`, so this is written as a bound.
 exec 2>&3 3>&-
+# ROUND 36, R26-S-1: the verdict is a BYTE test and not a line count. `wc -l`
+# counts newlines, so a write with no trailing newline reads as zero lines and
+# the arm's own sentence becomes false of a non-empty stream — this phase's
+# own lesson one layer along, since a line count is a projection of a byte
+# fact. `wc -l` is kept for the report and `[ -s ]` decides.
 STDERR_N=$(wc -l < "$STDERR_LOG" | tr -d ' ')
-if [ "$STDERR_N" = "0" ]; then
-  say "GATE-STDERR: this runner wrote NOTHING to its own stderr in $STDERR_N lines — the four shell parse errors R25-S-3 measured on every run of the parent head are gone, and a 'say' sentence that the shell would execute rather than print now reds this arm instead of disappearing into a stream no law reads"
+STDERR_B=$(wc -c < "$STDERR_LOG" | tr -d ' ')
+if [ ! -s "$STDERR_LOG" ]; then
+  say "GATE-STDERR: this runner wrote NOTHING to its own stderr — $STDERR_B bytes, $STDERR_N lines — the four shell parse errors R25-S-3 measured on every run of the parent head are gone, and a 'say' sentence that the shell would execute rather than print now reds this arm instead of disappearing into a stream no law reads"
 else
   cat "$STDERR_LOG" >&2
-  say "GATE-STDERR: FAIL — this runner wrote $STDERR_N line(s) to its own stderr, the first being: $(head -1 "$STDERR_LOG")"
+  say "GATE-STDERR: FAIL — this runner wrote $STDERR_B byte(s) in $STDERR_N line(s) to its own stderr, the first being: $(head -1 "$STDERR_LOG")"
   FAILED=1
 fi
 
