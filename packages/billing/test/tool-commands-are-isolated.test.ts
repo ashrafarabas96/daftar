@@ -299,6 +299,61 @@ const REFUSED_RUNNER_ARGV_OVERRIDES_THE_FILE = 'REFUSED-RUNNER-ARGV-OVERRIDES-TH
 const UNDEFENDED_FLAGS = ['--dangerously-ignore-unhandled-errors', '--file-parallelism'] as const;
 
 /**
+ * ROUND 63, THE CHALLENGER'S R59 F-1. Its shim stripped the four P5_* keys out
+ * of the environment it passed on AND double-forked, so the ancestry walk no
+ * longer reached the gate -- and `REFUSED-GATE-HANDED-DOWN-NOTHING` was armed
+ * by the walk SUCCEEDING, so breaking the chain switched the refusal off.
+ *
+ * The chain is one input. The gate's own COMMAND LINE is another, and it does
+ * not depend on the parent chain being intact: the gate always starts the
+ * runner with `--outputFile=<dir>/report.json` where `<dir>` is its own
+ * `mkdtemp(prefix='law-ran-')`. That word is on the runner's argv, which this
+ * run can read out of /proc for whichever ancestor IS the runner, re-parented
+ * or not. So a run carrying the gate's marker must also carry what the gate
+ * hands down beside it, and a run that carries the marker with the environment
+ * missing is refused by name instead of falling through to the shared-pack
+ * path.
+ *
+ * Returns true when the marker is there, false when it is not, and a reason
+ * when it cannot say.
+ */
+const startedOnTheGatesCommandLine = (procRoot = '/proc', startPid = process.pid): boolean | string => {
+  if (!existsSync(join(procRoot, String(startPid), 'status'))) {
+    return `this platform has no readable ${procRoot}, so the command line this run was started with cannot be read`;
+  }
+  let pid = startPid;
+  for (let hop = 0; hop < 32; hop += 1) {
+    let argv: string[] = [];
+    try {
+      argv = readFileSync(join(procRoot, String(pid), 'cmdline'))
+        .toString('utf8')
+        .split('\0')
+        .filter((word) => word.length > 0);
+    } catch {
+      // Keep walking.
+    }
+    if (argv.some((word) => word.endsWith('vitest.mjs') || basename(word) === 'vitest')) {
+      return argv.some((word) => {
+        if (!word.startsWith('--outputFile=')) return false;
+        const where = word.slice('--outputFile='.length);
+        return basename(dirname(where)).startsWith('law-ran-');
+      });
+    }
+    let status: string;
+    try {
+      status = readFileSync(join(procRoot, String(pid), 'status'), 'utf8');
+    } catch (error) {
+      return `the parent chain stopped at pid ${pid}, which cannot be read (${String(error)})`;
+    }
+    const parent = /^PPid:\s*([0-9]+)$/m.exec(status);
+    if (parent === null) return `pid ${pid} reports no parent, so the chain cannot be followed`;
+    pid = Number(parent[1]);
+    if (pid <= 1) break;
+  }
+  return 'no ancestor of this process names the runner, so the command line this run was started with cannot be read';
+};
+
+/**
  * The flags the RUN was started with, read from the nearest ancestor whose argv
  * names the runner. Returns the offending flags, or '' for "none", or a reason
  * it cannot say -- and the caller refuses on a reason, because a run that
@@ -3628,9 +3683,15 @@ describe('every written invocation of the pack tools is isolated', () => {
       { include: fromModule.include, exclude: fromModule.exclude, sequence: Object.keys(moduleSequence).sort() },
       `${REFUSED_TEST_WITHOUT_LAW_GATE}: the config's two collection settings and the shape of its \`sequence\` are not what this law pins. \`include\` and \`exclude\` decide which files are collected at all, which is the rung above every value pinned here`,
     ).toStrictEqual({ include: ['test/**/*.test.ts'], exclude: ['test/db/**'], sequence: ['concurrent', 'shuffle'] });
-    // And the same key by the OTHER route: a config shape nobody can edit is
-    // no help if the command line carries the file instead. `setupFiles` is
-    // absent from the pinned shape above, so the run must not have any.
+    // And the same key as the RUN sees it, which is not the same claim this
+    // comment used to make. IT SAID the shape pin "closes the same key coming
+    // in on the command line instead", and the challenger measured that
+    // vacuous for this key: vitest 4.1.11 answers ``CACError: Unknown option
+    // `--setupFiles` ``, so there is no command-line route to close. Corrected
+    // rather than softened. What the read below IS worth: `setupFiles` is
+    // absent from the pinned shape above, and this is the RUN's own resolved
+    // value, so any route that does reach the run -- a route neither the
+    // challenger nor this author has enumerated -- refuses here.
     // And the two the resolved config does not carry, read from the COMMAND
     // LINE rather than from the file -- the coordinator's R61-C-03.
     const flagsOfThisRun = undefendedFlagsOfThisRun();
@@ -4547,7 +4608,18 @@ describe('every written invocation of the pack tools is isolated', () => {
     // takes the shared-pack path, which is what a reviewer running `npx vitest`
     // by hand needs.
     const gateAncestor: { pid?: number } = {};
+    // ROUND 63: the gate's MARKER, which does not depend on the parent chain
+    // reaching the gate. A run started on the gate's command line and handed
+    // nothing is a run whose environment was edited in between -- the
+    // challenger's R59 shim exactly -- and it refuses here rather than falling
+    // through to the shared-pack path.
+    const marker = startedOnTheGatesCommandLine();
+    const markerSays = marker === true ? 'the gate started this run' : marker === false ? 'no marker' : marker;
     const notDescended = notStartedByTheGate('/proc', process.pid, undefined, gateAncestor);
+    expect(
+      marker === true && handedDown === '',
+      `${REFUSED_GATE_HANDED_DOWN_NOTHING}: this run was started on the gate's own command line -- its runner's argv carries \`--outputFile=\` inside a \`law-ran-\` directory, which only tools/law-ran.py creates -- and yet no P5_PACK_DIGEST reached this case. So something between the gate and here removed it: a shim on PATH, a wrapper, an environment filter. This arm does NOT depend on the parent chain reaching the gate, which is what the challenger's round-59 shim broke by double-forking (${markerSays})`,
+    ).toBe(false);
     expect(
       handedDown === '' && notDescended === '',
       `${REFUSED_GATE_HANDED_DOWN_NOTHING}: an ancestor of this run IS tools/law-ran.py and yet no P5_PACK_DIGEST reached this case, so something between the gate and here removed it -- a setupFile, a wrapper, an environment filter. The gate hands a digest down whenever the pack exists, and the checks that digest switches on are privacy, ancestry, the per-run nonce and REFUSED-PACK-MOVED-DURING-MEASUREMENT. All four were silently skipped when this read the environment alone`,

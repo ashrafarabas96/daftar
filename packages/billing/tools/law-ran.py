@@ -309,6 +309,10 @@ REFUSED_NONCE_NOT_AS_SPECIFIED = "REFUSED-NONCE-NOT-AS-SPECIFIED"
 # the same environment, so a forger who runs code still forges it. That is the
 # bound already declared for the nonce and it has not moved.
 REFUSED_LAW_WROTE_NO_RECEIPT = "REFUSED-LAW-WROTE-NO-RECEIPT"
+# ROUND 63, the challenger's R59 F-1: the program that runs the suite decides
+# what the report says, so it is pinned by its REAL path and not by what PATH
+# calls it.
+REFUSED_RUNNER_NOT_PINNED = "REFUSED-RUNNER-NOT-A-PINNED-PROGRAM"
 
 # The SET of test files this suite collects, pinned by value. A file arriving
 # or leaving is refused by name; change this list in the same commit that adds
@@ -487,6 +491,29 @@ def main() -> int:
     # Before anything is created, so a signal arriving between the first
     # mkdtemp and the handler's installation is not a window of its own.
     _install_signal_cleanup()
+    # THE CHALLENGER'S R59 S-1 (P3): a SIGKILLed run leaves its private pack
+    # copy, its nonce and its report directory behind, and no handler can
+    # prevent that. Its remedy was a sweep at the start of each run. This step
+    # REPORTS them instead of deleting them, for a reason worth stating: a
+    # `law-ran-*` directory in /tmp may belong to ANOTHER session's live gate
+    # run -- several phases of this project run at once -- and deleting a live
+    # run's private snapshot would turn its honest verdict into a confusing red
+    # and destroy another agent's evidence. The disclosure is bounded by the
+    # pid binding on the nonce, which already refuses a replay of a leaked
+    # environment; what is left is a note an operator can act on.
+    stale = sorted(
+        str(d)
+        for pattern in ("law-ran-*", "law-ran-nonce-*", "law-ran-pack-*", "law-ran-receipt-*")
+        for d in Path(tempfile.gettempdir()).glob(pattern)
+        if d.is_dir()
+    )
+    if stale:
+        print(
+            f"note: {len(stale)} directory(ies) of this step's own kinds are already in "
+            f"{tempfile.gettempdir()}: {stale[:6]}. A run killed with SIGKILL leaves these, and so does a live "
+            "run of this step in another session. Nothing is deleted here: one of them may be a live run's "
+            "private snapshot. If no gate is running, they are safe to remove by hand"
+        )
     ap = argparse.ArgumentParser()
     ap.add_argument(
         "--package",
@@ -679,16 +706,83 @@ def main() -> int:
     # resolves inside one is a refusal BY NAME rather than a runner. The child's
     # PATH is a separate value, built from the resolved node's own directory, so
     # this does not reintroduce the exit-127 false red.
-    inherited = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d and "node_modules" not in Path(d).parts]
-    pinned_path = os.pathsep.join(["/usr/bin", "/bin", *inherited])
+    # ROUND 63, THE CHALLENGER'S R59 F-1 (P1, A FAIL-OPEN), AND IT WALKED IN
+    # THROUGH THIS LINE. Rejecting `node_modules` was round 53's lesson; the
+    # lesson now is that THE REST OF PATH IS NO SAFER. A shim named `node`
+    # anywhere on the inherited tail -- touching no pinned file at all -- wrote
+    # the receipt out of the environment it was handed, stripped the four P5_*
+    # keys from what it passed on, and double-forked so the suite's parent chain
+    # no longer reached the gate. Measured by the challenger: gate rc 0,
+    # "29 law cases ran inside 306 total, 0 skipped, 0 failed", with privacy,
+    # ancestry, the per-run nonce and the movement check all skipped. Its
+    # control, the same shim with only the receipt write disabled, reds with
+    # REFUSED-LAW-WROTE-NO-RECEIPT -- which is how we know the four checks had
+    # not run in the green one.
+    #
+    # The remedy is the challenger's own: PIN THE RUNNER. The search path is
+    # reduced to the pinned prefixes plus whatever of the inherited tail lies
+    # INSIDE them, so a shim outside them is never selected, and the resolved
+    # program is then checked again by its REAL path, so a symlink into a
+    # pinned prefix is refused as well.
+    #
+    # WHAT THIS IS WORTH, said exactly, because a pin that is read as a wall is
+    # worse than no pin. This run is root in this container, so the prefixes
+    # below are WRITABLE by it: an attacker who is already this uid can place a
+    # shim inside one and this check passes. What it removes is the cheap door
+    # the challenger used -- one PATH entry, no privileged write, nothing a
+    # reviewer would see -- and what it leaves costs a write into a system
+    # directory, which `npm ci` and a container rebuild both undo. It is a cost,
+    # not a barrier, and the law's own default-deny marker is the half that
+    # reds when the chain is broken rather than when the program is wrong.
+    RUNNER_PREFIXES: tuple[str, ...] = ("/usr/bin", "/usr/local/bin", "/bin", "/opt")
+
+    def _inside_a_pinned_prefix(where: Path) -> bool:
+        return any(where.is_relative_to(Path(prefix)) for prefix in RUNNER_PREFIXES)
+
+    inherited = []
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or "node_modules" in Path(d).parts:
+            continue
+        try:
+            resolved_dir = Path(d).resolve()
+        except OSError:
+            continue
+        if _inside_a_pinned_prefix(resolved_dir):
+            inherited.append(d)
+    # ORDER MATTERS AND IT BIT ONCE, MEASURED THE MOMENT THIS PIN WENT IN. With
+    # the prefixes searched FIRST, `/usr/local/bin/node` -- a root-owned
+    # symlink to /opt/node22 -- won over the nvm prefix this phase's figures
+    # are pinned to, and the gate silently changed the interpreter it measures
+    # (the printed runner line is how it was caught). The caller's own PATH
+    # order is kept, filtered to the pinned prefixes, and the bare prefixes
+    # come last as a fallback: a shim outside them is never selected either
+    # way, and the runtime the records name does not move under the pin.
+    pinned_path = os.pathsep.join([*inherited, *RUNNER_PREFIXES])
     node = shutil.which("node", path=pinned_path)
     if node is None:
-        refuse(f"no node on {pinned_path!r}, so this step could not run the suite at all")
-    if "node_modules" in Path(node).resolve().parts:
+        refuse(
+            f"{REFUSED_RUNNER_NOT_PINNED}: no node on {pinned_path!r}, which is the pinned prefix set plus the "
+            "entries of PATH that lie inside it. This step will not fall back to the rest of PATH: that is the "
+            "door the challenger's round-59 shim walked through"
+        )
+    real_node = Path(node).resolve()
+    if "node_modules" in real_node.parts:
         refuse(
             f"the node this step resolved is {node!r}, inside a node_modules tree. "
             "Those directories are untracked by design and `npm run` puts four of them at the front of PATH, "
             "so a binary planted in one could fabricate the report this step reads"
+        )
+    if not _inside_a_pinned_prefix(real_node):
+        refuse(
+            f"{REFUSED_RUNNER_NOT_PINNED}: the node this step resolved is {node!r}, whose real path is "
+            f"{real_node} -- outside the pinned prefixes {RUNNER_PREFIXES}. A program that runs the suite "
+            "chooses what the report says, so it is pinned by where it IS and not by what PATH calls it"
+        )
+    if real_node.is_relative_to(package) or real_node.is_relative_to(Path(tempfile.gettempdir()).resolve()):
+        refuse(
+            f"{REFUSED_RUNNER_NOT_PINNED}: the node this step resolved has its real path at {real_node}, "
+            "inside the package under measurement or inside the temporary directory. Either one is writable by "
+            "the run it would be judging"
         )
 
     # R53-S1, the other default: npm's global config lives beside the node that
@@ -882,6 +976,13 @@ def main() -> int:
         )
     try:
         out = Path(tempfile.mkdtemp(prefix="law-ran-")) / "report.json"
+        # THE CHALLENGER'S R59 S-2 (P3): this was the one temporary directory of
+        # the three at mode 755, where the nonce and the pack copy are 700.
+        # Nothing in the verdict depended on it -- it holds a report this step
+        # writes and reads -- but a directory another user on the host can read
+        # is a disclosure for no reason, and `mkdtemp` already gives 700 to the
+        # other two. Set explicitly rather than assumed.
+        out.parent.chmod(0o700)
         _TEMPORARY.append(out.parent)
     except OSError as exc:
         # R57-C-01: a traceback here left the private pack copy behind as well.
