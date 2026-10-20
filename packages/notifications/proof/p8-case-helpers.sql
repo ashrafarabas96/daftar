@@ -402,6 +402,24 @@ END $fn$;
 -- character (so `length` is 2), a backslash-escaped quote in an E-string is
 -- one character, the client and the server agree on the encoding, and
 -- `= NULL` is an ordinary comparison that answers unknown.
+--
+-- DECLARED BOUND, R25-S-2, named and not closed. These four are an
+-- ENUMERATION, so the guard's DOMAIN is four behaviours and not "the session
+-- lexes as the scanner reads". R25 measured five more settings under which
+-- `p8.lex_session()` still answers the declared tuple:
+--
+--   DateStyle='DMY, SQL'  escape_string_warning=off  bytea_output='escape'
+--   IntervalStyle='sql_standard'  search_path=<other>,p8,public
+--
+-- `DateStyle` meets this phase's own membership test — it changes a
+-- statement's MEANING and not its tokens ('01/02/2024'::date answers
+-- 2024-01-02 under MDY and 2024-02-01 under DMY) — and is UNMEASURED here. No
+-- live case depends on it: the four case files carry no `::date` and no
+-- `::timestamp`, and their one `interval '1 second'` is not moved on input by
+-- `IntervalStyle`. `search_path` is the one that is not inert, because the
+-- attribution law below resolves the declared relation THROUGH it with
+-- `to_regclass`; that is the same ambiguity R25-F-1 names, and it is bounded
+-- there by the privilege question and not by the name.
 CREATE OR REPLACE FUNCTION p8.lex_session_expected() RETURNS TEXT
 LANGUAGE sql IMMUTABLE AS $fn$
   SELECT '2/1/same/null-is-unknown'
@@ -982,7 +1000,7 @@ CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TE
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
         eplan BOOLEAN; esst TEXT; emsg TEXT; servergrant BOOLEAN; named BOOLEAN;
-        relid OID; holdsall BOOLEAN;
+        relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[];
 BEGIN
   witnessed := subject IS NOT NULL;
   -- ROUND 29, N-3. Every path into this function passes through here, including
@@ -1193,44 +1211,82 @@ BEGIN
           label, sst, msg, esst, emsg;
       END IF;
     END IF;
-    -- ROUND 34, the coordinator's section 4 (P1). Every law above says
-    -- something true about the refusal and NONE of them says what it is
-    -- ABOUT. Measured on PostgreSQL 16.15 as an unprivileged role that HAS
-    -- `SELECT` on `rela` and nothing at all on `relb`:
+    -- ROUND 34, the coordinator's section 4 (P1), REWRITTEN IN ROUND 35 after
+    -- both reviews of `b1b4b7a` measured the pair still open (R25-F-1, the
+    -- coordinator's 3.2). Every law above says something true about the
+    -- refusal and NONE of them says what it is ABOUT. Measured on
+    -- PostgreSQL 16.15 as an unprivileged role that HAS `SELECT` on `rela`:
     --
-    --   case_refuses_relation('T1 …', 'SELECT 1 FROM @REL@, relb', …, 'rela')
+    --   X1 case_refuses_relation(… 'SELECT public.rela() FROM @REL@' …, 'rela')
     --     → PASS refused by permission denied [42501], rc 0
-    --   SELECT count(*) FROM rela   → 1, so the claim is FALSE of the subject
-    --   case_refuses_row(… same statement …, 'rela', 'id', '1')     → PASS
-    --   case_refuses_relation(… 'SELECT public.secret_fn() FROM @REL@' …) → PASS
+    --   X2 … 'SELECT 1 FROM @REL@, other.rela' …                     → PASS
+    --   X3/X4 the same two statements in the row form                → PASS
+    --   X5 X2 with `expect` spelled 'permission denied for table rela' → PASS
+    --   SELECT count(*) FROM rela → 1, so the claim is FALSE of the subject
     --
-    -- `assert_shape` passes because the keywords are declared ones;
-    -- `assert_statement_built` passes because `@REL@` is textually there; the
-    -- witness passes because `rela` exists in `pg_class`; the arriving class
-    -- is a grant class; and the EXPLAIN construction passes BECAUSE the
-    -- refusal genuinely is relation-level — about another relation. So the
-    -- class is not "two tables": it is any plan-time 42501 the statement can
-    -- provoke about anything, while the case names the subject it likes.
+    -- Round 34's two terms did not bound these. Its arrival term read the
+    -- server's message for the BARE name, so `permission denied for function
+    -- rela` (X1, X4) and `permission denied for table rela` about ANOTHER
+    -- SCHEMA's `rela` (X2, X3, X5) both satisfied it — the message carries no
+    -- schema and no kind. Its catalogue term asked whether the role held ALL
+    -- SEVEN table privileges, which is the COMPLEMENT of the question and not
+    -- its negation: it speaks only for a role that holds everything, so it was
+    -- silent for every role in this pack, and the reviews showed that what red
+    -- round 34's own T4 was the bench's `GRANT ALL PRIVILEGES` line and not the
+    -- shape of the attack.
     --
     -- Two terms, neither of them a text test on prose the CASE controls, and
     -- both only where the SERVER itself took a grant decision — a refusal a
     -- trigger raised, an RLS WITH CHECK violation or a constraint is decided
     -- somewhere else and the rules above are what bound those.
     --
-    --   (a) BY ARRIVAL: the server's own message must name the declared
-    --       relation. The comparison is token equality after splitting the
-    --       message on everything that cannot be in an identifier, so `relb`
-    --       does not satisfy a case that declared `rela`, and no substring
-    --       accident does. It reads the SERVER's words, not the author's.
-    --   (b) BY CONSTRUCTION, from the catalogue: a role that holds EVERY
-    --       table privilege on the declared relation cannot have been refused
-    --       BY A GRANT on it. This is a term and not the whole law because
-    --       the converse does not hold — a role may lack a privilege it never
-    --       needed — and because an RLS refusal arrives while the role holds
-    --       everything, which is why the branch excludes it.
+    --   (a) BY ARRIVAL, KIND-QUALIFIED: the server's own message must be
+    --       `permission denied for <kind> <declared>`, where <kind> is read
+    --       from the declared relation's OWN `relkind` in `pg_class` (plus
+    --       the version-independent spelling `relation`). The server names
+    --       the kind of the object it refused — measured on 16.15: `table`,
+    --       `view`, `materialized view`, `foreign table`, `sequence`,
+    --       `function` — so a refusal about a FUNCTION wearing the declared
+    --       relation's name no longer arrives, which is what the bare token
+    --       test could not see.
+    --   (b) BY CONSTRUCTION, from the catalogue, the NEGATION and not the
+    --       complement: the privileges the statement needs are DERIVED from
+    --       the keywords it DECLARES (SELECT, INSERT, UPDATE, DELETE,
+    --       TRUNCATE — the five whose table privilege is the keyword's own,
+    --       out of the set `assert_shape` has already bounded), and the role
+    --       must NOT hold all of them on the declared relation. A role that
+    --       holds every privilege the statement needs cannot have been
+    --       refused BY A GRANT on that relation, so the refusal is about
+    --       something else — which is what catches the cross-schema twin,
+    --       whose message is BYTE-IDENTICAL to the one the declared relation
+    --       would produce. The coordinator's ruling said to derive this from
+    --       the LEADING keyword; the gate's own `FB-f` probe measures why it
+    --       reads all of them, and the reason is written at the term itself.
     --
-    -- Neither term alone bounds both directions: (a) is the server's wording
-    -- and (b) is the server's catalogue, and a refusal has to satisfy both.
+    -- Measured consequence of (b)'s semantics, and the reason it is the right
+    -- question: `has_table_privilege(…, 'UPDATE')` answers FALSE for a role
+    -- holding only a COLUMN-scoped `UPDATE (col)` grant, which is exactly the
+    -- live W-2 and W-6 shape — the server refused those `permission denied for
+    -- table`, and the catalogue agrees the table-level privilege is absent.
+    --
+    -- DECLARED BOUNDS of the pair, neither of them a fail-open:
+    --   * (a) is kind-qualified but still not SCHEMA-qualified, because the
+    --     server's message carries no schema; what closes the cross-schema
+    --     half is (b), through the privilege, and only while the role lacks
+    --     the needed privilege on the declared relation. A twin in another
+    --     schema refusing a role that ALSO lacks the privilege on the declared
+    --     one is UNMEASURED here, and `R25-F-1`'s X5 is why no text test on
+    --     the message can close it.
+    --   * the declared relation is resolved with `to_regclass` and therefore
+    --     THROUGH `search_path`; a case that declares a bare name resolving to
+    --     a different schema than the statement reaches is bounded by (b)'s
+    --     privilege question on whatever it resolved to, not by name.
+    --   * (b) OVER-REFUSES, fail-closed, where a role holds the table-level
+    --     privilege and is refused by a COLUMN grant on the same relation:
+    --     that case is genuinely about the declared relation and this form
+    --     will red it. No live case is that shape (the six relation and row
+    --     sites lead with SELECT, INSERT or UPDATE and none is column-denied
+    --     while holding the table-level privilege).
     IF relation IS NOT NULL AND kind IN ('relation', 'row') THEN
       servergrant := (sst = '42501'
                       AND position('row-level security policy' in lower(coalesce(msg,''))) = 0
@@ -1238,48 +1294,89 @@ BEGIN
       IF servergrant THEN
         IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
           RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
-                          'relation "%" is not a plain lower-case identifier, so neither the token '
-                          'test on the server''s message nor the catalogue lookup can be evaluated '
-                          'for it, and this form will not pass a refusal it cannot attribute '
-                          '(the coordinator''s section 4)', label, relation;
-        END IF;
-        SELECT EXISTS (SELECT 1 FROM regexp_split_to_table(lower(coalesce(msg,'')), '[^a-z0-9_]+') w
-                        WHERE w = lower(relation)) INTO named;
-        IF NOT named THEN
-          RAISE EXCEPTION '% FAIL: THE REFUSAL IS NOT ABOUT THE DECLARED RELATION — this case '
-                          'declares "%" and the server refused with [%] %, which does not name it. '
-                          'A grant decision the server takes says what it is about, and this one '
-                          'is about something else the statement reached — another relation, or a '
-                          'function the role may not execute — so the case is evidence about that '
-                          'and not about "%" (the coordinator''s section 4)',
-            label, relation, sst, msg, relation;
+                          'relation "%" is not a plain lower-case identifier, so neither the '
+                          'kind-qualified test on the server''s message nor the catalogue lookup '
+                          'can be evaluated for it, and this form will not pass a refusal it '
+                          'cannot attribute (R25-F-1)', label, relation;
         END IF;
         relid := to_regclass(p8.quoted_ident(relation));
         IF relid IS NULL THEN
           RAISE EXCEPTION '% FAIL: THE DECLARED RELATION DOES NOT RESOLVE — "%" is not visible as '
                           'a relation in this session''s search_path, so the catalogue cannot be '
-                          'asked what privileges the role holds on it (the coordinator''s '
-                          'section 4)', label, relation;
+                          'asked what kind of object it is or what privileges the role holds on '
+                          'it (R25-F-1)', label, relation;
+        END IF;
+        SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
+                              WHEN 'm' THEN 'materialized view' WHEN 'f' THEN 'foreign table'
+               END INTO kindword
+          FROM pg_class c WHERE c.oid = relid;
+        IF kindword IS NULL THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
+                          'relation "%" is not a kind this form knows how to read out of the '
+                          'server''s refusal, so the arrival term cannot be evaluated (R25-F-1)',
+            label, relation;
+        END IF;
+        named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
+                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)');
+        IF NOT named THEN
+          RAISE EXCEPTION '% FAIL: THE REFUSAL IS NOT ABOUT THE DECLARED RELATION — this case '
+                          'declares the % "%" and the server refused with [%] %, which is not '
+                          '"permission denied for % %". A grant decision the server takes names '
+                          'the KIND and the name of the object it refused, and this one is about '
+                          'something else the statement reached — another relation, or a function '
+                          'the role may not execute, even one wearing this relation''s own name '
+                          '(R25-F-1, the coordinator''s 3.2)',
+            label, kindword, relation, sst, msg, kindword, relation;
+        END IF;
+        -- The privileges the statement DECLARES it needs, read out of the
+        -- keywords `assert_shape` has already bounded. The coordinator's
+        -- ruling said to derive this from the statement's LEADING keyword;
+        -- what runs here reads EVERY declared keyword, because the leading
+        -- one alone is not what the statement needs and the gate's own
+        -- `FB-f` probe is the measurement: `INSERT INTO … ON CONFLICT DO
+        -- UPDATE` leads with INSERT, which the worker HOLDS on
+        -- `notification_attempts`, and the refusal it gets is a genuine one
+        -- about that relation, for the UPDATE it lacks. Read by the leading
+        -- keyword alone the term would red that case — a fail-closed
+        -- over-refusal, but one that would also take away
+        -- `WITNESS-SHAPE-CTL`'s attribution. Reading all of them asks the
+        -- whole question: could a grant on THIS relation have refused this
+        -- statement at all?
+        SELECT array_agg(DISTINCT pr ORDER BY pr) INTO needprivs
+          FROM (SELECT lower(m[1]) AS w
+                  FROM regexp_matches(p8.sql_scan(stmt),
+                                      '[A-Za-z_][A-Za-z_0-9]*', 'g') AS m) t
+          JOIN LATERAL (SELECT CASE t.w WHEN 'select' THEN 'SELECT' WHEN 'insert' THEN 'INSERT'
+                                        WHEN 'update' THEN 'UPDATE' WHEN 'delete' THEN 'DELETE'
+                                        WHEN 'truncate' THEN 'TRUNCATE' END AS pr) p ON p.pr IS NOT NULL;
+        IF needprivs IS NULL THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT DERIVE THE PRIVILEGE THE STATEMENT NEEDS — the '
+                          'statement carries none of the five keywords whose table privilege is '
+                          'the keyword''s own (SELECT, INSERT, UPDATE, DELETE, TRUNCATE), so the '
+                          'catalogue cannot be asked the question that attributes the refusal, '
+                          'and this form will not pass a refusal it cannot attribute (R25-F-1)',
+            label;
         END IF;
         BEGIN
-          SELECT bool_and(has_table_privilege(current_user, relid, pr)) INTO holdsall
-            FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER'])
-                 AS pr;
+          SELECT bool_and(has_table_privilege(current_user, relid, pr)) INTO holdspriv
+            FROM unnest(needprivs) AS pr;
         EXCEPTION WHEN others THEN
           GET STACKED DIAGNOSTICS emsg = MESSAGE_TEXT;
           RAISE EXCEPTION '% FAIL: THE CATALOGUE COULD NOT BE ASKED ABOUT THE DECLARED RELATION — '
-                          'has_table_privilege on "%" answered %, so the second term of the '
+                          'has_table_privilege(%, "%", %) answered %, so the second term of the '
                           'attribution law cannot be evaluated and this form will not pass a '
-                          'refusal it cannot attribute (the coordinator''s section 4)',
-            label, relation, emsg;
+                          'refusal it cannot attribute (R25-F-1)',
+            label, current_user, relation, array_to_string(needprivs, ','), emsg;
         END;
-        IF holdsall THEN
-          RAISE EXCEPTION '% FAIL: THE ROLE HOLDS EVERY PRIVILEGE ON THE DECLARED RELATION — this '
-                          'case says a grant refuses % on "%", and the catalogue says the role '
-                          'holds SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER '
-                          'on it, so whatever [%] % was about, it was not a grant on this relation '
-                          '(the coordinator''s section 4)',
-            label, current_user, relation, sst, msg;
+        IF holdspriv THEN
+          RAISE EXCEPTION '% FAIL: THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS ON THE '
+                          'DECLARED RELATION — this case says a grant refuses % on "%", the '
+                          'statement declares the keywords that need %, and the catalogue says '
+                          'the role HOLDS all of them on it. Whatever [%] % was about, it was not '
+                          'a grant on this relation: the message names no schema, so a same-named '
+                          'relation in another schema produces a byte-identical one '
+                          '(R25-F-1 X2/X5)',
+            label, current_user, relation, array_to_string(needprivs, ', '), sst, msg;
         END IF;
       END IF;
     END IF;

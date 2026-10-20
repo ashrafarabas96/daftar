@@ -245,9 +245,25 @@ ARM_LABELS = (
     "RELATION-ATTRIB-REL",
     "ROW-ATTRIB-REL",
     "RELATION-ATTRIB-FN",
-    "RELATION-ATTRIB-HOLDS",
+    "RELATION-ATTRIB-NAMED",
     "RELATION-ATTRIB-CTL",
-    "RELATION-HOLDSALL-CTL",
+    # ROUND 35, R25-F-1: the five attacks both reviews measured passing at
+    # rc 0, the two probes that isolate the law's two terms, the two that
+    # isolate the bind law and the EXPLAIN construction, and the arm that
+    # reads the gate's own stderr (R25-S-3).
+    "ATTRIB-X1",
+    "ATTRIB-X2",
+    "ATTRIB-X3",
+    "ATTRIB-X4",
+    "ATTRIB-X5",
+    "ATTRIB-KIND-ISOLATE",
+    "ATTRIB-PRIV-CTL",
+    "ATTRIB-KIND-CTL",
+    "RELATION-BIND-ISOLATE",
+    "RELATION-BIND-CTL",
+    "RELATION-EXPLAIN-ISOLATE",
+    "RELATION-EXPLAIN-CTL",
+    "GATE-STDERR",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
     # each term has an arm that measures what the behaviour test admits or
@@ -402,6 +418,14 @@ EXPECTED_ARMS = (
     ("ARGSHAPE y", 1),
     ("ARGSHAPE z", 1),
     ("ATTRIB-BENCH", 1),
+    ("ATTRIB-KIND-CTL", 1),
+    ("ATTRIB-KIND-ISOLATE", 1),
+    ("ATTRIB-PRIV-CTL", 1),
+    ("ATTRIB-X1", 1),
+    ("ATTRIB-X2", 1),
+    ("ATTRIB-X3", 1),
+    ("ATTRIB-X4", 1),
+    ("ATTRIB-X5", 1),
     ("BASELINE CASE", 1),
     ("CENSUS-BASE", 1),
     ("CENSUS-LOSS", 1),
@@ -436,6 +460,7 @@ EXPECTED_ARMS = (
     ("CORPUS-SWAP", 1),
     ("EXEC-EQUIV", 1),
     ("EXEC-EQUIV-CTL", 1),
+    ("GATE-STDERR", 1),
     ("GRAFTS g5", 1),
     ("GRAFTS g7", 1),
     ("GUARD-CTL y1", 1),
@@ -523,9 +548,12 @@ EXPECTED_ARMS = (
     ("REACH-BENCH", 1),
     ("RELATION-ATTRIB-CTL", 1),
     ("RELATION-ATTRIB-FN", 1),
-    ("RELATION-ATTRIB-HOLDS", 1),
+    ("RELATION-ATTRIB-NAMED", 1),
     ("RELATION-ATTRIB-REL", 1),
-    ("RELATION-HOLDSALL-CTL", 1),
+    ("RELATION-BIND-CTL", 1),
+    ("RELATION-BIND-ISOLATE", 1),
+    ("RELATION-EXPLAIN-CTL", 1),
+    ("RELATION-EXPLAIN-ISOLATE", 1),
     ("RELATION-ROWTRAP", 1),
     ("RELATION-ROWTRAP-CTL", 1),
     ("RETIREMENT n1", 1),
@@ -602,7 +630,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "1540517b08dac72827140ce20b4f799fae252d9ecc27098f19f7083487c82a69"
+EXPECTED_SEAL = "cfb4963032fa234804518cf750c6523a6d2234e1f4dbbc1a34ff3d6f932eb247"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not

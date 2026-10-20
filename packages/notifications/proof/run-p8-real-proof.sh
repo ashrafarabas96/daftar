@@ -71,6 +71,19 @@ fi
 mkdir -p "$OUT"
 FAILED=0
 
+# ROUND 35, R25-S-3. Four shell parse errors went to this runner's own stderr
+# on EVERY run, in EVERY world, for four rounds, with FAILED=0 and rc 0: a
+# `say` argument is not data, it is shell input, so two literal examples
+# written with unescaped backticks were run as command substitutions and the
+# published sentence lost them both. Nothing read stderr, so nothing said so.
+# From here the runner's own stderr is a FILE, read by an arm at the end and
+# replayed to the real stderr there, so a line on it is a red gate and not a
+# silence. Per-command stderr is unaffected: every child the gate runs already
+# redirects its own into its own log.
+STDERR_LOG=$OUT/stderr.log
+: > "$STDERR_LOG"
+exec 3>&2 2>"$STDERR_LOG"
+
 say(){ echo "[$RUN] $*" | tee -a "$OUT/run.log"; }
 
 # ---------------------------------------------------------------------
@@ -2336,16 +2349,25 @@ wl_ctl "WITNESS-SHAPE-CTL" shape.sql \
 # This control used to expect the fail-open back, and it no longer
 # comes back. `FB-a` declares `notifications` and reads
 # `notification_provider_quarantine`, so with the bind condition deleted the
-# attribution law this round added names it instead: the server's refusal is
-# about a relation the case did not declare. The attribution of U-3's closure
-# to this one condition is WITHDRAWN rather than tuned, and two independent
-# laws now cover the class — one reads the statement's TEXT before it runs,
-# the other reads WHAT THE SERVER SAID it refused. The same shape as
+# attribution law names it instead: the server's refusal is about a relation
+# the case did not declare. The attribution of U-3's closure to this one
+# condition is WITHDRAWN rather than tuned. The same shape as
 # WITNESS-RELCLASS-CTL and ROW-ASTRAL-CLASS-CTL, and said the same way.
+#
+# ROUND 35 CORRECTS THE SENTENCE THIS BLOCK USED TO CARRY. It said "two
+# independent laws now cover the class — one reads the statement's TEXT
+# before it runs, the other reads WHAT THE SERVER SAID it refused". R25's 2.5
+# falsified it by construction: with the bind condition deleted and the
+# statement pointed at a SAME-NAMED relation in another schema, the arrival
+# term is blind, because the message carries no schema, and U-3's fail-open
+# came straight back. What covers that case on this head is the DERIVED-
+# PRIVILEGE term and not the arrival one, and what covers the bind law's own
+# class is the bind law alone — which is why this round gives it an isolating
+# probe of its own, `RELATION-BIND-ISOLATE`, instead of a sentence.
 wl_sub_ctl "WITNESS-BIND-CTL" bind.sql \
   "  IF position('@REL@' in bare) = 0 THEN" "  IF false THEN" \
   refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
-  "with the text test deleted ALONE a statement about another relation is caught by the arrival term behind it, which cannot be spelled around because it reads the server's own words (U-3, and the coordinator's section 4)"
+  "with the text test deleted ALONE this particular statement, which reads a DIFFERENTLY-named relation, is caught by the arrival term behind it; a statement reading a SAME-named relation in another schema is not, and that case is 'RELATION-BIND-ISOLATE' below (U-3, R25's 2.5)"
 wl_sub_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
   "    IF kind = 'relation' AND rowlevel THEN" "    IF false THEN" \
   refuse "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
@@ -2493,6 +2515,14 @@ wl_sub_ctl "WITNESS-BLOCK-CTL" block.sql \
 # declared figure still matched. A count sees reach, never content. So both
 # corpora are pinned BY DIGEST as well, which is this phase's rule that a
 # census pins its SET — an arrival, a departure and a replacement all red.
+#
+# DECLARED BOUND, R25-S-4, named and not rated. These two constants live in the
+# file they protect, so whoever edits a corpus edits its pin in the same
+# commit. That is this phase's declared self-check class: the pin bounds an
+# ACCIDENT and a THIRD party, never the author of the same commit, and what
+# bounds the author is the review that reads the diff. `CORPUS-SWAP` is as far
+# as a self-check reaches on the coordinator's 6.3, and it is recorded as a
+# bound rather than as a closure.
 CORPUS_PIN_SCAN=3ba3b56a8139d9935b037d455eafc6db578fe2edae5720694f2c26d61ac6c8d9
 CORPUS_PIN_ORC=260a8781bd31fc12f93801dd9914d11cd93cf66be0bc90fde65203c37b839431
 _pin_scan=$(sha256sum "$HERE/p8-scanner-corpus.txt" | cut -d' ' -f1)
@@ -3267,9 +3297,10 @@ wb_probe rb-scsoff.sql  "LEX-SESSION"      "UNLEXABLE SESSION" \
 # row-decided refusal no longer comes back as a PASS: the attribution law names
 # it first, because the 42501 the trigger provoked is about `p8bench_forbidden`
 # and the case declares `p8bench_rel`. Round 33's sentence attributing this
-# class to the construction ALONE is withdrawn; the construction is still what
-# answers "did a row decide it" for a refusal about the right relation, which
-# is what RELATION-ATTRIB-CTL and the arms above measure separately.
+# class to the construction ALONE is withdrawn. ROUND 35: the construction is
+# still what answers "did a row decide it" for a refusal about the RIGHT
+# relation, and R25-S-1 named that class as covered by it and by nothing else
+# while no arm exercised it. `RELATION-EXPLAIN-ISOLATE` below is that arm.
 wl_sub_ctl "RELATION-ROWTRAP-CTL" rb-trigrow.sql \
   "    IF kind = 'relation' THEN" "    IF false THEN" \
   refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
@@ -3295,13 +3326,66 @@ CREATE TABLE IF NOT EXISTS public.p8bench_own(k TEXT PRIMARY KEY);
 -- the declared relation while being about something else entirely.
 CREATE OR REPLACE FUNCTION public.p8bench_own() RETURNS INT LANGUAGE sql AS 'SELECT 1';
 REVOKE ALL ON FUNCTION public.p8bench_own() FROM PUBLIC;
-GRANT ALL PRIVILEGES ON public.p8bench_own TO daftar_worker;
+-- ROUND 35, R25-F-1 / the coordinator's 3.3. Round 34 wrote
+-- `GRANT ALL PRIVILEGES` here, and both reviews measured that THAT line, and
+-- not the shape of T4, was what red the arm: the term it fed asked whether the
+-- role held all seven privileges, so it spoke for no role this pack or any
+-- deployment actually has. One ordinary grant replaces it, which is the
+-- configuration every other case runs in.
+GRANT SELECT ON public.p8bench_own TO daftar_worker;
+-- The five attacks of R25-F-1, built here so the gate carries them.
+INSERT INTO public.p8bench_rel VALUES ('a') ON CONFLICT DO NOTHING;
+CREATE OR REPLACE FUNCTION public.p8bench_rel() RETURNS INT LANGUAGE sql AS 'SELECT 1';
+REVOKE ALL ON FUNCTION public.p8bench_rel() FROM PUBLIC;
+CREATE SCHEMA IF NOT EXISTS p8other;
+GRANT USAGE ON SCHEMA p8other TO daftar_worker;
+CREATE TABLE IF NOT EXISTS p8other.p8bench_rel(k TEXT PRIMARY KEY);
+REVOKE ALL ON p8other.p8bench_rel FROM PUBLIC;
+-- A relation the role may READ and may not WRITE, plus a function it may not
+-- execute: the probe that isolates the ARRIVAL term, because the role
+-- genuinely lacks the privilege the statement needs and the catalogue term is
+-- silent for it.
+CREATE TABLE IF NOT EXISTS public.p8bench_ro(k TEXT PRIMARY KEY);
+INSERT INTO public.p8bench_ro VALUES ('a') ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_ro FROM PUBLIC;
+GRANT SELECT ON public.p8bench_ro TO daftar_worker;
+-- IMMUTABLE on purpose and measured: the planner FOLDS it, so its EXECUTE
+-- check is taken at PLAN time, before the relation's INSERT privilege is
+-- checked at executor start. Written VOLATILE the refusal that arrives is the
+-- relation's own, which is a true case and not an attack — measured both ways
+-- on 16.15 while building this arm.
+CREATE OR REPLACE FUNCTION public.p8bench_sectext() RETURNS TEXT LANGUAGE sql IMMUTABLE AS 'SELECT ''z''::text';
+REVOKE ALL ON FUNCTION public.p8bench_sectext() FROM PUBLIC;
+-- R25-S-1: a refusal that a ROW decided and that NAMES the declared relation
+-- with its own kind, where the role HOLDS the privilege the statement needs —
+-- the one class the EXPLAIN construction alone covers.
+CREATE TABLE IF NOT EXISTS public.p8bench_y1t(k TEXT PRIMARY KEY);
+INSERT INTO public.p8bench_y1t VALUES ('seed') ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_y1t FROM PUBLIC;
+-- A COLUMN-scoped grant, and that is the whole point: the statement runs, and
+-- `has_table_privilege(…, 'INSERT')` answers FALSE for it, so the derived-
+-- privilege term is silent and the refusal the trigger provokes NAMES this
+-- relation with its own kind. Both attribution terms are satisfied and only
+-- the EXPLAIN construction sees that a row decided it.
+GRANT INSERT (k) ON public.p8bench_y1t TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_y1() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+DECLARE n BIGINT;
+BEGIN
+  IF NEW.k = 'BAD' THEN
+    EXECUTE 'SELECT count(*) FROM public.p8bench_y1t' INTO n;
+  END IF;
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_y1 ON public.p8bench_y1t;
+CREATE TRIGGER p8bench_y1 BEFORE INSERT ON public.p8bench_y1t
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_y1();
 SQL
 if [ -s "$WB/abench.log" ] && grep -qi "^ERROR" "$WB/abench.log"; then
   say "ATTRIB-BENCH: PLANT NOT ESTABLISHED — the attribution bench could not be built: $(tail -1 "$WB/abench.log")"
   FAILED=1
 else
-  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, and a function wearing a granted relation's own name — so a case can declare one subject while the refusal it reads is about another (the coordinator's section 4)"
+  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation and a row-conditional trigger — so a case can declare one subject while the refusal it reads is about another, and every grant here is an ordinary one (R25-F-1, the coordinator's 3.2 and 3.3)"
 fi
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T1 a relation case refused about a SECOND relation',
@@ -3334,16 +3418,106 @@ wb_probe t2.sql "ROW-ATTRIB-REL" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION
   "the same substitution in the row form, which the coordinator's 4.2 measured passing with no second table needed beyond the one the statement reaches"
 wb_probe t3.sql "RELATION-ATTRIB-FN" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "a relation case refused because the role may not EXECUTE a function the statement calls — the class is not two tables, it is any plan-time 42501 the statement can provoke about anything (the coordinator's 4.2)"
-wb_probe t4.sql "RELATION-ATTRIB-HOLDS" "THE ROLE HOLDS EVERY PRIVILEGE ON THE DECLARED RELATION" \
-  "a refusal that satisfies the arrival term by NAMING the declared relation — a function with the relation's own name — and is caught by the catalogue term instead, which is why the law has two and not one"
+wb_probe t4.sql "RELATION-ATTRIB-NAMED" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "a refusal that satisfies round 34's BARE-name arrival term — a function with the declared relation's own name — and is refused here because the term is now KIND-qualified: the server said \"for function\" and the declared object is a table (R25-F-1)"
 wl_sub_ctl "RELATION-ATTRIB-CTL" t1.sql \
   "      IF servergrant THEN" "      IF false THEN" \
   pass "PASS refused by permission denied" \
   "with the attribution law deleted ALONE the relation case passes on a refusal about another relation, with every other law satisfied — the state the coordinator measured at this head's parent and at the head before it (section 4.3)"
-wl_sub_ctl "RELATION-HOLDSALL-CTL" t4.sql \
-  "        IF holdsall THEN" "        IF false THEN" \
+# ---------------------------------------------------------------------
+# ROUND 35. R25-F-1 / the coordinator's 3.2: the five cases both reviews
+# measured PASSING at rc 0 on `b1b4b7a`, built here as arms. Each one is run
+# exactly as the pack runs a case, and each must now be RED. X1 and X4 are
+# refusals about a FUNCTION wearing the declared relation's name, which the
+# kind-qualified arrival term refuses; X2, X3 and X5 are refusals about a
+# SAME-NAMED relation in ANOTHER SCHEMA, whose message is byte-identical to the
+# one the declared relation would produce, so only the derived-privilege term
+# can see them. X5 is the one that shows no text test could ever close that
+# half: it spells the declared relation's name in `expect` in full and still
+# passed.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('X1 a relation case refused about a FUNCTION wearing the declared name',
+  $q$SELECT public.p8bench_rel() FROM @REL@$q$, 'permission denied', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/x1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('X2 a relation case refused about a SAME-NAMED relation in another schema',
+  $q$SELECT 1 FROM @REL@, p8other.p8bench_rel$q$, 'permission denied', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/x2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('X3 the same cross-schema substitution in the row form',
+  $q$SELECT (SELECT count(*) FROM p8other.p8bench_rel) FROM @REL@$q$,
+  'permission denied', 'p8bench_rel', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/x3.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('X4 the function wearing the declared name, in the row form',
+  $q$SELECT public.p8bench_rel() FROM @REL@$q$,
+  'permission denied', 'p8bench_rel', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/x4.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('X5 the cross-schema twin with the declared name spelled IN FULL in expect',
+  $q$SELECT 1 FROM @REL@, p8other.p8bench_rel$q$,
+  'permission denied for table p8bench_rel', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/x5.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('T5 a refusal about a function, where the role genuinely LACKS the privilege',
+  $q$INSERT INTO @REL@ VALUES (public.p8bench_sectext())$q$, 'permission denied', 'p8bench_ro');
+ROLLBACK;
+SQL
+} > "$WB/t5.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('T6 a refusal genuinely about the declared relation, from a statement not built from it',
+  $q$INSERT INTO "p8bench_ro" VALUES ('z')$q$, 'permission denied', 'p8bench_ro');
+ROLLBACK;
+SQL
+} > "$WB/t6.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('Y1 a ROW-decided refusal that names the declared relation with its own kind',
+  $q$INSERT INTO @REL@ VALUES ('BAD')$q$, 'permission denied', 'p8bench_y1t');
+ROLLBACK;
+SQL
+} > "$WB/y1.sql"
+wb_probe x1.sql "ATTRIB-X1" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R25-F-1 X1, which passed at rc 0 on this head's parent: the role HOLDS SELECT on the declared relation and the 42501 is about a function wearing its name"
+wb_probe x2.sql "ATTRIB-X2" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "R25-F-1 X2: the refusal is about a same-named relation in another schema and its message is byte-identical to one about the declared relation, so the ARRIVAL term is satisfied and the derived-privilege term is what refuses it"
+wb_probe x3.sql "ATTRIB-X3" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "R25-F-1 X3, the cross-schema twin in the row form, which the coordinator's 3.2 measured passing with the key and the witness both satisfied"
+wb_probe x4.sql "ATTRIB-X4" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R25-F-1 X4, the function wearing the declared name in the row form"
+wb_probe x5.sql "ATTRIB-X5" "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
+  "R25-F-1 X5, the case that closes the door on every cheap fix: 'expect' spells 'permission denied for table p8bench_rel' IN FULL and the refusal about the OTHER schema's relation satisfies it exactly, because the server's message carries no schema"
+wb_probe t5.sql "ATTRIB-KIND-ISOLATE" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "the probe that isolates the ARRIVAL term: the role genuinely lacks INSERT on the declared relation, so the derived-privilege term is SILENT, and only the kind-qualified reading of the server's words sees that the refusal is about a function"
+wb_probe t6.sql "RELATION-BIND-ISOLATE" "THE STATEMENT IS NOT BUILT FROM ITS SUBJECT" \
+  "the probe that isolates the BIND law, which round 34's withdrawal of WITNESS-BIND-CTL left with none: the refusal IS about the declared relation, with its own kind and name, the role lacks the privilege the statement needs and the plan refuses too, so every other law is satisfied and only the bind test refuses it (the coordinator's section 4)"
+wb_probe y1.sql "RELATION-EXPLAIN-ISOLATE" "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
+  "R25-S-1, and the probe that isolates the EXPLAIN construction, which round 34's withdrawal of RELATION-ROWTRAP-CTL left with none: the refusal NAMES the declared relation with its own kind and the role HOLDS the INSERT the statement needs, so both attribution terms are satisfied and only the construction sees that a row decided it"
+wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \
+  "        IF holdspriv THEN" "        IF false THEN" \
   pass "PASS refused by permission denied" \
-  "with the catalogue term deleted ALONE a refusal that merely NAMES the declared relation passes, which is what the arrival term on its own cannot see (section 4.4)"
+  "with the derived-privilege term deleted ALONE the cross-schema twin passes again, which is what the arrival term cannot see at any strength, because the message it reads carries no schema (R25-F-1 X2/X5)"
+wl_sub_ctl "ATTRIB-KIND-CTL" t5.sql \
+  "        IF NOT named THEN" "        IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the kind-qualified arrival term deleted ALONE a refusal about a FUNCTION passes in a case whose role genuinely lacks the privilege, so the catalogue term cannot cover it — which is why the law has two terms and not one (R25-F-1)"
+wl_sub_ctl "RELATION-BIND-CTL" t6.sql \
+  "  IF position('@REL@' in bare) = 0 THEN" "  IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the bind condition deleted ALONE the same statement passes, so the arm above is attributed to that one test and to nothing beside it (U-3, F-B)"
+wl_sub_ctl "RELATION-EXPLAIN-CTL" y1.sql \
+  "    IF kind = 'relation' THEN" "    IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the EXPLAIN construction deleted ALONE a row-decided refusal that names the declared relation correctly passes, which is the class R25-S-1 named as covered by the construction and by nothing else"
 
 # The lexing guard, now four MEASUREMENTS and no setting name.
 { wb_head; cat <<'SQL'
@@ -5031,7 +5205,19 @@ def _declared_not_a_site(off):
 # in any class reds by name, whether a line arrives or leaves. The reader
 # still cannot tell a planted say-site behind an odd quote from a word inside
 # prose; it can no longer fail to NOTICE one.
-EXCL_EXPECT = {"comment": 31, "own-pattern": 2, "definition": 1, "quote-parity": 12}
+# ROUND 35: the comment class moves 31 -> 32. The line that arrived is the
+# prologue comment at the top of this file explaining why the runner's own
+# stderr is now a file (R25-S-3); it writes this token inside a comment, and
+# nothing else moved. The quote-parity class stays at 12: the GATE-STDERR
+# sentence this round adds was first written with an apostrophe that made its
+# quote count odd, which would have made a REAL site invisible to this reader
+# — exactly the class this count exists to catch — and it was rewritten
+# rather than declared away. The quote-parity class still moves 12 -> 13, for
+# a different and declared reason: that same sentence QUOTES this token inside
+# its own text, and an occurrence behind an opening double quote is what this
+# rule is for. The GATE-STDERR site itself is PLACED, which is the thing that
+# matters, and it is the arm that now reads whatever the shell writes.
+EXCL_EXPECT = {"comment": 32, "own-pattern": 2, "definition": 1, "quote-parity": 13}
 excluded = {k: 0 for k in EXCL_EXPECT}
 unplaced = []
 for o in occurrences:
@@ -5108,7 +5294,7 @@ then
   PATHS_RT=$(sed -n 's/^PATHS: [0-9]* static sentences classified, \([0-9]*\) skipped.*/\1/p' "$CEN/paths-build.log")
   PATHS_OCC=$(sed -n 's/^PATHS: .*out of \([0-9]*\) occurrences.*/\1/p' "$CEN/paths-build.log")
   if _mk_census "$CEN/paths.log" "$CEN/paths.py"; then
-    say "CENSUS-PATHS: every one of the $PATHS_N static sentences this runner can print — in EVERY configuration, including the paths this container does not take — is classified by the census, so an undeclared line of an untaken path reds here (W-1); of $PATHS_ALL say-sites in the runner the other $PATHS_RT begin with a value substituted at run time, so their identity is knowable only from a run and the census reads it there, and $PATHS_NQ are not a quoted literal at all; and ALL $PATHS_OCC occurrences of the token \`say\` in this file, counted by a pattern that knows nothing about shell grammar, are either placed in one of those figures or declared not to be say-sites by a RULE — an occurrence this reader cannot place exits 3 by name. Round 30 anchored at the start of a line and lost twenty sites; round 31 enumerated separators and lost nine, `)` and `do` among them, one of which prints four times every run; both times the TOTAL came from the same pattern as the classification, so the gap was a silence rather than a difference. It cannot be now (C-3, R-1)"
+    say "CENSUS-PATHS: every one of the $PATHS_N static sentences this runner can print — in EVERY configuration, including the paths this container does not take — is classified by the census, so an undeclared line of an untaken path reds here (W-1); of $PATHS_ALL say-sites in the runner the other $PATHS_RT begin with a value substituted at run time, so their identity is knowable only from a run and the census reads it there, and $PATHS_NQ are not a quoted literal at all; and ALL $PATHS_OCC occurrences of the token \`say\` in this file, counted by a pattern that knows nothing about shell grammar, are either placed in one of those figures or declared not to be say-sites by a RULE — an occurrence this reader cannot place exits 3 by name. Round 30 anchored at the start of a line and lost twenty sites; round 31 enumerated separators and lost nine, ')' and 'do' among them, one of which prints four times every run; both times the TOTAL came from the same pattern as the classification, so the gap was a silence rather than a difference. It cannot be now (C-3, R-1)"
   else
     say "CENSUS-PATHS: FAIL — a sentence the runner can print is classified by nothing: $(tail -1 "$CEN/paths.py.decl.err")"
     FAILED=1
@@ -5157,6 +5343,23 @@ if python3 -I "$PATCHDIR/widen-census-complement.py" "$CEN/base.py" "$CEN/widene
   fi
 else
   say "CENSUS-SEAL-COMP: PLANT NOT ESTABLISHED — the complement could not be widened in a copy: $(tail -1 "$CEN/p9a.log")"
+  FAILED=1
+fi
+
+# ROUND 35, R25-S-3, and it runs HERE — after every arm above and immediately
+# before the arm census — so that it covers every line any arm could have
+# written AND so that the census, which judges this run's own log, sees this
+# arm name itself. The census is what runs after it; its own output is read
+# back into CENSUS_OUT with 2>&1 and judged there, so nothing it writes is
+# unread either. The replay to the real stderr keeps the lines visible to an
+# operator; the arm is what makes them a verdict.
+exec 2>&3 3>&-
+STDERR_N=$(wc -l < "$STDERR_LOG" | tr -d ' ')
+if [ "$STDERR_N" = "0" ]; then
+  say "GATE-STDERR: this runner wrote NOTHING to its own stderr in $STDERR_N lines — the four shell parse errors R25-S-3 measured on every run of the parent head are gone, and a 'say' sentence that the shell would execute rather than print now reds this arm instead of disappearing into a stream no law reads"
+else
+  cat "$STDERR_LOG" >&2
+  say "GATE-STDERR: FAIL — this runner wrote $STDERR_N line(s) to its own stderr, the first being: $(head -1 "$STDERR_LOG")"
   FAILED=1
 fi
 
