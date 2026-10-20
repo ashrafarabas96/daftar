@@ -1240,7 +1240,7 @@ const scriptOfTheRunner = (allowed: (token: string) => boolean, procRoot = '/pro
  * departures are both visible to the caller, because a census that only
  * checks the names it already knows fails open on the next file to appear.
  */
-const bytesUnder = (root: string): Record<string, string> => {
+const bytesUnder = (root: string, repoRoot: string): Record<string, string> => {
   const out: Record<string, string> = {};
   const walk = (dir: string, prefix: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1))) {
@@ -1249,8 +1249,30 @@ const bytesUnder = (root: string): Record<string, string> => {
       // A symbolic link is recorded as what it RESOLVES TO and never followed
       // as a file: the pinned package holds none today, and one that appears
       // is an ARRIVAL the comparison refuses rather than a file it hashes.
-      if (entry.isSymbolicLink()) out[rel] = `SYMLINK:${realpathSync(full)}`;
-      else if (entry.isDirectory()) walk(full, rel);
+      //
+      // ROUND 69, THE CHALLENGER'S R63-S-1 (P4, latent and closed before it
+      // cost a round), in the THREE zones its second message asked for. An
+      // ABSOLUTE target is a property of the CHECKOUT and not of the package,
+      // so the first link to appear would make one pin true here and false in
+      // CI. Two zones were not enough: a link inside the package pointing out
+      // of the package but still inside the REPOSITORY has an absolute target
+      // under the checkout root, which differs between any two clones and is
+      // not a difference. So:
+      //
+      //   * a target inside the pinned package -> relative to the package;
+      //   * a target elsewhere in the repository -> `repo:` and relative to
+      //     the repository root;
+      //   * a target outside the repository -> absolute, because a link into
+      //     /opt or /usr IS a different tree in any sense that matters.
+      if (entry.isSymbolicLink()) {
+        const target = realpathSync(full);
+        const zone = target.startsWith(`${root}${sep}`)
+          ? relative(root, target)
+          : target.startsWith(`${repoRoot}${sep}`)
+            ? `repo:${relative(repoRoot, target)}`
+            : target;
+        out[rel] = `SYMLINK:${zone}`;
+      } else if (entry.isDirectory()) walk(full, rel);
       else out[rel] = createHash('sha256').update(readFileSync(full)).digest('hex');
     }
   };
@@ -4510,8 +4532,13 @@ describe('every written invocation of the pack tools is isolated', () => {
     // for the next npm the suite itself spawns, so the file readers' reach is
     // their own and this is the measurement that says so.
     //
-    // ROUND 68, THE COORDINATOR'S R67-C-01 (P2), correcting something I wrote
-    // and the challenger repeated. I explained the non-reproduction by saying
+    // ROUND 68, THE COORDINATOR'S R67-C-01 (P2), correcting something I wrote.
+    // (ROUND 69, THE CHALLENGER'S POINT OF RECORD: an earlier draft of this
+    // comment said the challenger had repeated the claim. It did not -- it
+    // searched its own frozen reports and the sentence is in none of them, and
+    // neither is it in any message of its I hold. The error was mine twice:
+    // the explanation, and then the attribution.) I explained the
+    // non-reproduction by saying
     // npm puts its own node's directory at the front of the script's PATH. It
     // does not: on npm 10.9.4 and 11.6.2 it prepends the `node_modules/.bin`
     // chain and `@npmcli/run-script`'s node-gyp-bin, and nothing else. What
@@ -4802,11 +4829,41 @@ describe('every written invocation of the pack tools is isolated', () => {
       `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the runner's own entry ${relative(packageRoot, script)} is not one of the pinned files`,
     ).toContain(relative(packageRoot, script));
 
+    // ROUND 69, THE CHALLENGER'S R63-S-1, measured on a tree this case builds
+    // rather than by planting a symlink in the shared install (an arrival
+    // there would red every other thread's run, and a hardening measured by
+    // breaking somebody else's run is not one). `bytesUnder` is a pure
+    // function of a directory, so it is handed one: a file, a link INSIDE the
+    // root, and a link pointing OUT of it.
+    const scratch = mkdtempSync(join(tmpdir(), 'r69-bytes-'));
+    onTestFinished(() => rmSync(scratch, { recursive: true, force: true }));
+    mkdirSync(join(scratch, 'inner'));
+    writeFileSync(join(scratch, 'inner', 'real.js'), 'x\n');
+    symlinkSync(join(scratch, 'inner', 'real.js'), join(scratch, 'link-inside'));
+    const outside = join(tmpdir(), `r69-outside-${process.pid}`);
+    writeFileSync(outside, 'y\n');
+    onTestFinished(() => rmSync(outside, { force: true }));
+    symlinkSync(outside, join(scratch, 'link-outside'));
+    symlinkSync(join(realpathSync(repo), 'package.json'), join(scratch, 'link-in-the-repo'));
+    const rows = bytesUnder(realpathSync(scratch), realpathSync(repo));
+    expect(
+      rows['link-inside'],
+      'a link INSIDE the pinned root must be recorded by its path relative to that root, or the pin is a property of the checkout and not of the package',
+    ).toBe(`SYMLINK:${join('inner', 'real.js')}`);
+    expect(
+      rows['link-in-the-repo'],
+      'a link into the REPOSITORY but outside the pinned package must be recorded relative to the repository root: its absolute target differs between any two clones, and that is not a difference',
+    ).toBe('SYMLINK:repo:package.json');
+    expect(
+      rows['link-outside'],
+      'a link pointing out of the REPOSITORY keeps its absolute target, because a link into /opt or /usr is a different tree in any sense that matters',
+    ).toBe(`SYMLINK:${realpathSync(outside)}`);
+
     // The census refuses ARRIVALS as well as departures and edits: a file that
     // appears under the package is a file nobody reviewed, and vitest loads
     // what its own code points at.
     expect(
-      bytesUnder(packageRoot),
+      bytesUnder(packageRoot, realpathSync(repo)),
       `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the installed bytes of ${pin.package}@${pin.version} are not the pinned ones. If the change is intended it moves with package-lock.json, in the same commit, with the reason in the message`,
     ).toStrictEqual(pin.files);
   });

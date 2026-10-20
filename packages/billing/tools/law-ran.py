@@ -575,7 +575,24 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
         return problems + [f"{REFUSED_RUNNER_PROGRAM_UNPINNED}: the pinned package directory {base} is not there"]
     for path in sorted(base.rglob("*")):
         if path.is_symlink():
-            installed[str(path.relative_to(base))] = "SYMLINK:" + str(path.resolve())
+            # ROUND 69, THE CHALLENGER'S R63-S-1 (P4, latent), in THREE zones:
+            # an ABSOLUTE target is a property of the CHECKOUT and not of the
+            # package, and two zones were not enough because a link inside the
+            # package pointing elsewhere in the REPOSITORY has an absolute
+            # target under the checkout root, which differs between any two
+            # clones and is not a difference. Inside the package -> relative to
+            # it; elsewhere in the repository -> `repo:` and relative to the
+            # repository root; outside the repository -> absolute, because a
+            # link into /opt or /usr IS a different tree.
+            target = path.resolve()
+            try:
+                zone = str(target.relative_to(base))
+            except ValueError:
+                try:
+                    zone = "repo:" + str(target.relative_to(root.resolve()))
+                except ValueError:
+                    zone = str(target)
+            installed[str(path.relative_to(base))] = "SYMLINK:" + zone
         elif path.is_file():
             try:
                 installed[str(path.relative_to(base))] = hashlib.sha256(path.read_bytes()).hexdigest()
