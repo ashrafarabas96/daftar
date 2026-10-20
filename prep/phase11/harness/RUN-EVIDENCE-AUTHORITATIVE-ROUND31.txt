@@ -1409,12 +1409,17 @@ and reproducible below from the commit that holds this file):
 
     4a98df7b8cf526e227acce65c3df593ed299047c
 
-That tree is this commit's tree with ONE path replaced: this file, truncated to
-the 1397 lines that precede this block. Everything else -- every document,
-every harness file, both probe transcripts -- is byte-identical, which is what
-that single replacement proves. To reproduce it, in a throwaway clone checked
-out at the commit this file is in:
+That tree is the tree of the PUSHED commit
+`1024c3bd3dfb4d3573d5b52d9f9138c0c074bda6` with ONE path replaced: this file,
+truncated to the 1397 lines that precede this block. Everything else -- every
+document, every harness file, both probe transcripts -- is byte-identical,
+which is what that single replacement proves. The commit is named explicitly
+because round 32 added a file, exactly as the paragraph below said a later
+round would, so this record is now a statement about `1024c3b` and a reader
+checks it there. To reproduce it:
 
+    git clone <this repo> w && cd w
+    git checkout 1024c3bd3dfb4d3573d5b52d9f9138c0c074bda6
     P=prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND31.txt
     blob=$(git show HEAD:$P | head -n 1397 | git hash-object -w --stdin)
     git read-tree HEAD^{tree}

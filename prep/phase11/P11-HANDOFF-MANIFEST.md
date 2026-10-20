@@ -3305,8 +3305,8 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     81
-of them recordings of past runs              57
+files the commit holds under the harness     82
+of them recordings of past runs              58
 skip keys the committed source reads         25
 arms the selftest runs                       152
 ```
@@ -4301,6 +4301,66 @@ counts fall and the arm reds rather than passing over an empty set.
 | `C28-F1` | P1 | OPEN and DECLARED, sized, and measured UNREACHABLE through the existing mutation hook |
 | `R28-S3` / `R27-S1` | P3 | unchanged, on the coordinator's ruling |
 | carried | — | as §7.31, and **no CI has ever run the Phase 11 pack** |
+
+## 7.33 ROUND 32 (challenger: NO BLOCKING DEFECT at `1024c3b`, one residual; coordinator diff review OWED) — the pin is no longer SELECTED FOR, it is APPENDED
+
+The independent challenger of `1024c3b` found **no blocking defect** and
+verified the three closures of round 31 at the SHA, including the part this
+author could not verify for a reader: **it ran both tree-digest recipes on the
+pushed head and reproduced both named trees exactly** — round 30's record to
+tree `fbeace0c` and blob `e57cb299` at `ad57c1c`, round 31's to tree
+`4a98df7b` and blob `178ce04c` at `1024c3b`. A pointer that a second party has
+followed is no longer a pointer anyone has to take on trust.
+
+### `R32-S1` — a selector made of vocabulary is still a text check
+
+Round 31 held the printed findings by SELECTING the paragraphs that talk about
+the criterion, using the pin's own vocabulary. The challenger named the evasion
+exactly: a finding that states the rule in other words, or avoids `this run`,
+or carries fewer than three of the pin's stems, is not selected and so is not
+held. It rated it a residual rather than a finding — the sentences are source
+literals, the integrity at stake is documentary rather than figure legitimacy,
+the limit was declared, and the retired-sentence net still catches a retired
+wording by substring — and named the strongest fix: **pin the finding messages
+by CONSTRUCTION instead of selecting them by vocabulary.**
+
+That is this round's answer, and it is the project's own lesson applied to the
+author's own instrument: *close a text check by construction or by arrival,
+never by another text check.*
+
+| what changed | what it means |
+|---|---|
+| `FINDING_TAIL` | one sentence, composed from `HAYSTACK_SENTENCE` rather than written beside it, appended to every finding |
+| `_finding(text)` | the single door every branch of the report now prints through, so the pin is in the text a reader meets whatever that branch's own words are |
+| `direct_prints_in_the_finding_loops` | an `ast` reading of the COMMITTED bytes, scoped to `scan` alone, that names any `print` inside the loops which emit findings. Zero is required |
+| the arm | a `print` planted inside the findings loop of a COPY of the committed source is named by line. Nothing on disk moves to measure it |
+| the census | the pin is now required of **every labelled paragraph with no selector in the way** — four of them at this head — which is what the construction makes true |
+
+The vocabulary selector stays, demoted: it is a belt over the printed
+paragraphs that are NOT findings, and it is no longer what binds the ones that
+are. `check_blocks` keeps a findings list of its own and is deliberately
+outside this law's scope, because one doctrine for two functions is the defect
+this pack has a lesson about.
+
+### Residuals of this round
+
+| id | `P` | what |
+|---|---|---|
+| `R32-S1` | — | CLOSED BY CONSTRUCTION: the pin is appended by the only door a finding prints through, and an `ast` law over the committed bytes refuses any other door. The residual the challenger declared — that a vocabulary net can be evaded — is no longer load-bearing |
+| `C28-F1` | P1 | OPEN and DECLARED, sized, measured unreachable through the existing mutation hook |
+| `R28-S3` / `R27-S1` | P3 | unchanged, on the coordinator's ruling |
+| carried | — | as §7.32, and **no CI has ever run the Phase 11 pack** |
+
+### The challenger's frozen verdict
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-1024c3bd3dfb4d3573d5b52d9f9138c0c074bda6.md`, sha256 `e6530959eb8c5e4231053d68c175a1480db2694091778b57133ff86fad3abf55` |
+| Arabic | the same name with `-AR.md`, sha256 `adb55d28cbcf5b25628e2f5fc8403795674a818a55010242e16a16b93f076a2a` |
+| verdict | NO BLOCKING DEFECT at that SHA, `READY_TO_PROMOTE` = NO |
+
+**The coordinator diff review of `1024c3b` is OWED**, so that head has ONE of
+its two links. This commit answers `R32-S1` and is unsigned by anyone.
 
 ## 8. Coordinator state
 

@@ -2419,6 +2419,32 @@ def _frame_refusals(keys):
     return not msgs, tuple(msgs)
 
 
+FINDING_TAIL = (
+    " The haystack this gate weighs a figure against is " + HAYSTACK_SENTENCE + "."
+)
+"""The sentence appended to EVERY finding a reader meets, composed from the pin.
+
+`R32-S1`, the round-32 challenger's residual, and the project's own lesson:
+close a text check BY CONSTRUCTION, never by another text check. Round 31 held
+the printed findings by SELECTING the ones that talk about the criterion, from
+the pin's vocabulary -- which is a net, and the challenger was right that a
+finding written in other words slips under it. The pin is not selected for any
+more: it is APPENDED, by `_finding`, to every finding that is printed, and an
+`ast` law over the committed bytes requires that no finding is printed any
+other way.
+"""
+
+
+def _finding(text):
+    """Print one finding, with the rule's own sentence appended by construction.
+
+    Every branch of the report goes through here. `finding_construction_test`
+    reads the committed bytes and refuses a `print` inside the findings loop,
+    so a branch added later cannot emit a sentence this law has not seen.
+    """
+    print("  " + text + FINDING_TAIL)
+
+
 def scan(docs_dir, harness_dir, quiet=False, skip=()):
     """0 = every quoted figure is emitted. 1 = a finding. 2 = inert. 5 = a
     NAMED REFUSAL: the haystack could not be derived from a commit, or the
@@ -2519,8 +2545,8 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
         # longer invisible either.
         extra = _differs_from_commit(harness_dir)
         for name in extra or []:
-            print(
-                "  NOT IN THE HAYSTACK: %s differs from that commit (changed, untracked "
+            _finding(
+                "NOT IN THE HAYSTACK: %s differs from that commit (changed, untracked "
                 "or ignored). Nothing it contains legitimises a figure." % name
             )
     if seen == 0:
@@ -2554,10 +2580,10 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                 # exactly now, and what is not measured is named in the same
                 # breath, because a refusal a reader acts on must not claim
                 # more than it checked.
-                print(
-                    ("  NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, and the "
-                     "haystack here is " + HAYSTACK_SENTENCE + ", which this string "
-                     "is not in: no value case of this run asserted it and passed. "
+                _finding(
+                    ("NOT REQUIRED BY ANY CASE: %s:%d reports `%s`%s, which is "
+                     "not in that haystack: no value case of this run asserted it "
+                     "and passed. "
                      "Either have a case assert it -- and name that case beside the "
                      "figure -- or drop it. WHAT THIS CHECKS is that a case of this "
                      "run asserted the string; what it does NOT check is that the "
@@ -2567,8 +2593,8 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                      "round of work and is not here).") % (rel, n, tok, written)
                 )
             elif why == "bidi control":
-                print(
-                    "  BIDI-CONTROL-IN-A-CANDIDATE: %s:%d reports `%s`%s and carries "
+                _finding(
+                    "BIDI-CONTROL-IN-A-CANDIDATE: %s:%d reports `%s`%s and carries "
                     "%s, an explicit bidi formatting character. It is invisible and it "
                     "REORDERS what follows, so the figure this gate weighs and the "
                     "figure a reader sees need not be the same number. Remove it: a "
@@ -2582,22 +2608,22 @@ def scan(docs_dir, harness_dir, quiet=False, skip=()):
                                   if c in BIDI_CONTROLS))
                 )
             elif why == "no case named":
-                print(
-                    "  NAMES NO CASE: %s:%d reports `%s`%s. A case required it (%s), "
+                _finding(
+                    "NAMES NO CASE: %s:%d reports `%s`%s. A case required it (%s), "
                     "but this line does not say which, so nothing says the figure is "
                     "a figure OF what the sentence claims. Write the case in brackets "
                     "on the same line." % (rel, n, tok, written, who)
                 )
             elif why == "unidentified case":
-                print(
-                    "  THE CASE NAMED HAS NO IDENTIFIER: %s:%d reports `%s`%s and "
+                _finding(
+                    "THE CASE NAMED HAS NO IDENTIFIER: %s:%d reports `%s`%s and "
                     "names `%s`, which is what the suites record for a case titled in "
                     "prose. A case a document cannot reference cannot pin a figure; "
                     "give the case an identifier." % (rel, n, tok, written, UNIDENTIFIED)
                 )
             else:
-                print(
-                    "  ANOTHER CASE REQUIRED IT: %s:%d reports `%s`%s and names a case "
+                _finding(
+                    "ANOTHER CASE REQUIRED IT: %s:%d reports `%s`%s and names a case "
                     "that did not require it. The case(s) that did: %s. A true string "
                     "asserted of the wrong grid, pack or world is a false sentence made "
                     "of a true figure." % (rel, n, tok, written, who or "none")
@@ -7685,6 +7711,85 @@ def gate_sentences(printed, rule_statements_only=False):
     return out
 
 
+def direct_prints_in_the_finding_loops(text):
+    """The `print` calls inside the loops that emit FINDINGS, from source.
+
+    `R32-S1` closed by CONSTRUCTION. A finding must reach a reader through
+    `_finding`, which appends the pin; a branch that calls `print` itself emits
+    a sentence no law has read, which is how the round-31 selector could be
+    evaded. This reads the committed bytes and names every such call, so the
+    closure is a property of the code and not of the words the code happens to
+    use.
+    """
+    tree = ast.parse(text)
+    # `scan` only: `check_blocks` keeps a findings list of its own, and holding
+    # two functions to one doctrine is the defect this pack has a lesson about.
+    body = next((n for n in tree.body
+                 if isinstance(n, ast.FunctionDef) and n.name == "scan"), None)
+    if body is None:                                           # pragma: no cover
+        raise Refusal(
+            "FRAME-FUNCTION-ABSENT: `scan` is not in the committed bytes, so the "
+            "loops this law reads are not the loops that print a finding."
+        )
+    bad = []
+    for node in ast.walk(body):
+        if not isinstance(node, ast.For):
+            continue
+        names = {n.id for n in ast.walk(node.iter) if isinstance(n, ast.Name)}
+        if not ({"findings", "extra"} & names):
+            continue
+        for inner in ast.walk(node):
+            if (isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Name)
+                    and inner.func.id == "print"):
+                bad.append(inner.lineno)
+    return sorted(bad)
+
+
+def finding_construction_test():
+    """`R32-S1`: every finding is emitted by `_finding`, read from the commit."""
+    ok = True
+    _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+    if text is None:
+        raise Refusal(
+            "FRAME-SOURCE-NOT-IN-COMMIT: this file's committed bytes could not be "
+            "read, so the construction this law binds is not the one the commit "
+            "carries."
+        )
+    live = direct_prints_in_the_finding_loops(text)
+    good = not live
+    ok = ok and good
+    print(
+        "  construction R32-S1 the finding loops call `print` directly at %-14s -> %s"
+        % (", ".join(str(n) for n in live) or "no line",
+           "as required" if good else "**SELFTEST FAILED**")
+    )
+    # The tail is composed from the pin, not written beside it.
+    good = HAYSTACK_SENTENCE in FINDING_TAIL
+    ok = ok and good
+    print(
+        "  construction R32-S1 FINDING_TAIL carries the pin by composition %-9s -> %s"
+        % ("yes" if good else "NO", "as required" if good else "**SELFTEST FAILED**")
+    )
+    # And the arm: a branch that prints its own finding is NAMED. The plant is
+    # made in a COPY of the committed source, so nothing on disk moves.
+    hit = "    for rel, n, tok, raw, why, owners in findings:\n"
+    if hit not in text:                                        # pragma: no cover
+        print("  construction R32-S1 the findings loop was not found -> "
+              "**SELFTEST FAILED**")
+        return False
+    planted = text.replace(hit, hit + '        print("a finding of its own")\n', 1)
+    found = direct_prints_in_the_finding_loops(planted)
+    good = len(found) == 1
+    ok = ok and good
+    print(
+        "  construction R32-S1 a planted direct `print` is named at %-16s -> %s"
+        % (", ".join(str(n) for n in found) or "no line",
+           "as required" if good else "**SELFTEST FAILED**")
+    )
+    return ok
+
+
 def finding_sentence_arms():
     """`C31-S3`: the sentences a FINDING prints, derived by running the arms.
 
@@ -7707,6 +7812,15 @@ def finding_sentence_arms():
         ("the census of finding names", labels == [
             "BIDI-CONTROL-IN-A-CANDIDATE", "NOT REQUIRED BY ANY CASE"],
          ", ".join(labels) or "none"),
+        # `R32-S1`: the pin is required of every LABELLED paragraph with no
+        # selector in the way, which is what `_finding` makes true by
+        # construction. The vocabulary selector of round 31 is a belt over the
+        # paragraphs that are not findings, and is no longer what binds these.
+        ("the pin in every labelled finding, no selector",
+         all(HAYSTACK_SENTENCE in t for _, t in printed
+             if re.match(r"^[A-Z][A-Z -]{6,}:", t)),
+         "%d labelled paragraph(s)"
+         % sum(1 for _, t in printed if re.match(r"^[A-Z][A-Z -]{6,}:", t))),
     ):
         ok = ok and good
         print("  findings C31-S3 %-34s %-44s -> %s"
@@ -8824,6 +8938,7 @@ def selftest():
     ok = sentence_reading_arms() and ok
     ok = gate_sentence_arms() and ok
     ok = finding_sentence_arms() and ok
+    ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
     ok = frame_gate_test() and ok
     ok = anchor_names_test() and ok
