@@ -90,6 +90,23 @@ if not _DEPTH_IS_READABLE:
     )
     raise SystemExit(2)
 
+# Coord F-T, the ninth actual-diff review: closing F-N by construction WIDENED
+# the accepted set downward, because `int()` accepts what `isdigit()` refused --
+# a sign. `P7_HARNESS_SPAWN_DEPTH=-1000000` was read as a depth, the cap `> 2`
+# was false, and the child was handed -999,999, so a million spawns stood
+# between the refusal and the state it exists to refuse. A depth is a count of
+# spawns and cannot be negative, so a negative one is refused BY NAME here
+# rather than being carried as a number nothing can act on. Fail-closed either
+# way, and it takes an operator setting it, which is why the review filed it
+# below the blocking line.
+if _DEPTH < 0:
+    print(
+        f"REFUSED-P7-SPAWN-DEPTH-NEGATIVE: P7_HARNESS_SPAWN_DEPTH is {_DEPTH_READ!r}, and a "
+        f"depth is a count of spawns, so a negative one is not a depth. Carrying it would put "
+        f"this run that many spawns below the cap that stops this file spawning itself."
+    )
+    raise SystemExit(2)
+
 if _DEPTH > 2:
     print(
         f"REFUSED-P7-HARNESS-SPAWNED-ITSELF: this process is "
@@ -108,7 +125,12 @@ if "--isolation-probe" in sys.argv:
     # the Kotlin compiler was OOM-killed and the recursion was caught.
     # Disclosed because this harness's own rule is that a guard which cannot be
     # run is not a guard, and that version could not be run at all.
+    # R21-01: the probe also reports the `PATH` it was HANDED, because the
+    # wrapper assigning `PATH` and the child receiving it are two facts, and an
+    # arm that reads only the first measures a line of text rather than an
+    # environment.
     print("P7-ISOLATION-PROBE: isolated, so no file beside this one is importable")
+    print("P7-ISOLATION-PROBE: PATH=%s" % os.environ.get("PATH", ""))
     raise SystemExit(0)
 
 import re
@@ -2852,10 +2874,19 @@ def self_test() -> int:
     expect(
         "an edited SHEBANG is a refusal, because line one decides what runs (R20-01)",
         not the_wrapper_pin_holds(
-            wrapper_text.replace("#!/usr/bin/env -S bash -p", "#!/tmp/not-the-pinned-shell", 1)
+            wrapper_text.replace("#!/bin/bash -p", "#!/tmp/not-the-pinned-shell", 1)
         )
+        # R21-01's own shape: dropping back to a PATH-resolved interpreter is a
+        # difference, because `env` chooses `bash` through `PATH` and a forged
+        # `bash` earlier on it forges the whole verdict without reading a byte
+        # of this file.
         and not the_wrapper_pin_holds(
-            wrapper_text.replace("#!/usr/bin/env -S bash -p", "#!/usr/bin/env bash", 1)
+            wrapper_text.replace("#!/bin/bash -p", "#!/usr/bin/env -S bash -p", 1)
+        )
+        # And dropping `-p` alone, which is the privileged flag the rest of the
+        # file's defences assume.
+        and not the_wrapper_pin_holds(
+            wrapper_text.replace("#!/bin/bash -p", "#!/bin/bash", 1)
         ),
     )
     expect(
@@ -2926,6 +2957,11 @@ def self_test() -> int:
         (lambda v: v is not None and v[1] and "REFUSED-P7-TREES-LEFT-BEHIND" in v[0])(
             the_leftover_verdict(["/tmp/p7-proof-0-left"])
         ),
+    )
+    expect(
+        "the derived tree figure equals the literal declared for it, which is the one check "
+        "an arm fed the derivation's own output cannot make (F-Q)",
+        one_runs_worth_of_trees() == ONE_RUNS_TREES_DECLARED,
     )
     expect(
         "a tree count equal to the derived figure says nothing (S-4 / F-I)",
@@ -3040,6 +3076,22 @@ def self_test() -> int:
             for good in ("2", "+2", "02", " 2 ")
         ),
     )
+    # Coord F-T's arm. `int()` accepts a sign, so closing R20-04 by construction
+    # widened the set downward: at the head before this one `-1000000` was READ
+    # as a depth, the cap was false, and the child was handed -999,999.
+    expect(
+        "a NEGATIVE spawn depth is refused by name, since a depth is a count of spawns "
+        "(F-T)",
+        all(
+            "REFUSED-P7-SPAWN-DEPTH-NEGATIVE" in depth_run(below).stdout
+            and "Traceback" not in depth_run(below).stderr
+            for below in ("-1", "-1000000", "-0001")
+        ),
+    )
+    expect(
+        "and `-0` is zero, not a negative, so the refusal is not a false red (F-T)",
+        "P7-ISOLATION-PROBE: isolated" in depth_run("-0").stdout,
+    )
 
     # R19-05's arm. The id is in a comment, where nothing is declared, so the
     # census must read nineteen and refuse — and the control beside it is the
@@ -3139,15 +3191,67 @@ def self_test() -> int:
     # nobody, which is the outcome R19-02 asked for, so what is lost is one
     # directory, not a figure.
     _handler_foreign = tempfile.mkdtemp(prefix="p7-proof-someone-elses-")
+    # R21-04: a tree named the way this run's self-test child names its own.
+    # Unregistered here on purpose -- the point is attribution by the NONCE this
+    # process issued, not by a registry it could have consulted.
+    _childs_tree = tempfile.mkdtemp(prefix="p7-proof-" + THE_TAG_I_HAND_MY_CHILD + "-")
     _handler_said = stop_then_scrub_and_report(15)
-    _NO_MORE_TREES.clear()
+    # R21-03 / coord F-U: the flag the handler set stays SET across the arms
+    # below, because one of them reads it. It used to be cleared here, one line
+    # after the call, and the arm that named it then set the flag itself and
+    # cleared it again -- so it measured `a_tree`'s check, which has had its own
+    # arm since round 19, and said nothing about whether the handler sets
+    # anything. Deleting `_NO_MORE_TREES.set()` from the handler left the whole
+    # self-test green at 78 of 78, reproduced here before this was changed.
+    # This is `R18-01` again, inside the arm raised to answer it: an instrument
+    # fed its own input certifies the mechanism and never the path the run
+    # travels. The clear now happens AFTER the last arm that reads the flag.
     expect(
         "the signal report counts the DIRECTORY, not the list it was handed (F-L / R19-02)",
         f"holds {len(trees_on_disk())} tree(s)" in _handler_said,
     )
+    # R21-05: this used to pin the literal sentence `of which 0 are this run's
+    # and 1 are not`, which carries a count of OTHER people's trees. One stray
+    # left in the temp directory by any earlier killed run -- the ordinary
+    # condition this harness has a census and a threshold for -- made this arm
+    # red and stopped every proof, four lines after another arm saying a stray
+    # below one run's worth does not block. A hardening that causes a false red
+    # is not hardening, so what is asserted now is the PARTITION: the three
+    # numbers account for the listing exactly, whatever else is on disk.
+    _said_numbers = re.search(
+        r"holds (\d+) tree\(s\) under this harness's prefixes, of which (\d+) are this "
+        r"process's, (\d+) were made by this run's self-test child and (\d+) are neither",
+        _handler_said,
+    )
     expect(
-        "it computes ownership rather than asserting it, and names both numbers (R20-03)",
-        "of which 0 are this run's and 1 are not" in _handler_said,
+        "the report's three ownership numbers account for the listing exactly, whatever else "
+        "is on disk (R20-03 / R21-05)",
+        _said_numbers is not None
+        and int(_said_numbers.group(1))
+        == int(_said_numbers.group(2)) + int(_said_numbers.group(3)) + int(_said_numbers.group(4)),
+    )
+    expect(
+        "a tree that is nobody's is counted as neither, by name and not by a leftover phrase "
+        "(R20-03)",
+        os.path.basename(_handler_foreign) in _handler_said
+        and "Neither: [" in _handler_said,
+    )
+    expect(
+        "a tree carrying the nonce this run handed its self-test child is attributed to the "
+        "CHILD and not to a stranger (R21-04)",
+        (lambda report: f"The self-test child's: ['{_childs_tree}']" in report)(
+            stop_then_scrub_and_report(15)
+        ),
+    )
+    expect(
+        "a truncated enumeration says how many it is showing, so a reader can reconcile it "
+        "with the count (F-V)",
+        first_few("L", [str(i) for i in range(7)]).endswith("(first 5 of 7)."),
+    )
+    expect(
+        "and a complete enumeration carries no marker, because one on a complete list is "
+        "noise (F-V)",
+        first_few("L", ["a", "b"]) == "L: ['a', 'b'].",
     )
     expect(
         "it removed the tree this run had registered, including an arm's own (F-L / R20-03)",
@@ -3158,14 +3262,14 @@ def self_test() -> int:
         os.path.exists(_handler_foreign),
     )
     expect(
-        "and it stopped the creators, so a tree asked for after it is refused (F-L)",
-        (lambda: (
-            _NO_MORE_TREES.set(),
-            "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED" in how_a_tree_refuses(),
-            _NO_MORE_TREES.clear(),
-        )[1])(),
+        "and the HANDLER stopped the creators: the flag it set is read, not set here, and a "
+        "tree asked for now is refused by name (F-L / R21-03)",
+        _NO_MORE_TREES.is_set()
+        and "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED" in how_a_tree_refuses(),
     )
+    _NO_MORE_TREES.clear()
     scrub(_handler_foreign)
+    scrub(_childs_tree)
 
     # R20-02's arms. The subject here is the SHELL, not this file, so each one
     # runs the wrapper as a child with a hijacked environment and reads what
@@ -3176,10 +3280,22 @@ def self_test() -> int:
     hijack_function = 'exec() { echo P7-HIJACKED-EXEC-RAN; }'
     wrapper_path = os.path.join(os.path.dirname(me), "red-proofs.sh")
 
-    def through_the_wrapper(argv: list[str], **env: str) -> str:
+    def through_the_wrapper(argv: list[str], **env: str | None) -> str:
+        # A value of None REMOVES the key, which R21-02 made necessary: a
+        # privileged bash exports `SHELLOPTS` containing `privileged`, so a
+        # child started as `bash <path>` from inside this run is privileged by
+        # inheritance. An arm that means to measure a NON-privileged start has
+        # to take that inheritance away, or it measures the opposite state from
+        # the one its sentence names.
+        handed = dict(os.environ)
+        for key, value in env.items():
+            if value is None:
+                handed.pop(key, None)
+            else:
+                handed[key] = value
         run = subprocess.run(
             argv, capture_output=True, text=True,
-            cwd=os.path.dirname(me), env=dict(os.environ, **env),
+            cwd=os.path.dirname(me), env=handed,
         )
         return run.stdout + run.stderr
 
@@ -3208,13 +3324,54 @@ def self_test() -> int:
         ),
     )
     expect(
-        "run as `bash <path>`, which the shebang cannot govern, the wrapper REFUSES by name "
-        "rather than running unprivileged (R20-02)",
-        (lambda out: "REFUSED-P7-WRAPPER-NOT-PRIVILEGED" in out
+        "run as `bash <path>` with no privilege inherited, which the shebang cannot govern, "
+        "the wrapper REFUSES by name rather than running unprivileged (R20-02)",
+        # No function is planted here, deliberately: with one planted the
+        # FUNCTIONS-WERE-IMPORTED refusal below fires FIRST and this arm would
+        # pass on the wrong refusal, leaving the `$-` case unmeasured. One arm,
+        # one refusal.
+        "REFUSED-P7-WRAPPER-NOT-PRIVILEGED" in through_the_wrapper(
+            ["bash", wrapper_path, "--isolation-probe"], SHELLOPTS=None
+        ),
+    )
+    # R21-02's arms. `p` in `$-` is a FLAG, and `SHELLOPTS=privileged` sets it
+    # while the environment's functions are still imported, so the refusal above
+    # passed in exactly the state it existed to stop. The first arm measures
+    # bash, not this file, and is here as the vacuity closer: if a future bash
+    # stops importing functions in that state, this arm says so instead of
+    # leaving the refusal below looking load-bearing when it is not.
+    _flag_vs_property = through_the_wrapper(
+        ["bash", "-c", 'case $- in *p*) echo P7-FLAG-SAYS-PRIVILEGED;; esac; declare -F'],
+        SHELLOPTS="privileged",
+        **{"BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"},
+    )
+    expect(
+        "SHELLOPTS=privileged sets the privileged FLAG while the hijack is STILL imported, "
+        "so the flag and the property disagree (R21-02)",
+        "P7-FLAG-SAYS-PRIVILEGED" in _flag_vs_property and "exec" in _flag_vs_property,
+    )
+    expect(
+        "a function imported in that state is a refusal BY NAME, which is the property the "
+        "flag cannot see (R21-02)",
+        (lambda out: "REFUSED-P7-WRAPPER-FUNCTIONS-WERE-IMPORTED" in out
          and "P7-HIJACKED-EXEC-RAN" not in out)(
             through_the_wrapper(
                 ["bash", wrapper_path, "--isolation-probe"],
+                SHELLOPTS="privileged",
                 **{"BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"},
+            )
+        ),
+    )
+    expect(
+        "and the hijack of `unset` that neutralised this script's own defence is refused with "
+        "it, since the capture happens BEFORE `unset -f` runs (R21-02)",
+        (lambda out: "REFUSED-P7-WRAPPER-FUNCTIONS-WERE-IMPORTED" in out
+         and "P7-HIJACKED-EXEC-RAN" not in out)(
+            through_the_wrapper(
+                ["bash", wrapper_path, "--isolation-probe"],
+                SHELLOPTS="privileged",
+                **{"BASH_FUNC_unset%%": "() { : ; }",
+                   "BASH_FUNC_exec%%": "() { echo P7-HIJACKED-EXEC-RAN; }"},
             )
         ),
     )
@@ -3232,6 +3389,61 @@ def self_test() -> int:
         (lambda out: "REFUSED-P7-WRAPPER-ENVIRONMENT-SOURCES-A-FILE" in out
          and "P7-HIJACKED-EXEC-RAN" not in out)(
             through_the_wrapper([wrapper_path, "--isolation-probe"], BASH_ENV=_bash_env)
+        ),
+    )
+    # R21-01's arms. The subject is `PATH`, and the plants are the challenge's
+    # own: a forged `bash`, which the old `env -S` shebang resolved through
+    # `PATH`, and a forged `dirname`, which the handover line used to call
+    # unqualified. The first arm is the vacuity closer -- the same poisoned
+    # `PATH` against a wrapper written the way this one used to be -- because
+    # without it the two arms after could pass in a container where planting an
+    # executable earlier on `PATH` does nothing at all.
+    _bin = a_tree("p7-census-arm-")
+    _elsewhere = a_tree("p7-census-arm-")
+    open(os.path.join(_bin, "bash"), "w", encoding="utf-8").write(
+        "#!/bin/sh\necho P7-FORGED-BASH-RAN\nexit 0\n"
+    )
+    open(os.path.join(_bin, "dirname"), "w", encoding="utf-8").write(
+        "#!/bin/sh\nprintf '%s\\n' " + _elsewhere + "\n"
+    )
+    os.chmod(os.path.join(_bin, "bash"), 0o755)
+    os.chmod(os.path.join(_bin, "dirname"), 0o755)
+    open(os.path.join(_elsewhere, "red_proofs.py"), "w", encoding="utf-8").write(
+        "print('P7-FORGED-HARNESS-RAN')\n"
+    )
+    _old_shape = os.path.join(a_tree("p7-census-arm-"), "env-shebang.sh")
+    open(_old_shape, "w", encoding="utf-8").write(
+        "#!/usr/bin/env -S bash -p\n"
+        'exec /usr/bin/python3 -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py"\n'
+    )
+    os.chmod(_old_shape, 0o755)
+    _poisoned = _bin + ":" + os.environ.get("PATH", "")
+    expect(
+        "a forged `bash` earlier on PATH DOES reach a wrapper whose shebang goes through `env`, "
+        "so the two arms below are not vacuous (R21-01)",
+        "P7-FORGED-BASH-RAN" in through_the_wrapper([_old_shape], PATH=_poisoned),
+    )
+    expect(
+        "a forged `bash` earlier on PATH cannot reach this wrapper, whose shebang names the "
+        "interpreter absolutely (R21-01)",
+        (lambda out: "P7-ISOLATION-PROBE: isolated" in out
+         and "P7-FORGED-BASH-RAN" not in out)(
+            through_the_wrapper([wrapper_path, "--isolation-probe"], PATH=_poisoned)
+        ),
+    )
+    expect(
+        "and a forged `dirname` cannot redirect the handover, which names it absolutely and "
+        "assigns PATH before it runs (R21-01)",
+        (lambda out: "P7-ISOLATION-PROBE: isolated" in out
+         and "P7-FORGED-HARNESS-RAN" not in out)(
+            through_the_wrapper([wrapper_path, "--isolation-probe"], PATH=_poisoned)
+        ),
+    )
+    expect(
+        "the PATH the wrapper hands its child is the assigned one, not the inherited one "
+        "(R21-01)",
+        "PATH=/usr/bin:/bin" in through_the_wrapper(
+            [wrapper_path, "--isolation-probe"], PATH=_poisoned
         ),
     )
     expect(
@@ -3355,6 +3567,25 @@ def marked_as_the_childs(text: str) -> str:
 # child it runs, and the `--isolation-probe` that child spawns. Anything deeper
 # is this file spawning itself.
 SPAWN_DEPTH_ENV = "P7_HARNESS_SPAWN_DEPTH"
+
+# R21-04, the twenty-first challenge, P2 and measured on the head with no plant:
+# a SIGTERM during the self-test child printed `0 are this run's and 5 are not`
+# about five trees this run's OWN CHILD had made seconds earlier. The partition
+# was computed against this PROCESS's two registries, so "this run's" meant
+# "this process's", and a reader was told five foreign trees existed.
+#
+# The child cannot be attributed by its paths, because at the moment the parent
+# is signalled the child has printed nothing and its registry lives in another
+# process. So the parent issues the child a NONCE and the child puts it in every
+# tree name it creates. Attribution is then derived from the name the parent
+# itself handed down: no file another writer could append to -- which would let a
+# foreign tree read as ours, the fail-open direction -- and no guess. THE BOUND:
+# a tree whose name carries the nonce is this run's child's as far as anything
+# here can tell, and someone who knows the nonce could mint one; the nonce is
+# fresh per run and never printed before the attribution is made.
+TREE_TAG_ENV = "P7_TREE_TAG"
+MY_TREE_TAG = os.environ.get(TREE_TAG_ENV, "")
+THE_TAG_I_HAND_MY_CHILD = "c" + os.urandom(6).hex()
 DEEPEST_LEGITIMATE_SPAWN = 2
 
 
@@ -3370,6 +3601,7 @@ def env_for_a_child() -> dict[str, str]:
     """This process's environment with the spawn depth incremented."""
     env = dict(os.environ)
     env[SPAWN_DEPTH_ENV] = str(spawn_depth() + 1)
+    env[TREE_TAG_ENV] = THE_TAG_I_HAND_MY_CHILD
     return env
 
 
@@ -3452,8 +3684,19 @@ def wrapper_code_lines(wrapper_text: str) -> list[str]:
 # of itself in the surviving process, so `sys.executable` is identical under the
 # plant and the clean tree. A PROJECTION is not an IDENTITY.
 WRAPPER_CODE_PINNED: tuple[str, ...] = (
-    '#!/usr/bin/env -S bash -p',
-    'unset -f exec echo exit cd pwd set test [ unset command builtin printf 2>/dev/null',
+    '#!/bin/bash -p',
+    '_P7_FUNCS_AT_ENTRY=$(declare -F 2>/dev/null)',
+    'unset -f exec echo exit cd pwd set test [ unset command builtin printf declare 2>/dev/null',
+    'PATH=/usr/bin:/bin',
+    'export PATH',
+    'if [ -n "$_P7_FUNCS_AT_ENTRY" ]; then',
+    '  echo "REFUSED-P7-WRAPPER-FUNCTIONS-WERE-IMPORTED: a shell function was already defined when"',
+    '  echo "this script was read, so a command it uses could run as that function and forge a"',
+    '  echo "verdict with no file edited. SHELLOPTS=privileged sets the privileged FLAG while still"',
+    '  echo "importing functions, which is why the flag alone is not asked. Functions seen:"',
+    '  echo "$_P7_FUNCS_AT_ENTRY"',
+    '  exit 3',
+    'fi',
     'case $- in',
     '  *p*) ;;',
     '  *)',
@@ -3479,7 +3722,7 @@ WRAPPER_CODE_PINNED: tuple[str, ...] = (
     '  exit 3',
     'fi',
     'echo "P7 RED PROOFS: interpreter $PY ($("$PY" -V 2>&1)), isolated mode -I"',
-    'exec "$PY" -I "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"',
+    'exec "$PY" -I "$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")" && pwd)/red_proofs.py" "$@"',
 )
 
 
@@ -3490,7 +3733,7 @@ def the_wrapper_pin_holds(wrapper_text: str) -> bool:
 
 # The number of guard branches this harness's self-test declares. Pinned, not
 # derived: see the census in `self_test`.
-GUARD_BRANCHES_THIS_HARNESS_DECLARES = 78
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 92
 
 # F-I, the coordinator's actual-diff review of `9809db1`, a P1 fail-open that
 # needed no edit to reach: the stray census recognised trees by an ENUMERATED
@@ -3558,6 +3801,19 @@ _NO_MORE_TREES = threading.Event()
 ARM_TREES_THIS_RUN: list[str] = []
 
 
+def tag_for_my_trees() -> str:
+    """The nonce this process was handed, as a name fragment, or nothing.
+
+    R21-04: a child of this harness puts the parent's nonce in every tree name,
+    so the PARENT can attribute those trees when it is signalled while the child
+    is still alive -- the one moment at which the child's own registry is in
+    another process and its output has not been written yet. The top-level run
+    is handed no nonce and adds none, which keeps its tree names what every
+    earlier round measured.
+    """
+    return MY_TREE_TAG + "-" if MY_TREE_TAG else ""
+
+
 def trees_on_disk() -> list[str]:
     """Every directory under this harness's prefixes, whoever made it."""
     tmp = tempfile.gettempdir()
@@ -3589,7 +3845,7 @@ def an_arms_tree(prefix: str) -> str:
                 "REFUSED-P7-TREE-AFTER-THE-RUN-WAS-ENDED: an arm asked for a tree after a "
                 "signal ended this run."
             )
-        tree = tempfile.mkdtemp(prefix=prefix)
+        tree = tempfile.mkdtemp(prefix=prefix + tag_for_my_trees())
         ARM_TREES_THIS_RUN.append(tree)
     return tree
 
@@ -3615,7 +3871,7 @@ def a_tree(prefix: str) -> str:
                 "ended this run and its trees were scrubbed. Making one now would leave a tree "
                 "behind that nothing is left to remove."
             )
-        tree = tempfile.mkdtemp(prefix=prefix)
+        tree = tempfile.mkdtemp(prefix=prefix + tag_for_my_trees())
         TREES_THIS_RUN.append(tree)
     return tree
 
@@ -3655,6 +3911,19 @@ def scrub_all() -> list[str]:
 # discover: a run killed with -9 leaves its trees, and the next run reports them
 # as strays, which is why that report is a refusal above a threshold and no
 # longer a note.
+def first_few(label: str, trees: list[str], show: int = 5) -> str:
+    """`label: [a, b] (first 2 of 7).` -- F-V: a truncated list says so.
+
+    The signal report used to print `mine[:5]` beside a count of seven, so a
+    reader reconciling the list against the number saw a contradiction that was
+    not there. A list shorter than the limit carries no marker, because a marker
+    on a complete list is noise.
+    """
+    shown = trees[:show]
+    more = "" if len(trees) <= show else f" (first {len(shown)} of {len(trees)})"
+    return f"{label}: {shown}{more}."
+
+
 def stop_then_scrub_and_report(signum: int) -> str:
     """Stop the creators, scrub, LIST the directory, and say what the listing says.
 
@@ -3684,14 +3953,21 @@ def stop_then_scrub_and_report(signum: int) -> str:
         left = scrub_all()
     on_disk = trees_on_disk()
     mine = [tree for tree in on_disk if tree in known]
-    others = [tree for tree in on_disk if tree not in known]
+    childs = [
+        tree for tree in on_disk
+        if tree not in known and THE_TAG_I_HAND_MY_CHILD in os.path.basename(tree)
+    ]
+    others = [tree for tree in on_disk if tree not in known and tree not in childs]
     return (
         f"P7-SCRUBBED-ON-SIGNAL: signal {signum} ended this run; {registered - len(left)} of "
         f"{registered} tree(s) this run had registered were removed, and the temp directory now "
         f"holds {len(on_disk)} tree(s) under this harness's prefixes, of which {len(mine)} "
-        f"are this run's and {len(others)} are not — confirmed by LISTING the directory "
-        f"after the creators were stopped, and by computing the two sets rather than guessing "
-        f"which. This run's: {mine[:5]}. Not this run's: {others[:5]}."
+        f"are this process's, {len(childs)} were made by this run's self-test child and "
+        f"{len(others)} are neither — confirmed by LISTING the directory after the creators "
+        f"were stopped, and by computing the three sets rather than guessing which. "
+        + first_few("This process's", mine)
+        + " " + first_few("The self-test child's", childs)
+        + " " + first_few("Neither", others)
     )
 
 
@@ -3720,6 +3996,18 @@ def arm_the_signal_handlers() -> None:
 # compares its own counter to it at the end, so the figure is measured rather
 # than asserted. The self-test child makes census-arm trees in its OWN process
 # and reports them separately, which is why they are not in this sum.
+# Coord F-Q, carried for two rounds and closed here the way this lane closes
+# this shape. The derivation below is sound and its ARMS could not contradict
+# it, because they are fed its own output: changing `+ 2` to `+ 3` left the
+# self-test at 78 of 78 at the two previous heads, and only the authoritative
+# run's own counter caught it. An arm fed the derivation's own output certifies
+# the comparison and the refusal name, never the figure. So the figure gets an
+# EXTERNAL literal, exactly as the guard-branch census does, and the self-test
+# compares the two: the literal is bounded by REVIEW and by the fact that adding
+# a proof without touching it reds the self-test, which is the correct red.
+ONE_RUNS_TREES_DECLARED = 107
+
+
 def one_runs_worth_of_trees() -> int:
     """How many trees a main run of this harness makes, derived not written."""
     return len(PROOFS) + 2  # the baseline tree, and the omission arm's tree
