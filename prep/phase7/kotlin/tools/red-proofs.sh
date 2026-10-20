@@ -68,12 +68,25 @@
 #     primary defence.
 #   * If `/bin/bash` ITSELF is replaced, nothing written here runs at all, and no
 #     check inside this file or inside the harness can see it. The same holds for
-#     `/usr/bin/python3`, and for the DYNAMIC LOADER's own search path -- the
-#     loader has mapped what it was told to map before any code in this file or
-#     that interpreter runs, so `/etc/ld.so.conf`, `/etc/ld.so.preload` and the
-#     loader itself are outside every check here. Those three absolute paths and
-#     that search path are what a reader is trusting; nothing in this repository
-#     measures them.
+#     `/usr/bin/python3` and for the Kotlin toolchain this harness compiles with,
+#     which `P7_TOOLS_DIR` locates and which no digest in this repository pins:
+#     a forged `kotlinc` steers every proof. It fails closed today -- the
+#     baseline-green gate reds if the compiler misbehaves -- and it is named
+#     here because fail-closed is not the same as measured.
+#   * `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` and their siblings are honoured
+#     by the dynamic loader in EVERY process on this path -- this `bash`, the
+#     `env` below, the `dirname` below -- before a single line of that process's
+#     program runs. A preloaded constructor in this shell therefore forges the
+#     verdict at rc 0 with the harness never started, and nothing in this file
+#     can refuse it: the refusal would itself be written in a program the loader
+#     has already finished loading. The loader ignores these variables only when
+#     the process is set-uid or set-gid (`AT_SECURE`), and neither bash nor
+#     python here is either. The allow-list below closes the interpreter hop and
+#     NOT this one. Closing it is outside this file: a set-uid wrapper, a loader
+#     configuration, or a reader who checks the environment before invoking.
+#     `/etc/ld.so.conf`, `/etc/ld.so.preload` and the loader itself are likewise
+#     outside every check here. These are what a reader trusts; nothing in this
+#     repository measures them.
 #
 # Coord F-W, P1 and again with NO EDIT: the two paragraphs above are about what
 # the SHELL reads. Nothing here touched what the C runtime reads when `exec`
@@ -82,11 +95,21 @@
 # `git status --porcelain` empty. `python3 -I` isolates Python's own surface and
 # says nothing about the loader, which has already mapped the library before
 # `main`; `bash -p` restricts what bash imports, and the loader ignores
-# `LD_PRELOAD` only for set-uid processes, which neither of these is. The
-# handover therefore goes through `env -i` with a NAMED ALLOW-LIST, which closes
-# `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` and every future sibling in one
-# move: naming today's three would invite the next one, and a refusal that
-# enumerates names is the shape this lane has closed twice already.
+# `LD_PRELOAD` only for set-uid processes, which neither of these is.
+#
+# The handover therefore goes through `env -i` with a NAMED ALLOW-LIST, and
+# R23-01 is the correction of what that sentence used to claim. It said `env -i`
+# closes `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT` and every future sibling
+# "in one move". IT DOES NOT. Measured, with a constructor that prints and
+# `_exit(0)`s: `LD_PRELOAD=<lib> ./tools/red-proofs.sh` ends at rc 0 with the
+# harness never run and no probe output at all, because the loader honours
+# `LD_PRELOAD` in THIS SHELL -- and in `/usr/bin/env` and `/usr/bin/dirname` --
+# before any line written here is read. What `env -i` cleans is exactly ONE hop,
+# the interpreter it execs, which is the hop the coordinator's F-W measured.
+# Stated plainly because a false measured claim is this lane's blocking class:
+# an allow-list on the last hop closes the last hop. Naming today's three
+# `LD_*` by hand would be no better -- it would still be a check inside a
+# process the loader has already finished with.
 #
 # `SHELLOPTS` is deliberately NOT refused on presence, unlike `BASH_ENV` and
 # `ENV`: a privileged bash EXPORTS its own option list, so this harness's own
@@ -154,5 +177,15 @@ done
 # -I`. The harness itself was clean and the log still carried the sentence a
 # reader greps for. One environment for both, so the line cannot say more than
 # the run does.
-echo "P7 RED PROOFS: interpreter $PY ($(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)), isolated mode -I"
+PY_VERSION="$(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)"
+if [[ ! $PY_VERSION =~ ^Python\ [0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "REFUSED-P7-INTERPRETER-VERSION-UNREADABLE: asking $PY for its version returned"
+  echo "something that is not a version. R23-02: the loader preloads into the \`env\` process"
+  echo "too -- \`env -i\` cleans the environment of the program env EXECS, not of env itself --"
+  echo "so a constructor's output was folded into this banner, which is the line a reader"
+  echo "greps. This refuses rather than printing it. What came back was:"
+  echo "$PY_VERSION"
+  exit 3
+fi
+echo "P7 RED PROOFS: interpreter $PY ($PY_VERSION), isolated mode -I"
 exec /usr/bin/env -i "${HANDOVER[@]}" "$PY" -I "$HERE/red_proofs.py" "$@"

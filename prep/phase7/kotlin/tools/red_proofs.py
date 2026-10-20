@@ -153,6 +153,7 @@ if "--isolation-probe" in sys.argv:
     print("P7-ISOLATION-PROBE: ENV=%s" % ",".join(sorted(os.environ)))
     raise SystemExit(0)
 
+import hashlib
 import re
 import shutil
 import signal
@@ -3536,11 +3537,15 @@ def self_test() -> int:
         for line in WRAPPER_CODE_PINNED if line.startswith("KEEP=")
         for name in line.split("=", 1)[1].strip('"').replace("$KEEP", "").split()
     }
+    # The variables here are the ones the loader acts on SILENTLY. A
+    # `LD_PRELOAD` naming a file that does not exist makes the loader print its
+    # own warning, which the version probe captures and the banner now refuses
+    # by name -- correctly, and measured in its own arm below, but it would stop
+    # this arm before the child ever ran.
     _probe_env = through_the_wrapper(
         [wrapper_path, "--isolation-probe"],
-        LD_PRELOAD="/nonexistent/forge.so",
         LD_LIBRARY_PATH="/nonexistent/lib",
-        LD_AUDIT="/nonexistent/audit.so",
+        LD_BIND_NOW="1",
     )
     _handed = [
         line.split("=", 1)[1].strip()
@@ -3607,9 +3612,101 @@ def self_test() -> int:
         _forged_without_it,
     )
     expect(
-        "and it does NOT reach the interpreter through this wrapper, whose handover drops "
-        "every variable outside the allow-list (F-W)",
+        "and it does NOT reach THE INTERPRETER HOP through this wrapper, which is the one hop "
+        "the allow-list cleans and the whole of what it cleans (F-W / R23-01)",
         not _forged_through_the_wrapper,
+    )
+    # R23-01. The library above self-restricts to python, so the arm pair says
+    # nothing about the EARLIER hops -- and the loader honours `LD_PRELOAD` in
+    # this shell, in `env` and in `dirname` before a line of any of them runs.
+    # The previous head's text claimed the allow-list closed `LD_*` "in one
+    # move"; that was a false measured claim, which is this lane's blocking
+    # class, and it is corrected in the wrapper and here.
+    #
+    # THIS ARM RECORDS A DECLARED LIMIT. It is not a defence and must not be
+    # read as one: what it asserts is that the hole is OPEN, so that the day it
+    # closes -- a set-uid wrapper, a loader configuration, a hardened container
+    # -- this arm reds and a reader is told the bound moved rather than
+    # inheriting a sentence nobody re-measured.
+    if _cc is None:
+        _shell_hop_forges = True
+    else:
+        _shell_library = os.path.join(_lib_dir, "forge-any.so")
+        _shell_source = os.path.join(_lib_dir, "forge-any.c")
+        open(_shell_source, "w", encoding="utf-8").write(
+            "#include <stdio.h>\n#include <unistd.h>\n"
+            "__attribute__((constructor)) static void fire(void) {\n"
+            "  puts(\"P7-FORGED-IN-AN-EARLIER-HOP\");\n"
+            "  fflush(stdout);\n"
+            "  _exit(0);\n"
+            "}\n"
+        )
+        subprocess.run(
+            [_cc, "-shared", "-fPIC", "-o", _shell_library, _shell_source],
+            capture_output=True, text=True, check=False,
+        )
+        _shell_hop = through_the_wrapper(
+            [wrapper_path, "--isolation-probe"], LD_PRELOAD=_shell_library
+        )
+        _shell_hop_forges = (
+            "P7-FORGED-IN-AN-EARLIER-HOP" in _shell_hop
+            and "P7-ISOLATION-PROBE" not in _shell_hop
+        )
+    expect(
+        "DECLARED LIMIT, not a defence: a library preloaded into the SHELL forges before any "
+        "line of the wrapper runs, and nothing in this repository can refuse it (R23-01)",
+        _shell_hop_forges,
+    )
+    # R23-02's arms. `env -i` builds a clean environment for the program `env`
+    # EXECS, not for `env` itself, so a constructor runs in `env` and its stderr
+    # was captured by the version probe's `2>&1` INTO the banner -- the line a
+    # reader greps. The banner refuses anything that is not exactly a version
+    # string now.
+    if _cc is None:
+        _banner_refuses = True
+        _banner_clean = True
+    else:
+        _noisy = os.path.join(_lib_dir, "noisy.so")
+        _noisy_source = os.path.join(_lib_dir, "noisy.c")
+        open(_noisy_source, "w", encoding="utf-8").write(
+            "#include <stdio.h>\n"
+            "__attribute__((constructor)) static void fire(void) {\n"
+            "  fprintf(stderr, \"P7-CONSTRUCTOR-IN-THE-VERSION-PROBE\\n\");\n"
+            "}\n"
+        )
+        subprocess.run(
+            [_cc, "-shared", "-fPIC", "-o", _noisy, _noisy_source],
+            capture_output=True, text=True, check=False,
+        )
+        _banner = through_the_wrapper(
+            [wrapper_path, "--isolation-probe"], LD_PRELOAD=_noisy
+        )
+        _banner_refuses = (
+            "REFUSED-P7-INTERPRETER-VERSION-UNREADABLE" in _banner
+            and "P7 RED PROOFS: interpreter" not in _banner
+        )
+        _banner_clean = "P7 RED PROOFS: interpreter" in through_the_wrapper(
+            [wrapper_path, "--isolation-probe"]
+        )
+    expect(
+        "output folded into the version probe by a preloaded constructor is REFUSED by name "
+        "rather than printed in the banner (R23-02)",
+        _banner_refuses,
+    )
+    expect(
+        "and with nothing preloaded the banner still prints, so the shape check is not a "
+        "false red (R23-02)",
+        _banner_clean,
+    )
+    expect(
+        "the loader's OWN warning, folded into the version probe by an LD_PRELOAD naming a "
+        "file that does not exist, is refused by name too (R23-02)",
+        (lambda out: "REFUSED-P7-INTERPRETER-VERSION-UNREADABLE" in out
+         and "P7 RED PROOFS: interpreter" not in out)(
+            through_the_wrapper(
+                [wrapper_path, "--isolation-probe"], LD_PRELOAD="/nonexistent/forge.so"
+            )
+        ),
     )
     expect(
         "with no hijack at all the wrapper still answers, so none of the above is a false red "
@@ -3959,7 +4056,17 @@ WRAPPER_CODE_PINNED: tuple[str, ...] = (
     '    HANDOVER+=("$NAME=${!NAME}")',
     '  fi',
     'done',
-    'echo "P7 RED PROOFS: interpreter $PY ($(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)), isolated mode -I"',
+    'PY_VERSION="$(/usr/bin/env -i "${HANDOVER[@]}" "$PY" -V 2>&1)"',
+    'if [[ ! $PY_VERSION =~ ^Python\\ [0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then',
+    '  echo "REFUSED-P7-INTERPRETER-VERSION-UNREADABLE: asking $PY for its version returned"',
+    '  echo "something that is not a version. R23-02: the loader preloads into the \\`env\\` process"',
+    '  echo "too -- \\`env -i\\` cleans the environment of the program env EXECS, not of env itself --"',
+    '  echo "so a constructor\'s output was folded into this banner, which is the line a reader"',
+    '  echo "greps. This refuses rather than printing it. What came back was:"',
+    '  echo "$PY_VERSION"',
+    '  exit 3',
+    'fi',
+    'echo "P7 RED PROOFS: interpreter $PY ($PY_VERSION), isolated mode -I"',
     'exec /usr/bin/env -i "${HANDOVER[@]}" "$PY" -I "$HERE/red_proofs.py" "$@"',
 )
 
@@ -3971,7 +4078,7 @@ def the_wrapper_pin_holds(wrapper_text: str) -> bool:
 
 # The number of guard branches this harness's self-test declares. Pinned, not
 # derived: see the census in `self_test`.
-GUARD_BRANCHES_THIS_HARNESS_DECLARES = 98
+GUARD_BRANCHES_THIS_HARNESS_DECLARES = 102
 
 # F-I, the coordinator's actual-diff review of `9809db1`, a P1 fail-open that
 # needed no edit to reach: the stray census recognised trees by an ENUMERATED
@@ -4341,8 +4448,16 @@ def run_suite(tree: str) -> tuple[int, set[str], dict[str, str], str]:
     env["P7_SRC"] = os.path.join(tree, "src")
     env["P7_TEST"] = os.path.join(tree, "test")
     env["P7_OUT"] = os.path.join(tree, "build")
+    # A finding of this session's own, in the same class as R21-01 one layer in:
+    # this line said `"bash"`, resolved through `PATH`. Under the wrapper that is
+    # the assigned `/usr/bin:/bin`, but this file is also run directly -- both
+    # reviewers do it, and so do I -- and then it is the caller's `PATH` that
+    # chooses the shell which compiles and runs every case. Named absolutely.
+    # The `"bash"` calls in the self-test are deliberately left as they are:
+    # there the SHELL is the subject being measured, and one arm plants a forged
+    # `bash` on `PATH` on purpose.
     proc = subprocess.run(
-        ["bash", os.path.join(HERE, "run-tests.sh")],
+        ["/bin/bash", os.path.join(HERE, "run-tests.sh")],
         capture_output=True, text=True, env=env,
     )
     log = proc.stdout + proc.stderr
@@ -4350,8 +4465,77 @@ def run_suite(tree: str) -> tuple[int, set[str], dict[str, str], str]:
     return proc.returncode, failing, failures_with_details(log), log
 
 
+def what_compiled_these_proofs() -> str:
+    """The toolchain this run compiles with, MEASURED and not pinned.
+
+    The coordinator's residual on `8ce52dc`: `P7_TOOLS_DIR` is on the handover's
+    allow-list -- it has to be, the compiler lives there -- so it steers the
+    `kotlinc` that decides every proof, and no digest in this repository pins it.
+    It fails CLOSED today, because a compiler that misbehaves reds the
+    baseline-green gate before any proof is read, and that is why it is a
+    residual rather than a forge.
+
+    What this prints is what it says: the resolved paths and their digests AS
+    THIS RUN FOUND THEM. It is not provenance -- a digest taken from the copy on
+    disk pins that copy, forged or not, which is the "a run cannot be its own
+    witness" shape -- and it is not a gate. It is the one thing a reader needs
+    and did not have: a record of WHAT compiled the proofs whose green they are
+    being asked to act on, against which a later run can be compared.
+
+    The SET of files is derived by EXECUTION and not written out here: the same
+    `toolchain.sh` the suite sources is sourced, and the paths it exports are
+    read back. A hand-written list would be a second copy of that script's
+    logic, and a second copy is exactly the shape this lane keeps finding
+    wrong -- it would still read "kotlinc" on the day the suite compiles with
+    something else. If sourcing it answers nothing, the row says so by name
+    instead of silently shortening the list.
+
+    What that costs, said rather than hidden: the set is what `toolchain.sh`
+    EXPORTS, so `kotlinc`'s own row is the digest of the launcher script and not
+    of the jars under `$P7_LIB` that it loads. Deriving those would mean reading
+    the launcher, which is the hand-written copy this avoids. The bound is: a
+    changed launcher shows here, a changed compiler jar does not.
+    """
+    rows = []
+    _asked = (
+        '. "$1" >/dev/null 2>&1 || exit 7\n'
+        'printf "%s\\n" "$KOTLINC" "$JUNIT_JAR" ${TEST_CP//:/ }\n'
+    )
+    _said = subprocess.run(
+        ["/bin/bash", "-c", _asked, "p7", os.path.join(HERE, "toolchain.sh")],
+        capture_output=True, text=True,
+    )
+    _files = []
+    for line in _said.stdout.split("\n"):
+        # `TEST_CP` repeats the JUnit jar that `JUNIT_JAR` already named; the
+        # order is the order the script exported them in, and a row appears once.
+        if line.strip() and line not in _files:
+            _files.append(line)
+    if _said.returncode != 0 or not _files:
+        return (
+            "P7 TOOLCHAIN UNDERIVABLE: sourcing toolchain.sh to ask which files compile "
+            f"these proofs exited {_said.returncode} and named {len(_files)} of them. The "
+            "toolchain is unpinned either way (see the wrapper's bounds); this run cannot "
+            "even record which copy it used."
+        )
+    for what in _files:
+        try:
+            with open(what, "rb") as handle:
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    digest.update(chunk)
+            rows.append(f"{what} sha256 {digest.hexdigest()}")
+        except OSError as why:
+            rows.append(f"{what} UNREADABLE ({why.strerror})")
+    return (
+        "P7 TOOLCHAIN (MEASURED, NOT PINNED -- a digest read from the copy on disk is a "
+        "record, not provenance; see the wrapper's bounds):\n  " + "\n  ".join(rows)
+    )
+
+
 def main() -> int:
     harvesting = "--harvest" in sys.argv
+    print(what_compiled_these_proofs(), flush=True)
 
     # The guards' own guard, and it runs FIRST, in its own interpreter. A gate
     # inside the set it measures runs as a subprocess, never imported: an
