@@ -229,6 +229,16 @@ ARM_LABELS = (
     "HATCH",
     "BASELINE",
     "I1-conc",
+    # ROUND 33: the two BLOCKING findings of the reviews of `b7c0933`, each
+    # with its plant and its one-deletion control, plus the arm that answers
+    # R-5 and the bench the first of them needs.
+    "ROWTRAP-BENCH",
+    "RELATION-ROWTRAP",
+    "RELATION-ROWTRAP-CTL",
+    "LEX-SESSION",
+    "LEX-SESSION-CTL",
+    "EXEC-EQUIV",
+    "EXEC-EQUIV-CTL",
 )
 
 # The labels that are deliberately NOT arms. This list is the price of the
@@ -397,6 +407,8 @@ EXPECTED_ARMS = (
     ("CORE-NET-STRAY", 1),
     ("CORE-PIN", 1),
     ("CORE-PIN-CTL", 1),
+    ("EXEC-EQUIV", 1),
+    ("EXEC-EQUIV-CTL", 1),
     ("GRAFTS g5", 1),
     ("GRAFTS g7", 1),
     ("GUARD-CTL y1", 1),
@@ -448,6 +460,8 @@ EXPECTED_ARMS = (
     ("ISOLATION i12", 1),
     ("ISOLATION i4", 1),
     ("ISOLATION i7", 1),
+    ("LEX-SESSION", 1),
+    ("LEX-SESSION-CTL", 1),
     ("LEX-SETTINGS", 1),
     ("LINEAGE a5", 1),
     ("LINEAGE a7", 1),
@@ -473,6 +487,8 @@ EXPECTED_ARMS = (
     ("MUT 9", 1),
     ("MUT 9b", 1),
     ("REACH-BENCH", 1),
+    ("RELATION-ROWTRAP", 1),
+    ("RELATION-ROWTRAP-CTL", 1),
     ("RETIREMENT n1", 1),
     ("RETIREMENT n2", 1),
     ("RETIREMENT n3", 1),
@@ -491,6 +507,7 @@ EXPECTED_ARMS = (
     ("ROW-REACH-DOLLAR", 1),
     ("ROW-REACH-SEMI", 1),
     ("ROW-REACH-SEMI-CTL", 1),
+    ("ROWTRAP-BENCH", 1),
     ("SANDBOX y24", 1),
     ("SANDBOX y25", 1),
     ("SANDBOX-CTL y26", 1),
@@ -545,7 +562,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "0e144fea76881be23b3da063dc4f739cca5bf0f22bff54d34bb870b034d71e6e"
+EXPECTED_SEAL = "9cb7dc0d18582083f1a64455c0a5ad1b08087455bee8b3b7a551c8c07730a26d"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not

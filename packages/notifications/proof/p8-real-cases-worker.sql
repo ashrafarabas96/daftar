@@ -62,9 +62,27 @@ SELECT p8.case_equals('W-1b and the status actually moved',
 -- this file's own text: the coordinator's review wrote `WHERE id = '…dead' AND
 -- @KEY@ <> ''`, the witness read the declared row, the statement touched none,
 -- and the case passed. The form now appends the predicate itself from the
--- declared key, so this case supplies the mutation and nothing else — and the
+-- declared key, so this case supplies the mutation and nothing else.
+--
+-- ROUND 33 corrects the clause that used to end this paragraph — "and the
 -- statement and the witness read the same row because one expression builds
--- both.
+-- both". The coordinator's review of `b7c0933` measured it FALSE for the
+-- second time, by a route round 32 did not close: with
+-- `standard_conforming_strings` flipped to `off` in the case session, the
+-- server reads `'A\'B'` as one literal and a `;` behind it is at top level,
+-- while both scanners read `on` and see no semicolon at all. The appended
+-- predicate joined the SECOND statement, the mutation ran unqualified, and
+-- the case passed on the refusal the other row decided — installed in `W-6`,
+-- with the whole gate still `FAILED=0` at 202 of 202 arms.
+--
+-- What builds both is one expression; what makes that matter is that the
+-- text the predicate is appended to is the text the laws read, and that the
+-- reading is the server's. The second half is what was missing. From this
+-- round the scanner asserts its own preconditions IN THE SESSION THAT WILL
+-- LEX — `p8.assert_lex_session`, read at the moment of the scan — so a `SET`
+-- in a case file is exactly what the law reads. Appending is still not
+-- composing; it is bounded by three named refusals over a reading the server
+-- attests in the session that makes it.
 SELECT p8.case_refuses_row('W-2 may NOT rewrite the obligation key — the UPDATE grant is column-scoped', $q$
   UPDATE @REL@ SET obligation_key = 'B1|rewritten'
 $q$, 'permission denied',

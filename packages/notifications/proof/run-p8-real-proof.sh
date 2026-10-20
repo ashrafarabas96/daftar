@@ -2319,9 +2319,20 @@ wl_sub_ctl(){      # wl_sub_ctl <arm> <probe> <needle> <repl> <expect: pass|refu
 wl_ctl "WITNESS-SHAPE-CTL" shape.sql \
   "  IF bad IS NOT NULL THEN" \
   "the ON CONFLICT spelling reaches one row in a relation case again, with its key pointed at nothing, which is W-3"
-wl_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
-  "    IF kind = 'relation' AND rowlevel THEN" \
-  "a relation case can be witnessed by the relation while its refusal is decided by the row, which is W-3's other half"
+# ROUND 33. This control used to expect the fail-open back, and it no longer
+# comes back — the sentence it printed attributed the closure of W-3's other
+# half to this one condition, and that attribution is WITHDRAWN rather than
+# tuned. With the context term deleted the same case is still refused, by the
+# construction this round added: the server PLANS the statement without
+# refusing, so the refusal needed a row. Two independent laws now cover the
+# class and the class decides which one speaks — the context term first,
+# because it is the cheaper message, and the construction behind it, because
+# it is the one no mechanism can be re-spelled around. The same shape as
+# ROW-ASTRAL-CLASS-CTL above, and said the same way.
+wl_sub_ctl "WITNESS-RELCLASS-CTL" relclass.sql \
+  "    IF kind = 'relation' AND rowlevel THEN" "    IF false THEN" \
+  refuse "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
+  "with the context term deleted ALONE a relation case refused by a check constraint is named by the EXPLAIN construction instead, so the two bound W-3's other half independently: one reads who raised the refusal, the other asks the server whether it would have arrived before any row was read (D-1)"
 wl_sub_ctl "WITNESS-HANDLER-CTL" handler.sql \
   "  IF bare ~* '(^|[^a-z_])exception([^a-z_]|\$)' THEN" "  IF false THEN" \
   refuse "THE REFUSAL CAME FROM THE STATEMENT'S OWN BLOCK" \
@@ -2357,10 +2368,20 @@ wl_sub_ctl "WITNESS-LITERAL-CTL" literal.sql \
 # F-1: `@KEY@` bound its own PRESENCE. `WHERE id = '…dead' AND @KEY@ <> ''`
 # carried it, the witness read the declared row, the statement touched none, and
 # the case passed. The predicate is now APPENDED by the form from the declared
-# key, so the statement and the witness read the same row because one expression
-# builds both: the attack is not refused, it is unwritable. Three layers, each
-# with its own arm: the placeholder ban, the row shape law, and the construction
-# underneath them.
+# key. Three layers, each with its own arm: the placeholder ban, the row shape
+# law, and the construction underneath them.
+#
+# ROUND 33 deletes the clause that used to follow — "so the statement and the
+# witness read the same row because one expression builds both: the attack is
+# not refused, it is unwritable". It was measured FALSE a second time, by the
+# coordinator's review of `b7c0933`: one expression does build both, and the
+# attack is written anyway by changing what the laws READ. With
+# `standard_conforming_strings = off` in the case session the server's
+# literals end somewhere else than the scanner's, a `;` moves to top level,
+# the appended predicate joins the second statement and the mutation runs
+# unqualified. `p8.assert_lex_session` now refuses that session at the moment
+# of the scan. Nothing here is unwritable; it is refused, by laws that are
+# armed below.
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_row('FB-k a row case whose declared key is a decoy beside its own predicate',
   $q$UPDATE @REL@ SET relname = 'rewritten' WHERE relname = 'no-such-relation-at-all' AND @KEY@ <> ''$q$,
@@ -2450,6 +2471,7 @@ wl_sub_ctl "WITNESS-BLOCK-CTL" block.sql \
 # reviews measured on this head's parent; input and output are hex, so no
 # escaping convention sits between the two readings being compared.
 SCAN=$OUT/scan; mkdir -p "$SCAN"
+SCAN_EXPECT=78       # 26 payloads x 3 modes, the readings p8-scanner-corpus.txt is declared to hold
 if python3 -I "$HERE/p8-case-net.py" --scan "$HERE/p8-scanner-corpus.txt" >"$SCAN/py.txt" 2>"$SCAN/py.err"; then
   {
     echo "\pset tuples_only on"
@@ -2467,7 +2489,12 @@ SQL
   if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
                -f "$SCAN/sql.sql" >"$SCAN/sql.txt" 2>"$SCAN/sql.err"; then
     SCAN_N=$(grep -c . "$SCAN/py.txt")
-    if diff -q "$SCAN/py.txt" "$SCAN/sql.txt" >/dev/null 2>&1; then
+    if [ "$SCAN_N" != "$SCAN_EXPECT" ]; then
+      # ROUND 33, the coordinator's 4.1, the other corpus. Same reason: the
+      # count came from the file, so a line could leave without a word.
+      say "SCANNER-AGREE: FAIL — the corpus yields $SCAN_N readings and this gate declares $SCAN_EXPECT. A payload that LEAVES this corpus takes its attestation with it"
+      FAILED=1
+    elif diff -q "$SCAN/py.txt" "$SCAN/sql.txt" >/dev/null 2>&1; then
       say "SCANNER-AGREE: the Python scanner and p8.sql_scan return byte-identical output for all $SCAN_N readings of the corpus — every line of it in all three modes, led by the five attacks the twenty-first round measured — so the gate has ONE reading of SQL and not two that can drift"
     else
       say "SCANNER-AGREE: FAIL — the two scanners disagree: $(diff "$SCAN/py.txt" "$SCAN/sql.txt" | head -2 | tr '\n' ' ')"
@@ -2529,6 +2556,7 @@ fi
 # did), and the scanner's verdict is whether its strip output still shows the
 # keyword. They must agree, case by case.
 ORC=$OUT/oracle; mkdir -p "$ORC"
+ORC_EXPECT=15        # the payloads p8-scanner-oracle.txt is declared to hold
 ORACLE_STEM='UPDATE p8oracle SET v = v + 1'
 if python3 -I "$HERE/p8-case-net.py" --oracle-scan "$HERE/p8-scanner-oracle.txt" \
      "$ORACLE_STEM" >"$ORC/scanner.txt" 2>"$ORC/scanner.err"; then
@@ -2539,7 +2567,7 @@ if python3 -I "$HERE/p8-case-net.py" --oracle-scan "$HERE/p8-scanner-oracle.txt"
     echo "CREATE TEMP TABLE ocorpus(line TEXT);"
     printf '%s\n' "\\copy ocorpus FROM PROGRAM 'grep -v \"^#\" $HERE/p8-scanner-oracle.txt | grep -v \"^\$\"' WITH (FORMAT csv, DELIMITER E'\\b', QUOTE E'\\f')"
     cat <<'SQL'
-CREATE TEMP TABLE p8oracle(k TEXT PRIMARY KEY, v INT);
+CREATE TEMP TABLE p8oracle(k TEXT PRIMARY KEY, v INT, "a$b$c$b$" INT DEFAULT 0);
 CREATE TEMP TABLE overdict(lab TEXT, verdict TEXT);
 DO $o$
 DECLARE r RECORD; moved INT;
@@ -2548,7 +2576,7 @@ BEGIN
                   convert_from(decode(split_part(line, E'\t', 2), 'hex'), 'UTF8') AS payload
            FROM ocorpus LOOP
     DELETE FROM p8oracle;
-    INSERT INTO p8oracle VALUES ('W', 0), ('X', 0);
+    INSERT INTO p8oracle(k, v) VALUES ('W', 0), ('X', 0);
     BEGIN
       EXECUTE 'UPDATE p8oracle SET v = v + 1' || r.payload;
       GET DIAGNOSTICS moved = ROW_COUNT;
@@ -2572,11 +2600,31 @@ SQL
   } > "$ORC/server.sql"
   if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
                -f "$ORC/server.sql" >"$ORC/server.txt" 2>"$ORC/server.err"; then
+    # ROUND 33, the twenty-third challenge's R-7. The two sides were compared
+    # by LINE POSITION: the scanner's in corpus-file order, the server's in
+    # whatever order a seq scan over a temp table returns, pinned by nothing.
+    # At fourteen rows they happened to line up; the challenger reproduced a
+    # divergence at 4,000. So both files are now put in ONE deterministic
+    # order by ONE tool before they are compared, and the labels are required
+    # to be distinct — a comparison by key is only a comparison if the key
+    # identifies the line.
+    LC_ALL=C sort -o "$ORC/scanner.txt" "$ORC/scanner.txt"
+    LC_ALL=C sort -o "$ORC/server.txt" "$ORC/server.txt"
     ORC_N=$(grep -c . "$ORC/scanner.txt")
+    ORC_LAB=$(cut -f1 "$ORC/scanner.txt" | LC_ALL=C sort -u | grep -c .)
     ORC_SEES=$(awk -F'\t' '$2=="sees"' "$ORC/server.txt" | wc -l)
     ORC_BLIND=$(awk -F'\t' '$2=="blind"' "$ORC/server.txt" | wc -l)
     ORC_JUNK=$(grep -c 'NOT-A-LEXING-PROBE' "$ORC/server.txt" || true)
-    if [ "${ORC_JUNK:-0}" -gt 0 ]; then
+    if [ "$ORC_N" != "$ORC_EXPECT" ] || [ "$ORC_LAB" != "$ORC_EXPECT" ]; then
+      # ROUND 33, the coordinator's 4.1. Both closures in this pack rest on ONE
+      # line arriving in a corpus, and nothing pinned either corpus's SET: the
+      # arm derived its count from the corpus it had just read, so deleting the
+      # astral payload and breaking the scanner at the same time left the arm
+      # printing its green sentence over the remaining lines. A literal here
+      # makes a DEPARTURE refuse the way an arrival does.
+      say "SCANNER-ORACLE: FAIL — the oracle corpus holds $ORC_N payloads under $ORC_LAB distinct labels and this gate declares $ORC_EXPECT. A payload that LEAVES this corpus takes its attestation with it, so the number is committed and not counted from the file"
+      FAILED=1
+    elif [ "${ORC_JUNK:-0}" -gt 0 ]; then
       say "SCANNER-ORACLE: PLANT NOT ESTABLISHED — the server would not RUN $ORC_JUNK of the $ORC_N payloads, so those lines measure nothing about lexing and this arm draws no conclusion from them: $(grep 'NOT-A-LEXING-PROBE' "$ORC/server.txt" | head -2 | tr '\n' ' ')"
       FAILED=1
     elif [ "$ORC_SEES" -lt 1 ] || [ "$ORC_BLIND" -lt 1 ]; then
@@ -2609,6 +2657,7 @@ if python3 -I "$PATCHDIR/wl-sub.py" "$HERE/p8-case-net.py" "$ORC/old.py" \
    && ! cmp -s "$HERE/p8-case-net.py" "$ORC/old.py" \
    && python3 -I "$ORC/old.py" --oracle-scan "$HERE/p8-scanner-oracle.txt" \
         "$ORACLE_STEM" >"$ORC/ctl.txt" 2>"$ORC/ctl.err"; then
+  LC_ALL=C sort -o "$ORC/ctl.txt" "$ORC/ctl.txt"
   if diff -q "$ORC/ctl.txt" "$ORC/server.txt" >/dev/null 2>&1; then
     say "SCANNER-ORACLE-CTL: FAIL — round 31's tag class was restored in a copy and the oracle still reported agreement, so SCANNER-ORACLE does not measure the defect it was built for"
     FAILED=1
@@ -2633,6 +2682,8 @@ cat > "$IDR/probe.sql" <<'SQL'
 DO $r$
 DECLARE c TEXT; srv BOOLEAN; ours BOOLEAN; bad INT := 0; tested INT := 0;
         n_join INT := 0; n_sep INT := 0;
+        tested_c INT := 0; n_join_c INT := 0; n_sep_c INT := 0;
+        tested_t INT := 0; n_tag INT := 0; n_notag INT := 0;
 BEGIN
   FOREACH c IN ARRAY ARRAY['a','Z','_','0','9','$',' ','+',
                            U&'\00df', U&'\00b7', U&'\+01F600', U&'\0100'] LOOP
@@ -2658,6 +2709,59 @@ BEGIN
       RAISE NOTICE 'IDENT-RULE MISMATCH on % : server=% ours=%', c, srv, ours;
     END IF;
   END LOOP;
+  -- ROUND 33, the twenty-third challenge's R-2. The round declared the rule
+  -- ONCE per language in three parts — `ident_start`, `ident_cont`,
+  -- `dollar_tag` — and this probe asserted the first of them, while the
+  -- sentence it printed credited "the class both scanners use". The class the
+  -- author's own third defect lived in, `$` as an identifier CONTINUATION
+  -- character, is in the second. Both of the others are asserted here now, by
+  -- the same method: ask the server, read what it answers.
+  --
+  -- CONTINUATION: `SELECT a<c>`. If the server joined <c> to the running
+  -- identifier the column it cannot find is `a<c>`; if it did not, the column
+  -- it cannot find is `a`, or the statement does not parse at all. Both of
+  -- those mean NOT joined, and neither is read as an attestation of
+  -- anything else.
+  FOREACH c IN ARRAY ARRAY['a','Z','_','0','9','$',' ','+','-','.',
+                           U&'\00df', U&'\00b7', U&'\+01F600', U&'\0100'] LOOP
+    tested_c := tested_c + 1;
+    BEGIN
+      EXECUTE format('SELECT a%s', c);
+      srv := FALSE;   -- it resolved, so there is no identifier question here
+    EXCEPTION WHEN OTHERS THEN
+      srv := SQLERRM LIKE 'column "a%" does not exist'
+             AND (position('"a' || c || '"' in SQLERRM) > 0
+                  OR position('"a' || lower(c) || '"' in SQLERRM) > 0);
+    END;
+    ours := p8.ident_cont(c);
+    IF srv THEN n_join_c := n_join_c + 1; ELSE n_sep_c := n_sep_c + 1; END IF;
+    IF srv IS DISTINCT FROM ours THEN
+      bad := bad + 1;
+      RAISE NOTICE 'IDENT-CONT MISMATCH on % : server=% ours=%', c, srv, ours;
+    END IF;
+  END LOOP;
+  -- TAG: the whole spelling, asked of the server as a value. A dollar-quoted
+  -- string evaluates; `$1x$y$1x$` is a positional parameter and raises.
+  FOREACH c IN ARRAY ARRAY['$a$b$a$','$$b$$','$1x$y$1x$','$a_1$b$a_1$',
+                           '$' || U&'\+01F600' || '$b$' || U&'\+01F600' || '$',
+                           '$' || U&'\00b7' || '$b$' || U&'\00b7' || '$'] LOOP
+    tested_t := tested_t + 1;
+    BEGIN
+      EXECUTE format('SELECT %s', c);
+      srv := TRUE;
+    EXCEPTION WHEN OTHERS THEN
+      srv := FALSE;
+    END;
+    ours := p8.dollar_tag(c, 1) IS NOT NULL;
+    IF srv THEN n_tag := n_tag + 1; ELSE n_notag := n_notag + 1; END IF;
+    IF srv IS DISTINCT FROM ours THEN
+      bad := bad + 1;
+      RAISE NOTICE 'DOLLAR-TAG MISMATCH on % : server=% ours=%', c, srv, ours;
+    END IF;
+  END LOOP;
+  IF n_join_c < 1 OR n_sep_c < 1 OR n_tag < 1 OR n_notag < 1 THEN
+    RAISE EXCEPTION 'IDENT-RULE: PLANT NOT ESTABLISHED — a probe set of one polarity cannot tell a correct rule from a constant answer: continuation %/% , tag %/%', n_join_c, n_sep_c, n_tag, n_notag;
+  END IF;
   -- A probe set that is all of one polarity cannot tell a correct rule from
   -- one that answers the same way every time.
   IF n_join < 1 OR n_sep < 1 THEN
@@ -2666,29 +2770,168 @@ BEGIN
   IF bad > 0 THEN
     RAISE EXCEPTION 'IDENT-RULE: % of % probe characters are classified differently by p8.ident_start and by the server', bad, tested;
   END IF;
-  RAISE NOTICE 'IDENT-RULE OK % characters (% joined, % separated)', tested, n_join, n_sep;
+  RAISE NOTICE 'IDENT-RULE OK % start characters (% joined, % separated), % continuation characters (% joined, % separated), % tag spellings (% tags, % not)',
+    tested, n_join, n_sep, tested_c, n_join_c, n_sep_c, tested_t, n_tag, n_notag;
 END $r$;
 SQL
 if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
              -f "$IDR/probe.sql" >"$IDR/probe.log" 2>&1; then
-  say "IDENT-RULE: $(grep -o 'IDENT-RULE OK .*' "$IDR/probe.log" | head -1) — every probe character, ASCII and not, is an identifier character to p8.ident_start exactly when the server joins it to the following E as one identifier, so the class both scanners use is READ FROM THE SERVER rather than restated here a third time (D-2)"
+  say "IDENT-RULE: $(grep -o 'IDENT-RULE OK .*' "$IDR/probe.log" | head -1) — every probe character, ASCII and not, is an identifier character to p8.ident_start exactly when the server joins it to the following E as one identifier, so all THREE classes both scanners use — identifier start, identifier continuation and the dollar-tag spelling — are READ FROM THE SERVER rather than restated here a third time (D-2, R-2)"
 else
   say "IDENT-RULE: FAIL — $(grep -m1 'IDENT-RULE' "$IDR/probe.log" | tr '\n' ' ')"
+  FAILED=1
+fi
+
+
+# ---------------------------------------------------------------------
+# ROUND 33, R-5: `exec` equivalence, armed. Unanswered since round 22.
+# ---------------------------------------------------------------------
+# The row form does not run the statement a case wrote. It runs
+# `p8.sql_scan(stmt, 'exec')` — comments gone, every literal kept — and
+# appends its predicate to THAT, which is what closed round 31's trailing-
+# comment attack. Nothing in this gate had ever asserted that the rewrite is
+# the same program to the server. Two challengers named it; the twenty-third
+# built the arm outside the pack and measured 1,390 rewritten statements with
+# 0 divergences, which is evidence about his corpus and not a measurement this
+# gate makes on every future head.
+#
+# It makes it now, and the SET it runs over is derived rather than typed: each
+# payload of the pinned oracle corpus, under four declared wrappers that put
+# comments where the rewrite acts. The verdict is read off the SERVER, three
+# ways at once — the SQLSTATE, the ROW_COUNT, and the whole resulting table —
+# because "the same program" is a claim about what it DID, not about its text.
+# A rewrite the scanner refuses to produce for a statement the server runs is
+# counted and reds by name rather than being skipped.
+EXE=$OUT/execequiv; mkdir -p "$EXE"
+{
+  echo "\pset tuples_only on"
+  echo "\pset format unaligned"
+  echo "CREATE TEMP TABLE xcorpus(line TEXT);"
+  printf '%s\n' "\\copy xcorpus FROM PROGRAM 'grep -v \"^#\" $HERE/p8-scanner-oracle.txt | grep -v \"^\$\"' WITH (FORMAT csv, DELIMITER E'\\b', QUOTE E'\\f')"
+  cat <<'SQL'
+CREATE TEMP TABLE p8exec(k TEXT PRIMARY KEY, v INT, "a$b$c$b$" INT DEFAULT 0);
+DO $x$
+DECLARE
+  r RECORD; w TEXT; st TEXT; rew TEXT;
+  s1 TEXT; s2 TEXT; n1 INT; n2 INT; t1 TEXT; t2 TEXT;
+  compared INT := 0; rewritten INT := 0; diverged INT := 0; refused INT := 0;
+  botherr INT := 0;
+BEGIN
+  FOR r IN SELECT split_part(line, E'\t', 1) AS lab,
+                  convert_from(decode(split_part(line, E'\t', 2), 'hex'), 'UTF8') AS payload
+           FROM xcorpus LOOP
+    FOREACH w IN ARRAY ARRAY['@P@', '@P@ -- tail', ' /* lead */@P@', '@P@ /* a /* b */ */'] LOOP
+      st := 'UPDATE p8exec SET v = v + 1' || replace(w, '@P@', r.payload);
+      compared := compared + 1;
+      BEGIN
+        rew := p8.sql_scan(st, 'exec');
+      EXCEPTION WHEN OTHERS THEN
+        refused := refused + 1;
+        RAISE NOTICE 'EXEC-EQUIV REFUSED % : %', r.lab, SQLERRM;
+        CONTINUE;
+      END;
+      IF rew = st THEN CONTINUE; END IF;
+      rewritten := rewritten + 1;
+      DELETE FROM p8exec; INSERT INTO p8exec(k, v) VALUES ('W', 0), ('X', 0);
+      BEGIN
+        EXECUTE st; GET DIAGNOSTICS n1 = ROW_COUNT; s1 := 'OK';
+      EXCEPTION WHEN OTHERS THEN s1 := SQLSTATE; n1 := -1;
+      END;
+      SELECT coalesce(string_agg(k || ':' || v || ':' || "a$b$c$b$", ',' ORDER BY k), '')
+        INTO t1 FROM p8exec;
+      DELETE FROM p8exec; INSERT INTO p8exec(k, v) VALUES ('W', 0), ('X', 0);
+      BEGIN
+        EXECUTE rew; GET DIAGNOSTICS n2 = ROW_COUNT; s2 := 'OK';
+      EXCEPTION WHEN OTHERS THEN s2 := SQLSTATE; n2 := -1;
+      END;
+      SELECT coalesce(string_agg(k || ':' || v || ':' || "a$b$c$b$", ',' ORDER BY k), '')
+        INTO t2 FROM p8exec;
+      IF s1 <> 'OK' AND s2 <> 'OK' THEN botherr := botherr + 1; END IF;
+      IF s1 IS DISTINCT FROM s2 OR n1 IS DISTINCT FROM n2 OR t1 IS DISTINCT FROM t2 THEN
+        diverged := diverged + 1;
+        RAISE NOTICE 'EXEC-EQUIV DIVERGENCE % : [%/%/%] vs [%/%/%] on %',
+          r.lab, s1, n1, t1, s2, n2, t2, st;
+      END IF;
+    END LOOP;
+  END LOOP;
+  IF refused > 0 THEN
+    RAISE EXCEPTION 'EXEC-EQUIV: the scanner REFUSED to rewrite % of % statements, so for those the form would run nothing this arm measured', refused, compared;
+  END IF;
+  IF rewritten < 1 THEN
+    RAISE EXCEPTION 'EXEC-EQUIV: PLANT NOT ESTABLISHED — the rewrite changed none of % statements, so comparing them measures nothing', compared;
+  END IF;
+  IF diverged > 0 THEN
+    RAISE EXCEPTION 'EXEC-EQUIV: % of % rewritten statements are a DIFFERENT PROGRAM to the server', diverged, rewritten;
+  END IF;
+  RAISE NOTICE 'EXEC-EQUIV OK % statements, % rewritten, % divergences (% of the rewritten pairs refused on both sides, which is still the same verdict)',
+    compared, rewritten, diverged, botherr;
+END $x$;
+SQL
+} > "$EXE/probe.sql"
+if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+             -f "$EXE/probe.sql" >"$EXE/probe.log" 2>&1; then
+  say "EXEC-EQUIV: $(grep -o 'EXEC-EQUIV OK .*' "$EXE/probe.log" | head -1) — the text the row form RUNS is the same program to the server as the text the case wrote, measured on the SQLSTATE, the ROW_COUNT and the whole table state together over every payload of the pinned oracle corpus under four comment wrappers (R-5)"
+else
+  say "EXEC-EQUIV: FAIL — $(grep -m1 'EXEC-EQUIV' "$EXE/probe.log" | tr '\n' ' ')"
+  FAILED=1
+fi
+# The control: make `exec` blank its literals the way `strip` does — one
+# substitution — and the rewrite must then be a different program. An
+# equivalence arm that cannot see a changed literal is a sentence.
+if python3 -I "$PATCHDIR/wl-sub.py" "$HERE/p8-case-helpers.sql" "$EXE/sub.sql" \
+     "        out := out || CASE WHEN mode = 'exec' THEN substr(t, i, j - i) ELSE ' ' END;" \
+     "        out := out || ' ';" >"$EXE/sub-patch.log" 2>&1 \
+   && ! cmp -s "$HERE/p8-case-helpers.sql" "$EXE/sub.sql" \
+   && "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+                -f "$EXE/sub.sql" >"$EXE/sub-load.log" 2>&1; then
+  if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+               -f "$EXE/probe.sql" >"$EXE/ctl.log" 2>&1; then
+    say "EXEC-EQUIV-CTL: FAIL — with 'exec' blanking its literals the arm above still reported equivalence, so it does not measure what the form runs"
+    FAILED=1
+  else
+    say "EXEC-EQUIV-CTL: with 'exec' made to blank its literals ALONE the rewrite becomes a different program and the arm above reds — $(grep -m1 'DIFFERENT PROGRAM\|DIVERGENCE' "$EXE/ctl.log" | tr '\n' ' ')"
+  fi
+else
+  say "EXEC-EQUIV-CTL: PLANT NOT ESTABLISHED — that one change could not be made in a copy: $(tail -1 "$EXE/sub-patch.log")"
+  FAILED=1
+fi
+if "$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 \
+             -f "$HERE/p8-case-helpers.sql" >"$EXE/restore.log" 2>&1; then
+  :
+else
+  say "FAIL: the real case helpers could not be loaded back after EXEC-EQUIV-CTL — $(tail -1 "$EXE/restore.log")"
   FAILED=1
 fi
 
 # ROUND 32, R-4 (P3). Both scanners implement standard_conforming_strings = on
 # semantics — a backslash is special only inside E'…' — and nothing in the pack
 # had ever asserted it. On a cluster with it off the server reads the same
-# bytes differently and every reading in this gate is quietly wrong. The gate
-# asserts server_version and datcollate already; this is one more line beside
-# them, and it fails on ABSENCE rather than only on drift.
+# bytes differently and every reading in this gate is quietly wrong.
+#
+# ROUND 33 corrects what the sentence under this arm used to claim. It said
+# this closed R-4. It did NOT, and both reviews of `b7c0933` measured the same
+# thing: these are SESSION GUCs, settable with a plain `SET`, and this arm
+# reads them in a psql connection OF ITS OWN. A case file that flips
+# `standard_conforming_strings` and hides a `;` behind `'A\'B'` passed with
+# the whole gate at `FAILED=0`, 202 of 202 arms. The closure is
+# `p8.assert_lex_session`, called at the top of `p8.sql_scan`, which reads the
+# settings IN THE SESSION THAT WILL LEX; the `LEX-SESSION` plant above is what
+# measures it.
+#
+# This arm is KEPT, and it is now what its name says: a statement about the
+# CLUSTER'S DEFAULT, which fails the run on ABSENCE before any case runs, and
+# a better message than a per-case refusal when a whole cluster is wrong. It
+# reads the same three settings in ONE comparison as the in-session law, so
+# the two cannot drift into asking different questions, and the encoding is
+# compared to the server's rather than to a literal — equal encodings mean no
+# conversion sits between the bytes a case file declares and the bytes the
+# server lexes, whatever the two are.
 SCS=$("$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -tAc \
-        "SELECT current_setting('standard_conforming_strings') || '/' || current_setting('backslash_quote')" 2>&1)
-if [ "$SCS" = "on/safe_encoding" ]; then
-  say "LEX-SETTINGS: standard_conforming_strings=on, backslash_quote=safe_encoding — the two settings that decide how the server lexes a backslash in a string, which both scanners assume and neither had ever read (R-4)"
+        "SELECT p8.lex_session() || ' | ' || p8.lex_session_expected()" 2>&1)
+if [ "${SCS%% | *}" = "${SCS##* | }" ]; then
+  say "LEX-SETTINGS: the cluster's default session lexes the way both scanners do — standard_conforming_strings/backslash_quote/client_encoding = ${SCS%% | *}, read in ONE comparison so no fourth setting is defined as not mattering. This is a statement about the DEFAULT and not a closure: a case file can still move all three, and what refuses that is p8.assert_lex_session at the top of p8.sql_scan (R-4, the coordinator's b7c0933 section 3)"
 else
-  say "LEX-SETTINGS: ABORT — this cluster lexes strings differently from what both scanners implement: standard_conforming_strings/backslash_quote = $SCS, expected on/safe_encoding"
+  say "LEX-SETTINGS: ABORT — this cluster's default session lexes differently from what both scanners implement: got ${SCS%% | *}, both scanners implement ${SCS##* | }"
   FAILED=1
 fi
 
@@ -2892,6 +3135,76 @@ wl_sub_ctl "ROW-PACK-CTL" rb-pack.sql \
   "                      ~* 'nothing matches this') THEN" \
   pass "PASS refused by THE STATEMENT CARRIES AN EXCEPTION HANDLER" \
   "with that one condition deleted a case can call this pack's own helpers to manufacture the message it reads (C-2)"
+
+# ---------------------------------------------------------------------
+# ROUND 33. The two BLOCKING findings of the reviews of `b7c0933`, each with
+# the plant that reproduces it and the one deletion that brings it back.
+# ---------------------------------------------------------------------
+# The second bench: a relation whose BEFORE INSERT trigger reaches an object
+# the role may not touch, FOR ONE ROW'S CONTENT ONLY. The refusal that
+# arrives is the SERVER's 42501 — not raised by a `RAISE`, carrying no RLS
+# phrase, with `SQL statement "SELECT count(*) FROM …"` as its innermost
+# frame — so none of the three context terms sees it, and at `b7c0933` a
+# relation case passed on a refusal one row's content decided. The trigger
+# function is SECURITY INVOKER, outside schema p8, so the denial is the
+# worker's own and `assert_arriving_class` lets it speak.
+"$B/psql" -h "$D" -p "$P" -U daftar_migrator -d daftar -q -v ON_ERROR_STOP=1 >"$WB/rbench.log" 2>&1 <<'SQL'
+CREATE TABLE IF NOT EXISTS public.p8bench_rel(k TEXT PRIMARY KEY);
+CREATE TABLE IF NOT EXISTS public.p8bench_forbidden(x INT);
+REVOKE ALL ON public.p8bench_forbidden FROM PUBLIC;
+CREATE OR REPLACE FUNCTION public.p8bench_rowtrap() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+DECLARE n INT;
+BEGIN
+  IF NEW.k = 'BAD' THEN
+    EXECUTE 'SELECT count(*) FROM public.p8bench_forbidden' INTO n;
+  END IF;
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_rowtrap ON public.p8bench_rel;
+CREATE TRIGGER p8bench_rowtrap BEFORE INSERT ON public.p8bench_rel
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_rowtrap();
+GRANT SELECT, INSERT ON public.p8bench_rel TO daftar_worker;
+SQL
+if [ -s "$WB/rbench.log" ] && grep -qi "^ERROR" "$WB/rbench.log"; then
+  say "ROWTRAP-BENCH: PLANT NOT ESTABLISHED — the row-decided-denial bench could not be built: $(tail -1 "$WB/rbench.log")"
+  FAILED=1
+else
+  say "ROWTRAP-BENCH: a relation whose trigger reaches a forbidden object for ONE row's content, so the 42501 that arrives is the server's own and carries no RAISE frame — the shape the twenty-third challenge measured passing as relation-level evidence (D-1)"
+fi
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('RB-trigrow a relation case refused by a row-conditional trigger',
+  $q$INSERT INTO @REL@ (k) VALUES ('BAD')$q$,
+  'permission denied for table p8bench_forbidden', 'p8bench_rel');
+ROLLBACK;
+SQL
+} > "$WB/rb-trigrow.sql"
+# The lexing-session plant. The warmup is not decoration: `p8.sql_scan`'s own
+# body contains the literal `'\'` and plpgsql compiles a function on first
+# call, so the attack needs one ordinary case ahead of it. It declares row X,
+# which the trigger refuses, so it passes honestly.
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('RB-scs-warmup an ordinary row case, which compiles the scanner',
+  $q$UPDATE @REL@ SET v = 2$q$, 'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'X');
+SET standard_conforming_strings = off;
+SELECT p8.case_refuses_row('RB-scsoff two statements, the semicolon behind a backslash-escaped quote',
+  $q$UPDATE @REL@ SET v = 2 + length('A\'B') - 3 ; SELECT length('C\'D') FROM @REL@$q$,
+  'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+ROLLBACK;
+SQL
+} > "$WB/rb-scsoff.sql"
+wb_probe rb-trigrow.sql "RELATION-ROWTRAP" "THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ" \
+  "a relation case whose 42501 was decided by one row's content, through a trigger reaching a forbidden object — the server raised it, so no frame and no phrase gives it away, and the form now asks the server to PLAN the same statement instead (D-1)"
+wb_probe rb-scsoff.sql  "LEX-SESSION"      "UNLEXABLE SESSION" \
+  "a case file that flips standard_conforming_strings in its own session and hides a semicolon behind a backslash-escaped quote, which both reviewers measured passing end to end with the whole gate FAILED=0 (the coordinator's section 3)"
+wl_sub_ctl "RELATION-ROWTRAP-CTL" rb-trigrow.sql \
+  "    IF kind = 'relation' THEN" "    IF false THEN" \
+  pass "PASS refused by permission denied for table p8bench_forbidden" \
+  "with the EXPLAIN construction deleted ALONE the relation case passes on a refusal one row's content decided, with the relation witness attesting only that the relation exists — the state the twenty-third challenge measured at this head's parent (D-1)"
+wl_sub_ctl "LEX-SESSION-CTL" rb-scsoff.sql \
+  "  PERFORM p8.assert_lex_session();" "  PERFORM 1;" \
+  pass "PASS refused by DENIED-BY-THE-OTHER-ROW" \
+  "with the session's lexing settings unread at scan time the semicolon is invisible to every law, the appended predicate joins the second statement, the mutation runs against every row and the case reports the refusal the OTHER row decided — the fail-open both reviews measured on this head's parent (the coordinator's section 3)"
 
 # ---------------------------------------------------------------------
 # ROUND 30, F-4: the net over every SQL file the run LOADS, and its byte pin
@@ -4500,22 +4813,60 @@ def _declared_not_a_site(off):
     col = off - (s.rindex("\n", 0, off) + 1 if off else 0)
     before = line[:col]
     if "#" in before:
-        return True                      # inside a shell or Python comment
+        return "comment"                 # inside a shell or Python comment
     if "SAY = r'" in line or "ALL_SAY = re.compile" in line:
-        return True                      # this reader's own two patterns
+        return "own-pattern"             # this reader's own two patterns
     if re.match(r'\s*\(\s*\)', line[col + 3:]):
-        return True                      # `say(){ … }`, the definition itself
+        return "definition"              # `say(){ … }`, the definition itself
     if before.count("'") % 2 == 1 or before.count('"') % 2 == 1:
-        return True                      # inside a string literal
-    return False
-unplaced = [o for o in occurrences
-            if o not in placed and not _declared_not_a_site(o)]
+        return "quote-parity"            # inside a string literal
+    return None
+# ROUND 33, the coordinator's 4.2 and the twenty-third challenge's R-6, which
+# are one gap read from two sides. The exclusions above are consulted only for
+# an occurrence the placement pattern could not place, so a say-site that is
+# BOTH unplaceable AND excluded is dropped, and the independent total moves
+# alone. Measured by the coordinator: `[ -n "${RUN_ID#C}" ] && ! say "…"` (the
+# `#` is inside a parameter expansion) and `printf '%s' "it's" ; ! say "…"`
+# (the quote is inside a literal) are both real sentences that print, both
+# invisible, rc 0. The challenger's plant is the third: `eval 'say "…"'`.
+#
+# A heuristic cannot be fixed by a better heuristic — that is this phase's own
+# lesson about text checks — so the SET is pinned instead. Every exclusion is
+# counted by its rule and compared with a committed literal, and ANY movement
+# in any class reds by name, whether a line arrives or leaves. The reader
+# still cannot tell a planted say-site behind an odd quote from a word inside
+# prose; it can no longer fail to NOTICE one.
+EXCL_EXPECT = {"comment": 31, "own-pattern": 2, "definition": 1, "quote-parity": 12}
+excluded = {k: 0 for k in EXCL_EXPECT}
+unplaced = []
+for o in occurrences:
+    if o in placed:
+        continue
+    why = _declared_not_a_site(o)
+    if why is None:
+        unplaced.append(o)
+    else:
+        excluded[why] += 1
 if unplaced:
     sys.stderr.write(
         "PATHS: UNPLACED SAY-SITE — %d occurrence(s) of the token `say` are in "
         "neither the classified set nor the declared exclusions, so this "
         "reader cannot bound its own claim; first at line %s\n"
         % (len(unplaced), ", ".join(str(_line_of(o) + 1) for o in unplaced[:6])))
+    sys.exit(3)
+drift = {k: (excluded[k], EXCL_EXPECT[k])
+         for k in EXCL_EXPECT if excluded[k] != EXCL_EXPECT[k]}
+if drift or len(placed) + sum(excluded.values()) != len(occurrences):
+    sys.stderr.write(
+        "PATHS: THE EXCLUDED SET MOVED — %s; placed %d + excluded %d against "
+        "%d occurrences. Every occurrence this reader declares not to be a "
+        "say-site is counted by its rule and the counts are committed, so a "
+        "sentence that becomes invisible is a red and not a smaller number. "
+        "If the change is honest, update EXCL_EXPECT in the same commit and "
+        "say which line moved\n"
+        % ("; ".join("%s %d, declared %d" % (k, g, w)
+                     for k, (g, w) in sorted(drift.items())) or "no class moved",
+           len(placed), sum(excluded.values()), len(occurrences)))
     sys.exit(3)
 lits = re.findall(SAY + r'"((?:[^"\\]|\\.)*)"', s, re.M)
 sites = len(placed)

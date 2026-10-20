@@ -136,6 +136,22 @@ DROP FUNCTION IF EXISTS p8.case_refuses_unwitnessed(TEXT, TEXT, TEXT);
 --       agree. So the bound is: three named refusals, over a reading the
 --       server attests. It is still not a proof that no fourth route exists.
 --
+--       ROUND 33 found the fourth route, and it was in the words "a reading
+--       the server attests": round 32 attested it in a psql connection of
+--       the arm's own, not in the session where a case runs. With
+--       `standard_conforming_strings = off` set by the case file itself, the
+--       server's literals end somewhere else than the scanner's — `'A\'B'`
+--       is one literal to the server and two fragments to both scanners — so
+--       a `;` the scanners place INSIDE a string is at top level to the
+--       server, the appended predicate joins the second statement and the
+--       mutation runs against every row. The same PASS on a refusal another
+--       row decided, through a reading nobody had asked the session about.
+--       `p8.assert_lex_session`, called at the top of `p8.sql_scan`, now
+--       makes the reading assert its own preconditions where the lexing will
+--       happen. The bound is unchanged in shape and one clause stronger: three
+--       named refusals, over a reading the SESSION attests. It is still not a
+--       proof that no fifth route exists.
+--
 --   case_refuses_relation(label, stmt, expect, relation)
 --       The refusal is about a RELATION. The statement must carry @REL@ and may
 --       carry only the SQL keywords this form declares, read from
@@ -255,10 +271,100 @@ BEGIN
   RETURN NULL;
 END $fn$;
 
+-- ROUND 33, the coordinator diff review's BLOCKING finding on `b7c0933` and
+-- the twenty-third challenge's D-2, which rebuilt it independently.
+--
+-- Round 32 added an arm, `LEX-SETTINGS`, that reads
+-- `standard_conforming_strings` and `backslash_quote` and aborts the run if
+-- the cluster does not lex the way both scanners do. The diagnosis was right
+-- and the guard did not close it: those are SESSION GUCs, settable by any
+-- role with a plain `SET`, and the arm read them in a psql connection OF ITS
+-- OWN. So the one setting every reading in this gate depends on was asserted
+-- where it cannot be violated and unasserted where it can.
+--
+-- The attack the coordinator built, and the challenger reproduced on a bench
+-- of his own, is two lines in a case file:
+--
+--     SET standard_conforming_strings = off;
+--     SELECT p8.case_refuses_row('…',
+--       $q$UPDATE @REL@ SET v = 2 + length('A\'B') - 3 ; SELECT … FROM @REL@$q$,
+--       'DENIED-BY-THE-OTHER-ROW', 'p8bench_reach', 'k', 'W');
+--
+-- With the setting off the server reads `'A\'B'` as ONE literal, so the `;`
+-- is at top level and the statement is two statements. Both scanners
+-- implement `on`, so to them the backslash is ordinary, `'A\'` is a complete
+-- literal and the `;` is INSIDE the next one — `assert_single_statement`
+-- sees no semicolon at all, the appended predicate joins the SECOND
+-- statement, the UPDATE runs unqualified, and the case reports a PASS on a
+-- refusal the row it did not declare decided. Installed in the real case
+-- `W-6`, the whole of gate 6 stayed `FAILED=0`, 202 of 202 arms,
+-- `passes=101` — the honest run's figures exactly.
+--
+-- This is the same shape as the defect round 32 closed, one layer along:
+-- round 31 hid the semicolon behind a dollar tag the scanners did not know,
+-- and it can still be hidden behind a lexing setting they assume.
+--
+-- So the reading asserts its own preconditions AT THE MOMENT IT READS, in
+-- the session that will do the lexing, which is the only place a `SET` in a
+-- case file cannot get in front of: the `SET` is then exactly what the law
+-- reads. One call site, at the top of `p8.sql_scan`, covers every law in the
+-- pack, because every law reads its statement through it.
+--
+-- The three settings are read in ONE comparison against ONE expected string,
+-- not field by field. This phase's own rule: a reader that compares each
+-- field separately has defined every field it does not read as not
+-- mattering, and the next setting that decides how bytes become tokens is
+-- then a silence rather than a refusal.
+--
+-- `client_encoding` is in it because it sits between the bytes a case file
+-- declares and the bytes the server lexes, and it is compared to
+-- `server_encoding` rather than to a literal: equal encodings mean no
+-- conversion happens, whatever the two are, so this cannot red a cluster
+-- that is internally consistent. Both are GUCs, so the comparison costs no
+-- catalogue read.
+--
+-- The refusal is NOT spelled `p8.sql_scan: UNLEXABLE`, which is this file's
+-- prefix for an unterminated construct: `p8.sql_scan_value` catches exactly
+-- that prefix and returns the raw body, and `p8.sql_scan_hex` turns it into
+-- the string `UNLEXABLE`. A session refusal that wore that prefix would be
+-- SWALLOWED by both — a guard that cannot be run is not a guard — so it is
+-- spelled `p8: UNLEXABLE SESSION` and propagates out of every wrapper.
+--
+-- `p8.sql_scan` and the two functions that wrap it are STABLE from this
+-- round, not IMMUTABLE. They were never immutable in truth once they read a
+-- setting, and a declaration that lies to the planner is the kind of sentence
+-- this phase keeps measuring false.
+CREATE OR REPLACE FUNCTION p8.lex_session() RETURNS TEXT
+LANGUAGE sql STABLE AS $fn$
+  SELECT current_setting('standard_conforming_strings') || '/'
+      || current_setting('backslash_quote') || '/'
+      || current_setting('client_encoding')
+$fn$;
+
+CREATE OR REPLACE FUNCTION p8.lex_session_expected() RETURNS TEXT
+LANGUAGE sql STABLE AS $fn$
+  SELECT 'on/safe_encoding/' || current_setting('server_encoding')
+$fn$;
+
+CREATE OR REPLACE FUNCTION p8.assert_lex_session() RETURNS void
+LANGUAGE plpgsql STABLE AS $fn$
+BEGIN
+  IF p8.lex_session() <> p8.lex_session_expected() THEN
+    RAISE EXCEPTION 'p8: UNLEXABLE SESSION — THIS SESSION LEXES DIFFERENTLY FROM THE SCANNER: '
+                    'standard_conforming_strings/backslash_quote/client_encoding = %, and both '
+                    'scanners implement %. A backslash, a quote or a byte means something else '
+                    'here than it does to the reading every law in this pack is about to make, '
+                    'so no refusal derived from that reading would be evidence about the '
+                    'statement the server will run (the coordinator''s b7c0933 section 3)',
+                    p8.lex_session(), p8.lex_session_expected()
+      USING ERRCODE = 'P0001';
+  END IF;
+END $fn$;
+
 -- The 'dollar' mode's recursion, with the refusal turned into the raw body.
 -- See the comment at its call site.
 CREATE OR REPLACE FUNCTION p8.sql_scan_value(body TEXT) RETURNS TEXT
-LANGUAGE plpgsql IMMUTABLE AS $fn$
+LANGUAGE plpgsql STABLE AS $fn$
 BEGIN
   RETURN p8.sql_scan(body, 'dollar');
 EXCEPTION WHEN SQLSTATE 'P0001' THEN
@@ -267,13 +373,14 @@ EXCEPTION WHEN SQLSTATE 'P0001' THEN
 END $fn$;
 
 CREATE OR REPLACE FUNCTION p8.sql_scan(t TEXT, mode TEXT DEFAULT 'strip')
-RETURNS TEXT LANGUAGE plpgsql IMMUTABLE AS $fn$
+RETURNS TEXT LANGUAGE plpgsql STABLE AS $fn$
 DECLARE
   out TEXT := '';
   i INT := 1;
   n INT := length(t);
   j INT; k INT; depth INT; tag TEXT; esc BOOLEAN; c TEXT; closed BOOLEAN;
 BEGIN
+  PERFORM p8.assert_lex_session();
   IF mode NOT IN ('strip', 'dollar', 'exec') THEN
     RAISE EXCEPTION 'p8.sql_scan: unknown mode %', mode;
   END IF;
@@ -392,7 +499,7 @@ END $fn$;
 -- report that the same way, or the comparison is between an output on one
 -- side and an abort on the other, and an abort is not a reading.
 CREATE OR REPLACE FUNCTION p8.sql_scan_hex(t TEXT, mode TEXT) RETURNS TEXT
-LANGUAGE plpgsql IMMUTABLE AS $fn$
+LANGUAGE plpgsql STABLE AS $fn$
 BEGIN
   RETURN encode(convert_to(p8.sql_scan(t, mode), 'UTF8'), 'hex');
 EXCEPTION WHEN SQLSTATE 'P0001' THEN
@@ -796,6 +903,7 @@ END $$;
 CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT, kind TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
+        eplan BOOLEAN; esst TEXT; emsg TEXT;
 BEGIN
   witnessed := subject IS NOT NULL;
   -- ROUND 29, N-3. Every path into this function passes through here, including
@@ -892,6 +1000,13 @@ BEGIN
     -- ran for a row, not taken by the server before any row was read. A grant
     -- or ownership denial, and an RLS WITH CHECK violation, both come from the
     -- server itself and carry no such frame.
+    --
+    -- ROUND 33: that last sentence is TRUE about the frame and the inference
+    -- drawn from it was FALSE, measured by the twenty-third challenge. A
+    -- grant denial does come from the server — and WHETHER THE SERVER IS
+    -- EVER ASKED can be decided by the row. The term below it is kept and is
+    -- no longer what carries this form; the paragraph that said the
+    -- remaining class was empty is withdrawn.
     rowlevel := (sst <> '42501'
                  OR position('row-level security policy' in lower(coalesce(msg,''))) > 0
                  OR split_part(coalesce(ctx,''), E'\n', 1) ~ 'PL/pgSQL function .* at RAISE');
@@ -901,6 +1016,81 @@ BEGIN
                       'decided by the row rather than by a grant. Use case_refuses_row and declare '
                       'the key the refusal is about (W-3, R-2). Innermost frame: %',
         label, subject, sst, msg, split_part(coalesce(ctx,''), E'\n', 1);
+    END IF;
+    -- ROUND 33, the twenty-third challenge's D-1, which is round 22's R-2
+    -- again: the term above closes the route it was built for and not the
+    -- class. It asks WHO RAISED the refusal; what this form needs answered is
+    -- WHETHER THE OUTCOME DEPENDED ON THE ROW. A trigger that reaches an
+    -- object the role may not touch, for one row's content only, makes the
+    -- SERVER raise 42501 — no `at RAISE` frame, no RLS phrase, the innermost
+    -- frame is `SQL statement "SELECT count(*) FROM forbidden"` — and the
+    -- relation case passed on it, with the relation witness attesting only
+    -- that the relation exists.
+    --
+    -- Both reviewers prescribed a control ROW: run the statement against a
+    -- second row the case declares and require the refusal for both. I did
+    -- not take that, and the reason is the one this phase keeps re-learning —
+    -- the control would be chosen by the case, so a trigger that refuses for
+    -- both declared values passes it, and the form would again be evidence
+    -- about two rows rather than about the relation.
+    --
+    -- What the form needs is answerable by CONSTRUCTION, from the server, and
+    -- the server already has the question built in. A relation-level refusal
+    -- is a permission decision taken when the executor starts, BEFORE any row
+    -- is processed; `EXPLAIN` starts the executor and processes no row. So:
+    -- plan the same statement and require the same refusal to arrive. The
+    -- measurements that decide this, taken on PostgreSQL 16.15 as an
+    -- unprivileged role:
+    --
+    --   INSERT INTO nogrant VALUES (1)   → 42501 permission denied
+    --   EXPLAIN INSERT INTO nogrant …    → 42501 permission denied   (same)
+    --   EXPLAIN SELECT * FROM nogrant    → 42501 permission denied
+    --   INSERT INTO t3 VALUES ('BAD')    → 42501, raised inside a trigger
+    --   EXPLAIN INSERT INTO t3 VALUES ('BAD')  → a PLAN, no refusal
+    --
+    -- A grant denial reproduces under the plan; a row-decided one cannot,
+    -- because no row is ever reached. That ends the question in behaviour
+    -- rather than in the wording of `PG_EXCEPTION_CONTEXT`, and it does not
+    -- enumerate mechanisms: anything that needs a row to happen is invisible
+    -- to the planner, whatever raises it.
+    --
+    -- A statement the server will not PLAN is refused by name rather than
+    -- waved through. `EXPLAIN TRUNCATE t` is a syntax error (42601), so a
+    -- TRUNCATE relation case cannot be verified this way and this form says
+    -- so instead of passing it. No case in this pack is one today — the four
+    -- relation cases are three SELECTs and an INSERT — so this refuses
+    -- nothing that exists and refuses the first one that arrives, which is
+    -- the direction this phase requires of a law it cannot complete.
+    IF kind = 'relation' THEN
+      BEGIN
+        EXECUTE 'EXPLAIN ' || stmt;
+        eplan := TRUE;
+      EXCEPTION WHEN others THEN
+        GET STACKED DIAGNOSTICS esst = RETURNED_SQLSTATE, emsg = MESSAGE_TEXT;
+        eplan := FALSE;
+      END;
+      IF eplan THEN
+        RAISE EXCEPTION '% FAIL: THE REFUSAL DID NOT ARRIVE BEFORE ANY ROW WAS READ — this form '
+                        'claims the refusal is about "%" as a whole, and the server PLANNED the '
+                        'same statement without refusing, so what arrived ([%] %) needed a row to '
+                        'be processed and is not a decision about the relation. A trigger, a '
+                        'constraint or any other per-row mechanism can produce it for one row and '
+                        'not another. Use case_refuses_row and declare the key the refusal is '
+                        'about (D-1, W-3, R-2)',
+          label, subject, sst, msg;
+      ELSIF esst = '42601' THEN
+        RAISE EXCEPTION '% FAIL: THIS FORM CANNOT VERIFY A STATEMENT THE SERVER WILL NOT PLAN — '
+                        'the relation form proves a refusal is relation-level by requiring it to '
+                        'arrive from EXPLAIN, which processes no row, and the server answered '
+                        '[%] % to EXPLAIN of this statement. TRUNCATE is the known shape. Write '
+                        'the case in a form whose evidence this pack can build (D-1)',
+          label, esst, emsg;
+      ELSIF esst <> sst OR position(expect in coalesce(emsg,'')) = 0 THEN
+        RAISE EXCEPTION '% FAIL: THE PLANNED REFUSAL IS NOT THE ONE THAT ARRIVED — running the '
+                        'statement gave [%] % and planning it gave [%] %, so the refusal this '
+                        'case reads is not the relation-level one the plan meets (D-1)',
+          label, sst, msg, esst, emsg;
+      END IF;
     END IF;
     -- ROUND 31, C-2, and it runs HERE rather than at the top of the handler:
     -- the two rules above already name the attacks they were built for, and a

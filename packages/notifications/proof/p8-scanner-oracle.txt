@@ -27,7 +27,7 @@ honest-none		no predicate at all: the server touches both rows and the scanner s
 honest-where	205748455245206b203d20275827	an ordinary predicate: both the server and the scanner see it
 d1-dollar-tag	202c206b203d206b207c7c2024f09f9880246974277324f09f988024205748455245206b203d20275827	D-1: a supplementary-plane dollar tag round 31 did not recognise, so the where vanished from every law
 d1-plain-tag	202c206b203d206b207c7c2024712469742773247124205748455245206b203d20275827	the same shape with an ASCII tag, which round 31 did read
-dollar-cont	202c206b203d206b207c7c20276127205748455245206b203d20275827	an ordinary string before the predicate
+dollar-cont	202c2022612462246324622422203d206124622463246224202b2031205748455245206b203d20275827	the label the twenty-third challenge caught: this payload advertised `$` as an identifier CONTINUATION character and carried no `$` at all. It does now — `a$b$c$b$` is ONE identifier to the server, which is why the bench carries a column of that name — and the class the author found while reproducing D-1 is measured here (R-3)
 comment-where	202d2d205748455245206b203d20275827	a where inside a comment: the server does not act on it and the scanner must not see it
 blockcomment	202f2a205748455245206b203d20275827202a2f	the same inside a block comment
 literal-where	202c206b203d206b207c7c2027205748455245206b203d2027275827272027	a where inside a string literal: a value, not code
@@ -37,3 +37,4 @@ escape-string	202c206b203d206b207c7c204527615c276227205748455245206b203d20275827
 doubled-quote	202c206b203d206b207c7c20276127276227205748455245206b203d20275827	a doubled quote inside a plain string before the predicate
 quoted-ident	202c20226b22203d206b205748455245206b203d20275827	a quoted identifier: kept, and the predicate after it is code
 dollar-empty-tag	202c206b203d206b207c7c202424697427732424205748455245206b203d20275827	an empty dollar tag with an apostrophe in the body
+middot-tag	202c206b203d206b207c7c2024c2b7246974277324c2b724205748455245206b203d20275827	U+00B7, the character on which BOTH readers were wrong in opposite directions while D-2 was being reproduced. A tag to the server, so the apostrophe in the body is ordinary text and the WHERE is code (R-3)
