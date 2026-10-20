@@ -556,6 +556,18 @@ function checkFileTable(manifest: string, root: string): FileTable {
     problems.push('no repo-file rows were parsed from §3, so this direction measured nothing — which is a failure and not a pass (PART 17)');
     return { problems, rows: rows.length, sha };
   }
+  // THE SENTENCE OVER THE TABLE IS A CLAIM LIKE ANY OTHER (round 24, F-R24-06).
+  // It named a commit the rows were NOT measured at in three consecutive
+  // rounds -- F-R22-09, F-R23-08, F-R24-06 -- because every direction here
+  // read the cells and none read the prose. A reader takes the SHA from that
+  // sentence, so a sentence nobody checks is a figure nobody checks.
+  for (const m of manifest.matchAll(/the line counts are `wc -l` \*\*at `([0-9a-f]{7,40})`\*\*/g)) {
+    const named = m[1] as string;
+    if (!sha.startsWith(named))
+      problems.push(
+        `\u00a73's own sentence says the line counts are \`wc -l\` at \`${named}\`, and this file declares \`${sha.slice(0, 12)}\` — the rows are re-measured at the declared head, so the sentence over them names a commit they were not taken at (round 24, F-R24-06, the third round on this one paragraph)`,
+      );
+  }
   for (const row of rows) {
     const measured = linesAt(root, sha, row.path);
     if (measured === null) {
@@ -759,7 +771,21 @@ function main(): void {
         return `| \`${path}\` | ${measured} |`;
       });
     }
+    // THE SENTENCE OVER THE TABLE IS REWRITTEN WITH IT (round 24, F-R24-06).
+    // «the line counts are `wc -l` **at `<sha>`**» named the wrong commit in
+    // THREE consecutive rounds: the rows were re-measured against the declared
+    // head every time and the prose beside them was left to a human to
+    // remember. A figure this gate rewrites and a figure a reader must update
+    // by hand do not stay equal, so the gate now writes both and direction 5
+    // reads the prose as a claim like any other.
+    let proseSha = 0;
+    if (declared !== null)
+      rewritten = rewritten.replace(/(the line counts are `wc -l` \*\*at `)[0-9a-f]{7,40}(`\*\*)/g, (_whole, a: string, b: string) => {
+        proseSha += 1;
+        return `${a}${declared.slice(0, 12)}${b}`;
+      });
     writeFileSync(manifestPath, rewritten);
+    if (proseSha > 0) console.log(`  \u00a73's own sentence re-anchored to ${declared === null ? '?' : declared.slice(0, 12)}.`);
     console.log(`\nREWROTE the digest table: ${onDisk.length} artifact(s).`);
     console.log(
       declared === null

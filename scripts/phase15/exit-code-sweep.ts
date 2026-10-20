@@ -714,6 +714,15 @@ function handsProducerOver(n: ts.Node, p: Producers): boolean {
 }
 
 /** Every name a binding pattern binds, at any depth and in any pattern form. */
+/** Does this import clause bind `name` -- as default, namespace, or named? */
+function importBindsName(clause: ts.ImportClause, name: string): boolean {
+  if (clause.name !== undefined && clause.name.text === name) return true;
+  const nb = clause.namedBindings;
+  if (nb === undefined) return false;
+  if (ts.isNamespaceImport(nb)) return nb.name.text === name;
+  return nb.elements.some((el) => el.name.text === name);
+}
+
 function boundNames(name: ts.BindingName): string[] {
   const out: string[] = [];
   const walk = (b: ts.Node): void => {
@@ -834,6 +843,13 @@ function derivedProducers(
         if (init !== undefined) {
           if (ts.isArrowFunction(init) || ts.isFunctionExpression(init)) {
             if (returnsTheProducer(init)) for (const nm of boundNames(n.name)) returners.add(nm);
+          } else if (ts.isIdentifier(init) && returners.has(init.text)) {
+            // `const mkB = mkA` where `mkA` RETURNS the producer. The id side
+            // has derived through an alias since round 17 and the returner side
+            // did not, so one alias lost returner-ness and `mkB()` yielded a
+            // producer nothing followed (round 24, F-R24-04). Two rules about
+            // one question must not disagree about what an alias means.
+            for (const nm of boundNames(n.name)) returners.add(nm);
           } else if (mentions(init)) for (const nm of boundNames(n.name)) ids.add(nm);
         }
       }
@@ -841,8 +857,10 @@ function derivedProducers(
         const left = unwrap(n.left);
         fromKey(left, null);
         const right = unwrap(n.right);
-        const isFn = ts.isArrowFunction(right) || ts.isFunctionExpression(right);
-        const hit = isFn ? returnsTheProducer(right) : mentions(right);
+        // `mk = mkA` assigns returner-ness the same way `const mk = mkA`
+        // declares it: one line per copy, one arm per copy (F-R24-04).
+        const isFn = ts.isArrowFunction(right) || ts.isFunctionExpression(right) || (ts.isIdentifier(right) && returners.has(right.text));
+        const hit = isFn ? (ts.isIdentifier(right) ? true : returnsTheProducer(right as ts.ArrowFunction | ts.FunctionExpression)) : mentions(right);
         if (hit) {
           // `run = spawnSync`, `this.go = spawnSync`, `api['go'] = spawnSync`:
           // the TARGET side is read by what it NAMES, not by its shape.
@@ -1018,10 +1036,6 @@ interface OutsideRead {
   readonly degraded: boolean;
 }
 
-function outsideSurface(abs: string, depth: number): Surface {
-  return outsideRead(abs, depth).surface;
-}
-
 function outsideRead(abs: string, depth: number): OutsideRead {
   const hit = OUTSIDE_SURFACE.get(abs);
   if (hit !== undefined) return { surface: hit, degraded: false };
@@ -1152,7 +1166,7 @@ let PACK_ESCAPE_REFUSALS: { file: string; line: number; text: string }[] = [];
  * name: a module this reader could not open is a module whose producers it
  * cannot know (round 23, F-R23-13).
  */
-const PACK_IMPORT_REFUSALS = new Map<string, { file: string; line: number; text: string }>();
+const PACK_IMPORT_REFUSALS = new Map<string, { file: string; line: number; text: string; reason: 'unresolved' | 'degraded' }>();
 
 /** `file` → `name#index` of each exported function parameter the pack hands a producer to. */
 let PACK_PRODUCER_PARAMS: ReadonlyMap<string, ReadonlySet<string>> = new Map<string, ReadonlySet<string>>();
@@ -1244,15 +1258,44 @@ function importedProducers(sf: ts.SourceFile): { ids: Set<string>; members: Set<
     // stays this pack's declared residual: refusing `node:fs` and `typescript`
     // would be a false red, and a hardening that causes one is not hardening.
     if (resolved === null && spec.startsWith('.') && !PACK_PRODUCER_EXPORTS.has(specKey(spec))) {
-      PACK_IMPORT_REFUSALS.set(`${sf.fileName}:${spec}`, {
+      PACK_IMPORT_REFUSALS.set(`${sf.fileName}:${spec}:unresolved`, {
         file: sf.fileName,
         line: lineOf(sf, st) + 1,
         text: textOf(sf, st),
+        reason: 'unresolved',
       });
       continue;
     }
     const outside = resolved !== null && dirname(resolved) !== resolvePath(SWEPT_DIR) ? resolved : null;
-    const from = outside === null ? PACK_PRODUCER_EXPORTS.get(target) : outsideSurface(outside, 0);
+    /**
+     * THE FLOOR HAS TO BE READ, NOT MERELY RETURNED (round 24, F-R24-01).
+     *
+     * Round 23 made `outsideRead` report `degraded` -- a surface computed
+     * while a cycle was cut, or past the hop bound, is a FLOOR and not a
+     * measurement -- and then consumed it through a wrapper that drops the
+     * word. This is the ONE call that crosses from the outside graph into the
+     * pack, so it is the only place where that flag can mean anything, and
+     * until now a cut cycle handed the pack an incomplete surface it treated
+     * as the truth about that module, with no refusal printed. An unresolvable
+     * import is refused by name a dozen lines above; a module read only to a
+     * floor is the same claim ("this reader does not know what it publishes")
+     * and is refused the same way. The surface is still USED, because what it
+     * did see is true as far as it goes: the refusal adds a reader, it does
+     * not remove one.
+     */
+    let from: Surface | undefined;
+    if (outside === null) from = PACK_PRODUCER_EXPORTS.get(target);
+    else {
+      const read = outsideRead(outside, 0);
+      if (read.degraded)
+        PACK_IMPORT_REFUSALS.set(`${sf.fileName}:${spec}:degraded`, {
+          file: sf.fileName,
+          line: lineOf(sf, st) + 1,
+          text: textOf(sf, st),
+          reason: 'degraded',
+        });
+      from = read.surface;
+    }
     if (from === undefined || st.importClause === undefined) continue;
     // Whatever this module stores a producer under, an importer can call
     // through (round 18, F-R18-02). Over-reporting a field name is the pack's
@@ -1384,6 +1427,19 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
    * const B = A;` is two hops.
    */
   const aliasesFree = new Set<string>();
+  /**
+   * ROOTS THIS READER CANNOT BOUND AT ALL (round 24, F-R24-03).
+   *
+   * `aliasesFree` answers "is this name the free object"; it cannot answer
+   * "might this name be the free object", and round 23 treated the second as
+   * a NO. A PARAMETER is the clearest case: the object it names is chosen by
+   * the CALLER, so `function install(t) { t['go'] = spawnSync }` publishes
+   * onto whatever is passed -- `globalThis` in the escape that found this --
+   * and was neither published nor refused. A name initialized from a call
+   * this file cannot follow is the same question. Both are refused BY NAME,
+   * which is this pack's rule for a key nobody can follow.
+   */
+  const unboundableRoots = new Set<string>();
   {
     const inits = new Map<string, ts.Expression>();
     const collectInits = (n: ts.Node): void => {
@@ -1391,22 +1447,79 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
       n.forEachChild(collectInits);
     };
     collectInits(sf);
+    const collectParams = (n: ts.Node): void => {
+      const params = (n as { parameters?: ts.NodeArray<ts.ParameterDeclaration> }).parameters;
+      if (params !== undefined) for (const prm of params) for (const nm of boundNames(prm.name)) unboundableRoots.add(nm);
+      n.forEachChild(collectParams);
+    };
+    collectParams(sf);
     const rootName = (e: ts.Expression): string | null => {
       let cur = unwrap(e);
       while (ts.isPropertyAccessExpression(cur) || ts.isElementAccessExpression(cur)) cur = unwrap(cur.expression);
       return ts.isIdentifier(cur) ? cur.text : null;
     };
+    /**
+     * WHAT REACHES THE NAME, not what the name's own text says (F-R24-03).
+     *
+     * Round 23 asked only for the initializer's ROOT, so `const G = rootOf()`
+     * -- a function whose body returns `globalThis` -- yielded no root at all
+     * and the name was neither an alias nor refused. A call to a function
+     * DECLARED IN THIS FILE is followed into its returns: the roots it can
+     * yield are the roots the name can hold.
+     */
+    const fnBodies = new Map<string, ts.Node>();
+    const collectFns = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name !== undefined && n.body !== undefined) fnBodies.set(n.name.text, n.body);
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined) {
+        const init = unwrap(n.initializer);
+        if ((ts.isArrowFunction(init) || ts.isFunctionExpression(init)) && init.body !== undefined) fnBodies.set(n.name.text, init.body);
+      }
+      n.forEachChild(collectFns);
+    };
+    collectFns(sf);
+    const returnedRoots = (body: ts.Node): string[] => {
+      const roots: string[] = [];
+      if (ts.isExpression(body)) {
+        const r = rootName(body);
+        if (r !== null) roots.push(r);
+        return roots;
+      }
+      const visit = (n: ts.Node): void => {
+        if (ts.isFunctionDeclaration(n) || ts.isFunctionExpression(n) || ts.isArrowFunction(n)) return;
+        if (ts.isReturnStatement(n) && n.expression !== undefined) {
+          const r = rootName(n.expression);
+          if (r !== null) roots.push(r);
+        }
+        n.forEachChild(visit);
+      };
+      visit(body);
+      return roots;
+    };
+    const callRoots = (e: ts.Expression): string[] => {
+      const c = unwrap(e);
+      if (!ts.isCallExpression(c)) return [];
+      const callee = unwrap(c.expression);
+      if (!ts.isIdentifier(callee)) return [];
+      const body = fnBodies.get(callee.text);
+      return body === undefined ? [] : returnedRoots(body);
+    };
     for (let moved = true; moved; ) {
       moved = false;
       for (const [name, init] of inits) {
         if (aliasesFree.has(name)) continue;
-        const r = rootName(init);
-        if (r === null || r === name) continue;
-        if (!declared.has(r) || aliasesFree.has(r)) {
+        const roots = [rootName(init), ...callRoots(init)].filter((x): x is string => x !== null && x !== name);
+        if (roots.some((r) => !declared.has(r) || aliasesFree.has(r))) {
           aliasesFree.add(name);
           moved = true;
         }
       }
+    }
+    // A name whose initializer is a CALL this file cannot follow holds an
+    // object nobody here can bound: not free, not provably local, so writes
+    // onto it are refused rather than skipped (round 24, F-R24-03).
+    for (const [name, init] of inits) {
+      if (aliasesFree.has(name)) continue;
+      if (ts.isCallExpression(unwrap(init)) && callRoots(init).length === 0) unboundableRoots.add(name);
     }
   }
 
@@ -1434,12 +1547,33 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
    */
   const constAt = (node: ts.Node, name: string): string | null => {
     for (let cur: ts.Node | undefined = node; cur !== undefined; cur = cur.parent) {
+      // A PARAMETER binds the name in the function it belongs to, and is in no
+      // `statements` array, so round 23's walk went straight past one into an
+      // outer `const` of the same name and answered with the decoy's value
+      // (round 24, F-R24-02 (b)).
+      const params = (cur as { parameters?: ts.NodeArray<ts.ParameterDeclaration> }).parameters;
+      if (params !== undefined) for (const prm of params) if (boundNames(prm.name).includes(name)) return null;
       const stmts = (cur as { statements?: ts.NodeArray<ts.Statement> }).statements;
       if (stmts === undefined) continue;
       for (const st of stmts) {
+        // Any OTHER binding of the name in this scope stops the walk too: a
+        // function, a class or an import binds the name as surely as a `const`
+        // does, and walking past one answers for a name this scope has taken.
+        if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name !== undefined && st.name.text === name) return null;
+        if (ts.isImportDeclaration(st) && st.importClause !== undefined && importBindsName(st.importClause, name)) return null;
         if (!ts.isVariableStatement(st)) continue;
         for (const d of st.declarationList.declarations) {
-          if (!ts.isIdentifier(d.name) || d.name.text !== name) continue;
+          if (!boundNames(d.name).includes(name)) continue;
+          // THE WALK STOPS AT THE FIRST BINDING, whether or not it can be read.
+          // Round 23 `continue`d past a binding it could not read -- a
+          // destructuring, a `let`, a declaration with no initializer -- and
+          // kept walking OUTWARD, so an unrelated outer `const` of the same
+          // name answered for the one actually written (F-R24-02 (a)), and a
+          // reassigned `let` published its INITIAL value (F-R24-02 (c)). A
+          // shadow this reader cannot read is a reason to REFUSE, which is
+          // what `null` means here, not a reason to keep looking.
+          if (!ts.isIdentifier(d.name)) return null;
+          if ((st.declarationList.flags & ts.NodeFlags.Const) === 0) return null;
           if (d.initializer === undefined) return null;
           const init = unwrap(d.initializer);
           return ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init) ? init.text : null;
@@ -1459,6 +1593,11 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
     const root = rootOf(t);
     // `this.x = …` is a class field, already a member of this file.
     return ts.isIdentifier(root) && (!declared.has(root.text) || aliasesFree.has(root.text));
+  };
+  /** Not provably local, and not provably free: a root to REFUSE, not to skip. */
+  const isUnboundableTarget = (t: ts.Expression): boolean => {
+    const root = rootOf(t);
+    return ts.isIdentifier(root) && !isFree(t) && unboundableRoots.has(root.text);
   };
   const record = (key: string | null, n: ts.Node): void => {
     if (key !== null) out.add(key);
@@ -1492,6 +1631,12 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
       const t = unwrap(n.left);
       if (ts.isPropertyAccessExpression(t) && isFree(t) && handsProducerOver(n.right, p)) record(t.name.text, n);
       else if (ts.isElementAccessExpression(t) && isFree(t) && handsProducerOver(n.right, p)) record(keyOf(t.argumentExpression, n), n);
+      // The target is a root this file cannot bound -- a parameter, or a name
+      // from a call it cannot follow. The KEY may be perfectly readable and
+      // the OBJECT is still unknown, so the key is worth nothing: refused by
+      // name (round 24, F-R24-03).
+      else if ((ts.isPropertyAccessExpression(t) || ts.isElementAccessExpression(t)) && isUnboundableTarget(t) && handsProducerOver(n.right, p))
+        record(null, n);
       // A DESTRUCTURING target writes several names at once and the pattern
       // need not spell any of them, so it is refused rather than read -- but
       // ONLY when it writes into a free object. Round 23's F-R23-06: this arm
@@ -1510,7 +1655,14 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
       const callee = ts.isPropertyAccessExpression(c) && ts.isIdentifier(c.expression) ? `${c.expression.text}.${c.name.text}` : null;
       const dest = n.arguments[0];
       const destFree = dest !== undefined && isFree(unwrap(dest));
-      if ((callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {
+      const destUnknown = dest !== undefined && isUnboundableTarget(unwrap(dest));
+      if (
+        (callee === 'Reflect.set' || callee === 'Reflect.defineProperty' || callee === 'Object.defineProperty' || callee === 'Object.defineProperties') &&
+        destUnknown &&
+        n.arguments.length > 2
+      )
+        record(null, n);
+      if ((callee === 'Reflect.set' || callee === 'Reflect.defineProperty' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {
         const keyArg = n.arguments[1];
         const valArg = n.arguments[2];
         // `Reflect.set(o, k, v)` hands `v` over; `Object.defineProperty(o, k,
@@ -1525,6 +1677,33 @@ function escapedProducerKeys(sf: ts.SourceFile, p: Producers): Escapes {
               : mentionsProducer(valArg, p));
         if (hands && keyArg !== undefined) record(keyOf(keyArg, n), n);
       }
+      // `Object.defineProperties(o, { go: { value: spawnSync } })` writes a
+      // whole MAP of keys with no assignment operator and only two arguments,
+      // so the three-argument forms above never saw it (round 24, F-R24-05).
+      if (callee === 'Object.defineProperties' && n.arguments.length > 1) {
+        const map = unwrap(n.arguments[1] as ts.Expression);
+        if (destUnknown && (handsProducerOver(map, p) || mentionsProducer(map, p))) record(null, n);
+        else if (destFree) {
+          if (!ts.isObjectLiteralExpression(map)) {
+            if (handsProducerOver(map, p) || mentionsProducer(map, p)) record(null, n);
+          } else
+            for (const pr of map.properties) {
+              if (!ts.isPropertyAssignment(pr)) continue;
+              const desc = unwrap(pr.initializer);
+              const hands = ts.isObjectLiteralExpression(desc) ? handsProducerOver(desc, p) : mentionsProducer(desc, p);
+              if (!hands) continue;
+              record(
+                ts.isComputedPropertyName(pr.name)
+                  ? keyOf(pr.name.expression, n)
+                  : ts.isIdentifier(pr.name) || ts.isStringLiteral(pr.name)
+                    ? pr.name.text
+                    : null,
+                n,
+              );
+            }
+        }
+      }
+      if (callee === 'Object.assign' && n.arguments.length > 1 && destUnknown) record(null, n);
       if (callee === 'Object.assign' && n.arguments.length > 1 && destFree) {
         for (const a of n.arguments.slice(1)) {
           const arg = unwrap(a);
@@ -1932,7 +2111,10 @@ function sweep(dir: string): SweepResult {
     ...[...PACK_IMPORT_REFUSALS.values()].map((u) => ({
       file: u.file,
       line: u.line,
-      text: `REFUSED-UNRESOLVED-RELATIVE-IMPORT: ${u.text}   — this specifier names a file on disk and no file is there, so whatever it publishes was never read`,
+      text:
+        u.reason === 'unresolved'
+          ? `REFUSED-UNRESOLVED-RELATIVE-IMPORT: ${u.text}   — this specifier names a file on disk and no file is there, so whatever it publishes was never read`
+          : `REFUSED-DEGRADED-OUTSIDE-SURFACE: ${u.text}   — this module's surface was computed while an import cycle was cut, or past the hop bound, so it is a FLOOR and not a measurement of what it publishes`,
       bound: null,
       via: null,
       how: null,
@@ -3482,7 +3664,10 @@ const PLANTS: readonly Plant[] = [
       );
     },
     expect: (r) =>
-      r.unchecked.some((site) => site.file === 'planted-x54.ts')
+      // Round 24: the new REFUSED-DEGRADED-OUTSIDE-SURFACE line names this
+      // same file whenever the cycle is cut, so redness alone stopped
+      // attributing anything here. The arm reads the CALL, as X65's does.
+      r.unchecked.some((site) => site.file === 'planted-x54.ts' && !/^REFUSED-/.test(site.text))
         ? null
         : 'a module read while its import cycle was cut was cached with the EMPTY surface that cut produced, so every later reader of it saw a module that exports nothing',
   },
@@ -3541,7 +3726,10 @@ const PLANTS: readonly Plant[] = [
       );
     },
     expect: (r) =>
-      r.unchecked.some((site) => site.file === 'planted-x56.ts')
+      // Round 24: the new REFUSED-DEGRADED-OUTSIDE-SURFACE line names this
+      // same file whenever the cycle is cut, so redness alone stopped
+      // attributing anything here. The arm reads the CALL, as X65's does.
+      r.unchecked.some((site) => site.file === 'planted-x56.ts' && !/^REFUSED-/.test(site.text))
         ? null
         : 'a module whose CHILD was computed under a cut cached its own empty surface: the floor has to travel with the value, not stay in the frame that produced it',
   },
@@ -3637,7 +3825,7 @@ const PLANTS: readonly Plant[] = [
   },
   {
     id: 'X60',
-    what: "round 23's F-R23-05 — a CONDITIONAL of returners in callee position, which `isProducerExpr` splits and `isReturnerCall` did not",
+    what: "round 23's F-R23-05 in CALLEE position, caught by the conservative fallback — which is what the deletion measured, so the sentence says it (round 24, F-R24-07)",
     plant: (dir) => {
       writeFileSync(
         join(dir, 'planted-x60.ts'),
@@ -3849,7 +4037,10 @@ const PLANTS: readonly Plant[] = [
       );
     },
     expect: (r) =>
-      r.unchecked.some((site) => site.file === 'planted-x67.ts')
+      // Round 24: the new REFUSED-DEGRADED-OUTSIDE-SURFACE line names this
+      // same file whenever the cycle is cut, so redness alone stopped
+      // attributing anything here. The arm reads the CALL, as X65's does.
+      r.unchecked.some((site) => site.file === 'planted-x67.ts' && !/^REFUSED-/.test(site.text))
         ? null
         : 'a module whose child was read under a cut was cached from the IMPORT side: the floor stayed in the frame that produced it, one edge kind over from F-R23-01',
   },
@@ -3904,6 +4095,315 @@ const PLANTS: readonly Plant[] = [
       r.unchecked.some((site) => site.file === 'planted-x69.ts')
         ? 'an `Object.assign` with no producer anywhere in the file was refused as a producer escape: the branch refused on the ARGUMENT SHAPE instead of on what the argument carries'
         : null,
+  },
+  {
+    id: 'X70',
+    what: "round 24's F-R24-04 \u2014 one `const` alias of a RETURNER, where the same alias of a PRODUCER keeps it",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, '..', 'planted-x70-inner.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'export const mkX70 = (): typeof spawnSync => spawnSync;', ''].join('\n'),
+      );
+      writeFileSync(join(dir, '..', 'planted-x70-helper.ts'), ["import { mkX70 } from './planted-x70-inner';", 'export const mkX70b = mkX70;', ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x70.ts'),
+        [
+          "import { mkX70b } from '../planted-x70-helper';",
+          'export function go(): void {',
+          '  const sh = mkX70b();',
+          "  sh('git', ['status'], { encoding: 'utf8' });",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x70.ts')
+        ? null
+        : 'a const alias of a returner lost returner-ness, although the identical alias of a producer keeps it: two rules about one question disagreeing about what an alias means',
+  },
+  {
+    id: 'X71',
+    what: "round 24's F-R24-04, the OTHER copy \u2014 returner-ness assigned rather than declared",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, '..', 'planted-x71-inner.ts'),
+        ["import { spawnSync } from 'node:child_process';", 'export const mkX71 = (): typeof spawnSync => spawnSync;', ''].join('\n'),
+      );
+      writeFileSync(
+        join(dir, '..', 'planted-x71-helper.ts'),
+        [
+          "import { mkX71 } from './planted-x71-inner';",
+          // Declared with NO initializer: measured in round 24, an initializer
+          // let the DECLARATION rule carry this plant, and the assignment rule
+          // then blinded no arm at all -- the plant attributed nothing.
+          'export let mkX71b: typeof mkX71;',
+          'mkX71b = mkX71;',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x71.ts'),
+        [
+          "import { mkX71b } from '../planted-x71-helper';",
+          'export function go(): void {',
+          '  const sh = mkX71b();',
+          "  sh('git', ['status'], { encoding: 'utf8' });",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x71.ts')
+        ? null
+        : 'returner-ness crossed a declaration and not an assignment: one line per copy needs one arm per copy',
+  },
+  {
+    id: 'X72',
+    what: "round 24's F-R24-03 \u2014 the free object handed to a PARAMETER: the caller chooses the object, so the key is worth nothing",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x72-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'function installX72(target: Record<string, unknown>): void {',
+          "  target['__x72go'] = spawnSync;",
+          '}',
+          'installX72(globalThis as unknown as Record<string, unknown>);',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x72.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x72go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x72-writer.ts' && /REFUSED-UNBOUNDED-PRODUCER-ESCAPE/.test(site.text))
+        ? null
+        : 'a producer written onto a PARAMETER was neither published nor refused: free-ness was read from the name instead of from what reaches it',
+  },
+  {
+    id: 'X73',
+    what: "round 24's F-R24-03, second shape \u2014 the free object obtained from a CALL, which has no initializer root to read",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x73-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'function rootX73(): Record<string, unknown> {',
+          '  return globalThis as unknown as Record<string, unknown>;',
+          '}',
+          'const GX73 = rootX73();',
+          "GX73['__x73go'] = spawnSync;",
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x73.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x73go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x73.ts')
+        ? null
+        : 'a free object returned by a call was not followed, so the key published on it was neither read nor refused',
+  },
+  {
+    id: 'X74',
+    what: "round 24's F-R24-02 (c) \u2014 a reassigned `let` key, whose INITIALIZER was published as the key actually written",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x74-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'export function installX74(real: boolean): void {',
+          "  let KEY_X74 = '__x74decoy';",
+          "  if (real) KEY_X74 = '__x74go';",
+          '  (globalThis as unknown as Record<string, unknown>)[KEY_X74] = spawnSync;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x74.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x74go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x74-writer.ts' && /REFUSED-UNBOUNDED-PRODUCER-ESCAPE/.test(site.text))
+        ? null
+        : 'a reassignable key binding was read as though its initializer were the key: a name that can change is a name this reader cannot bound',
+  },
+  {
+    id: 'X75',
+    what: "round 24's F-R24-02 (a) \u2014 a destructured shadow the resolver could not read, which it walked PAST into an outer decoy",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x75-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const KEY_X75 = '__x75decoy';",
+          'export function labelX75(): string {',
+          '  return KEY_X75;',
+          '}',
+          'export function installX75(): void {',
+          "  const { KEY_X75 } = { KEY_X75: '__x75go' };",
+          '  (globalThis as unknown as Record<string, unknown>)[KEY_X75] = spawnSync;',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x75.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x75go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x75-writer.ts' && /REFUSED-UNBOUNDED-PRODUCER-ESCAPE/.test(site.text))
+        ? null
+        : 'a binding this reader cannot read was skipped and the walk answered with an outer const of the same name: a shadow is a reason to refuse, not to keep looking',
+  },
+  {
+    id: 'X76',
+    what: "round 24's F-R24-02 (b) \u2014 a PARAMETER shadowed by an outer const of the same name, invisible to a walk over statements",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x76-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "const slotX76 = '__x76decoy';",
+          'export function slotNameX76(): string {',
+          '  return slotX76;',
+          '}',
+          'export function installX76(slotX76: string): void {',
+          '  (globalThis as unknown as Record<string, unknown>)[slotX76] = spawnSync;',
+          '}',
+          "installX76('__x76go');",
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x76.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x76go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x76-writer.ts' && /REFUSED-UNBOUNDED-PRODUCER-ESCAPE/.test(site.text))
+        ? null
+        : 'a parameter binding was invisible to the key resolver, so an outer const of the same name answered for it',
+  },
+  {
+    id: 'X77',
+    what: "round 24's F-R24-01 \u2014 a cut cycle's FLOOR consumed at the pack boundary as though it were a measurement",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, '..', 'planted-x77-a.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          "import { ROUND_X77 } from './planted-x77-b';",
+          'export const seedX77 = spawnSync;',
+          'export const shX77 = ROUND_X77;',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(join(dir, '..', 'planted-x77-b.ts'), ["import { seedX77 } from './planted-x77-a';", 'export const ROUND_X77 = seedX77;', ''].join('\n'));
+      writeFileSync(
+        join(dir, 'planted-x77.ts'),
+        ["import { shX77 } from '../planted-x77-a';", 'export function go(): void {', "  shX77('git', ['status'], { encoding: 'utf8' });", '}', ''].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x77.ts')
+        ? null
+        : 'a module read only to a FLOOR was consumed as the truth about what it publishes, with no refusal printed: the flag was returned and never asked',
+  },
+  {
+    id: 'X78',
+    what: "round 24's F-R24-05 \u2014 `Object.defineProperties`, a whole MAP of keys written with two arguments and no assignment operator",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x78-writer.ts'),
+        [
+          "import { spawnSync } from 'node:child_process';",
+          'Object.defineProperties(globalThis, {',
+          '  __x78go: { value: spawnSync, writable: true },',
+          '});',
+          '',
+        ].join('\n'),
+      );
+      writeFileSync(
+        join(dir, 'planted-x78.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x78go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x78.ts')
+        ? null
+        : 'a descriptor MAP published a producer under a key nothing read: a rule that enumerates two callee spellings misses the third',
+  },
+  {
+    id: 'X79',
+    what: "round 24's F-R24-05, second spelling \u2014 `Reflect.defineProperty`, which the enumerated pair did not name",
+    plant: (dir) => {
+      writeFileSync(
+        join(dir, 'planted-x79-writer.ts'),
+        ["import { spawnSync } from 'node:child_process';", "Reflect.defineProperty(globalThis, '__x79go', { value: spawnSync, writable: true });", ''].join(
+          '\n',
+        ),
+      );
+      writeFileSync(
+        join(dir, 'planted-x79.ts'),
+        [
+          'export function go(): void {',
+          "  const f = (globalThis as unknown as Record<string, unknown>)['__x79go'] as (a: string, b: string[]) => unknown;",
+          "  f('git', ['status']);",
+          '}',
+          '',
+        ].join('\n'),
+      );
+    },
+    expect: (r) =>
+      r.unchecked.some((site) => site.file === 'planted-x79.ts')
+        ? null
+        : 'one more spelling of the same write published nothing: an enumerated list of callee names is a list of the names somebody thought of',
   },
   {
     id: 'X45',

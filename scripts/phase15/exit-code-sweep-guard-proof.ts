@@ -331,7 +331,7 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
     // carries its producer outward by RE-EXPORT, so the floor it depends on is
     // the one on the re-export walk and this deletion left X56 red. X67 is the
     // same cycle with import edges only, which is the copy this line owns.
-    arms: ['X67'],
+    arms: ['X67', 'X77'],
   },
   {
     label: "round 23's namespace import in an outside module",
@@ -343,7 +343,7 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
     label: "round 23's local alias of a free object",
     bound: '    return ts.isIdentifier(root) && (!declared.has(root.text) || aliasesFree.has(root.text));',
     blind: '    return ts.isIdentifier(root) && !declared.has(root.text);',
-    arms: ['X58', 'X63'],
+    arms: ['X58', 'X63', 'X73'],
   },
   {
     label: "round 23's scope-walking key resolver",
@@ -351,7 +351,7 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
       '  const constAt = (node: ts.Node, name: string): string | null => {\n    for (let cur: ts.Node | undefined = node; cur !== undefined; cur = cur.parent) {',
     blind:
       '  const constAt = (node: ts.Node, name: string): string | null => {\n    void node;\n    let flat: string | null = null;\n    const scanFlat = (q: ts.Node): void => {\n      if (ts.isVariableDeclaration(q) && ts.isIdentifier(q.name) && q.name.text === name && q.initializer !== undefined) {\n        const i = unwrap(q.initializer);\n        flat = ts.isStringLiteral(i) || ts.isNoSubstitutionTemplateLiteral(i) ? i.text : null;\n      }\n      q.forEachChild(scanFlat);\n    };\n    scanFlat(sf);\n    return flat;\n    for (let cur: ts.Node | undefined = node; cur !== undefined; cur = cur.parent) {',
-    arms: ['X59'],
+    arms: ['X59', 'X74', 'X75', 'X76'],
   },
   {
     label: "round 23's conditional of returners in callee position",
@@ -365,9 +365,16 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
   },
   {
     label: "round 23's reflective write forms",
-    bound: "      if ((callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
-    blind: "      if (false && (callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
-    arms: ['X61'],
+    // Re-anchored in round 24: the line gained `Reflect.defineProperty`
+    // (F-R24-05), so the round-23 text stopped matching and the uniqueness
+    // preflight reported it at 0 occurrences rather than letting the section
+    // pass on a replacement that changed nothing. Removing the whole branch
+    // blinds BOTH reflective plants, which is what the arm list now says.
+    bound:
+      "      if ((callee === 'Reflect.set' || callee === 'Reflect.defineProperty' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    blind:
+      "      if (false && (callee === 'Reflect.set' || callee === 'Reflect.defineProperty' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    arms: ['X61', 'X79'],
   },
   {
     label: "round 23's refusal of an unresolved relative import",
@@ -402,10 +409,71 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
   // the line I had anchored is the one in `isProducerExpr`, not the one in
   // `handsProducerOver`. Two rules, two deletions, each with the arms it owns.
   {
+    label: "round 24's refusal of a degraded outside surface at the pack boundary",
+    bound: '      const read = outsideRead(outside, 0);\n      if (read.degraded)',
+    blind: '      const read = outsideRead(outside, 0);\n      if (false)',
+    arms: ['X77'],
+  },
+  {
+    label: "round 24's parameter binding in the key resolver",
+    bound: '      if (params !== undefined) for (const prm of params) if (boundNames(prm.name).includes(name)) return null;',
+    blind: '      if (false) for (const prm of params ?? []) if (boundNames(prm.name).includes(name)) return null;',
+    arms: ['X76'],
+  },
+  {
+    label: "round 24's stop at the first binding, readable or not",
+    bound: '          if (!ts.isIdentifier(d.name)) return null;',
+    blind: '          if (!ts.isIdentifier(d.name)) continue;',
+    arms: ['X75'],
+  },
+  {
+    label: "round 24's refusal of a REASSIGNABLE key binding",
+    bound: '          if ((st.declarationList.flags & ts.NodeFlags.Const) === 0) return null;',
+    blind: '          if (false) return null;',
+    arms: ['X74'],
+  },
+  {
+    label: "round 24's parameters as roots this file cannot bound",
+    bound: '      if (params !== undefined) for (const prm of params) for (const nm of boundNames(prm.name)) unboundableRoots.add(nm);',
+    blind: '      if (false) for (const prm of params ?? []) for (const nm of boundNames(prm.name)) unboundableRoots.add(nm);',
+    arms: ['X72'],
+  },
+  {
+    label: "round 24's free root followed through a CALL",
+    bound: '        const roots = [rootName(init), ...callRoots(init)].filter((x): x is string => x !== null && x !== name);',
+    blind: '        const roots = [rootName(init)].filter((x): x is string => x !== null && x !== name);',
+    arms: ['X73'],
+  },
+  {
+    label: "round 24's returner-ness through a const alias",
+    bound: '          } else if (ts.isIdentifier(init) && returners.has(init.text)) {',
+    blind: '          } else if (false && ts.isIdentifier(init) && returners.has(init.text)) {',
+    arms: ['X70'],
+  },
+  {
+    label: "round 24's returner-ness through an ASSIGNMENT",
+    bound: '        const isFn = ts.isArrowFunction(right) || ts.isFunctionExpression(right) || (ts.isIdentifier(right) && returners.has(right.text));',
+    blind: '        const isFn = ts.isArrowFunction(right) || ts.isFunctionExpression(right);',
+    arms: ['X71'],
+  },
+  {
+    label: "round 24's Object.defineProperties branch",
+    bound: "      if (callee === 'Object.defineProperties' && n.arguments.length > 1) {",
+    blind: "      if (false && callee === 'Object.defineProperties' && n.arguments.length > 1) {",
+    arms: ['X78'],
+  },
+  {
+    label: "round 24's Reflect.defineProperty spelling",
+    bound:
+      "      if ((callee === 'Reflect.set' || callee === 'Reflect.defineProperty' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    blind: "      if ((callee === 'Reflect.set' || callee === 'Object.defineProperty') && destFree && n.arguments.length > 2) {",
+    arms: ['X79'],
+  },
+  {
     label: "the returner call read as a VALUE in a binding's region",
     bound: '  if (ts.isCallExpression(x) && isReturnerCall(x, p)) return true;',
     blind: '  if (ts.isCallExpression(x) && isReturnerCall(x, p) && false) return true;',
-    arms: ['X36', 'X41', 'X42', 'X60'],
+    arms: ['X36', 'X41', 'X42', 'X60', 'X70', 'X71'],
   },
   {
     label: "round 22's returner-call HAND-OVER",
@@ -421,13 +489,13 @@ const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string;
     blind: '  for (const k of PACK_ESCAPED_KEYS) void k;',
     // Seven arms, all measured: every plant whose producer is published under
     // a pack-wide escaped key depends on this line, and round 23 added four.
-    arms: ['X47', 'X50', 'X58', 'X59', 'X61', 'X63', 'X64'],
+    arms: ['X47', 'X50', 'X58', 'X59', 'X61', 'X63', 'X64', 'X73', 'X78', 'X79'],
   },
   {
     label: "round 22's refusal of a key nobody can name",
     bound: '    else unbounded.push({ line: lineOf(sf, n) + 1, text: textOf(sf, n) });',
     blind: '    else void n;',
-    arms: ['X51'],
+    arms: ['X51', 'X72', 'X74', 'X75', 'X76'],
   },
   {
     label: "round 22's absolute-path parse key for an outside module",
@@ -784,15 +852,20 @@ function main(): number {
     console.log('  the SAME bytes in one file stay visible.');
     console.log(`  ${String(RULE_DELETIONS.length)} rules carry a deletion of their own, each pinned to the arms it owns and no others:`);
     for (const r of RULE_DELETIONS) console.log(`    ${r.label} \u2014 ${r.arms.join(', ')}`);
-    console.log('  TEN of those arm lists were WRONG when first written, and this instrument said so.');
-    console.log('  In round 22: the hand-over rule was anchored to the wrong one of two lines calling');
-    console.log('  the same helper, and the cycle-cut rule blinded NO arm, because the plant written for');
-    console.log('  it did not depend on it. In round 23, on the first run over its own answer: three');
-    console.log('  rules blinded NO arm at all \u2014 one because the conservative fallback already caught');
-    console.log('  the plant, one because the plant used the OTHER copy of a two-copy line, and one');
-    console.log('  because a removed resolver candidate turns into a NAMED REFUSAL rather than a miss');
-    console.log('  \u2014 and six blinded MORE arms than the list claimed. Two plants were built and one arm');
-    console.log('  tightened to answer that, and every list here is now the MEASURED set.');
+    console.log('  NINETEEN of those arm lists were WRONG when first written, and this instrument');
+    console.log('  said so every time. In round 22: the hand-over rule was anchored to the wrong one');
+    console.log('  of two lines calling the same helper, and the cycle-cut rule blinded NO arm,');
+    console.log('  because the plant written for it did not depend on it. In round 23: three rules');
+    console.log('  blinded no arm at all \u2014 one because the conservative fallback already caught the');
+    console.log('  plant, one because the plant used the OTHER copy of a two-copy line, and one');
+    console.log('  because a removed resolver candidate turns into a NAMED REFUSAL rather than a');
+    console.log('  miss \u2014 and six blinded MORE arms than claimed. In round 24: one more rule blinded');
+    console.log('  no arm, because its plant carried an initializer and the DECLARATION rule caught');
+    console.log('  it first; and the new boundary refusal made three older arms red FOR ANOTHER');
+    console.log('  REASON, which this instrument reports as a deletion that no longer attributes');
+    console.log('  \u2014 those three now read the CALL and not the file. Five plants were built or');
+    console.log('  rebuilt and four arms tightened across those rounds, and every list here is the');
+    console.log('  MEASURED set.');
     console.log('  The two rules round 20 added carry their own deletions: the conservative callee');
     console.log('  fallback, removed, blinds X44, X45 and X60 \u2014 X60 was written for another rule and');
     console.log('  this is the rule that actually catches it; and the one exception');
