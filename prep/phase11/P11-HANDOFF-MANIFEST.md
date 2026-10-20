@@ -3305,8 +3305,8 @@ and states no count:
 ```text
 what this pack counts, read from the commit and from this file:
 
-files the commit holds under the harness     83
-of them recordings of past runs              59
+files the commit holds under the harness     84
+of them recordings of past runs              60
 skip keys the committed source reads         25
 arms the selftest runs                       152
 ```
@@ -4591,9 +4591,246 @@ of its own, and the coordinator has ruled it a later one. `C28-F1` stays OPEN
 and sized. **No CI has ever run this pack**, no migration number exists anywhere
 in it, `OD-P11-07` is the owner's alone, and `READY_TO_PROMOTE` = NO.
 
+## 7.35 ROUND 35 (challenger at `493d135`: NO BLOCKING DEFECT, `R33-S1` ANSWERED, one residual) — a law that binds a SHAPE binds only that shape
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-493d13588c43e55690bb659d221e046a886febb7.md`, sha256 `86ef4fe485d6619b1323b7fa311d907bc5a08af475a91dc1ab6151e314e7a5c7` |
+| Arabic | the same name with `-AR.md`, sha256 `9e772ae31f16ba02dbc04e7a809834d3d74c0a26d337e748464dd7ae5f02da3d` |
+| verdict | NO BLOCKING DEFECT at that SHA, `R33-S1` ANSWERED, `R34-S1` named, `READY_TO_PROMOTE` = NO |
+
+The challenger verified the round-33 closure at the pinned SHA — every in-loop
+emission form named by the lint, the arrival census at that head's 35 shapes
+with and without a capture, the selector's threshold measured at its three neighbours,
+and both tree recipes reproduced in a fresh `--no-local` clone. **The
+coordinator diff review of `493d135` has since returned `SIGN` (§7.36), so that
+head is FULLY SIGNED and NOT PROMOTED.** Nothing in this section is itself a
+signature.
+
+### `R34-S1` (`P3`, named) — closed
+
+The residual: the arrival predicate bound only the LABELLED shape
+(`^[A-Z][A-Z -]{6,}:`), so an **unlabelled** paragraph, emitted through a
+callable the lint cannot resolve — an imported function, a method named neither
+`print` nor `write` — would sit below both layers. No current finding is
+unlabelled, so it was not a current fail-open; it is the same species as
+`C33-F1` one level further out, and the right answer is the same one: stop
+describing the thing you want to catch.
+
+**The rule is turned round.** `NON_FINDING_PARAGRAPHS` declares the FOUR
+paragraphs this gate prints that are not findings, and
+`_printed_paragraphs_below_the_law` reports every printed paragraph that
+neither carries the tail `_finding` appends nor matches one of those four. A new
+kind of printed line reds whether it is labelled or not, and whatever emitted
+it.
+
+**The first form of this was matched by the first four words, and the
+challenger attacked it before it was pushed — rightly.** Two attacks, both now
+closed:
+
+* *A finding could be exempted by opening with a non-finding's words and then
+  saying something else.* Three of the four are matched by their WHOLE shape
+  now. The fourth is the inventory line, whose tail carries a capture name and
+  two digests, so it is matched by a PREFIX — and that prefix is **composed
+  from the pin**, so an exempted paragraph of that kind has to quote the rule
+  itself. The arm for it plants a declared opening followed by other words and
+  requires it to be named; the control is the LIVE inventory line, not a
+  hand-written imitation of it, because the hand-written one passed only while
+  the exemption was four words long and fails now.
+* *A fifth non-finding added later could be silently exempt.* The count is
+  pinned as a literal, and every entry must be MATCHED by a live printed
+  paragraph: an exemption nothing walks through is an open door, which is this
+  pack's lesson about a gate nobody calls applied to a whitelist.
+
+Measured, with the plant COMMITTED on a clean tree in a throwaway clone, using
+an emission the lint provably cannot resolve
+(`__import__("sys").stdout.writelines`, no `print` and no `write` anywhere):
+
+| | |
+|---|---|
+| the lint | `the finding loops call print directly at no line -> as required` — it sees nothing, exactly as the challenger said |
+| the arrival law | `every printed paragraph is a finding or a declared one: 1 below the law -> **SELFTEST FAILED**` |
+| the census | one shape and one printed paragraph over the pinned counts |
+
+So the one layer that cannot see it is the one that was never the closure, and
+the one that is the closure names it.
+
+### The third vector, measured before it was dispatched — and `A-35-F1`, self-reported
+
+The challenger named a third attack on the shape comparison: `_sentence_shape`
+masks only quoted spans, absolute paths and digits, so a paragraph whose
+variable part is none of those three is either pinned too tightly (a live line
+stops matching its exemption) or too loosely (two different paragraphs collapse
+onto one shape and a non-finding's exemption is borrowed). Measured here rather
+than waited for, on the live lines:
+
+| planted paragraph | named |
+|---|---|
+| the live frame line, untouched | no, correctly |
+| the frame line plus a bare hostname / a relative path / a UUID / a locale / a boolean word | **yes, all five** |
+| the live inventory line, untouched | no, correctly |
+| the inventory opening with the pin REPLACED by other words | **yes** |
+| the inventory prefix, pin intact, followed by criterion prose of its own | **no** |
+
+So the too-tight direction is **fail-closed**: any variation the mask does not
+cover stops matching the exemption and reds, which forces the author to declare
+it rather than letting it through. The too-loose direction is closed for the
+three whole-shape entries, because their text has no maskable part to collapse.
+
+**`A-35-F1`, self-reported, `P3`, and it is the last row of that table.** A
+paragraph can carry the inventory prefix — which quotes the pin, as the
+exemption requires — and then continue into prose stating a criterion of its
+own, and it is exempt. The pin IS in front of the reader, so the rule this
+whole chain enforces is satisfied; what is not checked is that nothing ELSE in
+the same paragraph contradicts it. `RETIRED_SENTENCES` catches a retired
+wording there by name; a NEW wrong wording beside the pin is the outer limit
+`gate_sentences` has declared since round 29 — nothing here derives the set of
+sentences a person may add. It is recorded because the measurement that
+produced it is in this section, not because anyone found it in the live set:
+no live paragraph does this.
+
+### The enrolment family was censusing a refusal, not its lines
+
+Found while closing the above, and it is the vacuity rule rather than a
+residual anyone raised: `printed_block_sentences` installed a WORLD's capture,
+and the enrolment check resolves its subject from the harness it runs in — so
+it refused `RUN-CAPTURE-NOT-THIS-HEAD` and the census held that refusal where
+its printed lines should have been. A family that refuses prints nothing, and a
+census of nothing passes over an empty set. It now installs a capture carrying
+THIS subject's head, so the check runs: the union is **36 shapes, 27 printed,
+13 names**, the same with a capture installed and with none.
+
+### What is still not done
+
+`R33-S1`'s shared `check_blocks` door is unchanged and is the coordinator's
+later round; its printed paragraphs are inside the arrival law, its emitter is
+not. `C28-F1` stays OPEN and sized. `R27-S1` stands. **No CI has ever run this
+pack**, no migration number exists anywhere in it, `OD-P11-07` is the owner's
+alone, and `READY_TO_PROMOTE` = NO. **The `36 / 27 / 13` census above is the
+one this section's own work produced, not `493d135`'s** — that head's census is
+`35 / 25 / 13`, which is what the two reports on it measured, because the
+enrolment fix described just above is in THIS commit and not in it. §7.36
+widens it again and carries the literals that are live.
+
+## 7.36 ROUND 36 (coordinator diff review of `493d135`: **`SIGN`**, one `P1` residual) — a branch no arm provokes is held by nothing, and a label is not a length
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-COORD-DIFF-REVIEW-493d135.md`, sha256 `ff0e75466a5096fe0197732206496eb79fe18bd8624a4dc6b145f2e73807ce2d` |
+| verdict | **`SIGN`** at `493d13588c43e55690bb659d221e046a886febb7`. `C33-F1` closed BY ARRIVAL, with the reviewer's attack and all eight doors rebuilt against it; `C32-S1`, `S2`, `S3`, `S4` and `C33-S1` all closed and each measured. One residual at `P1` |
+| so | **`493d135` is FULLY SIGNED** — independent challenger (§7.35) and coordinator diff review, both on that one SHA. It is **NOT PROMOTED**, and no signature here covers this commit |
+
+### `C34-S1` (`P1`) — closed, and the reviewer's own plants red it
+
+The finding, and it is one sentence of round 35's fallback measured false:
+`scan` has eleven emission sites, six through `_finding` and five direct
+`print` calls. Three of the five were in the census. **Two were in no shape of
+it** — the `INERT` branch (`seen == 0`, rc 2) and the frame refusal at the top
+(rc 5). For a branch no arm provokes, the belt the round says is underneath is
+not underneath: the arrival predicates are exact, and they only ever see what
+an arm PROVOKED. And the labelled test required SEVEN characters before the
+colon, so `INERT:` — six — was not a label at all, and a paragraph spelling a
+short name walked past that arm as well. The reviewer committed two such
+paragraphs, each carrying THREE of the pin's four content words and stating the
+criterion with no pin: **selftest rc 0 on `493d135`**, twice.
+
+**Two arms and one regex, which is what the review prescribed.**
+
+* `printed_branch_sentences` provokes both branches, so both paragraphs arrive
+  in `printed_paragraphs()` where the belt and the labelled arm genuinely
+  apply: a documents directory with no figure in it gives the first, and an
+  inadmissible frame the second. The frame arm plants the refusal LIST, as the
+  `C20` arm in front of `--check-blocks` already does and for the same reason
+  — the frame instruments read the real tree, and every run that reaches this
+  census has a clean committed one — and the planted refusal is deliberately
+  lowercase, so the names census gains no name no instrument raised.
+* The labelled test is ONE pattern now (`LABELLED`), used by all five sites
+  that asked the question, and its floor is TWO characters rather than seven. A
+  length is not a law; the three sites that spelled it separately are how two
+  of them came to disagree about what a label is.
+* The `INERT` paragraph is a declared non-finding, the FIFTH, matched by its
+  WHOLE shape — and the declared list is now the ONE door that says a printed
+  paragraph is not a finding: `_labelled_printed_without_the_pin` reads it too,
+  instead of carrying a second doctrine of its own. Appending the pin to
+  `INERT` would have made the below-the-law predicate read it as a finding,
+  which it is not.
+
+Measured on this commit, each plant COMMITTED on a clean tree in a throwaway
+clone, against the same two plants the reviewer used:
+
+| plant, committed | on `493d135` | on this commit |
+|---|---|---|
+| the `INERT` paragraph rewritten to state the criterion, three stems | selftest unchanged from clean: **no arm names it** | **five arms red**, among them the live union, the labelled arm and the below-the-law arm |
+| a second paragraph printed in that branch under the six-character label `UNHELD:` | selftest unchanged from clean: **no arm names it** | **seven arms red**, the three census literals among them |
+
+The in-file arm is the reviewer's plant rebuilt FROM the pin rather than typed
+out — the `INERT` line with a criterion statement carrying three of
+`_criterion_stems()` — and the control beside it is the LIVE `INERT` paragraph
+of this run, not an imitation of it. Both must be named by BOTH predicates, and
+the control by neither. Three further lines read the floor itself: a
+six-character label is held, a two-character one is held, and a lowercase
+opening is not a label.
+
+Census, re-pinned as literals: **38 paragraph shapes, 28 printed, 15 names, 5
+declared non-findings**, the same with a capture installed and with none. Of
+the two new names, `INERT` is the branch this finding is about.
+
+### `A-35-F2`, self-reported, `P1` — and it is a fail-open the census created
+
+Found while closing the above, on this round's own commit, before any reviewer
+read it. Round 35 made `printed_block_sentences` install a capture so that its
+census would stop depending on the command line. A generator RUNS the arms, and
+`_block_body` and `_guard_rows` MEMOISE what a run produced — so that capture
+filled both caches, and `blocks_test`, a VERDICT arm that runs much later with
+no capture installed, read the memoised bodies and ran to completion. On
+`493d135` the same captureless run **refuses `RUN-CAPTURE-ABSENT`** at that
+point and measures nothing.
+
+A census that makes a later verdict stop refusing is a fail-open, whichever way
+the verdict then goes, and this pack's stopping rule is that a fail-open
+blocks. Both caches are snapshotted and put back, so nothing that family
+generates outlives it. `capture_leak_arm` is the arm, and its three lines are
+the shape this project asks for: the family leaves both caches as it found
+them; **its arms do fill them**, so the first line is not vacuous; and a
+captureless enrolment check still refuses, by name, after the family has run.
+
+A consequence worth stating plainly, because it changes what a reader sees:
+`--selftest` run WITHOUT `--run-capture` returns **5** on this commit, as it
+does on `493d135`, and not 0. The 0 that round 35 reported from a captureless
+run was itself the leak. The authoritative run is the driver, which supplies a
+capture.
+
+### The authoritative run
+
+Whole driver from zero on a fresh clone, PostgreSQL 16 at `en_US.utf8`,
+migrations applied as `daftar_migrator` and not as superuser, its own scratch
+cluster and port, `/usr/bin/python3 -I` throughout. Subject
+`6c01300f85f154358a875da55371eb849c22929a`, a commit that exists only in that
+clone; the transcript states the three paths the pushed tree adds to it and the
+confirming run at the end of that file measures the pushed tree itself.
+
+| | |
+|---|---|
+| whole driver | **`EXIT_SCRIPT 0`** — every step: pack DDL, harness bytes, both proof suites twice for idempotence, both race suites, the generated blocks and the figure scan |
+| `--selftest` under the driver | **rc 0**, no failed line; the five new arm lines (two census branches, three on the floor) and the three leak lines all pass |
+| the figure scan | 9 documents, 230 sink rows from 43 cases, 9 candidate figures, 0 not emitted, `RUN_HEAD 6c01300f85f1` |
+| the generated blocks | 5 enrolled, 0 findings |
+| the union census | **38 paragraph shapes, 28 printed rather than raised, 15 names, 8 labelled printed and 0 of them without the pin, 5 declared non-findings** — and 38 both with a capture installed and with none |
+| Pack A and Pack B | 121 and 53 cases, each suite twice on the same database, 0 failed; 9 races and the lot overlay's races, 0 findings |
+
+### What is still not done
+
+Unchanged by this commit: `R33-S1`'s shared `check_blocks` door, `A-35-F1`
+(`P3`, the pin-prefixed paragraph that continues into criterion prose of its
+own), `C28-F1` OPEN and sized, and `R27-S1`. **No CI has ever run this pack**,
+no migration number exists anywhere in it, `OD-P11-07` is the owner's alone,
+and `READY_TO_PROMOTE` = NO. **This head is UNSIGNED**: `493d135` is the last
+fully signed head, and an independent challenger and a coordinator diff review
+are both owed on this one.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), and now **`1024c3b`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it and the coordinator's diff review of the same head signed it (§7.34). The head AFTER it, `2f2a910`, is **NOT signed**: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which this commit answers. None of these is a promotion verdict, none covers any other SHA, and **no one has signed this head.**
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict, none covers any other SHA, and **no one has signed this head**, which carries the answer to the one `P1` residual of that signature and one `P1` this round found in its own previous commit.
 
 ---
 

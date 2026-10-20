@@ -1454,15 +1454,16 @@ this file, truncated to the 1437 lines that precede this block. Everything else
 -- every document, every harness file, every other transcript -- is
 byte-identical, which is what that single replacement proves.
 
-This record cannot name its own commit by SHA: writing the SHA into the file
-would change the file and so change the SHA. Every OTHER record in this
-directory does name one, because a later round re-points it -- round 33 did
-that for round 32's record, round 32 for round 31's, round 31 for round 30's --
-and round 34 will do it for this one. Until then, "this commit" is the commit a
-reader has checked out, and the reproduction is:
+This record could not name its own commit by SHA when it was written: writing
+the SHA into the file would have changed the file and so changed the SHA. A
+later round re-points it, and round 36 does that here. **The commit this file
+is in is `493d13588c43e55690bb659d221e046a886febb7`**, which is on the remote
+branch `claude/phase11-prep-re0epv` and is the round-33 head that an
+independent challenger and the coordinator's diff review both signed. The
+reproduction, with that SHA in place of "the commit this file is in":
 
     git clone <this repo> w && cd w
-    git checkout <the commit this file is in>
+    git checkout 493d13588c43e55690bb659d221e046a886febb7
     P=prep/phase11/harness/RUN-EVIDENCE-AUTHORITATIVE-ROUND33.txt
     blob=$(git show HEAD:$P | head -n 1437 | git hash-object -w --stdin)
     git read-tree HEAD^{tree}

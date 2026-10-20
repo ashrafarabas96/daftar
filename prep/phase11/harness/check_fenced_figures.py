@@ -7687,6 +7687,17 @@ def _states_the_criterion(text):
     return hits >= SENTENCE_STEM_THRESHOLD
 
 
+# `C34-S1`, the coordinator's round-34 residual. The labelled test used to
+# require SEVEN characters before the colon (`^[A-Z][A-Z -]{6,}:`), which is a
+# LENGTH and not a law. `INERT:` is six, so the sentence the `seen == 0` branch
+# prints was labelled by nothing, and a reviewer's plant spelling a short name
+# -- `UNHELD:` -- walked past the labelled arm untouched. The floor is TWO
+# characters now, and it is ONE pattern, used by every site that asks the
+# question: two spellings of one test is how two sites come to disagree about
+# what a label is.
+LABELLED = r"^(?P<name>[A-Z][A-Z -]+):"
+
+
 def _sentence_shape(text):
     """One SHAPE of a printed paragraph: its words, with what MOVES masked.
 
@@ -7809,9 +7820,28 @@ def printed_block_sentences():
     # counted 34 shapes when run by hand and 36 under the driver, where a real
     # capture is on the command line. A census whose number depends on the
     # environment measures the environment; this one is pinned to a world.
-    harness = _world_harness("plain")
+    # The capture has to carry THIS subject's head, not a world's: the
+    # enrolment check resolves the subject from the harness it is run in, so a
+    # world's capture makes it refuse `RUN-CAPTURE-NOT-THIS-HEAD` and the
+    # census then holds a refusal where the printed lines should be. `R34-S1`
+    # of the round-34 challenger is about paragraphs below the law; this is the
+    # same question one step earlier -- a family that refuses prints nothing,
+    # and a census of nothing is the vacuity the project forbids.
+    # And `A-35-F2`, which this round measured on its own commit before anyone
+    # else read it. A generator RUNS the arms, and `_block_body` and
+    # `_guard_rows` memoise what a run produced. So installing a capture here
+    # -- which the paragraph above does deliberately -- filled those caches
+    # under THIS arm's capture, and `blocks_test`, a VERDICT arm that runs much
+    # later with no capture installed, then read the memoised bodies and ran to
+    # completion where on `493d135` it refused `RUN-CAPTURE-ABSENT` and
+    # measured nothing. A census that makes a later verdict stop refusing is a
+    # fail-open, and this pack's rule is that a fail-open blocks. Both caches
+    # are therefore snapshotted and put back, so nothing this family generated
+    # outlives it; `capture_leak_arm` is the arm, and it reds if either cache
+    # is left behind.
     held = list(_RUN_CAPTURE)
-    _RUN_CAPTURE[:] = [_world_capture("plain", harness)]
+    bodies, rows = dict(_BODIES), dict(_ROWS)
+    _RUN_CAPTURE[:] = [_seat_capture("blocks", _subject_top(_harness_dir()))]
     try:
         return _printed_by([
             ("the enrolment check on an edited block",
@@ -7821,13 +7851,62 @@ def printed_block_sentences():
         ])
     finally:
         _RUN_CAPTURE[:] = held
+        _BODIES.clear()
+        _BODIES.update(bodies)
+        _ROWS.clear()
+        _ROWS.update(rows)
+
+
+def printed_branch_sentences():
+    """The two printed branches no family above provokes, run loud.
+
+    `C34-S1`. Measured by the coordinator against the round-33 commit: `scan`
+    has eleven emission sites, and two of them were in NO shape of the union --
+    the `INERT` branch (`seen == 0`, rc 2, the gate refusing to report an
+    unweighed pass as a pass) and the frame refusal at the top of the scan
+    (rc 5). A branch no arm provokes is a branch no law here reads, whatever
+    the law says about its own reach, which is `C33-F1` one layer down: the
+    arrival predicates below are exact, and they only ever see what an arm
+    PROVOKED.
+
+    Both are reachable without a plant in the subject: a documents directory
+    with no figure in it gives the first, and an inadmissible frame the second.
+    """
+    def inert():
+        # No `key=<number|boolean>` line anywhere in the documents, which is
+        # the one condition the branch asks about.
+        return _arm("a document with no figure anywhere in it", quiet=False)
+
+    def frame():
+        # The frame instruments read the REAL tree, and every run that reaches
+        # this census has a clean committed one -- that is what admits it. So
+        # the refusal LIST is planted for the length of the arm, the way the
+        # `C20` arm in front of `--check-blocks` plants one, and what the
+        # census then reads is the SENTENCE this branch prints, which is
+        # parameterised by nothing but the first refusal and the count. The
+        # planted refusal is deliberately LOWERCASE: a `FRAME-...` spelling
+        # would put a NAME in the names census that no instrument raised.
+        cache = list(_FRAME_PARSED)
+        try:
+            _FRAME_PARSED[:] = [(
+                "a refusal planted by this arm only, so that the sentence this "
+                "branch prints arrives where a law reads it",
+            )]
+            return _arm(PROBE, quiet=False)
+        finally:
+            _FRAME_PARSED[:] = cache
+
+    return _printed_by([
+        ("the INERT branch, on a documents directory with no figure", inert),
+        ("the frame refusal at the top of the scan", frame),
+    ])
 
 
 def printed_paragraphs():
     """EVERY paragraph this gate can print, as far as its arms can provoke it.
 
-    The union of the four families: the `CATCH` arms, every declared world, the
-    two seat arms and the enrolment check. This is the set the pin arm binds
+    The union of the five families: the `CATCH` arms, every declared world, the
+    two seat arms, the enrolment check and the two branches `C34-S1` named. This is the set the pin arm binds
     and the set the criterion selector is measured against, so that adding a
     finding branch cannot add a sentence no law reads -- the defect `C33-F1`
     named, where a closure by SYNTAX was credited with a reach only arrival can
@@ -7837,7 +7916,8 @@ def printed_paragraphs():
     for label, text in (printed_finding_sentences()
                         + printed_world_sentences()
                         + printed_seat_sentences()
-                        + printed_block_sentences()):
+                        + printed_block_sentences()
+                        + printed_branch_sentences()):
         key = _sentence_shape(text)
         if key in seen:
             continue
@@ -7880,9 +7960,9 @@ def finding_labels(printed):
     """
     names = set()
     for _, text in printed:
-        hit = re.match(r"^(?:REFUSED: )?([A-Z][A-Z -]{6,}):", text)
+        hit = re.match(r"^(?:REFUSED: )?" + LABELLED.lstrip("^"), text)
         if hit:
-            names.add(hit.group(1))
+            names.add(hit.group("name"))
     return sorted(names)
 
 
@@ -8101,9 +8181,9 @@ def finding_sentence_arms():
         # from -- a census of one family is a census of one family.
         ("the pin in every labelled finding, no selector",
          all(HAYSTACK_SENTENCE in t for _, t in printed
-             if re.match(r"^[A-Z][A-Z -]{6,}:", t)),
+             if re.match(LABELLED, t)),
          "%d labelled paragraph(s)"
-         % sum(1 for _, t in printed if re.match(r"^[A-Z][A-Z -]{6,}:", t))),
+         % sum(1 for _, t in printed if re.match(LABELLED, t))),
     ):
         ok = ok and good
         print("  findings C31-S3 %-34s %-44s -> %s"
@@ -8276,9 +8356,87 @@ def _labelled_printed_without_the_pin(paragraphs):
     """
     out = []
     for where, text in _printed_to_stdout(paragraphs):
-        if not re.match(r"^[A-Z][A-Z -]{6,}:", text):
+        if not re.match(LABELLED, text):
+            continue
+        # `C34-S1`: the declared non-findings are the ONE door that says a
+        # printed paragraph is not a finding, and this arm reads everything
+        # else. `INERT:` is labelled and carries no pin, and appending the pin
+        # to it would make the paragraph below-the-law predicate read it as a
+        # finding, which it is not -- so it is exempted HERE, by the same
+        # declaration, and not by a second doctrine of its own. An edit to its
+        # words stops matching that declaration and is then named by both arms,
+        # which is the measurement at the end of `union_sentence_arms`.
+        if _declared_non_finding(_sentence_shape(text)) is not None:
             continue
         if HAYSTACK_SENTENCE not in text:
+            out.append((where, text))
+    return out
+
+
+NON_FINDING_PARAGRAPHS = (
+    ("whole", "generated blocks: N enrolled, N finding(s)"),
+    ("whole", "the decision frame was parsed before this verdict: four "
+              "functions, no refusal"),
+    ("whole", "a.md: the generated block `X` differs from a fresh run. It is "
+              "generated, not written: run `X` -- or `X` -- and commit what it "
+              "prints."),
+    ("prefix", "quoted figures: N documents, haystack from "
+               + HAYSTACK_SENTENCE + " ("),
+    ("whole", "INERT: no `X` line was found in any document. The check is "
+              "measuring nothing, which it must not report as a pass."),
+)
+"""Every paragraph this gate PRINTS that is not a finding, declared.
+
+`R34-S1`, the round-34 challenger's residual, and then its own two attacks on
+the first form of this closure. Until this existed the arrival predicate bound
+only the LABELLED shape, so an UNLABELLED paragraph --
+printed through a callable the lint cannot resolve, in any branch -- sat below
+both layers. The rule is turned round here: a printed paragraph is bound unless
+it is one of these FIVE declared non-findings. A new kind of printed line reds
+whether it is labelled or not and whatever emitted it.
+
+Two things this tuple does that a list of OPENINGS did not, both of them the
+challenger's own attacks on the opening form:
+
+  * three of the four are matched by their WHOLE shape, so a finding cannot be
+    exempted by starting with a non-finding's first words and then saying
+    something else;
+  * the fourth is the inventory line, whose variable tail is a capture name and
+    two digests, so it is matched by a PREFIX -- and that prefix is COMPOSED
+    FROM the pin. An exempted paragraph of that kind therefore has to quote the
+    rule itself, which is the thing the whole chain is for.
+
+And the exemptions are armed from both sides: the count is pinned as a literal,
+and every entry must be MATCHED by a live printed paragraph. An exemption
+nothing uses is an open door, which is this pack's own lesson about a gate
+nobody calls.
+"""
+
+
+def _declared_non_finding(shape):
+    """Which declared non-finding this shape IS, or None."""
+    for kind, text in NON_FINDING_PARAGRAPHS:
+        if kind == "whole" and shape == text:
+            return text
+        if kind == "prefix" and shape.startswith(text):
+            return text
+    return None
+
+
+def _printed_paragraphs_below_the_law(paragraphs):
+    """Printed paragraphs that are neither a finding nor a declared non-finding.
+
+    `R34-S1`. A finding is identified by the tail `_finding` appends, which is
+    composed from the pin, so this reads what a reader is TOLD and not how the
+    code emitted it: a helper, an imported function, a method named neither
+    `print` nor `write`, inside a loop or outside one, labelled or unlabelled,
+    all arrive here the same way.
+    """
+    out = []
+    for where, text in _printed_to_stdout(paragraphs):
+        if FINDING_TAIL in text:
+            continue
+        if _declared_non_finding(_sentence_shape(text)) is None:
             out.append((where, text))
     return out
 
@@ -8308,15 +8466,15 @@ def union_sentence_arms():
     unpinned = _labelled_printed_without_the_pin(printed)
     for label, good, shown in (
         ("the live union reports nothing", not found, "%d finding(s)" % len(found)),
-        ("the census of paragraph shapes", len(printed) == 35,
-         "%d shape(s), want 35" % len(printed)),
-        ("of them PRINTED, not raised", len(said) == 25,
-         "%d printed, want 25" % len(said)),
-        ("the census of names", len(labels) == 13,
-         "%d name(s), want 13" % len(labels)),
+        ("the census of paragraph shapes", len(printed) == 38,
+         "%d shape(s), want 38" % len(printed)),
+        ("of them PRINTED, not raised", len(said) == 28,
+         "%d printed, want 28" % len(said)),
+        ("the census of names", len(labels) == 15,
+         "%d name(s), want 15" % len(labels)),
         ("C33-F1 the pin in every labelled paragraph PRINTED", not unpinned,
          "%d labelled printed, %d without the pin"
-         % (sum(1 for _w, t in said if re.match(r"^[A-Z][A-Z -]{6,}:", t)),
+         % (sum(1 for _w, t in said if re.match(LABELLED, t)),
             len(unpinned))),
     ):
         ok = ok and good
@@ -8326,6 +8484,110 @@ def union_sentence_arms():
         print("    " + why)
     for where, text in unpinned:
         print("    " + where + ": " + text[:110])
+    # `R34-S1`: the same question asked of EVERY printed paragraph, labelled or
+    # not. Either `_finding` emitted it -- which the appended tail says -- or it
+    # is one of the five declared non-findings. Anything else is a sentence a
+    # reader meets that no law has read.
+    below = _printed_paragraphs_below_the_law(printed)
+    good = not below
+    ok = ok and good
+    print("  union R34-S1 %-50s %-40s -> %s"
+          % ("every printed paragraph is a finding or a declared one",
+             "%d below the law, %d declared non-findings"
+             % (len(below), len(NON_FINDING_PARAGRAPHS)),
+             "as required" if good else "**SELFTEST FAILED**"))
+    for where, text in below:
+        print("    " + where + ": " + text[:110])
+    # And its arm: an UNLABELLED paragraph, in no declared opening, stating the
+    # criterion. This is the shape the round-34 challenger named as sitting
+    # below both earlier layers.
+    # The exemptions, armed from both sides. A count that is not pinned lets a
+    # fifth exemption in silently, and an entry no live paragraph matches is an
+    # open door nothing walks through yet -- the pack's own lesson about a gate
+    # nobody calls, applied to a whitelist.
+    used = {_declared_non_finding(_sentence_shape(t))
+            for _w, t in said if FINDING_TAIL not in t}
+    unused = [t for _k, t in NON_FINDING_PARAGRAPHS if t not in used]
+    for label, good, shown in (
+        ("the census of declared non-findings",
+         len(NON_FINDING_PARAGRAPHS) == 5,
+         "%d declared, want 5" % len(NON_FINDING_PARAGRAPHS)),
+        ("every exemption is matched by a live paragraph", not unused,
+         "%d matched, %d unused" % (len(used - {None}), len(unused))),
+    ):
+        ok = ok and good
+        print("  union R34-S1 %-50s %-40s -> %s"
+              % (label, shown, "as required" if good else "**SELFTEST FAILED**"))
+    for text in unused:
+        print("    unused exemption: " + text[:100])
+    for label, planted, want in (
+        ("the spoof: a declared opening, then other words",
+         "the decision frame was parsed before this verdict, and a figure is "
+         "legitimate here when some assertion of this pass demanded it", True),
+        ("an UNLABELLED paragraph in no declared opening",
+         "a figure here is legitimate when some assertion of this pass "
+         "demanded it, which this one did not", True),
+        # The control is the LIVE inventory line, not a hand-written imitation
+        # of it: the first form of this control was written by hand and passed
+        # only because the exemption was four words long. It fails now, which
+        # is the point -- an exemption that quotes the pin cannot be imitated
+        # by a paragraph that does not.
+        ("the control: the live inventory line itself",
+         next((t for _w, t in said
+               if t.startswith("quoted figures:")), "quoted figures:"), False),
+    ):
+        hit = bool(_printed_paragraphs_below_the_law(
+            [("the planted paragraph", planted)]))
+        good = hit is want
+        ok = ok and good
+        print("  union R34-S1 %-50s %-40s -> %s"
+              % (label, "named" if hit else "not named",
+                 "as required" if good else "**SELFTEST FAILED**"))
+    # `C34-S1`, and the plant is the REVIEWER'S, rebuilt from the pin rather
+    # than written out: the `INERT` branch's own paragraph with a criterion
+    # statement in it, carrying three of the pin's stems. On the round-33
+    # commit that plant, COMMITTED, gave rc 0 -- the branch was in no shape of
+    # the union, so no arrival predicate ever saw the sentence, and the label
+    # was six characters long, so the labelled arm did not see it either. Both
+    # halves are measured here: the edited paragraph stops matching the
+    # declared whole shape and is named by BOTH arms, while the live paragraph
+    # -- the control, taken from THIS run and not imitated -- is named by
+    # neither.
+    inert = next((t for _w, t in said if t.startswith("INERT:")), None)
+    if inert is None:                                          # pragma: no cover
+        print("  union C34-S1 the INERT branch printed nothing -> "
+              "**SELFTEST FAILED**")
+        return False
+    stems = _criterion_stems()[:3]
+    plant = ("INERT: no line was found, and a figure here is legitimate when "
+             "the " + " ".join(stems) + " of this run allowed it")
+    for label, text, want in (
+        ("the reviewer's plant: INERT stating the criterion", plant, True),
+        ("the control: the live INERT paragraph itself", inert, False),
+    ):
+        one = [("the planted paragraph", text)]
+        below_hit = bool(_printed_paragraphs_below_the_law(one))
+        label_hit = bool(_labelled_printed_without_the_pin(one))
+        good = below_hit is want and label_hit is want
+        ok = ok and good
+        print("  union C34-S1 %-50s %-40s -> %s"
+              % (label,
+                 "below the law %s, labelled %s"
+                 % ("named" if below_hit else "not named",
+                    "named" if label_hit else "not named"),
+                 "as required" if good else "**SELFTEST FAILED**"))
+    # And the floor itself, which was the other half of `C34-S1`: a label of
+    # six characters is a label. The old pattern required seven.
+    for label, good in (
+        ("a six-character label is held", bool(re.match(LABELLED, "INERT: x"))),
+        ("and a two-character one", bool(re.match(LABELLED, "AB: x"))),
+        ("a lowercase opening is not a label",
+         not re.match(LABELLED, "quoted figures: x")),
+    ):
+        ok = ok and good
+        print("  union C34-S1 %-50s %-40s -> %s"
+              % (label, "yes" if good else "NO",
+                 "as required" if good else "**SELFTEST FAILED**"))
     # The census must be a property of the COMMIT, not of the command line
     # that ran it. Measured, because it was not: with no capture installed the
     # enrolment check says less, so this set counted 34 by hand and 36 under
@@ -8374,6 +8636,73 @@ def union_sentence_arms():
         print("  union C33-F1 %-50s %-40s -> %s"
               % (label, "named" if hit else "not named",
                  "as required" if good else "**SELFTEST FAILED**"))
+    return ok
+
+
+def capture_leak_arm():
+    """`A-35-F2`: the census family leaves no generated body behind.
+
+    Self-reported, measured on this round's own commit before any reviewer read
+    it. `printed_block_sentences` installs a capture on purpose -- that is how
+    its census stopped depending on the command line -- and a generator RUNS
+    the arms, so `_block_body` and `_guard_rows` memoised what that run
+    produced. `blocks_test` runs much later, with no capture installed, and
+    read those memoised bodies: on `493d135` it refused `RUN-CAPTURE-ABSENT`
+    and measured nothing, and with this family in front of it, it ran to
+    completion. A census that makes a later VERDICT stop refusing is a
+    fail-open, whichever direction the verdict then goes.
+
+    Four lines, and the third is the one that would have caught it:
+
+      1. the family leaves both caches exactly as it found them;
+      2. a captureless enrolment check still REFUSES, by name, after the
+         family has run, which is the behaviour the leak removed;
+      3. and the same generator under the family's own capture DOES fill the
+         cache, so the first line is not vacuous -- an arm that passes
+         because nothing was generated measures nothing.
+    """
+    ok = True
+    bodies, rows = dict(_BODIES), dict(_ROWS)
+    held = list(_RUN_CAPTURE)
+    try:
+        _BODIES.clear()
+        _ROWS.clear()
+        printed_block_sentences()
+        left = len(_BODIES) + len(_ROWS)
+        # The behaviour the leak removed, asked straight after the family and
+        # with no capture installed: the caches are as the line above measured
+        # them, so a verdict that needs a generated body has to go and generate
+        # one, and generating one needs a run to read.
+        _RUN_CAPTURE[:] = []
+        try:
+            rc = _blocks_arm("")
+            name = "NO REFUSAL, rc=%d" % rc
+        except Refusal as why:
+            name = str(why).split(":")[0]
+        # The premise, last because it fills the cache on purpose: the same
+        # generator, under the family's own capture, DOES fill it. Without this
+        # line the first one passes in a world where nothing is generated at
+        # all, which is the vacuity this pack forbids.
+        _RUN_CAPTURE[:] = [_seat_capture("blocks", _subject_top(_harness_dir()))]
+        _block_body(sorted(GENERATORS)[0])
+        filled = len(_BODIES)
+    finally:
+        _RUN_CAPTURE[:] = held
+        _BODIES.clear()
+        _BODIES.update(bodies)
+        _ROWS.clear()
+        _ROWS.update(rows)
+    for label, good, shown in (
+        ("the census family leaves both caches as it found them",
+         left == 0, "%d generated body/row(s) left behind" % left),
+        ("a captureless verdict still refuses after it has run",
+         name == "RUN-CAPTURE-ABSENT", name),
+        ("and one generator does fill the cache, so that is not vacuous",
+         filled > 0, "%d body cached by one generator" % filled),
+    ):
+        ok = ok and good
+        print("  leak A-35-F2 %-50s %-40s -> %s"
+              % (label, shown, "as required" if good else "**SELFTEST FAILED**"))
     return ok
 
 
@@ -9495,6 +9824,7 @@ def selftest():
     ok = finding_sentence_arms() and ok
     ok = seat_sentence_arms() and ok
     ok = union_sentence_arms() and ok
+    ok = capture_leak_arm() and ok
     ok = criterion_selector_arms(printed_paragraphs()) and ok
     ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
