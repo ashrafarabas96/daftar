@@ -38,6 +38,7 @@ async function main(): Promise<number> {
   console.log('PHASE 15 — RED PROOF: THE CLUSTER-PORT WAIT   (PREPARED / NOT PROMOTED)');
   console.log('━'.repeat(78));
   let failures = 0;
+  let unmeasured = 0;
   const say = (id: string, ok: boolean, what: string, got: string): void => {
     if (!ok) failures += 1;
     console.log(`  ${id} ${ok ? 'AS REQUIRED' : 'FAILED     '} ${what}`);
@@ -74,23 +75,57 @@ async function main(): Promise<number> {
   // `setTimeout` in THIS process could never be released while the wait ran.
   // The first version of this arm did exactly that and failed, measuring the
   // test's own design rather than the wait -- which is the arm doing its job.
+  //
+  // ROUND 22: the second version carried a comment saying it waited for the
+  // child to hold the port, and waited for nothing. Two of five solo runs
+  // read `null in 29ms` — the wait returned because the port was still FREE,
+  // and the arm's own `ms >= 500` turned that into a FAILED row. It did not
+  // fail open, but a ~40% red on an instrument is noise nobody can read, and
+  // the comment was a false claim about this file. The child now ANNOUNCES
+  // its listen on stdout, this process reads that line before the wait
+  // starts, and a child that never announces makes the arm UNMEASURED rather
+  // than failed: a holder that never held measures nothing either way.
   {
     const child = spawn(
       process.execPath,
-      ['-e', `const s=require('net').createServer();s.listen(${String(PROOF_PORT_2)},'127.0.0.1',()=>setTimeout(()=>process.exit(0),1500));`],
-      { stdio: 'ignore' },
+      [
+        '-e',
+        `const s=require('net').createServer();s.listen(${String(PROOF_PORT_2)},'127.0.0.1',()=>{process.stdout.write('UP\\n');setTimeout(()=>process.exit(0),1500);});`,
+      ],
+      { stdio: ['ignore', 'pipe', 'ignore'] },
     );
-    // Wait for the child to actually hold it, or the arm measures nothing.
-    const t0 = Date.now();
-    const r = waitForClusterPorts([PROOF_PORT_2], 20_000);
-    const ms = Date.now() - t0;
-    child.kill();
-    say(
-      'W3',
-      r === null && ms >= 500 && ms < 10_000,
-      'a port freed DURING the wait ends it, before the budget',
-      `${r === null ? 'null' : r} in ${String(ms)}ms`,
-    );
+    const up = await new Promise<boolean>((res) => {
+      const timer = setTimeout(() => {
+        res(false);
+      }, 10_000);
+      child.stdout.on('data', (b: Buffer) => {
+        if (b.toString('utf8').includes('UP')) {
+          clearTimeout(timer);
+          res(true);
+        }
+      });
+      child.once('exit', () => {
+        clearTimeout(timer);
+        res(false);
+      });
+    });
+    if (!up) {
+      child.kill();
+      unmeasured += 1;
+      console.log('  W3 UNMEASURED  the holder never announced its listen, so nothing was held and there was no wait to measure');
+      console.log('     re-run this instrument alone; a holder that never held is not a verdict about the wait');
+    } else {
+      const t0 = Date.now();
+      const r = waitForClusterPorts([PROOF_PORT_2], 20_000);
+      const ms = Date.now() - t0;
+      child.kill();
+      say(
+        'W3',
+        r === null && ms >= 500 && ms < 10_000,
+        'a port freed DURING the wait ends it, before the budget',
+        `${r === null ? 'null' : r} in ${String(ms)}ms`,
+      );
+    }
   }
 
   // W4 — not a port. It must refuse, not poll NaN for the whole budget and
@@ -103,6 +138,11 @@ async function main(): Promise<number> {
   }
 
   console.log('');
+  if (unmeasured > 0) {
+    console.log(`EXIT 2 — ${String(unmeasured)} arm(s) could not be set up, so this run is NOT a clean bill.`);
+    console.log('  A proof that could not stage its own fixture measured nothing; re-run it alone.');
+    return 2;
+  }
   if (failures === 0) {
     console.log('All 4 arms behaved: a free port is fast, a held port is named and waited for,');
     console.log('  a port freed mid-wait ends it, and a non-port refuses instead of stalling.');

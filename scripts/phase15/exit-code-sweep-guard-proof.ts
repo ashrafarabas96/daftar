@@ -302,6 +302,72 @@ function sweepFile(script: string, pack: string, file: string): { readonly ran: 
   return { ran, reported: block.includes(file), code };
 }
 
+/**
+ * ONE DELETION PER RULE, EACH WITH THE ARMS IT MUST BLIND AND NO OTHERS.
+ *
+ * Round 21 added three rules and round 22 added four, and until now none of
+ * them had a deletion of its own: the plants went red, and nothing said WHICH
+ * rule turned them red. A rule no plant depends on is decorative, and a plant
+ * no deletion attributes is a smoke test. Each row below replaces exactly one
+ * line of the sweep and pins, by name, the arms that must go blind. The arm
+ * lists are not guesses: they were read off the stripped copies and then
+ * written down, so a later change that moves the blast radius fails here.
+ */
+const RULE_DELETIONS: readonly { readonly label: string; readonly bound: string; readonly blind: string; readonly arms: readonly string[] }[] = [
+  { label: 'the conservative callee fallback', bound: FALLBACK_BOUND, blind: FALLBACK_BLIND, arms: ['X44', 'X45'] },
+  // Round 22 measured BOTH of these here, by running them and reading which
+  // arms moved. The first list was written from what I expected -- X49 for the
+  // hand-over rule -- and this proof reported X36, X41 and X42 instead, because
+  // the line I had anchored is the one in `isProducerExpr`, not the one in
+  // `handsProducerOver`. Two rules, two deletions, each with the arms it owns.
+  {
+    label: "the returner call read as a VALUE in a binding's region",
+    bound: '  if (ts.isCallExpression(x) && isReturnerCall(x, p)) return true;',
+    blind: '  if (ts.isCallExpression(x) && isReturnerCall(x, p) && false) return true;',
+    arms: ['X36', 'X41', 'X42'],
+  },
+  {
+    label: "round 22's returner-call HAND-OVER",
+    bound: '      if (ts.isCallExpression(x) && isReturnerCall(x, p)) {\n        found = true;\n        return;\n      }',
+    blind: '      if (ts.isCallExpression(x) && isReturnerCall(x, p) && false) {\n        found = true;\n        return;\n      }',
+    arms: ['X49'],
+  },
+  {
+    label: "round 21's pack-wide escaped keys",
+    bound: '  for (const k of PACK_ESCAPED_KEYS) members.add(k);',
+    blind: '  for (const k of PACK_ESCAPED_KEYS) void k;',
+    arms: ['X47', 'X50'],
+  },
+  {
+    label: "round 22's refusal of a key nobody can name",
+    bound: '    else unbounded.push({ line: lineOf(sf, n) + 1, text: textOf(sf, n) });',
+    blind: '    else void n;',
+    arms: ['X51'],
+  },
+  {
+    label: "round 22's absolute-path parse key for an outside module",
+    bound: "    const sf = ast(abs, readFileSync(abs, 'utf8'));",
+    blind: "    const sf = ast(name, readFileSync(abs, 'utf8'));",
+    arms: ['X53'],
+  },
+  {
+    label: "round 22's re-export walk in an outside module",
+    bound:
+      '      if (!ts.isExportDeclaration(st) || st.moduleSpecifier === undefined || !ts.isStringLiteral(st.moduleSpecifier)) continue;\n      const next = resolveOutside(dirname(abs), st.moduleSpecifier.text);\n      if (next === null) continue;\n      if (OUTSIDE_ON_STACK.has(next) || depth + 1 > OUTSIDE_MAX_DEPTH) cut = true;\n      const from = outsideSurface(next, depth + 1);\n      const ids = new Set<string>(surface0.ids);',
+    blind:
+      '      if (!ts.isExportDeclaration(st) || st.moduleSpecifier === undefined || !ts.isStringLiteral(st.moduleSpecifier)) continue;\n      const next = resolveOutside(dirname(abs), st.moduleSpecifier.text);\n      if (next === null) continue;\n      if (OUTSIDE_ON_STACK.has(next) || depth + 1 > OUTSIDE_MAX_DEPTH) cut = true;\n      const from = EMPTY_SURFACE;\n      const ids = new Set<string>(surface0.ids);',
+    // X54's cycle reaches its producer through a RE-EXPORT too, so this
+    // deletion legitimately blinds both. Measured, not assumed.
+    arms: ['X52', 'X54'],
+  },
+  {
+    label: "round 22's refusal to memoise a surface computed while a cycle was cut",
+    bound: '  if (!cut) OUTSIDE_SURFACE.set(abs, surface);',
+    blind: '  OUTSIDE_SURFACE.set(abs, surface);',
+    arms: ['X54'],
+  },
+];
+
 function main(): number {
   console.log('━'.repeat(78));
   console.log('PHASE 15 — GUARD-DELETION PROOF: PROVENANCE, MEMBERSHIP, AND THE ROUND-20 RULES   (PREPARED / NOT PROMOTED)');
@@ -495,7 +561,7 @@ function main(): number {
     // once as it is, once with the one line replaced. What makes this an
     // attribution rather than a smoke test is the NAMED arm set: the stripped
     // copy must redden exactly the arms written for that rule and no others.
-    for (const r of [{ label: 'the conservative callee fallback', bound: FALLBACK_BOUND, blind: FALLBACK_BLIND, arms: ['X44', 'X45'] }]) {
+    for (const r of RULE_DELETIONS) {
       if (!me.includes(r.bound)) {
         console.log(`  ${r.label} is not written in the shape this proof removes, so that section`);
         console.log('  measures nothing. Re-anchor it before reading it again.');
@@ -603,6 +669,13 @@ function main(): number {
     console.log('  and is invisible without the one line that enumerates it. The binding is followed');
     console.log('  ACROSS a module boundary, and removing that one line blinds the cross-file plant while');
     console.log('  the SAME bytes in one file stay visible.');
+    console.log(`  ${String(RULE_DELETIONS.length)} rules carry a deletion of their own, each pinned to the arms it owns and no others:`);
+    for (const r of RULE_DELETIONS) console.log(`    ${r.label} \u2014 ${r.arms.join(', ')}`);
+    console.log('  Two of those arm lists were WRONG when first written, and this instrument said so:');
+    console.log("  round 22's hand-over rule was anchored to the wrong one of two lines that call the");
+    console.log('  same helper, and the cycle-cut rule blinded NO arm at all, because the plant written');
+    console.log('  for it did not depend on it. Both were corrected against what the deletions actually');
+    console.log('  moved, which is what this file is for.');
     console.log('  The two rules round 20 added carry their own deletions: the conservative callee');
     console.log('  fallback, removed, blinds exactly X44 and X45 and nothing else; and the one exception');
     console.log('  to the callee rule \u2014 reading the OBJECT of a method call \u2014 removed, stops the sweep');
