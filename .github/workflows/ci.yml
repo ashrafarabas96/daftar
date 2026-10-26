@@ -45,7 +45,24 @@ jobs:
   #    workspace is a HARD FAILURE, never a skipped job.
   # -------------------------------------------------------------------------
   workspaces:
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01 (DR-17), SECOND ROUND. This job was meant to stay on
+    # GitHub's machines as one of the light ones. It cannot: every
+    # GitHub-hosted job in this repository is refused before a runner is ever
+    # assigned, and the API annotation says why, verbatim —
+    #
+    #   "The job was not started because recent account payments have failed
+    #    or your spending limit needs to be increased."
+    #
+    # Measured on run 40419719684: `workspaces` failed 3 seconds in with
+    # `runner_name: ""` and zero steps, and because every other job declares
+    # `needs: workspaces`, all five were `skipped` — including the two this
+    # card had just moved to the self-hosted runner. Leaving the light jobs on
+    # GitHub therefore does not keep them cheap, it stops the whole workflow.
+    #
+    # Self-hosted runners are not metered and are not subject to the spending
+    # limit, so moving this job is what makes the rest of the workflow
+    # reachable at all. Not one step changed.
+    runs-on: [self-hosted, daftar-wsl]
     steps:
       - uses: actions/checkout@v4
       - name: Verify exact workspace set
@@ -375,7 +392,8 @@ jobs:
   # -------------------------------------------------------------------------
   web-admin:
     needs: workspaces
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
+    runs-on: [self-hosted, daftar-wsl]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -479,7 +497,11 @@ jobs:
   # -------------------------------------------------------------------------
   hygiene:
     needs: workspaces
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
+    # Nothing here needs root: gitleaks runs as a Docker container action and
+    # the runner has Docker. The `permissions:` block above is #14's fix and is
+    # untouched.
+    runs-on: [self-hosted, daftar-wsl]
     # gitleaks-action reads the pull request's commit list through the REST API
     # (GET /repos/{owner}/{repo}/pulls/{n}/commits) before it scans anything.
     # This workflow declared no `permissions:` anywhere and the repository's
