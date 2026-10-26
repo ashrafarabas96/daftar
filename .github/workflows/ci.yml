@@ -64,6 +64,44 @@ jobs:
     # reachable at all. Not one step changed.
     runs-on: [self-hosted, daftar-wsl]
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - name: Verify exact workspace set
         run: |
@@ -116,6 +154,44 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       # Full history: the corrective gate runs the explicit Phase 3 secret
       # range scan from 0f2b09e7… and the full review-index check, and
       # neither can reach the Phase 3 base from a depth-1 checkout.
@@ -351,7 +427,33 @@ jobs:
       # Budget A last. An entry the coordinator has not filled is a FAIL, not
       # a skip, so this step is red until every corrective stream has landed.
       - name: Install Chromium for the corrective gate's real-browser matrix
-        run: npx playwright-core install --with-deps chromium
+        # DR-18. `--with-deps` installs apt packages, and as a non-root user
+        # playwright runs them through `sudo`: measured, `install-deps
+        # --dry-run` as `laptop` prints `sudo -- sh -c "apt-get update&&
+        # apt-get install -y --no-install-recommends ..."`. GitHub's image
+        # grants its runner passwordless sudo. The self-hosted runner must not
+        # have it, and no sudoers rule was added, because a NOPASSWD rule for
+        # apt-get is root in all but name.
+        #
+        # So on the self-hosted runner the 33 system packages were installed
+        # ONCE as root, from `playwright-core@1.56.1 install-deps chromium
+        # --dry-run` — the pinned version's own list, not a hand-written one —
+        # and every package and version is recorded in the card's evidence.
+        # Verified afterwards as the runner user: 33 installed, 0 missing.
+        #
+        # What does NOT change: the BROWSER is still installed per job, by the
+        # pinned playwright-core, from the lockfile. Only the apt half is
+        # dropped, and only where it is already satisfied.
+        #
+        # One step with a shell branch, not two steps with `if:`, deliberately:
+        # two steps would leave one `skipped` in every run, and `skipped` is
+        # what this project refuses to read as evidence.
+        run: |
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            npx playwright-core install chromium
+          else
+            npx playwright-core install --with-deps chromium
+          fi
       - name: Phase 3 corrective gate (composes P3-S8)
         run: npm run gate:phase3:corrective
         env:
@@ -395,6 +497,44 @@ jobs:
     # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
     runs-on: [self-hosted, daftar-wsl]
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -423,6 +563,44 @@ jobs:
     # GitHub's image ships one. Nothing in this job was changed.
     runs-on: [self-hosted, daftar-wsl]
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -454,9 +632,54 @@ jobs:
   # -------------------------------------------------------------------------
   browser:
     needs: workspaces
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01 / DR-18: self-hosted. 111 billable minutes on 2026-10-26.
+    # Two steps of this job pull in opposite directions — the Chromium
+    # dependency install wants root, and `embedded-postgres` in the gate
+    # REFUSES to initialise as root — which is why the job could not simply be
+    # moved. It is resolved by removing the root half rather than granting
+    # root: see the install step below. The runner runs as `laptop` (uid 1000),
+    # so the embedded PostgreSQL half is satisfied by construction.
+    runs-on: [self-hosted, daftar-wsl]
     timeout-minutes: 40
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -473,7 +696,33 @@ jobs:
           npm run build -w @daftar/api
           npm run build -w @daftar/web
       - name: Install Chromium for the pinned playwright-core
-        run: npx playwright-core install --with-deps chromium
+        # DR-18. `--with-deps` installs apt packages, and as a non-root user
+        # playwright runs them through `sudo`: measured, `install-deps
+        # --dry-run` as `laptop` prints `sudo -- sh -c "apt-get update&&
+        # apt-get install -y --no-install-recommends ..."`. GitHub's image
+        # grants its runner passwordless sudo. The self-hosted runner must not
+        # have it, and no sudoers rule was added, because a NOPASSWD rule for
+        # apt-get is root in all but name.
+        #
+        # So on the self-hosted runner the 33 system packages were installed
+        # ONCE as root, from `playwright-core@1.56.1 install-deps chromium
+        # --dry-run` — the pinned version's own list, not a hand-written one —
+        # and every package and version is recorded in the card's evidence.
+        # Verified afterwards as the runner user: 33 installed, 0 missing.
+        #
+        # What does NOT change: the BROWSER is still installed per job, by the
+        # pinned playwright-core, from the lockfile. Only the apt half is
+        # dropped, and only where it is already satisfied.
+        #
+        # One step with a shell branch, not two steps with `if:`, deliberately:
+        # two steps would leave one `skipped` in every run, and `skipped` is
+        # what this project refuses to read as evidence.
+        run: |
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            npx playwright-core install chromium
+          else
+            npx playwright-core install --with-deps chromium
+          fi
       - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
         run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
         env:
@@ -522,6 +771,44 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          case "$GITHUB_WORKSPACE" in
+            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          esac
+          mkdir -p "$GITHUB_WORKSPACE"
+          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $GITHUB_WORKSPACE"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       # Full history: gitleaks scans the pull request's commit RANGE, so with the
       # default depth-1 checkout the base commit is absent, git writes to stderr
       # and the action fails having scanned ~0 bytes. Depth 0 makes the scan real.
