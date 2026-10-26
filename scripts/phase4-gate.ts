@@ -111,7 +111,8 @@ export const UNGATED_HEADINGS: Readonly<Record<string, string>> = {
 
 export interface PlanAnalysis {
   readonly slices: string[];
-  readonly headings: string[];
+  /** Every slice number the plan names anywhere (`P4-SN`), in any shape — heading, prose, table, bold. */
+  readonly named: string[];
   readonly classified: Record<string, string>;
   readonly problems: string[];
 }
@@ -119,9 +120,12 @@ export interface PlanAnalysis {
 const bySliceNo = (a: string, b: string): number => Number(a.slice(1)) - Number(b.slice(1));
 
 /**
- * Total parse of the plan. Three independent views must agree: the `P4-SN` headings, the "**Gate.** `gate:phase4:sN`" lines,
- * and every mention of `gate:phase4:sN` / `gate:phase4:release` anywhere in the text. A heading with no Gate line and
- * no classification, a mention nobody declared, or a Gate line without a heading is a named problem — never silence.
+ * Total BY CONSTRUCTION, not by matching a format. Every occurrence of `P4-SN` anywhere in the plan registers slice N,
+ * so no heading style, table row or prose can hide a slice: merely naming it records it. Each registered slice must then be
+ * either a captured "**Gate.** `gate:phase4:sN`" line or a declared classification (UNGATED_HEADINGS); anything else is a
+ * named problem. Every mention of `gate:phase4:sN` / `gate:phase4:release` is cross-checked the same way, and a Gate line for
+ * a slice the plan never names is a problem too. Transient mentions ("composes s4") concern slices that are registered
+ * already, so they raise nothing.
  */
 export function analysePlan(text: string): PlanAnalysis {
   const problems: string[] = [];
@@ -131,25 +135,25 @@ export function analysePlan(text: string): PlanAnalysis {
     if (!slices.includes(s)) slices.push(s);
   }
   slices.sort(bySliceNo);
-  const headings: string[] = [];
-  for (const m of text.matchAll(/^#{2,4}[ \t]*P4-S(\d+)\b/gm)) {
+  const count = new Map<string, number>();
+  for (const m of text.matchAll(/P4-S(\d+)\b/g)) {
     const s = `s${m[1] as string}`;
-    if (!headings.includes(s)) headings.push(s);
+    count.set(s, (count.get(s) ?? 0) + 1);
   }
-  headings.sort(bySliceNo);
+  const named = [...count.keys()].sort(bySliceNo);
   const classified: Record<string, string> = {};
-  if (headings.length === 0) problems.push(`${PLAN_DOC} has no "P4-SN" heading — nothing to derive a roster from`);
-  for (const s of headings) {
+  if (named.length === 0) problems.push(`${PLAN_DOC} never names a "P4-SN" slice — nothing to derive a roster from`);
+  for (const s of named) {
     if (slices.includes(s)) continue;
     const why = UNGATED_HEADINGS[s];
     if (why !== undefined) classified[s] = why;
     else
       problems.push(
-        `P4-${s.toUpperCase()} has a heading in ${PLAN_DOC} but no "**Gate.** \`gate:phase4:${s}\`" line and no declared classification — the roster would silently omit it`,
+        `P4-${s.toUpperCase()} is named in ${PLAN_DOC} (${String(count.get(s))}x) but has no "**Gate.** \`gate:phase4:${s}\`" line and no declared classification — the roster would silently omit it`,
       );
   }
   for (const s of slices) {
-    if (!headings.includes(s)) problems.push(`${PLAN_DOC} has a Gate line for gate:phase4:${s} but no P4-${s.toUpperCase()} heading`);
+    if (!named.includes(s)) problems.push(`${PLAN_DOC} has a Gate line for gate:phase4:${s} but never names P4-${s.toUpperCase()}`);
   }
   const mentioned = new Set<string>();
   for (const m of text.matchAll(/gate:phase4:(s\d+|release)\b/g)) mentioned.add(m[1] as string);
@@ -157,9 +161,9 @@ export function analysePlan(text: string): PlanAnalysis {
     if (!slices.includes(s)) problems.push(`${PLAN_DOC} mentions gate:phase4:${s} but no Gate line declares it — the analysis did not capture it`);
   }
   if (mentioned.has('release') && classified['s9'] === undefined) {
-    problems.push(`${PLAN_DOC} mentions gate:phase4:release but no P4-S9 heading classifies it as the release gate`);
+    problems.push(`${PLAN_DOC} mentions gate:phase4:release but P4-S9 is not named and classified as the release gate`);
   }
-  return { slices, headings, classified, problems };
+  return { slices, named, classified, problems };
 }
 
 export function parsePlannedSlices(text: string): string[] {
@@ -171,7 +175,7 @@ export function plannedSlices(root: string): PlanAnalysis & { sha256: string | n
   if (!existsSync(path)) {
     return {
       slices: [],
-      headings: [],
+      named: [],
       classified: {},
       sha256: null,
       problems: [`${PLAN_DOC} is missing — the roster is derived from the plan, so without it no seal can be judged`],
@@ -201,7 +205,7 @@ const norm = (x: string): string => resolve(x).split(sep).join('/').toLowerCase(
 const same = (a: string, b: string): boolean => norm(a) === norm(b);
 
 /** What was measured: the resolved root, its HEAD, whether it is dirty, and the sha256 of the plan the roster came from. Measured, never inferred. */
-export function measureTree(root: string): TreeIdentity {
+export function measureTree(root: string, plan?: { sha256: string | null }): TreeIdentity {
   const problems: string[] = [];
   const notes: string[] = [];
   const abs = resolve(root);
@@ -236,7 +240,7 @@ export function measureTree(root: string): TreeIdentity {
         );
     }
   }
-  const planSha256 = plannedSlices(abs).sha256;
+  const planSha256 = (plan ?? plannedSlices(abs)).sha256;
   if (planSha256 === null) problems.push(`${PLAN_DOC} could not be hashed — the roster's source is not identified`);
   return { root: abs, head, dirty, dirtyEntries, planSha256, manifestSha256, notes, problems };
 }
@@ -271,12 +275,12 @@ export const NOT_GATE_CHECKABLE: readonly string[] = [
   'removal of the CANDIDATE-TENSE fence at acceptance (the s4 gate polices its presence, the owner decides the acceptance)',
 ];
 
-export function rosterProblems(root: string, declared: readonly string[] = SLICES, planned?: readonly string[]): string[] {
+export function rosterProblems(root: string, declared: readonly string[] = SLICES, planned?: readonly string[], analysis?: PlanAnalysis): string[] {
   const problems: string[] = [];
   let plan: readonly string[];
   if (planned !== undefined) plan = planned;
   else {
-    const r = plannedSlices(root);
+    const r = analysis ?? plannedSlices(root);
     problems.push(...r.problems);
     plan = r.slices;
   }
@@ -288,7 +292,7 @@ export function rosterProblems(root: string, declared: readonly string[] = SLICE
     if (plan.length > 0 && !plan.includes(s)) problems.push(`slice ${s} is composed by the seal gate but ${PLAN_DOC} does not declare it`);
   }
   const pkgPath = join(root, 'package.json');
-  if (!existsSync(pkgPath)) return [`${pkgPath} is missing`];
+  if (!existsSync(pkgPath)) return [...problems, `${pkgPath} is missing`];
   const scripts = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
   const found = Object.keys(scripts)
     .map((k) => /^gate:phase4:(s\d+)$/.exec(k)?.[1])
@@ -442,26 +446,46 @@ interface Options {
   readonly logDir: string;
 }
 
+const VALUE_FLAGS = ['root', 'evidence', 'log-dir'] as const;
+const BOOL_FLAGS = ['list', 'structural-only', 'prove-red'] as const;
+
+/** Strict: an unknown flag, a stray word, an empty or missing value, or a repeated flag is an error — never silently dropped. */
 export function parseOptions(argv: readonly string[]): Options {
-  const value = (name: string): string | undefined => {
-    const eq = argv.find((a) => a.startsWith(`--${name}=`));
-    if (eq !== undefined) return eq.slice(name.length + 3);
-    const i = argv.indexOf(`--${name}`);
-    if (i < 0) return undefined;
-    const v = argv[i + 1];
-    if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value (got ${v === undefined ? 'nothing' : JSON.stringify(v)})`);
-    return v;
-  };
-  const rootArg = value('root');
+  const values = new Map<string, string>();
+  const bools = new Set<string>();
+  for (let i = 0; i < argv.length; i += 1) {
+    const a = argv[i] as string;
+    const m = /^--([a-z-]+)(?:=(.*))?$/s.exec(a);
+    if (m === null) throw new Error(`unexpected argument ${JSON.stringify(a)}`);
+    const name = m[1] as string;
+    if ((BOOL_FLAGS as readonly string[]).includes(name)) {
+      if (m[2] !== undefined) throw new Error(`--${name} takes no value (got ${JSON.stringify(m[2])})`);
+      if (bools.has(name)) throw new Error(`--${name} was given twice`);
+      bools.add(name);
+    } else if ((VALUE_FLAGS as readonly string[]).includes(name)) {
+      if (values.has(name)) throw new Error(`--${name} was given twice`);
+      let v = m[2];
+      if (v === undefined) {
+        v = argv[i + 1];
+        if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value (got ${v === undefined ? 'nothing' : JSON.stringify(v)})`);
+        i += 1;
+      }
+      if (v === '') throw new Error(`--${name} needs a value (got an empty string)`);
+      values.set(name, v);
+    } else {
+      throw new Error(`unknown option --${name}`);
+    }
+  }
+  const rootArg = values.get('root');
   const root = rootArg !== undefined ? resolve(rootArg) : join(__dirname, '..');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   return {
     root,
-    list: argv.includes('--list'),
-    structuralOnly: argv.includes('--structural-only'),
-    proveRed: argv.includes('--prove-red'),
-    evidence: resolve(value('evidence') ?? join(root, 'release', 'phase4-seal-gate.json')),
-    logDir: resolve(value('log-dir') ?? join(root, 'release', `phase4-gate-logs-${stamp}`)),
+    list: bools.has('list'),
+    structuralOnly: bools.has('structural-only'),
+    proveRed: bools.has('prove-red'),
+    evidence: resolve(values.get('evidence') ?? join(root, 'release', 'phase4-seal-gate.json')),
+    logDir: resolve(values.get('log-dir') ?? join(root, 'release', `phase4-gate-logs-${stamp}`)),
   };
 }
 
@@ -526,8 +550,13 @@ const unbuiltStep = (s: string): Step => ({
   fn: () => [`P4-${s.toUpperCase()} is declared by ${PLAN_DOC} but gate:phase4:${s} does not exist in this tree — an unbuilt slice cannot be sealed over`],
 });
 
-export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly string[] = SLICES, explicitPlanned?: readonly string[]): readonly Step[] {
-  const planned = explicitPlanned ?? plannedSlices(o.root).slices;
+export function sealPlan(
+  o: Pick<Options, 'root' | 'logDir'>,
+  slices: readonly string[] = SLICES,
+  explicitPlanned?: readonly string[],
+  analysis?: PlanAnalysis & { sha256: string | null },
+): readonly Step[] {
+  const planned = explicitPlanned ?? (analysis ?? plannedSlices(o.root)).slices;
   const sliceStep = (s: string): Step =>
     cmd(`slice-${s}`, `Phase 4 slice gate — P4-${s.toUpperCase()}`, ['run', '-s', `gate:phase4:${s}`], { validate: sliceEvidence(s), slice: s });
   const bySlice = new Map(slices.map((s) => [s, sliceStep(s)]));
@@ -542,7 +571,7 @@ export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly s
       name: 'preflight: the roster agrees with the tree; no mandatory skip is set',
       kind: 'in-process',
       structural: true,
-      fn: () => rosterProblems(o.root, slices, explicitPlanned),
+      fn: () => rosterProblems(o.root, slices, explicitPlanned, analysis),
     },
     {
       id: 'identity',
@@ -550,7 +579,7 @@ export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly s
       kind: 'in-process',
       structural: true,
       fn: () => {
-        measuredTree = measureTree(o.root);
+        measuredTree ??= measureTree(o.root, analysis);
         return [...measuredTree.problems, ...treeIsAPhase4Candidate(o.root)];
       },
     },
@@ -647,20 +676,30 @@ export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly s
  * PASS needs: every roster slice has a step in the plan, and every planned step has a result whose
  * status is exactly `pass`. A missing result is `not_run`; `skipped`, `fail` and `not_run` are each a FAIL.
  */
-export function judge(plan: readonly Step[], results: readonly Result[], roster: readonly string[] = SLICES): { verdict: 'PASS' | 'FAIL'; reasons: string[] } {
+export function judge(
+  plan: readonly Step[],
+  results: readonly Result[],
+  roster: readonly string[] = SLICES,
+): { verdict: 'PASS' | 'FAIL'; reasons: string[]; hard: string[] } {
   const reasons: string[] = [];
+  /** Reasons that are a failure in themselves; the rest are only "did not run". Declared, not matched in text. */
+  const hard: string[] = [];
+  const add = (reason: string, isHard: boolean): void => {
+    reasons.push(reason);
+    if (isHard) hard.push(reason);
+  };
   for (const s of roster) {
-    if (!plan.some((st) => st.slice === s)) reasons.push(`slice ${s} is on the roster but the plan has no step that runs it`);
+    if (!plan.some((st) => st.slice === s)) add(`slice ${s} is on the roster but the plan has no step that runs it`, true);
   }
   for (const st of plan) {
     const r = results.find((x) => x.id === st.id);
-    if (r === undefined) reasons.push(`${st.id} (${st.name}) has no result — NOT_RUN`);
-    else if (r.status === 'skipped') reasons.push(`${st.id} (${st.name}) was SKIPPED — a skipped step is red`);
-    else if (r.status === 'not_run') reasons.push(`${st.id} (${st.name}) was NOT_RUN`);
-    else if (r.status === 'fail') reasons.push(`${st.id} (${st.name}) FAILED${r.problems.length > 0 ? `: ${r.problems[0]?.split('\n')[0] ?? ''}` : ''}`);
-    else if (r.status !== 'pass') reasons.push(`${st.id} has the unrecognised status ${String(r.status)}`);
+    if (r === undefined) add(`${st.id} (${st.name}) has no result — NOT_RUN`, false);
+    else if (r.status === 'skipped') add(`${st.id} (${st.name}) was SKIPPED — a skipped step is red`, true);
+    else if (r.status === 'not_run') add(`${st.id} (${st.name}) was NOT_RUN`, false);
+    else if (r.status === 'fail') add(`${st.id} (${st.name}) FAILED${r.problems.length > 0 ? `: ${r.problems[0]?.split('\n')[0] ?? ''}` : ''}`, true);
+    else if (r.status !== 'pass') add(`${st.id} has the unrecognised status ${String(r.status)}`, true);
   }
-  return { verdict: reasons.length === 0 ? 'PASS' : 'FAIL', reasons };
+  return { verdict: reasons.length === 0 ? 'PASS' : 'FAIL', reasons, hard };
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -808,27 +847,49 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
   const full = { s0: '', s1: gl('s1'), s5: gl('s5'), s9: 'closes with `gate:phase4:release`' };
   proofs.push({ name: 'analysis control: a consistent plan has no problem', caught: analysePlan(doc(full)).problems.length === 0, by: 'analysePlan' });
   const reworded = analysePlan(doc({ ...full, s5: '**Gate:** `gate:phase4:s5`' })).problems;
-  expectRed('plan: S5 Gate line reworded ("**Gate:**") → the slice is not silently dropped', reworded, /P4-S5 has a heading .* no declared classification/);
+  expectRed('plan: S5 Gate line reworded ("**Gate:**") → the slice is not silently dropped', reworded, /P4-S5 is named in .* no declared classification/);
   expectRed('plan: S5 Gate line reworded → the uncaptured mention is named too', reworded, /mentions gate:phase4:s5 but no Gate line declares it/);
-  expectRed('plan: S5 Gate line without the backticks', analysePlan(doc({ ...full, s5: '**Gate.** gate:phase4:s5' })).problems, /P4-S5 has a heading/);
-  expectRed('plan: a heading with no Gate line and no classification', analysePlan(doc({ ...full, s7: 'no gate here' })).problems, /P4-S7 has a heading/);
+  expectRed('plan: S5 Gate line without the backticks', analysePlan(doc({ ...full, s5: '**Gate.** gate:phase4:s5' })).problems, /P4-S5 is named in/);
+  expectRed('plan: a heading with no Gate line and no classification', analysePlan(doc({ ...full, s7: 'no gate here' })).problems, /P4-S7 is named in/);
   expectRed(
     'plan: a mention nobody declared (prose names gate:phase4:s6)',
     analysePlan(doc(full, '\nsee also gate:phase4:s6\n')).problems,
     /mentions gate:phase4:s6 but no Gate line declares it/,
   );
-  expectRed('plan: a Gate line without a heading', analysePlan(`${doc(full)}\n${gl('s4')}\n`).problems, /Gate line for gate:phase4:s4 but no P4-S4 heading/);
+  expectRed('plan: a Gate line without a heading', analysePlan(`${doc(full)}\n${gl('s4')}\n`).problems, /Gate line for gate:phase4:s4 but never names P4-S4/);
   expectRed(
     'plan: gate:phase4:release named but no S9 heading classifies it',
     analysePlan(doc({ s1: gl('s1') }, '\ngate:phase4:release\n')).problems,
-    /mentions gate:phase4:release but no P4-S9 heading/,
+    /mentions gate:phase4:release but P4-S9 is not named/,
   );
-  expectRed('plan: no P4 heading at all', analysePlan('nothing').problems, /no "P4-SN" heading/);
+  expectRed('plan: no P4 heading at all', analysePlan('nothing').problems, /never names a "P4-SN" slice/);
+  // Totality by construction (round 3): one proof PER SHAPE of how a slice could be written. No Gate line, nothing else names S5
+  // except the shape itself — and each must still be a named problem, because merely naming a slice registers it.
+  {
+    const base = `### P4-S0 — x\n### P4-S1 — x\n${gl('s1')}\n### P4-S9 — x\ngate:phase4:release\n`;
+    const shapes: Record<string, string> = {
+      'h1 (# P4-S5)': '# P4-S5 — x',
+      'h5 (##### P4-S5)': '##### P4-S5 — x',
+      'prefixed (## Slice P4-S5)': '## Slice P4-S5 — x',
+      'bold (**P4-S5**)': '**P4-S5**',
+      'table row (| P4-S5 | x |)': '| P4-S5 | x |',
+      'prose (we build P4-S5 later)': 'we build P4-S5 later',
+      'control (### P4-S5)': '### P4-S5 — x',
+    };
+    for (const [shape, text] of Object.entries(shapes)) {
+      expectRed(`plan shape ${shape}, no Gate line → P4-S5 is a named problem`, analysePlan(`${base}${text}\n`).problems, /P4-S5 is named in/);
+    }
+    proofs.push({
+      name: 'plan shape: a transient mention of a registered slice raises nothing ("composes s4", "P4-S1 and P4-S0")',
+      caught: analysePlan(`${base}P4-S1 composes P4-S0 and gate:phase4:s1 again\n`).problems.length === 0,
+      by: 'analysePlan',
+    });
+  }
   {
     const real = plannedSlices(join(__dirname, '..'));
     proofs.push({
-      name: 'the real plan is total: every heading is a Gate line or a declared classification, every mention is captured',
-      caught: real.problems.length === 0 && real.headings.length === real.slices.length + Object.keys(real.classified).length,
+      name: 'the real plan is total: every named slice is a Gate line or a declared classification, every mention is captured',
+      caught: real.problems.length === 0 && real.named.length === real.slices.length + Object.keys(real.classified).length,
       by: real.problems[0] ?? `${real.slices.join(',')} + ${Object.keys(real.classified).join(',')}`,
     });
   }
@@ -911,6 +972,52 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
   };
   expectRed('options: --root with no value is refused, not swallowed', optionsError(['--root', '--structural-only']), /--root needs a value/);
   expectRed('options: --root as the last token is refused', optionsError(['--root']), /--root needs a value/);
+  expectRed('options: an unknown flag is an error', optionsError(['--list', '--no-such-flag']), /unknown option --no-such-flag/);
+  expectRed('options: an empty --root= is an error, not the cwd', optionsError(['--root=']), /--root needs a value/);
+  expectRed('options: a repeated --root is an error, not first-wins', optionsError(['--root', 'a', '--root', 'b']), /--root was given twice/);
+  expectRed('options: a repeated boolean flag is an error', optionsError(['--list', '--list']), /--list was given twice/);
+  expectRed('options: a stray word is an error', optionsError(['stray']), /unexpected argument "stray"/);
+  expectRed('options: a value on a boolean flag is an error', optionsError(['--list=1']), /--list takes no value/);
+  proofs.push({
+    name: 'options: a correct command line still parses',
+    caught: optionsError(['--structural-only', '--root', 'x', '--evidence=e.json']).length === 0,
+    by: 'parseOptions',
+  });
+  // Gate verdict from declared status, not message text (round 3, g6): a failure whose message happens to contain "NOT_RUN" is still hard.
+  {
+    const st: Step = { id: 'x', name: 'x', kind: 'in-process', structural: true };
+    const failed: Result = { id: 'x', name: 'x', status: 'fail', exitCode: 1, signal: null, durationMs: 1, log: null, problems: ['the NOT_RUN of the world'] };
+    proofs.push({
+      name: 'judge: a FAILED step whose message says NOT_RUN is a hard failure',
+      caught: judge([st], [failed], []).hard.length === 1,
+      by: 'judge.hard',
+    });
+    proofs.push({
+      name: 'judge: a step with no result is only NOT_RUN, not hard',
+      caught: judge([st], [], []).hard.length === 0 && judge([st], [], []).reasons.length === 1,
+      by: 'judge.hard',
+    });
+    proofs.push({
+      name: 'judge: a skipped step is hard',
+      caught: judge([st], [{ ...failed, status: 'skipped', problems: [] }], []).hard.length === 1,
+      by: 'judge.hard',
+    });
+  }
+  // g5: a missing package.json must not discard the plan problems collected before it.
+  expectRed(
+    'roster check: a missing package.json keeps the plan problems already found',
+    (() => {
+      const d = mkdtempSync(join(tmpdir(), 'phase4-gate-nopkg-'));
+      try {
+        mkdirSync(join(d, 'docs'), { recursive: true });
+        writeFileSync(join(d, PLAN_DOC), '### P4-S5 — x\n');
+        return rosterProblems(d, SLICES);
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    })(),
+    /P4-S5 is named in/,
+  );
   // 8. main() itself (review note 4): run the real runner against a scratch tree and read its exit code and text.
   const scratch = mkdtempSync(join(tmpdir(), 'phase4-gate-main-'));
   try {
@@ -958,13 +1065,58 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
     mainProof('main(): RELEASE_GATE_SKIP_X → REFUSED, exit 1', run(built, [], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
     mainProof('main(): RELEASE_GATE_SKIP_X with --list is refused too', run(built, ['--list'], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
     mainProof(
+      'main(): RELEASE_GATE_SKIP_X with --prove-red is a refusal, not a TypeError',
+      run(built, ['--prove-red'], { RELEASE_GATE_SKIP_X: '1' }),
+      1,
+      /REFUSED/,
+    );
+    mainProof('main(): an unknown flag with --list → exit 1, not 0', run(built, ['--list', '--no-such-flag']), 1, /unknown option --no-such-flag/);
+    mainProof('main(): an empty --root= → exit 1', run(built, [], {}, ['--root=', '--structural-only']), 1, /--root needs a value/);
+    mainProof('main(): a repeated --root → exit 1', run(built, [], {}, ['--root', built, '--root', built, '--structural-only']), 1, /--root was given twice/);
+    {
+      // The artefact reports the roster the gate judged, and the plan hash the identity measured (round 3, g4).
+      const r = run(built, []);
+      let art: { roster?: string[]; composedSlices?: string[]; plannedByDocs?: string[]; tree?: { planSha256?: string | null } } = {};
+      try {
+        art = JSON.parse(readFileSync(r.evidence, 'utf8')) as typeof art;
+      } catch {
+        /* stays empty → the proof fails */
+      }
+      const h = createHash('sha256')
+        .update(readFileSync(join(built, PLAN_DOC)))
+        .digest('hex');
+      proofs.push({
+        name: 'main(): the artefact roster is the judged roster (plan ∪ composed), not the hard-coded four',
+        caught:
+          art.roster?.join() === ['s1', 's2', 's3', 's4'].join() && art.composedSlices?.join() === 's1,s2,s3,s4' && art.plannedByDocs?.join() === 's1,s2,s3,s4',
+        by: `roster ${String(art.roster?.join())}`,
+      });
+      proofs.push({
+        name: 'main(): the artefact plan hash is the hash of the document the roster was read from',
+        caught: art.tree?.planSha256 === h,
+        by: String(art.tree?.planSha256).slice(0, 12),
+      });
+      const u = run(tree(planned8, 'unbuilt-art'), []);
+      let art8: { roster?: string[] } = {};
+      try {
+        art8 = JSON.parse(readFileSync(u.evidence, 'utf8')) as typeof art8;
+      } catch {
+        /* stays empty */
+      }
+      proofs.push({
+        name: 'main(): with S5–S8 declared the artefact roster has eight slices',
+        caught: art8.roster?.length === 8,
+        by: `roster ${String(art8.roster?.join())}`,
+      });
+    }
+    mainProof(
       'main(): S5 and S6 Gate lines reworded → exit 1, no clean exit 3 (B-1)',
       run(
         tree(planned8, 'reworded', (s) => (s === 's5' || s === 's6' ? `**Gate:** \`gate:phase4:${s}\`` : gl(s))),
         [],
       ),
       1,
-      /P4-S5 has a heading[\s\S]*P4-S6 has a heading/,
+      /P4-S5 is named in[\s\S]*P4-S6 is named in/,
     );
     mainProof('main(): --root with no value → exit 1, not a swallowed flag', run(built, [], {}, ['--root', '--structural-only']), 1, /--root needs a value/);
     // B-2 through main(): the evidence of a git tree carries that tree's own HEAD, clean state and plan hash.
@@ -1009,6 +1161,17 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
 async function main(): Promise<void> {
   const o = parseOptions(process.argv.slice(2));
 
+  // Refused before anything else, --prove-red and --list included: a skip switch in the environment poisons every verdict.
+  const skips = Object.keys(process.env).filter((k) => k.startsWith('RELEASE_GATE_SKIP_'));
+  if (skips.length > 0) {
+    console.error(`REFUSED: a seal verdict may not be produced with ${skips.join(', ')} set.`);
+    if (!o.proveRed) {
+      mkdirSync(dirname(o.evidence), { recursive: true });
+      writeFileSync(o.evidence, `${JSON.stringify({ verdict: 'FAIL', mandatorySkips: skips, steps: [], producedAt: new Date().toISOString() }, null, 2)}\n`);
+    }
+    process.exit(1);
+  }
+
   if (o.proveRed) {
     const proofs = proveRed();
     for (const p of proofs) console.log(`${p.caught ? 'caught' : 'MISSED'}  ${p.name}  ←  ${p.by}`);
@@ -1021,17 +1184,14 @@ async function main(): Promise<void> {
     process.exit(missed.length === 0 ? 0 : 1);
   }
 
-  const plan = sealPlan(o).filter((s) => !o.structuralOnly || s.structural);
-  const fullPlan = sealPlan(o);
+  // One measurement, taken before any step runs: the plan document is read once, and the roster, the plan hash
+  // and the tree identity all come from that single read.
+  const plan0 = plannedSlices(o.root);
+  measuredTree = measureTree(o.root, plan0);
+  const fullPlan = sealPlan(o, SLICES, undefined, plan0);
+  const plan = fullPlan.filter((s) => !o.structuralOnly || s.structural);
   console.log(`PHASE 4 SEAL GATE${o.structuralOnly ? ' (structural checks only — NOT A SEAL)' : ''}\n`);
 
-  const skips = Object.keys(process.env).filter((k) => k.startsWith('RELEASE_GATE_SKIP_'));
-  if (skips.length > 0) {
-    console.error(`REFUSED: a seal verdict may not be produced with ${skips.join(', ')} set.`);
-    mkdirSync(dirname(o.evidence), { recursive: true });
-    writeFileSync(o.evidence, `${JSON.stringify({ verdict: 'FAIL', mandatorySkips: skips, steps: [], producedAt: new Date().toISOString() }, null, 2)}\n`);
-    process.exit(1);
-  }
   if (!o.list && !o.structuralOnly) mkdirSync(o.logDir, { recursive: true });
 
   const results: Result[] = fullPlan.map((s) => ({
@@ -1093,17 +1253,19 @@ async function main(): Promise<void> {
     }
   }
 
-  const plannedDoc = plannedSlices(o.root);
-  const planned = plannedDoc.slices;
-  const tree = measuredTree ?? measureTree(o.root);
-  const { verdict: judged, reasons } = judge(fullPlan, results, [...new Set([...SLICES, ...planned])]);
-  const verdict = o.structuralOnly ? (reasons.some((x) => !/NOT_RUN/.test(x)) ? 'FAIL' : 'STRUCTURAL_ONLY_NOT_A_SEAL') : judged;
+  const planned = plan0.slices;
+  const judgedRoster = [...new Set([...SLICES, ...planned])];
+  const tree = measuredTree ?? measureTree(o.root, plan0);
+  const { verdict: judged, reasons, hard } = judge(fullPlan, results, judgedRoster);
+  // Decided on declared failures, never on the wording of a message.
+  const verdict = o.structuralOnly ? (hard.length > 0 ? 'FAIL' : 'STRUCTURAL_ONLY_NOT_A_SEAL') : judged;
   const artefact = {
     produced: 'scripts/phase4-gate.ts',
     producedAt: new Date().toISOString(),
     phase: 4,
-    roster: SLICES,
-    tree: { ...tree, planDoc: PLAN_DOC, planSha256: plannedDoc.sha256, planClassifiedWithoutGate: plannedDoc.classified, planHeadings: plannedDoc.headings },
+    roster: judgedRoster,
+    composedSlices: SLICES,
+    tree: { ...tree, planDoc: PLAN_DOC, planClassifiedWithoutGate: plan0.classified, planNamed: plan0.named },
     plannedByDocs: planned,
     unbuiltSlices: planned.filter((x) => !SLICES.includes(x)),
     structuralOnly: o.structuralOnly,
