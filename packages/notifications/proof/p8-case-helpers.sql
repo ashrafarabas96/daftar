@@ -1097,7 +1097,11 @@ BEGIN
   -- only refuse, never admit — which is why it does not reintroduce the defect
   -- round 36 closed. The scanner blanks literals and strips comments, so a
   -- semicolon inside a payload is not one of these.
-  IF position(';' in rtrim(rtrim(p8.sql_scan(stmt)), ';')) > 0 THEN
+  -- ROUND 38, `R28-S-2`: one-argument `rtrim` strips SPACES only, so a
+  -- statement ending `;` and a newline was refused. Fail-closed, and no live
+  -- statement is that shape, but the guard was plainly written to tolerate
+  -- trailing whitespace and tolerated one class of it.
+  IF position(';' in rtrim(rtrim(p8.sql_scan(stmt), E' \t\n\r'), ';')) > 0 THEN
     RAISE EXCEPTION 'p8.plan_relations: MORE THAN ONE STATEMENT — this helper plans the statement '
                     'it is given as the role that owns it, so it will not be handed a second one'
       USING ERRCODE = 'P0001';
@@ -1117,6 +1121,7 @@ CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TE
 LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
         eplan BOOLEAN; esst TEXT; emsg TEXT; servergrant BOOLEAN; named BOOLEAN;
+        rlsdecision BOOLEAN; rlsrel TEXT;
         relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[]; leadkw TEXT; scanned TEXT;
         homonyms TEXT;
         reach OID[];
@@ -1416,6 +1421,90 @@ BEGIN
       servergrant := (sst = '42501'
                       AND position('row-level security policy' in lower(coalesce(msg,''))) = 0
                       AND split_part(coalesce(ctx,''), E'\n', 1) !~ 'PL/pgSQL function .* at RAISE');
+      -- ROUND 38, `R28-F-1` (P1, fail-open), reproduced here before anything
+      -- was changed. Every attribution term above and below sat inside
+      -- `servergrant`, and `servergrant` EXCLUDES the row-level-security
+      -- class by construction. For the ROW form nothing else asked the
+      -- question: `assert_arriving_class` admits 42501 outright for a row
+      -- case and asks nothing about which relation, the handler ban reads the
+      -- statement's own block, and the EXPLAIN construction is relation-only.
+      -- So a row case passed at rc 0 on a refusal about a DIFFERENT relation
+      -- entirely — measured, with `expect` spelling that other relation's
+      -- name in full:
+      --
+      --   UPDATE @REL@ SET v = 2, declared `p8r28_d`, whose BEFORE UPDATE
+      --   trigger inserts a row an RLS policy on `p8r28_rls` rejects
+      --     → PASS refused by new row violates row-level security policy for
+      --       table "p8r28_rls" [42501], rc 0
+      --
+      -- The previous head's own declared bound said this residue was covered
+      -- by `assert_arriving_class`, the handler ban and the construction.
+      -- That sentence was FALSE of the row form for this class, and it is
+      -- withdrawn below at the bound it belonged to.
+      --
+      -- It needs no fourth reader. An RLS refusal names its object IN THE
+      -- MESSAGE, quoted — `for table "<name>"` — so the answer is the
+      -- SERVER'S and not the case's text, which is the only kind of answer
+      -- this law takes. The class is admitted into the block with an arrival
+      -- term of its own, and the name it yields is a BARE one, so it is
+      -- carried by the same name-uniqueness term the grant class uses.
+      rlsdecision := (sst = '42501'
+                      AND position('row-level security policy' in lower(coalesce(msg,''))) > 0
+                      AND split_part(coalesce(ctx,''), E'\n', 1) !~ 'PL/pgSQL function .* at RAISE');
+      IF servergrant OR rlsdecision THEN
+        relid := to_regclass(p8.quoted_ident(relation));
+        IF relid IS NULL THEN
+          RAISE EXCEPTION '% FAIL: THE DECLARED RELATION DOES NOT RESOLVE — "%" is not visible as '
+                          'a relation in this session''s search_path, so neither the statement''s '
+                          'reach nor the catalogue can be compared against it (R26-F-1)',
+            label, relation;
+        END IF;
+        SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
+                              WHEN 'm' THEN 'materialized view' WHEN 'f' THEN 'foreign table'
+               END INTO kindword
+          FROM pg_class c WHERE c.oid = relid;
+        IF kindword IS NULL THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
+                          'relation "%" is not a kind this form knows how to read out of the '
+                          'server''s refusal, so the arrival term cannot be evaluated (R25-F-1)',
+            label, relation;
+        END IF;
+        IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
+                          'relation "%" is not a plain lower-case identifier, so neither the '
+                          'kind-qualified test on the server''s message nor the catalogue lookup '
+                          'can be evaluated for it, and this form will not pass a refusal it '
+                          'cannot attribute (R25-F-1)', label, relation;
+        END IF;
+      IF rlsdecision THEN
+        -- The RLS arrival term. PostgreSQL spells the object in every message
+        -- of this class with `for table "<name>"` — measured on 16.15 in both
+        -- spellings, with and without the policy's own name in front of it —
+        -- so the quoted name is read out of the server's words and compared
+        -- to the declared relation. A message of this class this form cannot
+        -- read is refused by name rather than admitted unmeasured. The reach
+        -- term is NOT asked here and the reason is the class itself: an RLS
+        -- refusal is a decision about a ROW, so the set of relations the
+        -- statement touches is not the question. The NAME is, and it is bare,
+        -- which is why the uniqueness term below runs for this class too.
+        rlsrel := lower(substring(coalesce(msg,'') from 'for table "([^"]*)"[^"]*$'));
+        IF rlsrel IS NULL OR rlsrel = '' THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE ROW-LEVEL REFUSAL IS ABOUT — the '
+                          'server answered [%] %, which carries the row-level security phrase but '
+                          'no `for table "<name>"` this form can read, so the relation the policy '
+                          'refused cannot be compared with the declared one and this form will '
+                          'not pass a refusal it cannot attribute (R28-F-1)', label, sst, msg;
+        END IF;
+        IF rlsrel <> lower(relation) THEN
+          RAISE EXCEPTION '% FAIL: THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION — this case '
+                          'declares "%" and the server''s own message names "%": [%] %. A policy '
+                          'on a relation this statement reached through a trigger refuses a row '
+                          'that has nothing to do with the declared one, and until this term '
+                          'existed the whole attribution law was skipped for this class, so the '
+                          'case passed at rc 0 even with `expect` spelling the other relation in '
+                          'full (R28-F-1)', label, relation, rlsrel, sst, msg;
+        END IF;
+      END IF;
       IF servergrant THEN
           -- (0) BY REACH, FROM THE SERVER, and it runs FIRST of the three:
           -- a statement that touches a second relation is not evidence about
@@ -1434,23 +1523,10 @@ BEGIN
           -- PLANNER, so EXPLAIN raises 22012 and a reach term outside this
           -- condition refused an honest probe for a reason that has nothing to
           -- do with reach.
-        relid := to_regclass(p8.quoted_ident(relation));
-        IF relid IS NULL THEN
-          RAISE EXCEPTION '% FAIL: THE DECLARED RELATION DOES NOT RESOLVE — "%" is not visible as '
-                          'a relation in this session''s search_path, so neither the statement''s '
-                          'reach nor the catalogue can be compared against it (R26-F-1)',
-            label, relation;
-        END IF;
-        SELECT CASE c.relkind WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'v' THEN 'view'
-                              WHEN 'm' THEN 'materialized view' WHEN 'f' THEN 'foreign table'
-               END INTO kindword
-          FROM pg_class c WHERE c.oid = relid;
-        IF kindword IS NULL THEN
-          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
-                          'relation "%" is not a kind this form knows how to read out of the '
-                          'server''s refusal, so the arrival term cannot be evaluated (R25-F-1)',
-            label, relation;
-        END IF;
+        -- ROUND 38. The declared relation is resolved, its kind read and its
+        -- identifier shape checked ABOVE, because the row-level class needs
+        -- the same three and a security term written twice is a term that
+        -- drifts.
         -- ROUND 37, `R27-S-2`. A plain VIEW is expanded by the REWRITER, so the
         -- plan names the view's base tables and never the view itself —
         -- measured on 16.15: `SELECT k FROM p8bench_vw` plans as
@@ -1508,13 +1584,6 @@ BEGIN
             (SELECT coalesce(string_agg(r::regclass::text, ', ' ORDER BY r::regclass::text),
                              'nothing at all') FROM unnest(reach) AS r),
             relation;
-        END IF;
-        IF relation !~ '^[a-z_][a-z0-9_]*$' THEN
-          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT ASK WHO THE REFUSAL IS ABOUT — the declared '
-                          'relation "%" is not a plain lower-case identifier, so neither the '
-                          'kind-qualified test on the server''s message nor the catalogue lookup '
-                          'can be evaluated for it, and this form will not pass a refusal it '
-                          'cannot attribute (R25-F-1)', label, relation;
         END IF;
         named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
                  || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)');
@@ -1602,6 +1671,7 @@ BEGIN
                           '(R25-F-1 X2/X5)',
             label, current_user, relation, array_to_string(needprivs, ', '), sst, msg;
         END IF;
+      END IF;
         -- ROUND 37, `R27-F-1`, and it is the fourth round of ONE class. The
         -- three terms above are each sound and the class survives all three,
         -- because every one of them is blind in the same place: the server's
@@ -1619,14 +1689,30 @@ BEGIN
         --       not enter triggers; arrival matches byte for byte;
         --       has_table_privilege answers FALSE for a column grant, so the
         --       privilege term is silent. PASS.
-        --   F2  the RELATION form, which the challenger reported closed and
-        --       which this author measured open. An IMMUTABLE function is
-        --       FOLDED at plan time, so its body's reads are not in the plan
-        --       AND the refusal reproduces under EXPLAIN — which is exactly
-        --       what the construction above asks for. Same twin, same
-        --       byte-identical message, column-scoped INSERT. PASS. Written
-        --       VOLATILE the construction reds it (measured both ways), so
-        --       the split is plan-time folding and nothing else.
+        --   F2  the RELATION form. ROUND 38, `R28-F-2`: THE ARM ROUND 37
+        --       SHIPPED FOR THIS HALF WAS AN HONEST CASE AND ITS PUBLISHED
+        --       SENTENCES WERE FALSE. It declared `p8bench_ro`, on which the
+        --       role holds no INSERT at all, so the bare statement — no
+        --       function, no twin, nothing folded — is refused with the
+        --       byte-identical message, at run time and under the plan alike
+        --       (measured). Its refusal was ABOUT the declared relation; the
+        --       case carried a TRUE claim and its pass was honest. And the
+        --       sentence that said "written VOLATILE the construction reds
+        --       it" was false of that arm for the same reason: the INSERT's
+        --       own ACL check refuses the plan under either volatility.
+        --       Withdrawn by name. The CLASS it described is real, and round
+        --       38 ships an arm that establishes it the way `R1` is
+        --       established — by making the role genuinely able to do what
+        --       the case says it may not:
+        --
+        --         `INSERT INTO @REL@ VALUES (p8bench_foldtwin())`, declared
+        --         `p8bench_fold`, on which the role holds a COLUMN-scoped
+        --         INSERT. The plain INSERT is ACCEPTED, so the refusal is
+        --         wholly the twin's; the IMMUTABLE function is folded, so the
+        --         twin is absent from the plan AND the refusal reproduces
+        --         under EXPLAIN, which satisfies the construction. Written
+        --         VOLATILE the construction reds it — measured both ways on
+        --         THIS fixture, where the split is real.
         --
         -- Two fixes were suggested and NEITHER is what runs here, each for a
         -- measured reason.
@@ -1674,7 +1760,15 @@ BEGIN
         -- function homonym is already refused by the arrival term above
         -- (`X1`), while a sequence prints a kind this form does not map and
         -- the version-independent spelling `relation` is accepted by arrival,
-        -- so sequences are counted here. What this term does NOT answer is
+        -- so sequences are counted here. ROUND 38, `R28-S-1`: a TOAST
+        -- relation (`relkind` 't') is spelled `table` by the server — it maps
+        -- to `OBJECT_TABLE` in `get_relkind_objtype` — so it belongs in the
+        -- set and is now in it. It is unreachable from a case (without a
+        -- superuser's `USAGE` on `pg_toast` the refusal names the SCHEMA, and
+        -- the arrival term reds that), but a set that is complete only
+        -- because nothing can reach the gap is a set with a gap. `i`/`I` map
+        -- to `index`, which the arrival term reds, and `c` is never
+        -- ACL-checked through `pg_class`. What this term does NOT answer is
         -- whether the statement needed that relation to be reached at all —
         -- that is the reach term's question and it is still asked first.
         SELECT coalesce(string_agg(n.nspname || '.' || c.relname, ', '
@@ -1682,7 +1776,7 @@ BEGIN
           INTO homonyms
           FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
          WHERE c.relname = relation AND c.oid <> relid
-           AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S');
+           AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S', 't');
         IF homonyms <> '' THEN
           RAISE EXCEPTION '% FAIL: THE DECLARED RELATION''S NAME DOES NOT NAME ONE OBJECT — this '
                           'case declares the % "%" (oid %) and this database also carries %. The '

@@ -274,6 +274,8 @@ ARM_LABELS = (
     "ATTRIB-W1",
     "ATTRIB-W2",
     "ATTRIB-W3",
+    "ATTRIB-A1",
+    "ATTRIB-A1B",
     "ATTRIB-F2",
     "ATTRIB-R1",
     "ATTRIB-W3C",
@@ -286,6 +288,8 @@ ARM_LABELS = (
     "REACH-Z1-CTL",
     "HOMONYM-F2-CTL",
     "HOMONYM-R1-CTL",
+    "RLS-A1-CTL",
+    "RLS-A1B-CTL",
     "REACH-Z2-CTL",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
@@ -445,6 +449,8 @@ EXPECTED_ARMS = (
     ("ARGSHAPE x", 1),
     ("ARGSHAPE y", 1),
     ("ARGSHAPE z", 1),
+    ("ATTRIB-A1", 1),
+    ("ATTRIB-A1B", 1),
     ("ATTRIB-BENCH", 1),
     ("ATTRIB-F2", 1),
     ("ATTRIB-KIND-CTL", 1),
@@ -604,6 +610,8 @@ EXPECTED_ARMS = (
     ("RETIREMENT n2", 1),
     ("RETIREMENT n3", 1),
     ("RETIREMENT-NET y19", 1),
+    ("RLS-A1-CTL", 1),
+    ("RLS-A1B-CTL", 1),
     ("ROW-ASTRAL", 1),
     ("ROW-ASTRAL-CLASS-CTL", 1),
     ("ROW-ASTRAL-CTL", 1),
@@ -674,7 +682,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "79d1263b1e1ee788e3fdc26d3b1b9370e54c11225bd4359a739e14ba1a9fb653"
+EXPECTED_SEAL = "265977107ed47c1de202bce9d3dcd5337b96b028143ede5f89fd60ae623a7e55"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
