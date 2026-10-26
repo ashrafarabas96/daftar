@@ -1116,6 +1116,117 @@ BEGIN
   RETURN coalesce(oids, ARRAY[]::OID[]);
 END $fn$;
 
+-- =====================================================================
+-- ROUND 40, `R30-F-1` and `R30-F-2`: ONE declaration of the server's own
+-- refusal prose, and every term that needs it reads THIS.
+-- =====================================================================
+-- Round 39 stopped parsing the server's message and started building it,
+-- which was right, and then built it in three places with three sets. The
+-- thirtieth challenge measured what that costs: the arrival terms built five
+-- of the row-level shapes, the impostor term carried nine hand-written
+-- strings covering three of them, and PostgreSQL 16 has SEVEN. A
+-- code-raised 42501 spelling one of the four the impostor list could not see
+-- passed at rc 0 publishing, byte for byte, what the server writes when a
+-- named policy rejects a row (`ATK-U4b`).
+--
+-- So the templates are declared ONCE, here, read out of the server binary of
+-- the version this phase deploys on and verified against the server's own
+-- behaviour:
+--
+--   $ strings /usr/lib/postgresql/16/bin/postgres | grep 'row-level security policy'
+--   new row violates row-level security policy "%s" (USING expression) for table "%s"
+--   new row violates row-level security policy "%s" for table "%s"
+--   new row violates row-level security policy (USING expression) for table "%s"
+--   new row violates row-level security policy for table "%s"
+--   query would be affected by row-level security policy for table "%s"
+--   target row violates row-level security policy "%s" (USING expression) for table "%s"
+--   target row violates row-level security policy (USING expression) for table "%s"
+--
+-- and of the 37 `permission denied for %s` templates the same binary carries,
+-- the ONE a relation reached by a DML statement produces is
+-- `permission denied for <kind> <bare name>`. `R30-S-3`: there is no
+-- `permission denied for relation %s` in PostgreSQL 16 at all — round 39
+-- carried it as a second candidate and it was dead prose. It is deleted, and
+-- the sentence in the homonyms block that leaned on it is corrected there.
+--
+-- `@R@` is the declared relation's name, `@K@` its kind word, `@P@` a policy
+-- name. The markers cannot collide with a name: the declared relation is
+-- constrained to `^[a-z_][a-z0-9_]*$` before any of this runs, and `@P@` is
+-- substituted LAST, so a policy whose own name contains `@R@` cannot reach
+-- the earlier substitution.
+CREATE OR REPLACE FUNCTION p8.server_refusal_templates()
+RETURNS TABLE(tpl TEXT, policynamed BOOLEAN) LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT * FROM (VALUES
+    ('permission denied for @K@ @R@', FALSE),
+    ('new row violates row-level security policy for table "@R@"', FALSE),
+    ('new row violates row-level security policy (USING expression) for table "@R@"', FALSE),
+    ('query would be affected by row-level security policy for table "@R@"', FALSE),
+    ('target row violates row-level security policy (USING expression) for table "@R@"', FALSE),
+    ('new row violates row-level security policy "@P@" for table "@R@"', TRUE),
+    ('new row violates row-level security policy "@P@" (USING expression) for table "@R@"', TRUE),
+    ('target row violates row-level security policy "@P@" (USING expression) for table "@R@"', TRUE)
+  ) v(tpl, policynamed);
+$fn$;
+
+-- The EXACT set: what the server could write about THIS relation, with the
+-- policy names taken from `pg_policy` and never from the message. This is what
+-- both arrival terms compare against, byte for byte. `R30-F-1`: there is no
+-- `lower()` on either side any more. Round 39 lowered the message and compared
+-- `pg_class.relname` byte-wise, so the two halves of one question used two
+-- rules: a twin wearing the declared name in another LETTER CASE satisfied the
+-- arrival term and was invisible to the uniqueness census. Four cases passed
+-- at rc 0 that way, and in each the role could do what the case published as
+-- refused. `lower()` bought nothing even where it was honest — the declared
+-- name is already plain lower case and the server prints it VERBATIM — so it
+-- was pure widening, by every case variant of the name, and `lower(relname)`
+-- is not the fix either: `relname` collates `C`, so U+212A (the KELVIN SIGN)
+-- escapes that census a second time while `lower()` in the database collation
+-- folds it to `k` (`ATK-U6`, measured).
+CREATE OR REPLACE FUNCTION p8.server_refusal_candidates(rel OID, relation TEXT, kindword TEXT)
+RETURNS TEXT[] LANGUAGE sql STABLE AS $fn$
+  SELECT coalesce(array_agg(DISTINCT c), ARRAY[]::TEXT[]) FROM (
+    SELECT replace(replace(t.tpl, '@K@', coalesce(kindword, '')), '@R@', relation) AS c
+      FROM p8.server_refusal_templates() t
+     WHERE NOT t.policynamed
+    UNION ALL
+    SELECT replace(replace(replace(t.tpl, '@K@', coalesce(kindword, '')), '@R@', relation),
+                   '@P@', pol.polname)
+      FROM p8.server_refusal_templates() t
+      CROSS JOIN pg_policy pol
+     WHERE t.policynamed AND pol.polrelid = rel
+  ) s;
+$fn$;
+
+-- A quoted field the server writes is a field it writes UNESCAPED, which is
+-- `R29-F-1`. For the impostor test the question is not which object a message
+-- is about but whether the case's own published sentence READS as prose the
+-- server could have written, and a reader cannot attribute a quoted field any
+-- better than the law can. So both sides are canonicalised the same way: every
+-- quoted run becomes `"*"`.
+CREATE OR REPLACE FUNCTION p8.canon_quoted(t TEXT) RETURNS TEXT LANGUAGE sql IMMUTABLE AS $fn$
+  SELECT regexp_replace(coalesce(t, ''), '"[^"]*"', '"*"', 'g');
+$fn$;
+
+-- The SHAPE set, for the impostor test, derived from the same templates: each
+-- one rendered for this relation with its policy field canonicalised, plus the
+-- same template with the name field removed, so prose the server writes about
+-- ANOTHER relation of the same kind is caught too. A policy name is NOT taken
+-- from `pg_policy` here, and that is the finding: the server can print a
+-- policy-named message about a relation that carries no policy today, and the
+-- case that publishes one is claiming exactly that.
+CREATE OR REPLACE FUNCTION p8.server_refusal_shapes(relation TEXT, kindword TEXT)
+RETURNS TEXT[] LANGUAGE sql STABLE AS $fn$
+  SELECT coalesce(array_agg(DISTINCT sh), ARRAY[]::TEXT[]) FROM (
+    SELECT p8.canon_quoted(replace(replace(replace(t.tpl, '@K@', coalesce(kindword, '')),
+                                           '@R@', relation), '@P@', '*')) AS sh
+      FROM p8.server_refusal_templates() t
+    UNION ALL
+    SELECT rtrim(p8.canon_quoted(replace(replace(replace(t.tpl, '@K@', coalesce(kindword, '')),
+                                                 '@R@', ''), '@P@', '*')))
+      FROM p8.server_refusal_templates() t
+  ) s WHERE sh <> '';
+$fn$;
+
 CREATE OR REPLACE FUNCTION p8.case_refuses_core(label TEXT, stmt TEXT, expect TEXT, subject TEXT,
                                                 kind TEXT, relation TEXT) RETURNS void
 LANGUAGE plpgsql AS $$
@@ -1124,10 +1235,33 @@ DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOO
         rlsdecision BOOLEAN; rlsrel TEXT;
         relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[]; leadkw TEXT; scanned TEXT;
         homonyms TEXT;
-        raisedpriv BOOLEAN; impostor TEXT;
+        raisedpriv BOOLEAN; impostor TEXT; rlson BOOLEAN;
         reach OID[];
 BEGIN
   witnessed := subject IS NOT NULL;
+  -- ROUND 40, `R30-S-1`. The first sentence of this file says a case is never
+  -- passed by "it throws", and two spellings did exactly that. `expect = ''`
+  -- passed because `position('' in <anything>)` is 1; `expect = NULL` passed
+  -- because `position(NULL in x) = 0` is NULL and `IF NULL THEN` does not
+  -- fire — three-valued logic, which this phase has a lesson about and still
+  -- walked into. Measured on the runner's own impostor fixture:
+  --
+  --   expect = ''    → NOTICE: OR3 PASS refused by  [42501]        rc 0
+  --   expect = NULL  → NOTICE: OR5 PASS refused by <NULL> [42501]  rc 0
+  --
+  -- Both also skipped round 39's impostor term by construction, because it was
+  -- gated on `coalesce(expect,'') <> ''` — an enumerated exemption with a hole
+  -- in it, which is a class this phase knows. Such a case publishes no prose,
+  -- so it carries no FALSE claim and the challenger graded it a residual; what
+  -- it does carry is a PASS that no sentence of its own supports, and that is
+  -- the thing this form exists to refuse. No live case declares either.
+  IF expect IS NULL OR expect = '' THEN
+    RAISE EXCEPTION '% FAIL: THE CASE ASSERTS NO REFUSAL — this form takes the refusal the '
+                    'statement must be refused BY, and it was given %, so any error at all '
+                    'would satisfy it and "it throws" would be the whole of the evidence. '
+                    'Name the refusal (R30-S-1)',
+      label, CASE WHEN expect IS NULL THEN 'NULL' ELSE 'the empty string' END;
+  END IF;
   -- ROUND 29, N-3. Every path into this function passes through here, including
   -- the unwitnessed three-argument wrapper, which is the one the coordinator's
   -- laundering attack used. The three new forms check it too; checking it twice
@@ -1367,8 +1501,12 @@ BEGIN
     --
     --   (a) BY ARRIVAL, KIND-QUALIFIED: the server's own message must be
     --       `permission denied for <kind> <declared>`, where <kind> is read
-    --       from the declared relation's OWN `relkind` in `pg_class` (plus
-    --       the version-independent spelling `relation`). The server names
+    --       from the declared relation's OWN `relkind` in `pg_class`. ROUND
+    --       40, `R30-S-3`: a second candidate spelling `relation` in place of
+    --       the kind stood here for four rounds and PostgreSQL 16 has no such
+    --       template — the server binary carries 37 `permission denied for
+    --       …` templates and that is not one of them, measured — so it was
+    --       dead prose and it is deleted. The server names
     --       the kind of the object it refused — measured on 16.15: `table`,
     --       `view`, `materialized view`, `foreign table`, `sequence`,
     --       `function` — so a refusal about a FUNCTION wearing the declared
@@ -1475,33 +1613,57 @@ BEGIN
       -- case that was built to walk through it (ATK-H2) now reds.
       raisedpriv := (sst = '42501'
                      AND split_part(coalesce(ctx,''), E'\n', 1) ~ 'PL/pgSQL function .* at RAISE');
-      IF raisedpriv AND coalesce(expect, '') <> '' THEN
-        SELECT string_agg(c.cand, ' / ') INTO impostor FROM (
-          SELECT cand FROM unnest(ARRAY[
-            'permission denied for table ' || lower(relation),
-            'permission denied for view ' || lower(relation),
-            'permission denied for materialized view ' || lower(relation),
-            'permission denied for sequence ' || lower(relation),
-            'permission denied for foreign table ' || lower(relation),
-            'permission denied for relation ' || lower(relation),
-            'new row violates row-level security policy for table "'
-              || lower(relation) || '"',
-            'new row violates row-level security policy (USING expression) for table "'
-              || lower(relation) || '"',
-            'query would be affected by row-level security policy for table "'
-              || lower(relation) || '"'
-          ]) AS cand
-        ) c
-        WHERE position(lower(expect) in c.cand) > 0
-           OR position(c.cand in lower(expect)) > 0;
+      IF raisedpriv THEN
+        -- ROUND 40, `R30-F-2`. Round 39 wrote this list by hand: nine strings,
+        -- covering three of PostgreSQL 16's seven row-level templates, while
+        -- the arrival term two hundred lines below built five of them from the
+        -- catalogue. A second hand-written copy of another program's prose is
+        -- the defect whatever strings are in it, so there is no list here any
+        -- more: the shapes come from `p8.server_refusal_shapes`, which renders
+        -- the SAME templates the arrival terms use. Measured on the parent,
+        -- each with the attack's own route removed afterwards and the statement
+        -- then ACCEPTED for the same role:
+        --
+        --   a trigger raising, at 42501, the server's own
+        --     new row violates row-level security policy "biz_isolation"
+        --       for table "p8atk_imp2"
+        --   on a relation the role may freely UPDATE
+        --     `expect` = that message, byte for byte  → PASS at rc 0 (ATK-U4b)
+        --     `expect` = the target-row template      → PASS at rc 0 (ATK-U5)
+        --
+        -- `ATK-U4b` is what settles it: the case published, as the refusal it
+        -- proved, the exact text PostgreSQL writes when a policy named
+        -- `biz_isolation` on that relation rejects a row. No reader can tell
+        -- that claim from the real thing, and round 39's bound said such a
+        -- case could not exist.
+        --
+        -- The comparison is on CANONICALISED prose, both sides: every quoted
+        -- run becomes `"*"`. That is not laxity, it is the same finding as
+        -- `R29-F-1` read from the other end — the server writes a quoted field
+        -- unescaped, so a reader cannot attribute one either, and a published
+        -- sentence that differs from the server's only inside its quotes is
+        -- indistinguishable from it. For the same reason the shapes carry the
+        -- policy field whether or not the declared relation has a policy
+        -- TODAY: the server can print a policy-named message about a relation
+        -- the moment one is added, and a case publishing one is claiming
+        -- exactly that.
+        SELECT string_agg(sh, ' / ') INTO impostor
+          FROM unnest(p8.server_refusal_shapes(relation, kindword)) AS sh
+         WHERE position(p8.canon_quoted(expect) in sh) > 0
+            OR position(sh in p8.canon_quoted(expect)) > 0;
         IF impostor IS NOT NULL THEN
           RAISE EXCEPTION '% FAIL: A CODE-RAISED 42501 IS ASSERTED AS A SERVER PRIVILEGE REFUSAL '
                           '- the refusal that arrived was written by a RAISE inside the database '
                           '(innermost frame: %), so no catalogue decided it and nothing in it is '
                           'about "%", yet this case asserts it with "%", which overlaps the prose '
-                          'the SERVER itself would print for that relation (%). Assert the refusal '
-                          'this code actually raises, in prose the server cannot produce, or make '
-                          'the case one the server decides (R29-F-2). Arrived: [%] %',
+                          'the SERVER itself would print about a relation of this kind (%). '
+                          'ROUND 40, `R30-S-5`: the test is OVERLAP and not equality, so an '
+                          'assertion that is merely SHORTER than the server''s prose lands here '
+                          'too, and that is not an accusation — it is the near miss equality '
+                          'leaves (one trailing space, and the published sentence is the '
+                          'server''s again). Assert the refusal this code actually raises, in '
+                          'prose the server cannot produce, or make the case one the server '
+                          'decides (R29-F-2, R30-F-2). Arrived: [%] %',
             label, split_part(coalesce(ctx,''), E'\n', 1), relation, expect, impostor, sst, msg;
         END IF;
       END IF;
@@ -1568,16 +1730,23 @@ BEGIN
                           'cannot attribute (R25-F-1)', label, relation;
         END IF;
       IF rlsdecision THEN
-        -- The RLS arrival term. PostgreSQL spells the object in every message
-        -- of this class with `for table "<name>"` — measured on 16.15 in both
-        -- spellings, with and without the policy's own name in front of it —
-        -- so the quoted name is read out of the server's words and compared
-        -- to the declared relation. A message of this class this form cannot
-        -- read is refused by name rather than admitted unmeasured. The reach
-        -- term is NOT asked here and the reason is the class itself: an RLS
-        -- refusal is a decision about a ROW, so the set of relations the
-        -- statement touches is not the question. The NAME is, and it is bare,
-        -- which is why the uniqueness term below runs for this class too.
+        -- The RLS arrival term. ROUND 40, `R30-S-4`: the paragraph that stood
+        -- here described the mechanism round 39 REMOVED — it said the quoted
+        -- name "is read out of the server's words and compared to the declared
+        -- relation", and nothing is read out of the server's words in this
+        -- head. That is round 29's own blocker, a paragraph left standing while
+        -- the code moved under it, inside the block that moved it. What is true
+        -- is this: the message the server sent must EQUAL, byte for byte, one
+        -- of the messages PostgreSQL could have written about the declared
+        -- relation, built from the templates in `p8.server_refusal_templates`
+        -- and from the policies `pg_policy` carries ON it. A message of this
+        -- class that equals none of them is refused by name rather than
+        -- admitted unmeasured. The reach term is NOT asked here and the reason
+        -- is the class itself: an RLS refusal is a decision about a ROW, so the
+        -- set of relations the statement touches is not the question. The name
+        -- is, and it is quoted in the message but BARE in the catalogue, which
+        -- is why the uniqueness term below runs for this class too — and why
+        -- both comparisons now use one rule, byte equality, which is `R30-F-1`.
         -- ROUND 39, `R29-F-1`. Round 38 PARSED this name out of the server's
         -- prose with `for table "([^"]*)"[^"]*$`, and defended it by saying
         -- the text comes from the server rather than from the case. That is
@@ -1612,27 +1781,25 @@ BEGIN
         --
         -- DECLARED BOUNDS. A refusal naming a PARTITION of a declared
         -- partitioned parent would not match a candidate built for the
-        -- parent, and is refused by name — fail-closed, and no case in this
-        -- pack declares a partitioned relation. The challenger also proposed
-        -- requiring `relrowsecurity` on the declared relation for this class.
-        -- It is NOT added, and the reason is this phase's own rule that a
-        -- guard nobody can run is not a guard: with the message BUILT rather
-        -- than read, a message equal to a candidate constructed for the
-        -- declared relation is already a message about the declared relation,
-        -- so the extra term could never be the thing that refuses and would
-        -- ship with no arm. Recorded rather than silently dropped.
-        SELECT bool_or(lower(coalesce(msg,'')) = cand) INTO named FROM (
-          SELECT lower(pre || 'for table "' || relation || '"') AS cand
-            FROM unnest(ARRAY['new row violates row-level security policy ',
-                              'new row violates row-level security policy (USING expression) ',
-                              'query would be affected by row-level security policy ']) AS pre
-          UNION ALL
-          SELECT lower('new row violates row-level security policy "' || pol.polname
-                       || '" ' || pre || 'for table "' || relation || '"')
-            FROM pg_policy pol
-            CROSS JOIN unnest(ARRAY['', '(USING expression) ']) AS pre
-           WHERE pol.polrelid = relid
-        ) c;
+        -- parent, and is refused by name — fail-closed, verified by the
+        -- thirtieth challenge rather than asserted here (`R30-S-7`), and no
+        -- case in this pack declares a partitioned relation.
+        --
+        -- WITHDRAWN, ROUND 40, `R30-F-1`. This paragraph went on to decline
+        -- the `relrowsecurity` term the twenty-eighth and twenty-ninth
+        -- challenges both proposed, saying it "could never be the thing that
+        -- refuses and would ship with no arm". That was a false claim about
+        -- this law, and `ATK-U3` is the case it said could not exist: a
+        -- declared relation with `relrowsecurity = f`, zero policies and a
+        -- FULL grant, whose trigger writes into a twin wearing its name in
+        -- upper case — passing at rc 0, with the role free to do what the
+        -- case published as refused. The term is added, above, as corroboration
+        -- with an arm and a one-deletion control, and the reason it is only
+        -- corroboration is written there. What made that sentence false was not
+        -- the reasoning but the `lower()` it reasoned about: "already a message
+        -- about the declared relation" was true of byte equality and false of
+        -- the case-insensitive comparison the code actually did.
+        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the row-level class
         IF NOT coalesce(named, FALSE) THEN
           RAISE EXCEPTION '% FAIL: THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION — this case '
                           'declares the % "%" and the server answered [%] %, which is not any of '
@@ -1642,6 +1809,39 @@ BEGIN
                           'reading a name out of the server''s prose, because the server writes '
                           'the name unescaped and a relation named with the delimiter injected a '
                           'field that every anchor read as the real one (R28-F-1, R29-F-1)',
+            label, kindword, relation, sst, msg;
+        END IF;
+        -- ROUND 40, and this term is here because round 39 DECLINED it with a
+        -- reason that was false. Round 39 wrote that requiring row-level
+        -- security on the declared relation "could never be the thing that
+        -- refuses and would ship with no arm", because a message equal to a
+        -- candidate built for the declared relation is already about it. The
+        -- thirtieth challenge built the case that sentence said could not
+        -- exist (`ATK-U3`): a relation with `relrowsecurity = f` and ZERO
+        -- policies, a FULL grant on it, and a trigger writing into a twin
+        -- wearing its name in upper case. Round 39's `lower()` made that
+        -- twin's message equal to the candidate, so the declined term WOULD
+        -- have refused it and WOULD have had an arm.
+        --
+        -- Dropping the `lower()` closes that case by arrival, so this term is
+        -- not what catches `ATK-U3` any more. It is kept as CORROBORATION,
+        -- which is the honest grade for it: a policy cannot refuse a row of a
+        -- relation whose `relrowsecurity` is false, so a row-level refusal
+        -- naming the declared relation while the catalogue says the declared
+        -- relation has no row-level security is a refusal about a DIFFERENT
+        -- object wearing the same name. `ATTRIB-U7` is that case built with
+        -- the twin in another schema, where arrival cannot see it, and
+        -- `RLSON-U7-CTL` deletes this term alone and shows the uniqueness
+        -- census still refuses. Necessary and not sufficient, measured in both
+        -- directions, which is what round 39 should have written instead of a
+        -- sentence about what could never happen.
+        SELECT c.relrowsecurity INTO rlson FROM pg_class c WHERE c.oid = relid;
+        IF NOT coalesce(rlson, FALSE) THEN
+          RAISE EXCEPTION '% FAIL: THE DECLARED RELATION HAS NO ROW-LEVEL SECURITY — this case '
+                          'declares the % "%" and a row-level refusal arrived naming it ([%] %), '
+                          'but pg_class.relrowsecurity is false for it, so no policy of its own '
+                          'can have refused anything: the refusal is about another object wearing '
+                          'this name (R30-F-1 ATK-U3). Declare the relation the policy is ON',
             label, kindword, relation, sst, msg;
         END IF;
       END IF;
@@ -1753,9 +1953,7 @@ BEGIN
         -- test is therefore byte EQUALITY against the two messages the server
         -- could write about the declared relation, built from its own
         -- `relkind` — not a pattern with a boundary to get wrong.
-        named := lower(coalesce(msg,'')) IN
-                   ('permission denied for ' || kindword || ' ' || lower(relation),
-                    'permission denied for relation ' || lower(relation));
+        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the grant class
         IF NOT named THEN
           RAISE EXCEPTION '% FAIL: THE REFUSAL IS NOT ABOUT THE DECLARED RELATION — this case '
                           'declares the % "%" and the server refused with [%] %, which is not '
@@ -1927,9 +2125,14 @@ BEGIN
         -- respectively, and for the same reason: the server spells the kind,
         -- `permission denied for sequence s` and `for function f`, so a
         -- function homonym is already refused by the arrival term above
-        -- (`X1`), while a sequence prints a kind this form does not map and
-        -- the version-independent spelling `relation` is accepted by arrival,
-        -- so sequences are counted here. ROUND 38, `R28-S-1`: a TOAST
+        -- (`X1`), while a sequence prints a kind this form does not map, so
+        -- sequences are counted here. ROUND 40, `R30-S-3`: the reason written
+        -- here used to be that `permission denied for relation s` "is accepted
+        -- by arrival", and no such template exists in PostgreSQL 16 — and in
+        -- any case a DECLARED sequence reds before arrival is reached, at
+        -- `kindword IS NULL`, measured by the thirtieth challenge. Keeping
+        -- `'S'` in this set is the conservative direction and it stays; the
+        -- reason beside it was wrong and is corrected. ROUND 38, `R28-S-1`: a TOAST
         -- relation (`relkind` 't') is spelled `table` by the server — it maps
         -- to `OBJECT_TABLE` in `get_relkind_objtype` — so it belongs in the
         -- set and is now in it. It is unreachable from a case (without a

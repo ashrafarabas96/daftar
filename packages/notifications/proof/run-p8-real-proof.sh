@@ -142,6 +142,20 @@ COLL=$(sup "SELECT datcollate FROM pg_database WHERE datname='postgres'" postgre
 say "server_version=$PGVER datcollate(template)=$COLL"
 case "$PGVER" in 16.*) ;; *) say "ABORT: server_version is $PGVER, not the PostgreSQL 16 family"; exit 2;; esac
 case "$COLL" in en_US.utf8|en_US.UTF-8) ;; *) say "ABORT: datcollate is $COLL, not en_US.utf8"; exit 2;; esac
+# ROUND 40, `R30-S-6`. Every arrival term in this pack is now byte equality
+# against the ENGLISH prose PostgreSQL writes, so the message locale is a
+# dependency of the whole attribution law. It was an UNSTATED one for six
+# rounds — the regex and substring forms before it were just as English — and
+# an unstated dependency is one nobody can check against a run. It is asserted
+# here, where the version and the collation are. Fail-CLOSED either way: on a
+# cluster whose `lc_messages` selects a translated catalogue the terms would red
+# rather than pass, and no CASE can reach this setting (`lc_messages` is
+# superuser-context: `SET lc_messages` as `daftar_worker` is `ERROR: permission
+# denied to set parameter`), so what this assertion bounds is the OPERATOR's
+# cluster and not any case's reach.
+LCM=$(sup "SHOW lc_messages" | tr -d ' \n')
+say "lc_messages=$LCM — the arrival terms compare the server's ENGLISH prose byte for byte, so this is a dependency of every one of them and not a detail of the environment"
+case "$LCM" in en_US.utf8|en_US.UTF-8|C|C.utf8|C.UTF-8|en_US|POSIX) ;; *) say "ABORT: lc_messages is $LCM, so the server does not write the English refusal prose every arrival term in this pack compares against"; exit 2;; esac
 
 # The applier is the repository's own, and it needs the repo's node_modules.
 TSX=$REPO/node_modules/.bin/tsx
@@ -3509,6 +3523,16 @@ CREATE TABLE IF NOT EXISTS public.p8bench_inj(k TEXT PRIMARY KEY, v INT NOT NULL
 INSERT INTO public.p8bench_inj VALUES ('a', 1) ON CONFLICT DO NOTHING;
 REVOKE ALL ON public.p8bench_inj FROM PUBLIC;
 GRANT SELECT, UPDATE (v) ON public.p8bench_inj TO daftar_worker;
+-- ROUND 40: this relation carries a PERMISSIVE policy of its own, which lets
+-- every row through and refuses nothing. It is here so that the round-40
+-- corroborating term (the declared relation must have row-level security) is
+-- SATISFIED for this fixture, and INJECT-H1-CTL therefore measures what it
+-- was built to measure: the construction against round 38's parse, one term,
+-- with nothing else standing behind it. Without it that control measured two
+-- terms at once and attributed to neither.
+ALTER TABLE public.p8bench_inj ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_injopen ON public.p8bench_inj;
+CREATE POLICY p8bench_injopen ON public.p8bench_inj FOR ALL USING (true) WITH CHECK (true);
 CREATE OR REPLACE FUNCTION public.p8bench_injtg() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER AS $t$
 BEGIN
@@ -3549,12 +3573,162 @@ END $t$;
 DROP TRIGGER IF EXISTS p8bench_imptg ON public.p8bench_imp;
 CREATE TRIGGER p8bench_imptg BEFORE UPDATE ON public.p8bench_imp
   FOR EACH ROW EXECUTE FUNCTION public.p8bench_imptg();
+-- ROUND 40, R30-F-1: the same twin shapes with the twin wearing the declared
+-- name in another LETTER CASE, and once with U+212A (the KELVIN SIGN), which
+-- lower() folds to k in the database collation while pg_class.relname
+-- collates C. Nothing here needs a superuser: these are names any role that
+-- may CREATE TABLE can choose.
+CREATE TABLE IF NOT EXISTS public.p8bench_up(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_up VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_up FROM PUBLIC;
+GRANT SELECT, UPDATE (v) ON public.p8bench_up TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public."P8BENCH_UP"(j TEXT);
+REVOKE ALL ON public."P8BENCH_UP" FROM PUBLIC;
+CREATE OR REPLACE FUNCTION public.p8bench_uptg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+DECLARE n BIGINT;
+BEGIN
+  SELECT count(*) INTO n FROM public."P8BENCH_UP";
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_uptg ON public.p8bench_up;
+CREATE TRIGGER p8bench_uptg BEFORE UPDATE ON public.p8bench_up
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_uptg();
+CREATE TABLE IF NOT EXISTS public.p8bench_upf(k TEXT);
+CREATE TABLE IF NOT EXISTS public."P8BENCH_UPF"(k TEXT);
+REVOKE ALL ON public.p8bench_upf, public."P8BENCH_UPF" FROM PUBLIC;
+GRANT INSERT (k) ON public.p8bench_upf TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_upftwin() RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER AS $f$
+DECLARE n BIGINT;
+BEGIN
+  SELECT count(*) INTO n FROM public."P8BENCH_UPF";
+  RETURN 'z';
+END $f$;
+REVOKE ALL ON FUNCTION public.p8bench_upftwin() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.p8bench_upftwin() TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public.p8bench_kel(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_kel VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_kel FROM PUBLIC;
+GRANT SELECT, UPDATE (v) ON public.p8bench_kel TO daftar_worker;
+DO $d$
+BEGIN
+  EXECUTE 'CREATE TABLE IF NOT EXISTS public.'
+       || quote_ident('p8bench_ke' || U&'\212A') || '(j TEXT)';
+  EXECUTE 'REVOKE ALL ON public.' || quote_ident('p8bench_ke' || U&'\212A')
+       || ' FROM PUBLIC';
+  EXECUTE 'CREATE OR REPLACE FUNCTION public.p8bench_keltg() RETURNS trigger'
+       || ' LANGUAGE plpgsql SECURITY INVOKER AS $t$ DECLARE n BIGINT;'
+       || ' BEGIN SELECT count(*) INTO n FROM public.'
+       || quote_ident('p8bench_ke' || U&'\212A') || '; RETURN NEW; END $t$';
+END $d$;
+DROP TRIGGER IF EXISTS p8bench_keltg ON public.p8bench_kel;
+CREATE TRIGGER p8bench_keltg BEFORE UPDATE ON public.p8bench_kel
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_keltg();
+-- The row-level half, twice: once with the declared relation carrying NO
+-- row-level security (ATK-U3's shape, where the corroborating term speaks) and
+-- once with it carrying a policy of its own (where only the byte comparison
+-- does).
+CREATE TABLE IF NOT EXISTS public.p8bench_upr(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_upr VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_upr FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_upr TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public."P8BENCH_UPR"(k TEXT);
+ALTER TABLE public."P8BENCH_UPR" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_uprp ON public."P8BENCH_UPR";
+CREATE POLICY p8bench_uprp ON public."P8BENCH_UPR" FOR ALL USING (true) WITH CHECK (k = 'OWNED');
+REVOKE ALL ON public."P8BENCH_UPR" FROM PUBLIC;
+GRANT SELECT, INSERT ON public."P8BENCH_UPR" TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_uprtg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  INSERT INTO public."P8BENCH_UPR" VALUES ('NOT-OWNED');
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_uprtg ON public.p8bench_upr;
+CREATE TRIGGER p8bench_uprtg BEFORE UPDATE ON public.p8bench_upr
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_uprtg();
+CREATE TABLE IF NOT EXISTS public.p8bench_uprb(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_uprb VALUES ('a', 1) ON CONFLICT DO NOTHING;
+ALTER TABLE public.p8bench_uprb ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_uprbp ON public.p8bench_uprb;
+CREATE POLICY p8bench_uprbp ON public.p8bench_uprb FOR ALL USING (true) WITH CHECK (true);
+REVOKE ALL ON public.p8bench_uprb FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_uprb TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public."P8BENCH_UPRB"(k TEXT);
+ALTER TABLE public."P8BENCH_UPRB" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_uprbp2 ON public."P8BENCH_UPRB";
+CREATE POLICY p8bench_uprbp2 ON public."P8BENCH_UPRB" FOR ALL USING (true) WITH CHECK (k = 'OWNED');
+REVOKE ALL ON public."P8BENCH_UPRB" FROM PUBLIC;
+GRANT SELECT, INSERT ON public."P8BENCH_UPRB" TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_uprbtg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  INSERT INTO public."P8BENCH_UPRB" VALUES ('NOT-OWNED');
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_uprbtg ON public.p8bench_uprb;
+CREATE TRIGGER p8bench_uprbtg BEFORE UPDATE ON public.p8bench_uprb
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_uprbtg();
+-- The corroborating term's own arm: the twin wears the declared name in
+-- ANOTHER SCHEMA, so the message IS one the server could write about the
+-- declared relation and only the catalogue can tell them apart.
+DROP SCHEMA IF EXISTS p8rls CASCADE;
+CREATE SCHEMA p8rls;
+GRANT USAGE ON SCHEMA p8rls TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public.p8bench_rlsn(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_rlsn VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_rlsn FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_rlsn TO daftar_worker;
+CREATE TABLE IF NOT EXISTS p8rls.p8bench_rlsn(k TEXT);
+ALTER TABLE p8rls.p8bench_rlsn ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_rlsnp ON p8rls.p8bench_rlsn;
+CREATE POLICY p8bench_rlsnp ON p8rls.p8bench_rlsn FOR ALL USING (true) WITH CHECK (k = 'OWNED');
+REVOKE ALL ON p8rls.p8bench_rlsn FROM PUBLIC;
+GRANT SELECT, INSERT ON p8rls.p8bench_rlsn TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_rlsntg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  INSERT INTO p8rls.p8bench_rlsn VALUES ('NOT-OWNED');
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_rlsntg ON public.p8bench_rlsn;
+CREATE TRIGGER p8bench_rlsntg BEFORE UPDATE ON public.p8bench_rlsn
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_rlsntg();
+-- ROUND 40, R30-F-2: the two impostor shapes round 39's nine strings could not
+-- see, both of them templates PostgreSQL 16 carries in its own binary.
+CREATE TABLE IF NOT EXISTS public.p8bench_imp2(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_imp2 VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_imp2 FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_imp2 TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_imp2tg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  RAISE EXCEPTION 'new row violates row-level security policy "biz_isolation" for table "p8bench_imp2"'
+    USING ERRCODE = '42501';
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_imp2tg ON public.p8bench_imp2;
+CREATE TRIGGER p8bench_imp2tg BEFORE UPDATE ON public.p8bench_imp2
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_imp2tg();
+CREATE TABLE IF NOT EXISTS public.p8bench_imp3(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_imp3 VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_imp3 FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_imp3 TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_imp3tg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  RAISE EXCEPTION 'target row violates row-level security policy (USING expression) for table "p8bench_imp3"'
+    USING ERRCODE = '42501';
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_imp3tg ON public.p8bench_imp3;
+CREATE TRIGGER p8bench_imp3tg BEFORE UPDATE ON public.p8bench_imp3
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_imp3tg();
 SQL
 if [ -s "$WB/abench.log" ] && grep -qi "^ERROR" "$WB/abench.log"; then
   say "ATTRIB-BENCH: PLANT NOT ESTABLISHED — the attribution bench could not be built: $(tail -1 "$WB/abench.log")"
   FAILED=1
 else
-  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation, a row-conditional trigger, a relation whose name is carried by nothing else, a twin reached by a per-row trigger under a column-scoped grant, a twin reached by a function the planner FOLDS under a column-scoped grant, and a POLICY on a relation the declared one's trigger writes into, a POLICY on a relation whose NAME carries the delimiter the server's row-level message uses, a twin whose NAME carries a space, and a relation the role may genuinely update whose trigger RAISES the server's own privilege prose at 42501 — so a case can declare one subject while the refusal it reads is about another, by eight different routes, and every grant and every name here is one any role could create (R25-F-1, the coordinator's 3.2 and 3.3, R27-F-1, R28-F-1, R29-F-1, R29-F-2)"
+  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation, a row-conditional trigger, a relation whose name is carried by nothing else, a twin reached by a per-row trigger under a column-scoped grant, a twin reached by a function the planner FOLDS under a column-scoped grant, and a POLICY on a relation the declared one's trigger writes into, a POLICY on a relation whose NAME carries the delimiter the server's row-level message uses, a twin whose NAME carries a space, and a relation the role may genuinely update whose trigger RAISES the server's own privilege prose at 42501, and then the same shapes again with the twin wearing the declared name in UPPER case, with U+212A in place of its last letter, and in another SCHEMA, plus two triggers raising the two row-level templates round 39's impostor list could not see — so a case can declare one subject while the refusal it reads is about another, by fifteen different routes, and every grant and every name here is one any role could create (R25-F-1, the coordinator's 3.2 and 3.3, R27-F-1, R28-F-1, R29-F-1, R29-F-2, R30-F-1, R30-F-2)"
 fi
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T1 a relation case refused about a SECOND relation',
@@ -3764,6 +3938,71 @@ SELECT p8.case_refuses_row('H2 a trigger RAISING the server own privilege prose'
 ROLLBACK;
 SQL
 } > "$WB/h2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U1 a twin wearing the declared name in UPPER case',
+  $q$UPDATE @REL@ SET v = 2$q$, 'permission denied', 'p8bench_up', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('U2 the relation form, a FOLDED read of an UPPER-case twin',
+  $q$INSERT INTO @REL@ VALUES (public.p8bench_upftwin())$q$,
+  'permission denied', 'p8bench_upf');
+ROLLBACK;
+SQL
+} > "$WB/u2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U6 a twin whose name carries U+212A, the KELVIN SIGN',
+  $q$UPDATE @REL@ SET v = 2$q$, 'permission denied', 'p8bench_kel', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u6.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U3 the row-level class, declared relation carrying NO policy',
+  $q$UPDATE @REL@ SET v = 2$q$, 'row-level security policy', 'p8bench_upr', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u3.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U3b the same with the declared relation carrying a policy of its own',
+  $q$UPDATE @REL@ SET v = 2$q$, 'row-level security policy', 'p8bench_uprb', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u3b.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U7 the twin wears the declared name in ANOTHER SCHEMA',
+  $q$UPDATE @REL@ SET v = 2$q$, 'row-level security policy', 'p8bench_rlsn', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u7.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U4b expect is the POLICY-NAMED message, byte for byte',
+  $q$UPDATE @REL@ SET v = 2$q$,
+  'new row violates row-level security policy "biz_isolation" for table "p8bench_imp2"',
+  'p8bench_imp2', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u4b.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('U5 the target-row template neither list carried',
+  $q$UPDATE @REL@ SET v = 2$q$,
+  'target row violates row-level security policy (USING expression) for table',
+  'p8bench_imp3', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/u5.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('UE an honest refusal asserted by the EMPTY string',
+  $q$SELECT 1 FROM @REL@$q$, '', 'p8bench_forbidden');
+ROLLBACK;
+SQL
+} > "$WB/ue.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('UN the same asserted by NULL',
+  $q$SELECT 1 FROM @REL@$q$, NULL, 'p8bench_forbidden');
+ROLLBACK;
+SQL
+} > "$WB/un.sql"
 wb_probe w1.sql "ATTRIB-W1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R26-F-1 W1, which passed at rc 0 on this head's parent: X2 with ONE extra DECLARED keyword as a column alias, which made the privilege conjunction smaller and took the term out of the law — and 'expect' spells the declared relation's name in full, so nothing in the case's wording is doing the work"
 wb_probe w2.sql "ATTRIB-W2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
@@ -3790,6 +4029,26 @@ wb_probe h3.sql "ATTRIB-H3" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
   "R29-F-1 ATK-H3, the grant half of the same class: a twin NAMED 'p8bench_tws x', reached by a per-row trigger under a column-scoped grant, makes the server write 'permission denied for table p8bench_tws x' — which round 38's boundary regex accepted, because a space IS the boundary it allowed after the declared name. The arrival term is now byte equality against the two messages the server can write for this relation's kind"
 wb_probe h2.sql "ATTRIB-H2" "A CODE-RAISED 42501 IS ASSERTED AS A SERVER PRIVILEGE REFUSAL" \
   "R29-F-2, which passed at rc 0 on this head's parent and is what falsifies the bound round 38 published as withdrawn: a trigger whose whole body RAISES the server's own privilege prose at 42501, on a relation the role MAY update — 'ALTER TABLE public.p8bench_imp DISABLE TRIGGER p8bench_imptg' and the same UPDATE by the same role returns UPDATE 1. assert_arriving_class admits 42501 for a row case, the handler ban reads the statement's own block and this trigger has none, and the EXPLAIN construction is the relation form's. What this head refuses is the ASSERTION: a code-raised 42501 may not be published in prose the server itself would print for the declared relation"
+wb_probe u1.sql "ATTRIB-U1" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R30-F-1 ATK-U1, which passed at rc 0 on this head's parent and is round 39's own H3 with ONE thing changed: the twin wears the declared name in UPPER case instead of the declared name plus a space. Every term was silent for its own reason, which is why no single one of them was the bug - reach cannot enter a trigger, the catalogue answers FALSE for a column-scoped grant, the message LOWERED equals the built candidate, and the uniqueness census compares relname BYTE for byte, so it never saw the twin at all"
+wb_probe u2.sql "ATTRIB-U2" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R30-F-1 ATK-U2, the relation form of the same: an IMMUTABLE function the planner FOLDS reads the UPPER-case twin under a column-scoped INSERT, so the plain statement is accepted and the refusal is wholly the twin's. This is R27-F-1's F2 shape in the sixth round of one class, reached by respelling one name"
+wb_probe u6.sql "ATTRIB-U6" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R30-F-1 ATK-U6, and it is what decides HOW the fix had to be written: the twin's name is the declared name with U+212A, the KELVIN SIGN, in place of its last letter. lower() in the database collation folds U+212A to k, so the message matched; pg_class.relname collates C, so lower(relname) would NOT have folded it and the census would have missed it a second time. The fix is to lower NEITHER side"
+wb_probe u3.sql "ATTRIB-U3" "THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION" \
+  "R30-F-1 ATK-U3, the case round 39 said could not exist when it declined the relrowsecurity term: the declared relation has relrowsecurity = f, ZERO policies and a FULL grant, and its trigger writes into an UPPER-case twin that carries the policy. It passed at rc 0 on the parent, and with the trigger disabled the same role updates the same row - so the term round 39 declined WOULD have refused it and WOULD have had an arm"
+wb_probe u3b.sql "ATTRIB-U3B" "THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION" \
+  "the same with the declared relation carrying a policy of its OWN, so the corroborating relrowsecurity term is satisfied and the BYTE comparison is the only thing left standing between the case and a PASS - which is what FOLD-U3B-CTL measures"
+wb_probe u7.sql "ATTRIB-U7" "THE DECLARED RELATION HAS NO ROW-LEVEL SECURITY" \
+  "the arm for the term round 39 declined, and the reason it is only CORROBORATION: here the twin wears the declared name in ANOTHER SCHEMA, so the message IS one the server could write about the declared relation and no comparison of the message can tell them apart. The catalogue can - a policy cannot refuse a row of a relation whose relrowsecurity is false - and RLSON-U7-CTL shows the uniqueness census refuses this one too"
+wb_probe u4b.sql "ATTRIB-U4B" "A CODE-RAISED 42501 IS ASSERTED AS A SERVER PRIVILEGE REFUSAL" \
+  "R30-F-2 ATK-U4b, which passed at rc 0 on this head's parent and is the one that settles the finding: the case publishes, as the refusal it proves, the complete text PostgreSQL writes when a policy named biz_isolation on that relation rejects a row - and the role may freely UPDATE the relation. Round 39's impostor list was nine hand-written strings covering three of the server's seven row-level templates, and this is one of the four it could not see"
+wb_probe u5.sql "ATTRIB-U5" "A CODE-RAISED 42501 IS ASSERTED AS A SERVER PRIVILEGE REFUSAL" \
+  "R30-F-2 ATK-U5, the target-row template, which neither round 39 list carried in either direction - the arrival builder did not construct it and the impostor list did not test it. Both now come from ONE declaration of the server's prose, read out of the PostgreSQL 16 binary"
+wb_probe ue.sql "EXPECT-EMPTY" "THE CASE ASSERTS NO REFUSAL" \
+  "R30-S-1: an HONEST refusal asserted by the empty string passed at rc 0 on the parent, because position('' in anything) is 1 - so 'it throws' was the whole of the evidence, which is the one thing the first sentence of the helpers says this form never accepts"
+wb_probe un.sql "EXPECT-NULL" "THE CASE ASSERTS NO REFUSAL" \
+  "the same asserted by NULL, which passed for a different reason: position(NULL in x) = 0 is NULL and IF NULL THEN does not fire. Three-valued logic, which this phase has a lesson about and walked into anyway"
 wl_sub_ctl "REACH-W1-CTL" w1.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
@@ -3831,20 +4090,45 @@ wl_sub_ctl "RLS-A1B-CTL" a1b.sql \
   pass "PASS refused by new row violates row-level security policy" \
   "the same with 'expect' naming the other relation in full, which is the measurement that shows no text test on the case's own wording was ever going to close it (R28-F-1)"
 wl_sub_ctl "INJECT-H1-CTL" h1.sql \
-  "SELECT bool_or(lower(coalesce(msg,'')) = cand) INTO named FROM (" \
-  "SELECT bool_or(lower(coalesce(msg,'')) = cand OR lower(substring(coalesce(msg,'') from 'for table \"([^\"]*)\"[^\"]*\$')) = lower(relation)) INTO named FROM (" \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the row-level class" \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword)) OR lower(substring(coalesce(msg,'') from 'for table \"([^\"]*)\"[^\"]*\$')) = lower(relation);  -- the row-level class" \
   pass "PASS refused by row-level security policy" \
-  "with round 38's PARSE restored beside the construction — one change, and the only one — the injected name passes again at rc 0, so the hole was the reading of the message and not the placement of the term. The parse and the construction disagree only here, which is the measurement that says building the message is what closed it (R29-F-1)"
+  "with round 38's PARSE restored BESIDE the construction — one change, and the only one — the injected name passes again at rc 0, so the hole was the reading of the message and not the placement of the term. ROUND 40 re-points this control at the line that now carries the comparison; it measures the same thing it measured in round 39 (R29-F-1)"
 wl_sub_ctl "INJECT-H3-CTL" h3.sql \
-  "        named := lower(coalesce(msg,'')) IN
-                   ('permission denied for ' || kindword || ' ' || lower(relation),
-                    'permission denied for relation ' || lower(relation));" \
-  "        named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
-                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|\$)');" \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the grant class" \
+  "        named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword || '|relation) ' || lower(relation) || '([^a-z0-9_]|\$)');  -- the grant class" \
   pass "PASS refused by permission denied" \
   "with round 38's boundary regex restored in place of byte equality the spaced twin passes again, which is the whole of R29-F-1's grant half: the term allowed ANY non-identifier character after the declared name, and a name may contain a space, so the server's own field had no end the regex could find"
+wl_sub_ctl "FOLD-U1-CTL" u1.sql \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the grant class" \
+  "        named := lower(coalesce(msg,'')) = ANY (ARRAY(SELECT lower(c) FROM unnest(p8.server_refusal_candidates(relid, relation, kindword)) AS c));  -- the grant class" \
+  pass "PASS refused by permission denied" \
+  "with round 39's lower() restored on both sides of the grant comparison — the ONE token this round removes — the UPPER-case twin passes again at rc 0. Nothing else in the law sees it: the uniqueness census compares relname byte for byte, so the two halves of one question were decided by two rules and this is the measurement of what that cost (R30-F-1)"
+wl_sub_ctl "FOLD-U3-CTL" u3.sql \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the row-level class" \
+  "        named := lower(coalesce(msg,'')) = ANY (ARRAY(SELECT lower(c) FROM unnest(p8.server_refusal_candidates(relid, relation, kindword)) AS c));  -- the row-level class" \
+  refuse "THE DECLARED RELATION HAS NO ROW-LEVEL SECURITY" \
+  "with the same lower() restored on the row-level comparison this case is STILL refused, and by the term round 39 declined as one that could never refuse anything. That is the whole of ATK-U3 answered in one arm: the sentence declining it was false, and the term it declined is what stands behind the byte comparison when the byte comparison is taken away"
+wl_sub_ctl "FOLD-U3B-CTL" u3b.sql \
+  "        named := coalesce(msg,'') = ANY (p8.server_refusal_candidates(relid, relation, kindword));  -- the row-level class" \
+  "        named := lower(coalesce(msg,'')) = ANY (ARRAY(SELECT lower(c) FROM unnest(p8.server_refusal_candidates(relid, relation, kindword)) AS c));  -- the row-level class" \
+  pass "PASS refused by row-level security policy" \
+  "the same change on a declared relation that carries a policy of its own, so the corroborating term is satisfied and cannot catch it: the case passes again at rc 0. This is the pair FOLD-U3-CTL needs — one case where the byte comparison is corroborated and one where it is alone — because a control that measures two terms at once attributes to neither"
+wl_sub_ctl "SHAPE-U5-CTL" u5.sql \
+  "p8.server_refusal_shapes(relation, kindword)" \
+  "ARRAY['permission denied for ' || kindword || ' ' || relation]" \
+  pass "PASS refused by target row violates row-level security policy" \
+  "with the impostor test narrowed back to the grant prose alone — which is the EXTENT round 39 shipped, not its direction — the target-row template passes again at rc 0. The defect was never that the test was pointed the wrong way; it was that a second hand-written copy of another program's prose covered three of its seven shapes (R30-F-2)"
+wl_sub_ctl "RLSON-U7-CTL" u7.sql \
+  "        IF NOT coalesce(rlson, FALSE) THEN" "        IF false THEN" \
+  refuse "THE DECLARED RELATION'S NAME DOES NOT NAME ONE OBJECT" \
+  "with the corroborating term deleted ALONE the cross-schema twin is still refused, by the uniqueness census behind it — which is why this term is graded corroboration and not a closure, in the author's own words this time rather than in a sentence about what could never happen (R30-F-1)"
+wl_sub_ctl "EXPECT-EMPTY-CTL" ue.sql \
+  "  IF expect IS NULL OR expect = '' THEN" "  IF false THEN" \
+  pass "PASS refused by " \
+  "with the one line this round added deleted, an honest refusal asserted by the empty string passes again at rc 0 and the log says 'PASS refused by' followed by nothing — which is the shape a reader would have to notice for themselves (R30-S-1)"
 wl_sub_ctl "IMPOSTOR-H2-CTL" h2.sql \
-  "      IF raisedpriv AND coalesce(expect, '') <> '' THEN" "      IF false THEN" \
+  "      IF raisedpriv THEN" "      IF false THEN" \
   pass "PASS refused by permission denied" \
   "with the one term this round added deleted the trigger's imitation passes again at rc 0, and nothing else in the law catches it — which is what makes the withdrawn sentence false rather than merely imprecise (R29-F-2)"
 wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \

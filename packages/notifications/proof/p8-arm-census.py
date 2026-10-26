@@ -300,6 +300,24 @@ ARM_LABELS = (
     "INJECT-H1-CTL",
     "INJECT-H3-CTL",
     "IMPOSTOR-H2-CTL",
+    # Round 40, R30-F-1 and R30-F-2: one comparison rule for one question, and
+    # one declaration of the server's prose for every term that reads it.
+    "ATTRIB-U1",
+    "ATTRIB-U2",
+    "ATTRIB-U3",
+    "ATTRIB-U3B",
+    "ATTRIB-U4B",
+    "ATTRIB-U5",
+    "ATTRIB-U6",
+    "ATTRIB-U7",
+    "EXPECT-EMPTY",
+    "EXPECT-NULL",
+    "FOLD-U1-CTL",
+    "FOLD-U3-CTL",
+    "FOLD-U3B-CTL",
+    "SHAPE-U5-CTL",
+    "RLSON-U7-CTL",
+    "EXPECT-EMPTY-CTL",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
     # each term has an arm that measures what the behaviour test admits or
@@ -392,6 +410,10 @@ NOT_ARM_PREFIXES = (
     "role X super/bypassrls",
     "BASELINE BUILD FAILED",
     "server_version=",
+    # Round 40, R30-S-6: the message locale the arrival terms compare against
+    # is asserted beside the version and the collation now, and its line is
+    # arm-shaped and is not an arm.
+    "lc_messages=",
     "the frozen boundary is anchored to ",
     # ROUND 30, W-1 (P1), found by the twentieth challenge and the defect this
     # round is about. Round 29's "refuse what you cannot classify" is strictly
@@ -469,6 +491,14 @@ EXPECTED_ARMS = (
     ("ATTRIB-KIND-ISOLATE", 1),
     ("ATTRIB-PRIV-CTL", 1),
     ("ATTRIB-R1", 1),
+    ("ATTRIB-U1", 1),
+    ("ATTRIB-U2", 1),
+    ("ATTRIB-U3", 1),
+    ("ATTRIB-U3B", 1),
+    ("ATTRIB-U4B", 1),
+    ("ATTRIB-U5", 1),
+    ("ATTRIB-U6", 1),
+    ("ATTRIB-U7", 1),
     ("ATTRIB-W1", 1),
     ("ATTRIB-W2", 1),
     ("ATTRIB-W3", 1),
@@ -514,6 +544,12 @@ EXPECTED_ARMS = (
     ("CORPUS-SWAP", 1),
     ("EXEC-EQUIV", 1),
     ("EXEC-EQUIV-CTL", 1),
+    ("EXPECT-EMPTY", 1),
+    ("EXPECT-EMPTY-CTL", 1),
+    ("EXPECT-NULL", 1),
+    ("FOLD-U1-CTL", 1),
+    ("FOLD-U3-CTL", 1),
+    ("FOLD-U3B-CTL", 1),
     ("GATE-STDERR", 1),
     ("GRAFTS g5", 1),
     ("GRAFTS g7", 1),
@@ -627,6 +663,7 @@ EXPECTED_ARMS = (
     ("RETIREMENT-NET y19", 1),
     ("RLS-A1-CTL", 1),
     ("RLS-A1B-CTL", 1),
+    ("RLSON-U7-CTL", 1),
     ("ROW-ASTRAL", 1),
     ("ROW-ASTRAL-CLASS-CTL", 1),
     ("ROW-ASTRAL-CTL", 1),
@@ -652,6 +689,7 @@ EXPECTED_ARMS = (
     ("SCANNER-ORACLE-CTL", 1),
     ("SHALLOW s12", 1),
     ("SHALLOW s8", 1),
+    ("SHAPE-U5-CTL", 1),
     ("VACUITY a", 1),
     ("VACUITY b", 1),
     ("VACUITY c", 1),
@@ -697,7 +735,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "abcdcb0ff72ee14b79b172e51ce2b5d60a8bf6995e39a145adcbf01bc686317d"
+EXPECTED_SEAL = "25f89d789ef89a853d94a6c7fc74a3211dbd82ade5b7ddfba8c45e564dc9e47a"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
