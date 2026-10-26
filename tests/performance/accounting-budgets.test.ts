@@ -76,11 +76,12 @@ const WARMUP = 5;
  * Why 200 samples. The estimator is `sorted[floor(0.95 * N)]`. With N = 30
  * that is index 28, so exactly ONE sample sits above p95 and the second
  * largest value IS the p95: two stalled iterations decide the verdict. That
- * is what failed on CI run 40359807575 (28 of 30 samples between 8.3 and
- * 14.5 ms; two stalls at 77.7 and 152.7 ms gave p95 = 77.7). With N = 200 the
- * index is 190, so 9 samples sit above p95 and the verdict moves only when
- * at least 10 of 200 (5 %) are slow. A runner stall that cost 2 of 30
- * (6.7 %) costs the same 2 of 200 (1 %), well short of the line. A genuine
+ * is what failed on CI run 40359807575, attempt 1 (27 of 30 samples between
+ * 8.3 and 14.5 ms; THREE stalls, at 48.3, 77.7 and 152.7 ms, gave
+ * p95 = 77.7). With N = 200 the index is 190, so 9 samples sit above p95 and
+ * the verdict moves only when at least 10 of 200 (5 %) are slow. A runner
+ * stall that cost 3 of 30 (10 %) costs the same 3 of 200 (1.5 %), well short
+ * of the line — and note the fraction is what matters, not the count. A genuine
  * regression shifts the whole distribution, not 5 % of it, so it still
  * fails: see the negative control below.
  * Cost: 200 x ~10 ms = about 2 s per case. A and B are cheap; C, D, E and F
