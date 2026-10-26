@@ -3134,11 +3134,11 @@ then reported that the real run does not name its own refusals.
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      158
-document lines that would red          93
-distinct tokens in them                40
+candidates with the guard deleted      161
+document lines that would red          96
+distinct tokens in them                41
 
-deleting `inline code span` would red 93 document line(s) carrying 40 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 96 document line(s) carrying 41 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -5521,6 +5521,14 @@ call is refused by not being ADMITTED.**
   is named by function and line. `os.system`, `logging.warning`,
   `warnings.warn`, `syslog.syslog`, `subprocess.run` and an object of this
   file's own are refused by the same clause, none of them by name.
+
+> **FALSE as published, measured by `R41-F1` (§7.45).** They are refused only
+> where they are WRITTEN INSIDE A VERDICT BODY. Moved one line away, into a
+> module-level function of this same file, `os.system` was refused by nothing:
+> `EXIT_SCRIPT 0`, every law row "as required", and fifteen pin-free
+> paragraphs to a reader at a site every arm provokes. The law's DOMAIN was
+> the three verdict bodies, not the act of printing. §7.45 makes the domain
+> every body a verdict can REACH.
 * **The ARGUMENTS are read as well as the receiver.** No part of an admitted
   call — receiver, positional argument or keyword — may mention an output
   stream or an emission, which is route (b) whatever the callee is called.
@@ -5547,6 +5555,15 @@ identified the object. What bounds that is the ten-method list plus
 reads this process, so a route that leaves through a child process is held by
 the STATIC law and by nothing else. Where round 40 published closure it did not
 have, this section publishes the bound.
+
+> **FALSE as published, measured by `R41-F2` (§7.45).** The bound named
+> `emitting_class_methods` as what made a free-name receiver safe, and
+> `emitting_class_methods` was blind: its seed was `_is_an_emission`, which
+> cannot see `os.system`. A class of this file with a method named `join` —
+> one of the admitted ten — spawning a child process, was green on every row.
+> A guarantee whose guarantor cannot see the attack is not a bound. §7.45
+> replaces the seed-based census with the closure census: every class method a
+> verdict can reach is judged by its own BODY.
 
 ### The challenger's routes, rebuilt COMMITTED against this head
 
@@ -5607,9 +5624,136 @@ number exists anywhere in it, `OD-P11-07` is the owner's alone, and
 repository: the authoritative run is made on the commit that is PUSHED
 UNCHANGED and published beside it, as `R39-S2` requires.
 
+## 7.45 ROUND 42 (round-41 challenge: **`NO-SIGN`**, `R41-F1`/`F2`/`F3` at `P1`) — the law's DOMAIN was three bodies, not the act of printing
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-0e34133db17a837bf31a23da4b0c5e93bc1e9124.md`, sha256 `ea6de1238a0d9d454a6b55068bed1bd7617272a86957672b81d40360257a7313`; evidence in `challenge-0e34133/` |
+| verdict | **`NO-SIGN`**, three blocking fail-opens. `0e34133` carries no signature. The challenger confirmed the rest of §7.44 — the four digests, the run reproduced from zero, and round 40's three routes red (they rebuilt route (a) as their own control and measured the published red) |
+| what blocked | the same call, one line OUTSIDE a verdict body. Round 41 turned the polarity over INSIDE the set of `ast.Call` nodes of three functions; the domain itself was never the question |
+
+### The three faces of one defect
+
+| | the edit | why every law was silent |
+|---|---|---|
+| **`R41-F1`** | a module-level `def _p41note(t): os.system(…)`, called from the live site | the callee is a `Name` in `module_level`, so the law admits it unconditionally; the DOOR for a module-level callee is `f.id in helpers`, and `_emitting_helpers`' seed is `_is_an_emission`, which cannot see `os.system`; arrival cannot see a child process. **Driven end to end at a PROVOKED site: `EXIT_SCRIPT 0`, 1441 lines, every gate 0, every law row "as required" — and FIFTEEN pin-free `UNHELD:` paragraphs to the reader.** Indistinguishable from the clean run in every figure this pack publishes |
+| **`R41-F2`** | `class _P41Sink: def join(self, t): os.system(…)`, called as `_P41SINK.join(…)` | `join` IS one of the admitted ten; the receiver is a free `Name`, which the declared bound admits; and `emitting_class_methods`, named in that bound as the thing that made it safe, has the same blind seed |
+| **`R41-F3`** | a module-level `def _p41shout(fn): print(…)`, applied as a BARE DECORATOR on a nested def | both laws begin `if not isinstance(node, ast.Call): continue`. A bare decorator is an `ast.Name` in a `decorator_list`; applying it is a call Python makes and `ast` does not spell as a `Call`. **The file already knew `_p41shout` emits** — `_emitting_helpers` answers True — the knowledge present and unused for want of a node to hang a door on |
+
+The challenger's diagnosis, which I adopt rather than restate: `_is_an_emission`
+is the single seed of every emission judgment in this file, and it is a
+FORBIDDEN-form list; the polarity turned over in `unclassifiable_calls` and did
+NOT turn over in the predicate that decides what emitting IS. A positive law
+resting on a negative predicate inherits the negative predicate's holes.
+
+### What this commit does — the domain becomes the bodies a verdict can REACH
+
+Not a fourth clause on the same three bodies. Two constructions, one static and
+one at run time, and the coordinator's instruction was to pair them.
+
+**1. `verdict_reachable_bodies` + `unaccounted_constructs`.** The domain is
+every module-level function and class method of the COMMIT that a verdict can
+reach — **69 bodies**, counted and pinned as a literal, so a new reachable body
+reds until it is declared. Reachability is by NAME and therefore an
+OVER-approximation (any `Name` naming a module-level function, any decorator
+entry, any `Attribute` whose attr names a method of a class of this file,
+whether or not it is a call, because a function passed as a value is called by
+whoever receives it); over-approximating can only put MORE bodies under the law.
+
+The accounting is the GREATEST FIXED POINT, which is the direction that cannot
+certify itself: every reachable function starts admitted, and one whose own body
+holds an unaccounted construct is dropped — which makes its callers' calls to it
+unaccounted in turn, until nothing more drops. A class method is in the domain
+and never in the clean set, because nothing here resolves a receiver, so a
+method is judged by its own body alone. That is `R41-F2`.
+
+ONE accounting function, two tiers, because `C36-S1`'s lesson was that two
+callers computing the same thing two ways is how one of them drifts. A VERDICT
+is held to `ADMITTED_METHODS` (ten), `ADMITTED_CALLEES`, a readable receiver and
+the unrooted stream test. A HELPER adds `ADMITTED_HELPER_METHODS` (**42**,
+counted from the commit and pinned) and `ADMITTED_HELPER_CALLEES` (**4**:
+`frozenset`, `getattr`, `globals`, `id` — as callees whose RESULT is a value; a
+callee BOUND from `getattr` is still a finding, which is `R39-F1`), and drops
+the receiver-readability requirement, because what bounds a helper's receiver is
+that every class method a verdict can reach is itself under this census.
+
+**A child process is accounted for by its SHAPE, not its name.** A blanket
+refusal is not available to this file: it reads its own committed bytes with
+`git show`, so the instrument every other law rests on IS a child process.
+`_a_captured_spawn` admits a spawn only where the bytes come back as a VALUE —
+both `stdout` and `stderr` given as `PIPE`/`STDOUT`/`DEVNULL`, or
+`capture_output=True`. `os.system` fails that test without being named by it.
+
+**2. The domain of the DOOR census becomes the act of calling.** `_call_like`
+yields every `ast.Call` AND every decorator entry that is not itself a `Call`,
+and `emission_sites` reads it, so a decorator that names an emitting helper or
+an alias is a DOOR — which both moves the door count and puts the site under
+the "every site was REACHED" law. That is `R41-F3`, closed with the knowledge
+the file already had.
+
+**3. `fd_leak_arm` — the run-time bound, on this process AND its children.**
+Every arrival instrument in this file replaces `sys.stdout`, so it reads what
+PYTHON wrote. This one reads the DESCRIPTOR: `dup2` a sink over fd 1 and fd 2,
+TEE `sys.stdout` and `sys.stderr`, run a verdict, then subtract what Python
+wrote from what arrived. What is left came to the descriptor without passing
+through Python — a child process, a C extension, a direct `os.write` — and any
+leftover is a finding. Its CONTROL runs a child whose output is NOT captured and
+requires the leftover to contain exactly its bytes, because an instrument that
+cannot see what it measures reports zero for the wrong reason.
+
+**And the first version of this arm was that very failure**, recorded here
+rather than quietly fixed: it ran the verdict through `_blocks_arm`, whose
+default is `quiet=True` — the third hardcoded one this file has had to argue
+with (`C32-S3`) — so it measured a verdict that had been asked to print
+nothing and reported `0 byte(s)` against a plant that WAS leaking. It now runs
+BOTH enrolment worlds with `quiet=False`, and against the provoked plant it
+reports `138 byte(s) unaccounted` and quotes the paragraph back. A census of
+descriptors under a flag that silences the verdict is a census of nothing.
+
+### Measured, each plant one committed edit in a throwaway clone
+
+| plant | the route | site | at `0e34133` | here |
+|---|---|---|---|---|
+| `ef75b25` | `R41-F1` `os.system` behind a module-level helper | unprovoked | 341 lines, **0 failed** | **2 named**: the method `os.system` in `_p42note`, AND `check_blocks`'s call to it |
+| `a714ec3` | the same, PROVOKED | provoked | `EXIT_SCRIPT 0`, 15 paragraphs leaked | **3 failed rows**: the same 2 unaccounted constructs, AND the descriptor census in BOTH worlds — `138 byte(s) unaccounted`, the leaked paragraph quoted back. Driven end to end at the previous shape of this arm: `EXIT_SCRIPT 1`, 1450 lines (`d4789b9`) |
+| `3d1acb7` | `R41-F2` admitted `join` on a class of this file | unprovoked | 341 lines, **0 failed** | **1 named**: `_P42Sink.join`, by its own body |
+| `8aa2899` | `R41-F3` bare decorator | unprovoked | 341 lines, **0 failed** | **2 failed rows**: `22 door(s), want 21` and the body count 70 |
+| `fe686f1` | the same, provoked | provoked | 346 lines, 8 failed | **9 failed rows** |
+
+The clean tree names nothing: **69 bodies, 0 unaccounted, 68 clean**, 10 sites,
+21 doors, `0 unclassifiable call(s)`, `0 byte(s) unaccounted at the descriptor`,
+and the fd control sees its child's bytes. No failed selftest line.
+
+### What is still NOT closed, and the bounds this round declares
+
+* **The implicit-call surface that has no callee to name.** `_call_like` covers
+  calls and decorators. A `with` statement's `__enter__`, an operator's
+  `__str__`, a `__getattr__`, a class body executing at import: those are
+  bounded by the OBJECT rules and by the closure census (every class method a
+  verdict can reach is read), and at run time by `fd_leak_arm` where an arm
+  provokes the site — not by the call quantifier. **Stated as a bound, not as
+  closure**, which is the lesson of the last two rounds.
+* **`fd_leak_arm` reads the descriptors of ONE arm.** It is a run-time
+  instrument, so its reach is the arms' worlds, exactly as arrival's is.
+* **`R40-S1`'s second half** = `R39-S1`/`R38-S1`/`R37-S1`: the law's SCOPE is
+  still the hand-written `EMITTING_VERDICTS` tuple. The domain is now every
+  body those three reach, which is the larger half of that residual; the
+  remaining half is which three functions are verdicts at all.
+* **`R40-S2`** unchanged and deliberately so: every binding form it misses
+  fails CLOSED.
+* **`R41-S1` (`P2`), corrected here.** §7.44 attributed `rc 1 with 4798 errors`
+  to all three worlds. Re-measured: subject and previous head 4798, **merge-base
+  4220**. The substance (rc 1, no abort at an 8 GB heap) holds at all three; the
+  FIGURE was wrong for one world, and a figure attributed to three worlds was
+  re-counted in two.
+* `R33-S1`, `A-35-F1` (`P3`), `C28-F1` (`P1`), `R27-S1` stand. **No CI has ever
+  run this pack**, no migration number exists anywhere in it, `OD-P11-07` is the
+  owner's alone, and `READY_TO_PROMOTE` = **NO**. This round quotes no run
+  figures inside the repository.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA. **`24da267` carries NO signature and never will**: the round-39 challenger returned `NO-SIGN` on `R39-F1` (§7.43) and the coordinator skipped its own review of that head because a blocker already stood. **`2374bfa` carries NO signature either**: the round-40 challenger returned **`NO-SIGN`** on `R40-F1` (§7.44, sha256 `c0dc9523…`), confirming every other claim of §7.43 — the provenance, the repaired `--amend`, the run reproduced from zero, the four digests and the five round-39 plants red — but measuring three routes still past `C37-S1`. **No one has signed THIS head**, and both reviews are owed on it.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA. **`24da267` carries NO signature and never will**: the round-39 challenger returned `NO-SIGN` on `R39-F1` (§7.43) and the coordinator skipped its own review of that head because a blocker already stood. **`2374bfa` carries NO signature either**: the round-40 challenger returned **`NO-SIGN`** on `R40-F1` (§7.44, sha256 `c0dc9523…`), confirming every other claim of §7.43 — the provenance, the repaired `--amend`, the run reproduced from zero, the four digests and the five round-39 plants red — but measuring three routes still past `C37-S1`. **`0e34133` carries NO signature either**: the round-41 challenger returned **`NO-SIGN`** on `R41-F1`/`F2`/`F3` (§7.45, sha256 `ea6de123…`), confirming the four digests, the run reproduced from zero and round 40's three routes red, while measuring three fail-opens one line outside the verdict bodies. **No one has signed THIS head**, and both reviews are owed on it.
 
 ---
 

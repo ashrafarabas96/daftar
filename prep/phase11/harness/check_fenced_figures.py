@@ -8016,21 +8016,24 @@ def emission_sites():
     for name, body in bodies.items():
         aliases = dict(at_module)
         aliases.update(_emission_aliases(body))
-        for node in ast.walk(body):
-            if not isinstance(node, ast.Call):
-                continue
-            f = node.func
+        for f, node, line, last, kind in _call_like(body):
             how = None
-            if _is_an_emission(node):
+            if node is not None and _is_an_emission(node):
                 how = "direct"
             elif isinstance(f, ast.Name) and f.id in aliases:
                 how = "the name `%s`, bound from %s" % (f.id, aliases[f.id])
             elif isinstance(f, ast.Name) and f.id in helpers:
                 how = "a call to `%s`, which reaches a print" % f.id
+            elif kind == "decorator" and isinstance(f, ast.Attribute):
+                # `R41-F3`: a decorator is applied, so a decorator that is an
+                # emission is a door like any other call on the stream.
+                if f.attr in EMITTING_METHODS or _mentions_an_output_stream(f.value):
+                    how = "the decorator `%s`" % ast.unparse(f)
             if how is None:
                 continue
-            last = getattr(node, "end_lineno", node.lineno) or node.lineno
-            out[(name, node.lineno)] = ((node.lineno, last), how)
+            if kind == "decorator":
+                how = "%s, APPLIED as a decorator -- a call Python makes" % how
+            out[(name, line)] = ((line, last), how)
     return out
 
 
@@ -8380,76 +8383,19 @@ def unclassifiable_calls(bodies=None, doors=None):
         doors = emission_sites()
     doors = doors or {}
     module_level = set(_COMMITTED_AST) if _COMMITTED_AST else set()
+    try:
+        tree, _funcs, classes, _methods = _committed_module()
+        tables = _function_tables(tree)
+    except Refusal:
+        raise
     out = []
     for name in sorted(bodies):
-        body = bodies[name]
-        bound = _bindings_in(body)
-        for node in ast.walk(body):
-            if not isinstance(node, ast.Call):
-                continue
-            if (name, node.lineno) in doors:
-                continue
-            f = node.func
-            if isinstance(f, ast.Name):
-                # `R40-F1` route (c): the BINDINGS decide, and they are asked
-                # before any list of names. A local called `chr` is whatever it
-                # was bound from.
-                if f.id in bound:
-                    unreadable = [v for v in bound[f.id]
-                                  if not _a_readable_binding(v, module_level)]
-                    if not unreadable:
-                        continue
-                    out.append((name, node.lineno,
-                                "the callee `%s` is bound from `%s`, which this file "
-                                "does not read"
-                                % (f.id, ast.unparse(unreadable[0]))))
-                    continue
-                if f.id in module_level or f.id in ADMITTED_CALLEES:
-                    continue
-                out.append((name, node.lineno,
-                            "the callee `%s` is a name this file cannot account for"
-                            % f.id))
-                continue
-            if isinstance(f, ast.Attribute):
-                why = _unadmitted_attribute(f, node, bound, module_level)
-                if why is None:
-                    continue
-                out.append((name, node.lineno, why))
-                continue
-            out.append((name, node.lineno,
-                        "the callee is a %s, which this file cannot read"
-                        % type(f).__name__))
+        out.extend(_accounted_in(name, bodies[name], True, module_level, doors,
+                                 tables, classes))
     return sorted(out)
 
 
-def _unadmitted_attribute(f, call, bound, module_level):
-    """Why this `Attribute` call is not accounted for, or `None` if it is.
-
-    `R40-F1`, routes (a) and (b). Three positive conditions: the METHOD is one
-    of `ADMITTED_METHODS`; the RECEIVER is an object this file can read; and no
-    part of the call -- receiver, positional argument or keyword -- mentions
-    the process's own output stream or an emission. The last condition is the
-    route that HANDED the stream to a method which never names it.
-    """
-    if f.attr not in ADMITTED_METHODS:
-        return ("the method `%s` is not one of the %d this file admits, so nothing "
-                "it reads says where `%s` puts the line"
-                % (f.attr, ADMITTED_METHOD_COUNT, ast.unparse(f)))
-    if not _a_readable_object(f.value, bound, module_level):
-        return ("the receiver of `%s` is a %s this file cannot read, so it cannot say "
-                "what object the method runs on"
-                % (ast.unparse(f), type(f.value).__name__))
-    if _mentions_an_emission(f.value):
-        return ("the receiver of `%s` mentions an emission, so this call is a door the "
-                "census did not derive" % ast.unparse(f))
-    for arg in list(call.args) + [k.value for k in call.keywords]:
-        if _mentions_an_emission(arg):
-            return ("`%s` is HANDED `%s`, so the stream is in the call although the "
-                    "callee does not name it" % (ast.unparse(f), ast.unparse(arg)))
-    return None
-
-
-def _a_readable_object(value, bound, module_level):
+def _a_readable_object(value, bound, module_level, seen=None):
     """Is this an object whose provenance this file can see?
 
     A literal; a name the function binds only from readable objects; a free
@@ -8464,16 +8410,22 @@ def _a_readable_object(value, bound, module_level):
                           ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
                           ast.JoinedStr, ast.FormattedValue)):
         return True
+    seen = set() if seen is None else seen
     if isinstance(value, ast.BinOp):
-        return (_a_readable_object(value.left, bound, module_level)
-                and _a_readable_object(value.right, bound, module_level))
+        return (_a_readable_object(value.left, bound, module_level, seen)
+                and _a_readable_object(value.right, bound, module_level, seen))
     if isinstance(value, ast.Name):
+        if value.id in seen:
+            # `x = x + y` is not a cycle this file has to resolve: the name is
+            # already being read one frame up, and a law that recursed here
+            # would abort rather than measure.
+            return True
         if value.id in bound:
-            return all(_a_readable_object(v, bound, module_level)
+            return all(_a_readable_object(v, bound, module_level, seen | {value.id})
                        for v in bound[value.id])
         return True
     if isinstance(value, ast.Attribute):
-        return _a_readable_object(value.value, bound, module_level)
+        return _a_readable_object(value.value, bound, module_level, seen)
     if isinstance(value, ast.Call):
         g = value.func
         if isinstance(g, ast.Name):
@@ -8483,7 +8435,7 @@ def _a_readable_object(value, bound, module_level):
                                 for v in bound[g.id])))
         if isinstance(g, ast.Attribute):
             return (g.attr in ADMITTED_METHODS
-                    and _a_readable_object(g.value, bound, module_level))
+                    and _a_readable_object(g.value, bound, module_level, seen))
         return False
     return False
 
@@ -8526,13 +8478,357 @@ def _a_readable_binding(value, module_level):
     law. A name bound only from constants and then called is now a finding,
     which is what it deserves to be.
     """
+    if isinstance(value, ast.BoolOp):
+        # `lookup = lookup or _frame_lookup`: every branch is read, so the
+        # name is read. A conditional that reaches an emission binds an ALIAS
+        # in `_emission_aliases` and becomes a door there, which is why
+        # reading the branches here does not weaken the emission law.
+        return all(_a_readable_binding(v, module_level) for v in value.values)
+    if isinstance(value, ast.IfExp):
+        return (_a_readable_binding(value.body, module_level)
+                and _a_readable_binding(value.orelse, module_level))
     if isinstance(value, ast.Name):
         return True
     if isinstance(value, ast.Attribute):
-        return value.attr in ADMITTED_METHODS
+        return (value.attr in ADMITTED_METHODS
+                or value.attr in ADMITTED_HELPER_METHODS)
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return value.func.id in module_level
     return False
+
+
+ADMITTED_HELPER_CALLEES = ("frozenset", "getattr", "globals", "id")
+ADMITTED_HELPER_CALLEE_COUNT = 4
+
+# `R41-F1`/`R41-F2`: the methods the HELPERS a verdict reaches may call, as
+# against the ten a VERDICT may call. Counted from the commit and pinned as a
+# literal: these are the pure string, path, hash, unicode, regex and `ast`
+# operations the reachable bodies actually use, and not one of them can put a
+# line in front of a reader. The list is POSITIVE, like `ADMITTED_METHODS`, so
+# a method absent from it is a FINDING wherever a verdict can reach it -- and a
+# later edit that needs a new one has to add it where a reviewer sees it.
+ADMITTED_HELPER_METHODS = (
+    "abspath", "access", "add", "basename", "category", "count", "decode",
+    "digit", "dirname", "encode", "endswith", "exists", "find", "fullmatch",
+    "hexdigest", "isascii", "isdigit", "isdir", "isfile", "islower", "items",
+    "iter_child_nodes", "lower", "match", "normalize", "parse", "partition",
+    "readlink", "realpath", "replace", "setdefault", "sha1", "sha256", "sort",
+    "splitext", "splitlines", "startswith", "stat", "sub", "unparse", "update",
+    "walk",
+)
+ADMITTED_HELPER_METHOD_COUNT = 42
+
+# The shapes in which a CHILD PROCESS is accounted for. `R41-F1` was
+# `os.system` one line outside a verdict, and a blanket refusal of child
+# processes is not available to this file: it reads its own committed bytes
+# with `git show`, so the instrument every other law rests on is a child
+# process. What distinguishes the two is not the name -- nothing here is a
+# name -- but whether the bytes come back as a VALUE or go to a descriptor.
+SPAWN_CAPTURE_SINKS = ("PIPE", "STDOUT", "DEVNULL")
+REACHABLE_BODY_COUNT = 69
+
+
+def _call_like(body):
+    """Every construct of `body` that CALLS something, with the callee.
+
+    `R41-F3`: the laws of rounds 39 to 41 all began `if not isinstance(node,
+    ast.Call): continue`, so their DOMAIN was a syntactic class rather than
+    the act of calling. A BARE decorator is an `ast.Name` sitting in a
+    `decorator_list`; applying it is a call Python makes and `ast` does not
+    spell as a `Call`. The challenger put a printing module-level function
+    there and both laws iterated past it, with the file's own
+    `_emitting_helpers` already answering True for that function -- the
+    knowledge present and unused, for want of a node to hang it on.
+
+    So the domain is the ACT. This yields `(callee, lineno, end_lineno, how)`
+    for every `ast.Call`, and for every decorator entry that is not itself a
+    `Call` (a called decorator arrives through the `Call` branch anyway).
+
+    What it still does not cover is declared rather than implied: an emission
+    Python performs with no callee this file can name -- a `with` statement's
+    `__enter__`, an operator's `__str__`, a `__getattr__`, a class body at
+    import. Those are bounded by the OBJECT rules (`_a_readable_object`, and
+    the closure census below, which requires every class method a verdict can
+    reach to be readable) and at run time by `fd_leak_arm`, not by this
+    quantifier.
+    """
+    for node in ast.walk(body):
+        if isinstance(node, ast.Call):
+            last = getattr(node, "end_lineno", node.lineno) or node.lineno
+            yield node.func, node, node.lineno, last, "call"
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for d in node.decorator_list:
+                if isinstance(d, ast.Call):
+                    continue
+                last = getattr(d, "end_lineno", d.lineno) or d.lineno
+                yield d, None, d.lineno, last, "decorator"
+
+
+def _a_captured_spawn(call):
+    """Is this a child process whose output this file takes as a VALUE?
+
+    `R41-F1`. BOTH `stdout` and `stderr` given, each one a `PIPE`, `STDOUT` or
+    `DEVNULL` attribute, or `capture_output=True`. `os.system` is refused by
+    this -- not by being named, but by not being this shape: its bytes go to
+    the process's own descriptors and nothing in this file can hold them.
+    """
+    if call is None:
+        return False
+    kw = {k.arg: k.value for k in call.keywords if k.arg}
+    if "capture_output" in kw:
+        v = kw["capture_output"]
+        return isinstance(v, ast.Constant) and v.value is True
+    for name in ("stdout", "stderr"):
+        v = kw.get(name)
+        if not (isinstance(v, ast.Attribute) and v.attr in SPAWN_CAPTURE_SINKS):
+            return False
+    return True
+
+
+def _an_output_stream_of_this_process(node):
+    """Does this expression reach THIS PROCESS's own output stream?
+
+    `_mentions_an_output_stream` fires on the attribute NAME alone, which is
+    right inside a verdict and wrong one frame out: `proc.stderr` of a
+    captured child is not this process's stderr, and reading the git
+    instrument's own error text would have been named as a leak. This asks
+    the same question with the receiver chain ROOTED: `sys.stdout`,
+    `sys.__stderr__`, `builtins.…`, and a local bound from one of those
+    (which `_emission_aliases` turns into a door in its own right).
+    """
+    for sub in ast.walk(node):
+        if not (isinstance(sub, ast.Attribute) and sub.attr in OUTPUT_STREAMS):
+            continue
+        root = sub.value
+        while isinstance(root, (ast.Attribute, ast.Subscript, ast.Call)):
+            root = root.func if isinstance(root, ast.Call) else root.value
+        if isinstance(root, ast.Name) and root.id in ("sys", "builtins"):
+            return True
+    return False
+
+
+def _function_tables(tree):
+    """Module-level containers whose every leaf is a module-level function.
+
+    `GENERATORS[name][0]()` is a callee this file CAN read -- the table is a
+    `dict` literal at the commit's module level and every leaf of it is a
+    function of the commit -- and a `Subscript` callee of a LOCAL is the form
+    `R39-F1` used. The distinction is provenance, not node type.
+    """
+    funcs = {n.name for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    out = set()
+    for n in tree.body:
+        if not (isinstance(n, ast.Assign)
+                and isinstance(n.value, (ast.Dict, ast.List, ast.Tuple))):
+            continue
+        leaves = [x for x in ast.walk(n.value) if isinstance(x, ast.Name)]
+        if leaves and all(x.id in funcs for x in leaves):
+            for t in n.targets:
+                if isinstance(t, ast.Name):
+                    out.add(t.id)
+    return out
+
+
+def _committed_module():
+    """The commit's own module: its functions, its classes, its tables."""
+    _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+    if text is None:
+        raise Refusal(
+            "FRAME-SOURCE-NOT-IN-COMMIT: the commit's copy of this file could not be "
+            "read, so the bodies a verdict can reach are unknown and the closure "
+            "census below would measure the running file instead of the reviewed one."
+        )
+    tree = ast.parse(text)
+    funcs = {n.name: n for n in tree.body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    classes = {n.name: n for n in tree.body if isinstance(n, ast.ClassDef)}
+    methods = {}
+    for cname, cnode in classes.items():
+        for m in cnode.body:
+            if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                methods.setdefault(m.name, []).append(("%s.%s" % (cname, m.name), m))
+    return tree, funcs, classes, methods
+
+
+def verdict_reachable_bodies():
+    """{label: body} for every body a VERDICT can reach, by name.
+
+    `R41-F1`, `R41-F2` and `R41-F3` were one defect with three faces: the
+    domain of every law in this family was the three verdict bodies, so the
+    same `os.system` that reds inside `check_blocks` was green one line out,
+    inside a module-level function of the same file, or inside a method of a
+    class of the same file. Moving the call did not change what a reader saw.
+
+    Reachability is by NAME and therefore an OVER-approximation: any `Name`
+    naming a module-level function of the commit, any decorator entry, and any
+    `Attribute` whose attr is the name of a method of a class of this file --
+    whether or not the expression is a call, because a function passed as a
+    value is called by whoever receives it. Over-approximating is the
+    conservative direction: it can only put MORE bodies under the law. What it
+    cannot do is resolve a callee computed at run time, and such a callee is a
+    finding of the census itself.
+    """
+    _tree, funcs, _classes, methods = _committed_module()
+    bodies = {}
+    for v in EMITTING_VERDICTS:
+        if v in funcs:
+            bodies[v] = funcs[v]
+    frontier = list(bodies)
+    while frontier:
+        label = frontier.pop()
+        body = bodies[label]
+        for x in ast.walk(body):
+            found = []
+            if isinstance(x, ast.Name) and x.id in funcs:
+                found.append((x.id, funcs[x.id]))
+            if isinstance(x, ast.Attribute) and x.attr in methods:
+                found.extend(methods[x.attr])
+            if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                for d in x.decorator_list:
+                    for y in ast.walk(d):
+                        if isinstance(y, ast.Name) and y.id in funcs:
+                            found.append((y.id, funcs[y.id]))
+            for lab, node in found:
+                if lab not in bodies:
+                    bodies[lab] = node
+                    frontier.append(lab)
+    return bodies
+
+
+def _accounted_in(label, body, strict, clean, doors, tables, classes):
+    """Every construct of one body that this file cannot read, with its reason.
+
+    ONE accounting, two tiers, because `C36-S1`'s lesson was that two callers
+    computing the same thing two ways is how one of them drifts. `strict` is a
+    VERDICT: the ten methods of `ADMITTED_METHODS`, the builtins of
+    `ADMITTED_CALLEES`, a readable receiver, and the unrooted stream test. A
+    HELPER adds `ADMITTED_HELPER_METHODS` and `ADMITTED_HELPER_CALLEES`, drops
+    the receiver-readability requirement (what bounds a helper's receiver is
+    that every class method a verdict can reach is itself under this census)
+    and uses the ROOTED stream test.
+
+    Either way the polarity is the one `R40-F1` established: a construct is
+    refused by not being ADMITTED, so the next route needs no thinking of in
+    advance.
+    """
+    allowed = tuple(ADMITTED_METHODS)
+    if not strict:
+        allowed = allowed + tuple(ADMITTED_HELPER_METHODS)
+    stream = _mentions_an_output_stream if strict else _an_output_stream_of_this_process
+    bound = _bindings_in(body)
+    local = {x.name for x in ast.walk(body)
+             if isinstance(x, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    local |= set(classes)
+    out = []
+    for f, call, line, _last, how in _call_like(body):
+        if strict and call is not None and (label, line) in doors:
+            continue
+        if isinstance(f, ast.Name):
+            if f.id in bound:
+                unreadable = [v for v in bound[f.id]
+                              if not _a_readable_binding(v, clean)]
+                if unreadable:
+                    out.append((label, line,
+                                "the callee `%s` is bound from `%s`, which this file "
+                                "does not read"
+                                % (f.id, ast.unparse(unreadable[0]))))
+                continue
+            if f.id in clean or f.id in ADMITTED_CALLEES or f.id in local:
+                continue
+            if not strict and f.id in ADMITTED_HELPER_CALLEES:
+                continue
+            if f.id in clean or f.id in local:                 # pragma: no cover
+                continue
+            out.append((label, line,
+                        "the %s `%s` is a name this file cannot account for"
+                        % ("decorator" if how == "decorator" else "callee", f.id)))
+            continue
+        if isinstance(f, ast.Attribute):
+            if _a_captured_spawn(call):
+                continue
+            if f.attr not in allowed:
+                out.append((label, line,
+                            "the %s `%s` is not one this file admits, so nothing it "
+                            "reads says where that call puts the line"
+                            % ("decorator" if how == "decorator" else "method",
+                               ast.unparse(f))))
+                continue
+            if strict and not _a_readable_object(f.value, bound, clean):
+                out.append((label, line,
+                            "the receiver of `%s` is a %s this file cannot read, so it "
+                            "cannot say what object the method runs on"
+                            % (ast.unparse(f), type(f.value).__name__)))
+                continue
+            if stream(f.value):
+                out.append((label, line,
+                            "the receiver of `%s` is this process's own output stream"
+                            % ast.unparse(f)))
+                continue
+            args = [] if call is None else list(call.args) + [
+                k.value for k in call.keywords]
+            handed = [a for a in args if stream(a) or (strict
+                                                       and _mentions_an_emission(a))]
+            if handed:
+                out.append((label, line,
+                            "`%s` is HANDED `%s`, so the stream is in the call although "
+                            "the callee does not name it"
+                            % (ast.unparse(f), ast.unparse(handed[0]))))
+            continue
+        if isinstance(f, ast.Subscript):
+            root = f
+            while isinstance(root, ast.Subscript):
+                root = root.value
+            if isinstance(root, ast.Name) and root.id in tables:
+                continue
+        out.append((label, line,
+                    "the %s is a %s, which this file cannot read"
+                    % ("decorator" if how == "decorator" else "callee",
+                       type(f).__name__)))
+    return out
+
+
+def unaccounted_constructs(bodies=None, doors=None):
+    """`R41-F1`/`F2`/`F3`: every construct in a body a VERDICT CAN REACH that
+    this file cannot read, named by body and line.
+
+    The greatest fixed point, which is the direction that cannot certify
+    itself: every reachable function starts ADMITTED, and a function whose own
+    body holds an unaccounted construct is dropped -- which makes its callers'
+    calls to it unaccounted in turn, until nothing more drops. So
+    `os.system` one frame out is not merely named where it is written; the
+    verdict's own call to the function holding it is named too.
+
+    A CLASS METHOD a verdict can reach is in the domain and never in the clean
+    set: nothing resolves a receiver here, so a method is judged by its own
+    body alone. That is what `R41-F2` needed -- the admitted method name
+    `join`, on a class of this file, with a child process inside it.
+    """
+    if bodies is None:
+        bodies = verdict_reachable_bodies()
+    if doors is None:
+        doors = emission_sites()
+    tree, _funcs, classes, _methods = _committed_module()
+    tables = _function_tables(tree)
+    functions = sorted(k for k in bodies if "." not in k)
+    clean = set(functions)
+    while True:
+        dropped = set()
+        for label in functions:
+            if label not in clean:
+                continue
+            if _accounted_in(label, bodies[label], label in EMITTING_VERDICTS,
+                             clean, doors, tables, classes):
+                dropped.add(label)
+        if not dropped:
+            break
+        clean -= dropped
+    out = []
+    for label in sorted(bodies):
+        out.extend(_accounted_in(label, bodies[label],
+                                 label in EMITTING_VERDICTS,
+                                 clean, doors, tables, classes))
+    return sorted(out), len(bodies), len(clean)
 
 
 def unclassifiable_call_arm():
@@ -8620,15 +8916,230 @@ def unclassifiable_call_arm():
         print("  sites C37-S1 %-50s %-40s -> %s"
               % (label, "%d named, want %d" % (len(got), want),
                  "as required" if good else "**SELFTEST FAILED**"))
-    strange = emitting_class_methods()
-    good = not strange
+    return ok
+
+
+def reachable_body_arm():
+    """The plants for `unaccounted_constructs`, the law of round 42.
+
+    `R41-F1`/`F2`/`F3` were the same call one line outside a verdict: inside a
+    module-level function of this file, inside a method of a class of this
+    file, and applied as a BARE DECORATOR, which is not an `ast.Call` at all.
+    So these plants are not spellings of a call -- they are POSITIONS, and each
+    is parsed from a string as a whole synthetic module, never written to the
+    tree.
+
+    The clean direction first, because a law that names everything measures
+    nothing.
+    """
+    ok = True
+
+    def census(src):
+        mod = ast.parse(src)
+        funcs = {n.name: n for n in mod.body
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        classes = {n.name: n for n in mod.body if isinstance(n, ast.ClassDef)}
+        bodies = dict(funcs)
+        for cname, cnode in classes.items():
+            for m in cnode.body:
+                if isinstance(m, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    bodies["%s.%s" % (cname, m.name)] = m
+        tables = _function_tables(mod)
+        functions = sorted(k for k in bodies if "." not in k)
+        clean = set(functions)
+        while True:
+            dropped = {label for label in functions
+                       if label in clean
+                       and _accounted_in(label, bodies[label], False, clean, {},
+                                         tables, classes)}
+            if not dropped:
+                break
+            clean -= dropped
+        out = []
+        for label in sorted(bodies):
+            out.extend(_accounted_in(label, bodies[label], False, clean, {},
+                                     tables, classes))
+        return out
+
+    clean_src = (
+        "def helper(t):\n"
+        "    return ', '.join(sorted(t))\n"
+        "def v():\n"
+        "    print(helper(['a']))\n"
+    )
+    spawn_src = (
+        "def helper(t):\n"
+        "    os.system('printf %s ' + t)\n"
+        "def v():\n"
+        "    helper('UNHELD')\n"
+    )
+    captured_src = (
+        "def helper(t):\n"
+        "    return subprocess.run(['echo', t], stdout=subprocess.PIPE,\n"
+        "                          stderr=subprocess.PIPE)\n"
+        "def v():\n"
+        "    print(helper('x'))\n"
+    )
+    sink_src = (
+        "class Sink(object):\n"
+        "    def join(self, t):\n"
+        "        os.system('printf %s ' + t)\n"
+        "def v():\n"
+        "    SINK.join('UNHELD')\n"
+    )
+    for label, src, want in (
+        ("R41-F1 a helper this file can read names nothing", clean_src, 0),
+        ("R41-F1 a CHILD PROCESS one frame out is named", spawn_src, 2),
+        ("R41-F1 the same spawn with its output CAPTURED is not", captured_src, 0),
+        ("R41-F2 an admitted method on a class of this file, spawning", sink_src, 1),
+    ):
+        got = census(src)
+        good = len(got) == want
+        ok = ok and good
+        print("  reach R41-F1 %-50s %-40s -> %s"
+              % (label, "%d named, want %d" % (len(got), want),
+                 "as required" if good else "**SELFTEST FAILED**"))
+    strange, bodies, clean = unaccounted_constructs()
+    good = not strange and bodies == REACHABLE_BODY_COUNT
     ok = ok and good
-    print("  sites R40-S1 %-50s %-40s -> %s"
-          % ("no method of a class of this file emits",
-             "%d class method(s) that emit" % len(strange),
+    print("  reach R41-F1 %-50s %-40s -> %s"
+          % ("every body a verdict can REACH is one this file reads",
+             "%d body(s), want %d, %d unaccounted"
+             % (bodies, REACHABLE_BODY_COUNT, len(strange)),
              "as required" if good else "**SELFTEST FAILED**"))
-    for cls, meth, line, why in strange:
-        print("    CLASS-METHOD-EMITS: %s.%s, line %d: %s" % (cls, meth, line, why))
+    for label, line, why in strange:
+        print("    REACHED-BODY-UNREADABLE: %s, line %d: %s" % (label, line, why))
+    print("  reach R41-F1 %-50s %-40s -> %s"
+          % ("of them, bodies whose every construct is read",
+             "%d clean" % clean, "as recorded"))
+    return ok
+
+
+def fd_leak_arm():
+    """`R41-F1` at RUN TIME: the bytes that reach this process's own
+    DESCRIPTORS, including the ones its CHILDREN write.
+
+    Every arrival instrument in this file replaces `sys.stdout`, so it reads
+    what PYTHON wrote. A child process writes to file descriptor 1 directly and
+    is invisible to all of them -- which is how `os.system` printed fifteen
+    pin-free paragraphs to a reader with every arrival arm green. The static
+    census above refuses that construct wherever a verdict can reach it; this
+    is the other side of the same bound, and it reads the descriptor rather
+    than the language.
+
+    How: `dup2` a sink over fd 1 and fd 2, TEE `sys.stdout` and `sys.stderr` so
+    that everything Python writes is also recorded, run a verdict, and then
+    subtract. What is left in the sink is bytes that arrived at the descriptor
+    WITHOUT passing through Python -- a child process, a C extension, a direct
+    `os.write`. Any leftover is a finding.
+
+    And the control, because an instrument that cannot see the thing it
+    measures reports zero for the wrong reason: a child process is run with
+    its output NOT captured, and the leftover must contain exactly its bytes.
+    That arm is this file's own `subprocess` call, in a temporary directory,
+    with no file of the tree touched.
+    """
+    ok = True
+
+    def measure(run):
+        sink = tempfile.NamedTemporaryFile(prefix="p11-fd-", suffix=".txt",
+                                           delete=False)
+        seen = []
+
+        class _Tee(object):
+            def __init__(self, to):
+                self._to = to
+
+            def write(self, text):
+                seen.append(text)
+                return self._to.write(text)
+
+            def writelines(self, lines):
+                for line in lines:
+                    self.write(line)
+
+            def flush(self):
+                return self._to.flush()
+
+            def __getattr__(self, name):
+                return getattr(self._to, name)
+
+        real_out, real_err = sys.stdout, sys.stderr
+        held_out, held_err = os.dup(1), os.dup(2)
+        try:
+            real_out.flush()
+            real_err.flush()
+            os.dup2(sink.fileno(), 1)
+            os.dup2(sink.fileno(), 2)
+            sys.stdout, sys.stderr = _Tee(real_out), _Tee(real_err)
+            try:
+                run()
+            finally:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                sys.stdout, sys.stderr = real_out, real_err
+        finally:
+            os.dup2(held_out, 1)
+            os.dup2(held_err, 2)
+            os.close(held_out)
+            os.close(held_err)
+        sink.close()
+        with open(sink.name, encoding="utf-8", errors="replace") as fh:
+            at_fd = fh.read()
+        os.unlink(sink.name)
+        left = at_fd
+        for chunk in seen:
+            if not chunk:
+                continue
+            at = left.find(chunk)
+            if at >= 0:
+                left = left[:at] + left[at + len(chunk):]
+        return left.strip()
+
+    # Under this subject's own capture, because the enrolment check GENERATES
+    # on every call and refuses without one -- `_under_the_blocks_capture` is
+    # the one place that installs it, and a second copy of it is how two
+    # copies drift apart (`A-35-F2`).
+    # TWO worlds, and `quiet=False` in both. `_blocks_arm`'s default is
+    # `quiet=True`, which is the third hardcoded one this file has had to
+    # argue with (`C32-S3`): a descriptor census run under it measures a
+    # verdict that was asked to print nothing, and the first version of this
+    # arm reported `0 byte(s)` against a plant that WAS leaking, for exactly
+    # that reason. The two worlds are the ones the branch families use --
+    # nothing enrolled, and a correct block enrolled -- so both sides of
+    # `enrolled` run under the descriptor.
+    for world, run in (
+        ("a correct block enrolled",
+         (lambda: _under_the_blocks_capture(
+             lambda: _blocks_arm("", quiet=False)))),
+        ("nothing enrolled",
+         (lambda: _under_the_blocks_capture(
+             lambda: _blocks_arm("", edit=True, quiet=False)))),
+    ):
+        left = measure(run)
+        good = left == ""
+        ok = ok and good
+        print("  fd    R41-F1 %-50s %-40s -> %s"
+              % ("nothing reaches fd 1 or fd 2 but what Python wrote, %s" % world,
+                 "%d byte(s) unaccounted at the descriptor" % len(left),
+                 "as required" if good else "**SELFTEST FAILED**"))
+        if left:
+            print("    FD-UNACCOUNTED: %r" % left[:200])
+
+    probe = "UNHELD-PROBE-%d" % os.getpid()
+
+    def child():
+        _under_the_blocks_capture(lambda: _blocks_arm("", quiet=False))
+        subprocess.run([sys.executable, "-I", "-c",
+                        "import sys; sys.stdout.write(%r)" % probe], timeout=60)
+
+    left = measure(child)
+    good = probe in left
+    ok = ok and good
+    print("  fd    R41-F1 %-50s %-40s -> %s"
+          % ("the control: a CHILD's uncaptured bytes ARE seen",
+             "%d byte(s), probe present: %s" % (len(left), probe in left),
+             "as required" if good else "**SELFTEST FAILED**"))
     return ok
 
 
@@ -8861,49 +9372,6 @@ def _emitting_helpers(funcs):
                     moved = True
                     break
     return emits
-
-
-def emitting_class_methods():
-    """`R40-S1`: a method of a class that emits is neither a helper nor a
-    verdict, so it is a FINDING in its own right.
-
-    `_emitting_helpers` closes over module-level `FunctionDef`s, and
-    `EMITTING_VERDICTS` names three of them. A `ClassDef` body sits outside
-    both: a printing method was reachable from a verdict through a receiver
-    this file reads (`_ArmShape.strip` is the shape the gap has today), and
-    neither the door census nor the arrival law would have said a word.
-
-    Rather than widen the door derivation to every method of every class --
-    which would need the receiver's TYPE, something this file cannot know --
-    this names the emission where it is written. The harness may print from
-    module-level functions; a class of it may not. That is a design constraint
-    of this pack's own instruments, and it reds the gate by line when a later
-    edit breaks it.
-    """
-    out = []
-    tree = None
-    if _COMMITTED_AST:
-        _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
-        if text is not None:
-            tree = ast.parse(text)
-    if tree is None:                                           # pragma: no cover
-        return out
-    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
-    emits = _emitting_helpers(funcs)
-    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
-        for m in [n for n in cls.body
-                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-            for x in ast.walk(m):
-                if _is_an_emission(x):
-                    out.append((cls.name, m.name, x.lineno,
-                                "`%s` emits" % ast.unparse(x.func)))
-                    break
-                if (isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
-                        and x.func.id in emits):
-                    out.append((cls.name, m.name, x.lineno,
-                                "`%s` reaches an emission" % x.func.id))
-                    break
-    return sorted(out)
 
 
 # `R39-F1`: the two sets this file reads instead of one list of method names.
@@ -10796,6 +11264,8 @@ def selftest():
     ok = capture_leak_arm() and ok
     ok = emission_site_census() and ok
     ok = unclassifiable_call_arm() and ok
+    ok = reachable_body_arm() and ok
+    ok = fd_leak_arm() and ok
     ok = criterion_selector_arms(printed_paragraphs()) and ok
     ok = finding_construction_test() and ok
     ok = guard_set_test() and ok
