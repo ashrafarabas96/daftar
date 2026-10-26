@@ -110,8 +110,25 @@ jobs:
         run: npm run check:localization
       - name: Format
         run: npm run format
+      # `eslint . --max-warnings 0` walks the whole monorepo in one process and
+      # died here with a V8 "Ineffective mark-compacts near heap limit" abort
+      # (exit 134) against a ~2057MB ceiling. It is the fourteenth step of this
+      # job, so its abort left steps 15-36 `skipped` — Typecheck, the unit
+      # tests, the fresh PostgreSQL bring-up, the migrations, the integration
+      # and security suites, the golden regression suite, every Phase 2 slice
+      # gate, the Phase 3 corrective gate and the API build. A memory ceiling
+      # was silently standing in for all of that evidence.
+      #
+      # Raising the ceiling for THIS STEP ONLY is the honest fix. The runner has
+      # far more memory than 6144MB, so nothing here is oversubscribed. What is
+      # deliberately NOT done: narrowing what Lint covers, lowering
+      # --max-warnings, or adding ignore entries. Each of those would turn a
+      # resource limit into permanently unreported lint errors, which is the
+      # opposite of what a gate is for.
       - name: Lint
         run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
@@ -425,6 +442,25 @@ jobs:
   hygiene:
     needs: workspaces
     runs-on: ubuntu-latest
+    # gitleaks-action reads the pull request's commit list through the REST API
+    # (GET /repos/{owner}/{repo}/pulls/{n}/commits) before it scans anything.
+    # This workflow declared no `permissions:` anywhere and the repository's
+    # default_workflow_permissions is the restricted `read`, which grants the
+    # job token `contents: read` and `packages: read` and NOTHING else. So that
+    # call answered 403 "Resource not accessible by integration" (the response's
+    # x-accepted-github-permissions asked for `pull_requests=read`) and the step
+    # died having scanned nothing. The defect was latent for as long as the
+    # `Dependency audit` step above failed first and skipped this one; the first
+    # pull request whose audit passed is the one that exposed it.
+    #
+    # Declared at JOB level, not file level, deliberately: every other job in
+    # this workflow needs nothing beyond the default, and a file-level block
+    # would hand all five of them a permission they have no use for. Adding
+    # `permissions` here also pins THIS job to exactly these two scopes, so a
+    # later change to the repository's default cannot silently widen it.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # Full history: gitleaks scans the pull request's commit RANGE, so with the
       # default depth-1 checkout the base commit is absent, git writes to stderr
