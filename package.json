@@ -73,6 +73,8 @@
     "gate:phase3:s8": "tsx scripts/phase3-s8-gate.ts",
     "gate:phase3:corrective": "tsx scripts/phase3-corrective-gate.ts",
     "gate:phase3:release": "tsx scripts/phase3-release-gate.ts",
+    "gate:phase4": "tsx scripts/phase4-gate.ts",
+    "gate:phase4:release": "tsx scripts/phase4-gate.ts",
     "gate:phase4:s1": "tsx scripts/phase4-s1-gate.ts",
     "gate:phase4:s2": "tsx scripts/phase4-s2-gate.ts",
     "gate:phase4:s3": "tsx scripts/phase4-s3-gate.ts",
