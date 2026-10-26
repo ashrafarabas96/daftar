@@ -84,7 +84,7 @@ export function discoverPhase3Relations(sql: string): string[] {
 export function discoverPhase3RelationsByPosition(migrations: Readonly<Record<string, string>>): string[] {
   const found = new Set<string>();
   for (const [path, sql] of Object.entries(migrations)) {
-    if ((path.split('/').pop() ?? path) <= PHASE2_PREFIX_END) continue;
+    if ((path.split(/[\\/]/).pop() ?? path) <= PHASE2_PREFIX_END) continue;
     for (const relation of discoverStoredRelations(sql)) found.add(relation);
   }
   return [...found].sort();
