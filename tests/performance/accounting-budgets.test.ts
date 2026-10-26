@@ -69,6 +69,41 @@ const RUN_LOCATION = process.env['CI'] === 'true' ? 'CI' : 'LOCAL';
 const ITERATIONS = TIER === 2 ? 60 : 30;
 const WARMUP = 5;
 
+/**
+ * PERF-01 (owner decision DR-15): a stable p95 for the two CHEAP budgets, A
+ * and B. No budget value changed; only the measurement got sturdier.
+ *
+ * Why 200 samples. The estimator is `sorted[floor(0.95 * N)]`. With N = 30
+ * that is index 28, so exactly ONE sample sits above p95 and the second
+ * largest value IS the p95: two stalled iterations decide the verdict. That
+ * is what failed on CI run 40359807575 (28 of 30 samples between 8.3 and
+ * 14.5 ms; two stalls at 77.7 and 152.7 ms gave p95 = 77.7). With N = 200 the
+ * index is 190, so 9 samples sit above p95 and the verdict moves only when
+ * at least 10 of 200 (5 %) are slow. A runner stall that cost 2 of 30
+ * (6.7 %) costs the same 2 of 200 (1 %), well short of the line. A genuine
+ * regression shifts the whole distribution, not 5 % of it, so it still
+ * fails: see the negative control below.
+ * Cost: 200 x ~10 ms = about 2 s per case. A and B are cheap; C, D, E and F
+ * keep their counts because each iteration is far more expensive.
+ *
+ * Why 20 warm-ups. They are discarded and never enter a statistic. 5 covered
+ * the JIT but not the pg pool filling, the planner caching plans for
+ * repeated statements and the HTTP keep-alive socket; 20 passes use every
+ * pooled connection several times before the clock starts. Start-up (app
+ * creation, dataset load, ANALYZE, token issue) happens in beforeAll, outside
+ * every measured window.
+ */
+const STABLE_ITERATIONS = 200;
+const STABLE_WARMUP = 20;
+
+/**
+ * NEGATIVE CONTROL ONLY. Unset in every normal run, and then inert. When set
+ * to a number of milliseconds it delays every measured B iteration by that
+ * much, so the p95 <= 60 ms assertion MUST go red. It exists to prove the
+ * hardened measurement can still fail; it never relaxes anything.
+ */
+const NEGATIVE_CONTROL_MS = Number(process.env['PERF01_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
+
 interface Measurement {
   readonly name: string;
   readonly budgetMs: number;
@@ -126,8 +161,8 @@ function summarise(name: string, budgetMs: number, samples: number[]): Measureme
 }
 
 /** Warm up, then measure. The warm-up samples are discarded, never averaged in. */
-async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS): Promise<Measurement> {
-  for (let i = 0; i < WARMUP; i += 1) await once();
+async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS, warmup = WARMUP): Promise<Measurement> {
+  for (let i = 0; i < warmup; i += 1) await once();
   const samples: number[] = [];
   for (let i = 0; i < iterations; i += 1) {
     const started = process.hrtime.bigint();
@@ -352,16 +387,22 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
   it(`p95 ≤ ${BUDGET.A_POST_P95} ms`, async () => {
     const c = await appClient();
     try {
-      const m = await measure('A post() in an open transaction', BUDGET.A_POST_P95, async () => {
-        const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
-        await c.query('BEGIN');
-        await postAs(assertionFor(command, userId), command, {}, c);
-        // Measured through COMMIT on purpose: the deferred entry validators
-        // run there, so timing only the call would leave out the part of the
-        // cost that scales with the journal. This is a stricter reading of
-        // the budget than §34 requires, never a looser one.
-        await c.query('COMMIT');
-      });
+      const m = await measure(
+        'A post() in an open transaction',
+        BUDGET.A_POST_P95,
+        async () => {
+          const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
+          await c.query('BEGIN');
+          await postAs(assertionFor(command, userId), command, {}, c);
+          // Measured through COMMIT on purpose: the deferred entry validators
+          // run there, so timing only the call would leave out the part of the
+          // cost that scales with the journal. This is a stricter reading of
+          // the budget than §34 requires, never a looser one.
+          await c.query('COMMIT');
+        },
+        STABLE_ITERATIONS,
+        STABLE_WARMUP,
+      );
       expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.A_POST_P95);
     } finally {
       await c.end();
@@ -371,23 +412,30 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
 
 describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
   it(`p95 ≤ ${BUDGET.B_ADJUSTMENT_ENDPOINT_P95} ms`, async () => {
-    const m = await measure('B manual adjustment endpoint', BUDGET.B_ADJUSTMENT_ENDPOINT_P95, async () => {
-      const response = await t.request
-        .post(`/v1/businesses/${businessId}/accounting/adjustments`)
-        .set('Authorization', `Bearer ${token}`)
-        .set('X-Business-Id', businessId)
-        .set('Idempotency-Key', randomUUID())
-        .send({
-          entryDate: today,
-          description: 'budget measurement',
-          reason: 'budget measurement',
-          lines: [
-            { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
-            { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
-          ],
-        });
-      expect([200, 201]).toContain(response.status);
-    });
+    const m = await measure(
+      'B manual adjustment endpoint',
+      BUDGET.B_ADJUSTMENT_ENDPOINT_P95,
+      async () => {
+        if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
+        const response = await t.request
+          .post(`/v1/businesses/${businessId}/accounting/adjustments`)
+          .set('Authorization', `Bearer ${token}`)
+          .set('X-Business-Id', businessId)
+          .set('Idempotency-Key', randomUUID())
+          .send({
+            entryDate: today,
+            description: 'budget measurement',
+            reason: 'budget measurement',
+            lines: [
+              { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
+              { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
+            ],
+          });
+        expect([200, 201]).toContain(response.status);
+      },
+      STABLE_ITERATIONS,
+      STABLE_WARMUP,
+    );
     expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
   }, 900_000);
 });
