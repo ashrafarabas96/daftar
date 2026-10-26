@@ -19,6 +19,26 @@ on:
 env:
   NODE_VERSION: '24.12.x'
 
+# CI-RUNNER-01 (DR-17). The heavy jobs now run on ONE self-hosted runner with
+# a single job slot, so two runs of the same ref would otherwise queue behind
+# each other for hours. Superseding a run is also the correct behaviour on its
+# own terms: a push that replaces a head makes the older run's result evidence
+# for a tree nobody will merge.
+#
+# The group key is the pull request number when there is one, and the ref
+# otherwise. That is what stops the DOUBLE RUN: a branch under `phase/**` with
+# an open pull request fires both the `push` and the `pull_request` trigger,
+# and without this the two race for the single runner. `github.ref` on a
+# `pull_request` event is `refs/pull/N/merge`, so keying on the PR number puts
+# both events of the same pull request in one group and the newer one cancels
+# the older.
+#
+# `main` is deliberately NOT exempted: its runs are serialised the same way,
+# and the surviving run is always the newest head.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # -------------------------------------------------------------------------
   # 1. Workspace integrity — every declared workspace must exist; a missing
@@ -55,7 +75,19 @@ jobs:
   # -------------------------------------------------------------------------
   backend:
     needs: workspaces
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01 (DR-17). This is the heaviest job in the workflow — 442 of
+    # the 789 billable minutes measured on 2026-10-26, 56% of the total — and
+    # it is the one whose evidence the phase gates depend on. It now runs on
+    # the owner's own machine, in a WSL2 Ubuntu 24.04 runner labelled
+    # `daftar-wsl`.
+    #
+    # Nothing else in this job changed: not a step, not a gate, not a
+    # `--max-warnings`, not the Lint heap ceiling, not the service container.
+    # The `services:` block below still brings up a throwaway `postgres:16`
+    # through Docker and still publishes 5432, so every `psql
+    # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
+    # exactly as it did on `ubuntu-latest`.
+    runs-on: [self-hosted, daftar-wsl]
     services:
       postgres:
         image: postgres:16
@@ -365,7 +397,13 @@ jobs:
   # -------------------------------------------------------------------------
   android:
     needs: workspaces
-    runs-on: ubuntu-latest
+    # CI-RUNNER-01: self-hosted. The Android toolchain is NOT part of the
+    # machine image here: setup-java downloads Temurin 17 and setup-android
+    # downloads platform 35 + build-tools 35.0.0 into the runner's own tool
+    # cache, both without root. Gradle 8.9 is installed on the runner because
+    # `gradle wrapper` below needs a gradle to bootstrap from and only
+    # GitHub's image ships one. Nothing in this job was changed.
+    runs-on: [self-hosted, daftar-wsl]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
