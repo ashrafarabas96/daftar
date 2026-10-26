@@ -1029,12 +1029,38 @@ END $$;
 --     a TRIGGER at run time is not in it. That is deliberate and it is the
 --     EXPLAIN construction's question, not this one's: `Y1` plans as exactly
 --     its declared relation and is refused by the construction.
---   * the helper pins `search_path` to `p8, public`, which is what every case
---     file in this pack sets. A session that sets a different one resolves
---     its declared relation differently from the plan, and the comparison
---     reds — fail-closed, by construction.
+--   * the helper pins `search_path` to `p8, public, pg_temp`, which is
+--     `p8, public` — what every case file in this pack sets — with `pg_temp`
+--     named LAST, which is PostgreSQL's own idiom for a definer: unnamed, it
+--     is searched FIRST, so a caller's temporary relation could shadow a
+--     schema name the plan resolves. ROUND 37, the coordinator's 6.4: the
+--     sentence here used to omit the third entry, and a reader auditing the
+--     pin would not have gone looking for an entry the prose left out. No
+--     case role may create a temporary relation in this database (measured:
+--     `permission denied to create temporary tables in database "daftar"`),
+--     so the shadow is not reachable from a case either way. A session that
+--     sets a different search_path resolves its declared relation differently
+--     from the plan, and the comparison reds — fail-closed, by construction.
 --   * a statement the planner cannot plan at all is refused by name here
 --     rather than being admitted unmeasured.
+--
+-- DECLARED RESIDUAL, NOT CLOSED IN THIS COMMIT — ROUND 37, `R27-S-1` and the
+-- coordinator's 6.1, and both reviewers rated it non-blocking. This helper is
+-- `SECURITY DEFINER` owned by the migrator, and the runner grants EXECUTE on
+-- it to all three case roles. PLANNING is not free of execution: the planner
+-- FOLDS an `IMMUTABLE` function with constant arguments, so that function's
+-- BODY runs — and under this wrapper it runs as the owner. The twenty-seventh
+-- challenge measured the lever end to end: a role that may execute neither
+-- `p8bench_tell()` nor read what it reads got both in one call. Writes are
+-- refused by PostgreSQL itself (`INSERT is not allowed in a non-volatile
+-- function`) and an injected tail is refused below, so no measured claim in
+-- this gate is false because of it, and the helper lives in the proof schema
+-- and ships in no migration. What closes it is a least-privilege planning
+-- role — one holding nothing but the reads `EXPLAIN` needs — in place of the
+-- migrator, who owns the law's own functions; roles in this project are
+-- created by `bootstrap.sql`, which this pack does not write, so that is a
+-- change of its own and not this commit's. Named here, with its measurement,
+-- rather than left for a reader to find.
 CREATE OR REPLACE FUNCTION p8.plan_nodes(node JSONB) RETURNS SETOF JSONB
 LANGUAGE plpgsql IMMUTABLE AS $fn$
 DECLARE child JSONB; k TEXT;
@@ -1062,6 +1088,20 @@ CREATE OR REPLACE FUNCTION p8.plan_relations(stmt TEXT) RETURNS OID[]
 LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = p8, public, pg_temp AS $fn$
 DECLARE j JSONB; oids OID[];
 BEGIN
+  -- ROUND 37, the coordinator's 6.1. This helper prepends text to the
+  -- statement it is given and runs the result as the migrator, so a second
+  -- statement riding on the first would run there too. Every caller inside
+  -- this pack has already passed `p8.assert_single_statement`, which is where
+  -- the law lives; this is the HELPER refusing for itself, so the guarantee
+  -- does not depend on who calls it. Narrowing by text is fail-closed — it can
+  -- only refuse, never admit — which is why it does not reintroduce the defect
+  -- round 36 closed. The scanner blanks literals and strips comments, so a
+  -- semicolon inside a payload is not one of these.
+  IF position(';' in rtrim(rtrim(p8.sql_scan(stmt)), ';')) > 0 THEN
+    RAISE EXCEPTION 'p8.plan_relations: MORE THAN ONE STATEMENT — this helper plans the statement '
+                    'it is given as the role that owns it, so it will not be handed a second one'
+      USING ERRCODE = 'P0001';
+  END IF;
   EXECUTE 'EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ' || stmt INTO j;
   SELECT array_agg(DISTINCT o) INTO oids FROM (
     SELECT to_regclass(quote_ident(n ->> 'Schema') || '.'
@@ -1078,6 +1118,7 @@ LANGUAGE plpgsql AS $$
 DECLARE msg TEXT; cons TEXT; sst TEXT; ctx TEXT; witnessed BOOLEAN; rowlevel BOOLEAN;
         eplan BOOLEAN; esst TEXT; emsg TEXT; servergrant BOOLEAN; named BOOLEAN;
         relid OID; holdspriv BOOLEAN; kindword TEXT; needprivs TEXT[]; leadkw TEXT; scanned TEXT;
+        homonyms TEXT;
         reach OID[];
 BEGIN
   witnessed := subject IS NOT NULL;
@@ -1410,35 +1451,51 @@ BEGIN
                           'server''s refusal, so the arrival term cannot be evaluated (R25-F-1)',
             label, relation;
         END IF;
+        -- ROUND 37, `R27-S-2`. A plain VIEW is expanded by the REWRITER, so the
+        -- plan names the view's base tables and never the view itself —
+        -- measured on 16.15: `SELECT k FROM p8bench_vw` plans as
+        -- `public.p8bench_own` and the view's own oid appears nowhere. The
+        -- reach term below can therefore never be satisfied by a view, and
+        -- before this refusal existed such a case was told its statement
+        -- "reaches more than the declared relation" when what it really
+        -- reaches is that relation's own definition. The over-refusal is
+        -- fail-CLOSED and stays; what changes is that the message now names
+        -- the real reason. Materialized views are unaffected: the server scans
+        -- them directly and the plan names them, so `m` is still a kind this
+        -- form reads. No case in this pack declares a view.
+        IF kindword = 'view' THEN
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT BOUND A STATEMENT ABOUT A VIEW — the declared '
+                          'relation "%" is a view, and a view is expanded by the rewriter before '
+                          'the planner sees it, so the plan this form reads names the view''s BASE '
+                          'relations and never the view. The reach term can never be satisfied for '
+                          'one, so this form refuses the case by name rather than reporting that '
+                          'the statement reaches more than its subject (R27-S-2)',
+            label, relation;
+        END IF;
         BEGIN
           reach := p8.plan_relations(stmt);
         EXCEPTION WHEN others THEN
           GET STACKED DIAGNOSTICS esst = RETURNED_SQLSTATE, emsg = MESSAGE_TEXT;
-          -- DECLARED BOUND, and it is the one case the gate's own `FB-i` probe
-          -- forced: the declared relation may be one the OWNER itself may not
-          -- touch. `FB-i` declares `pg_class` and updates it, and only a
-          -- superuser can, so EXPLAIN refuses for the definer too — with a
-          -- kind-qualified grant refusal ABOUT THE DECLARED RELATION, the same
-          -- sqlstate the case itself read. Where the PLAN and the RUN agree
-          -- that the refusal is a grant decision about the declared relation,
-          -- the reach is left UNREAD and the case continues on the other two
-          -- terms; any other planning failure refuses by name. What is
-          -- unmeasured in that window is a second relation reached beyond the
-          -- point where the planner stopped, and the window is exactly "a
-          -- declared relation the owner may not touch".
-          IF esst = '42501' AND sst = '42501'
-             AND lower(coalesce(emsg,'')) ~ ('permission denied for (' || kindword
-                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)')
-             AND lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
-                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|$)') THEN
-            reach := ARRAY[relid];
-          ELSE
-            RAISE EXCEPTION '% FAIL: THIS FORM CANNOT BOUND THE STATEMENT''S REACH — the server '
-                            'answered [%] % when asked to PLAN this statement for a role that '
-                            'holds everything, so the set of relations it touches cannot be read '
-                            'out of the plan, and this form will not pass a refusal whose subject '
-                            'it cannot bound (R26-F-1)', label, esst, emsg;
-          END IF;
+          -- ROUND 37, the coordinator's 6.2, and the window this branch used to
+          -- open is GONE rather than narrowed. Round 36 admitted one case
+          -- unmeasured: where the PLAN and the RUN both gave a kind-qualified
+          -- 42501 about the declared relation, the reach was left UNREAD and
+          -- the case continued on the other terms. The window was exactly "a
+          -- declared relation the OWNER itself may not touch", and only one
+          -- probe in this pack entered it — `FB-i`, which declared `pg_class`
+          -- for no reason but that a row of it exists in every configuration.
+          -- Both reviews measured a case walking into the window on purpose
+          -- and passing while reaching a second relation the role cannot read.
+          -- `FB-i` is re-aimed at `notifications`, an ordinary relation the
+          -- worker may not write, and with nothing left in the window the
+          -- branch is deleted: ANY failure to plan refuses by name. That is
+          -- the fail-closed direction, and it removes a hole instead of
+          -- trading it for a wider definer.
+          RAISE EXCEPTION '% FAIL: THIS FORM CANNOT BOUND THE STATEMENT''S REACH — the server '
+                          'answered [%] % when asked to PLAN this statement for a role that '
+                          'holds everything, so the set of relations it touches cannot be read '
+                          'out of the plan, and this form will not pass a refusal whose subject '
+                          'it cannot bound (R26-F-1, the coordinator''s 6.2)', label, esst, emsg;
         END;
         IF reach <> ARRAY[relid] THEN
           RAISE EXCEPTION '% FAIL: THE STATEMENT REACHES MORE THAN THE DECLARED RELATION — this '
@@ -1544,6 +1601,99 @@ BEGIN
                           'relation in another schema produces a byte-identical one '
                           '(R25-F-1 X2/X5)',
             label, current_user, relation, array_to_string(needprivs, ', '), sst, msg;
+        END IF;
+        -- ROUND 37, `R27-F-1`, and it is the fourth round of ONE class. The
+        -- three terms above are each sound and the class survives all three,
+        -- because every one of them is blind in the same place: the server's
+        -- grant refusal names a KIND and a BARE NAME and no schema, so a
+        -- relation in another schema wearing the declared relation's name
+        -- produces a BYTE-IDENTICAL message. Round 36 closed the half of the
+        -- class the PLAN can see. The twenty-seventh challenge built the half
+        -- it cannot, and this author reproduced it and then found it is not
+        -- one half but two. Measured on 16.15, each a case that PASSED at
+        -- rc 0 on `54f3a53` while the refusal was about another relation:
+        --
+        --   R1  the ROW form. A BEFORE UPDATE trigger on the declared
+        --       relation reads a same-named twin; the UPDATE grant is
+        --       COLUMN-scoped. reach = {declared} — a non-ANALYZE plan does
+        --       not enter triggers; arrival matches byte for byte;
+        --       has_table_privilege answers FALSE for a column grant, so the
+        --       privilege term is silent. PASS.
+        --   F2  the RELATION form, which the challenger reported closed and
+        --       which this author measured open. An IMMUTABLE function is
+        --       FOLDED at plan time, so its body's reads are not in the plan
+        --       AND the refusal reproduces under EXPLAIN — which is exactly
+        --       what the construction above asks for. Same twin, same
+        --       byte-identical message, column-scoped INSERT. PASS. Written
+        --       VOLATILE the construction reds it (measured both ways), so
+        --       the split is plan-time folding and nothing else.
+        --
+        -- Two fixes were suggested and NEITHER is what runs here, each for a
+        -- measured reason.
+        --
+        --   * Take the row form's reach from `EXPLAIN (ANALYZE, FORMAT JSON)`
+        --     in a rolled-back subtransaction, reading its `Trigger` nodes.
+        --     Measured: a `Trigger` node carries `Trigger Name`, `Relation`
+        --     (the relation the trigger is ON), `Time` and `Calls`. The
+        --     relations the trigger's BODY read appear nowhere — the twin's
+        --     name is absent from the whole plan. So it does not produce the
+        --     reach set it is wanted for, and it would buy that nothing by
+        --     EXECUTING the case's statement as the role that owns the
+        --     helper.
+        --   * Require a row case whose relation carries a trigger to spell
+        --     `expect` with the relation's name and resolve it with
+        --     `to_regclass`. That is round 34's error again: `X5` already
+        --     spells `permission denied for table p8bench_rel` IN FULL and
+        --     passes, and `to_regclass` in the case's own session answers the
+        --     DECLARED relation's oid for the bare name — measured, the
+        --     declared oid and never the twin's. A name cannot distinguish
+        --     two objects that share it.
+        --
+        -- What runs instead removes the AMBIGUITY rather than chasing the
+        -- mechanisms. The server's message identifies its object by kind and
+        -- bare name; so this term requires that pair to identify exactly ONE
+        -- object. If no other relation in this database wears the declared
+        -- relation's name, then a kind-qualified grant refusal naming it IS
+        -- about it — whatever reached it, trigger, folded function or anything
+        -- else nobody has thought of. The question is asked of the catalogue,
+        -- which is the server's, not of the case's text, and the case cannot
+        -- answer it by writing a different statement.
+        --
+        -- It is fail-CLOSED in the one direction that matters: a case whose
+        -- declared relation HAS a homonym is refused by name, and the
+        -- homonyms are named in the refusal. Measured on the real
+        -- 87-migration schema, no relation name is carried by two relations,
+        -- so this reds no live case; the bench's own twins are declared by
+        -- arms that red on the reach or arrival terms BEFORE this one, which
+        -- is why this term runs LAST and leaves every existing attribution
+        -- where it was.
+        --
+        -- DECLARED BOUNDS. Sequences and functions are included and excluded
+        -- respectively, and for the same reason: the server spells the kind,
+        -- `permission denied for sequence s` and `for function f`, so a
+        -- function homonym is already refused by the arrival term above
+        -- (`X1`), while a sequence prints a kind this form does not map and
+        -- the version-independent spelling `relation` is accepted by arrival,
+        -- so sequences are counted here. What this term does NOT answer is
+        -- whether the statement needed that relation to be reached at all —
+        -- that is the reach term's question and it is still asked first.
+        SELECT coalesce(string_agg(n.nspname || '.' || c.relname, ', '
+                                   ORDER BY n.nspname || '.' || c.relname), '')
+          INTO homonyms
+          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relname = relation AND c.oid <> relid
+           AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S');
+        IF homonyms <> '' THEN
+          RAISE EXCEPTION '% FAIL: THE DECLARED RELATION''S NAME DOES NOT NAME ONE OBJECT — this '
+                          'case declares the % "%" (oid %) and this database also carries %. The '
+                          'server''s grant refusal names a kind and a BARE name and no schema, so '
+                          'its message about either of them is byte-identical, and no term of this '
+                          'law can tell which one [%] % was about: a plan does not enter a '
+                          'trigger, a folded IMMUTABLE function''s reads are not in the plan '
+                          'either, and a column-scoped grant makes the catalogue answer FALSE for '
+                          'the relation the case DID declare. Give the case a subject whose name '
+                          'is its own (R27-F-1 R1/F2)',
+            label, kindword, relation, relid, homonyms, sst, msg;
         END IF;
       END IF;
     END IF;

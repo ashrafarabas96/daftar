@@ -34,8 +34,11 @@ the answer: `P8_EXPECT_CASES=98` gives the CASE count a literal and a red. The
 case count got its literal; the arm count did not.
 
 So the set itself is now DECLARED and SEALED. `EXPECTED_ARMS` names every arm
-identity, `EXPECTED_SEAL` is the SHA-256 of that list, and the census refuses by
-name in **both** directions — `ARM NOT DECLARED` on an arrival, `ARM MISSING` on
+identity, `EXPECTED_SEAL` is the SHA-256 of FOUR declarations and not of that
+list alone — round 30 widened it and ROUND 37 (`R27-S-3`) corrects this
+sentence, which was the second site of the stale recipe round 36 fixed at the
+first; `seal_of`'s own docstring carries the runnable one — and the census
+refuses by name in **both** directions — `ARM NOT DECLARED` on an arrival, `ARM MISSING` on
 a departure, naming which — plus `SEAL BROKEN` when the list and its digest
 disagree, so the set cannot be widened or narrowed quietly in passing. Adding an
 arm and removing one both now cost the same deliberate act: re-seal, in the same
@@ -271,6 +274,8 @@ ARM_LABELS = (
     "ATTRIB-W1",
     "ATTRIB-W2",
     "ATTRIB-W3",
+    "ATTRIB-F2",
+    "ATTRIB-R1",
     "ATTRIB-W3C",
     "ATTRIB-Z1",
     "ATTRIB-Z2",
@@ -279,6 +284,8 @@ ARM_LABELS = (
     "REACH-W3-CTL",
     "REACH-W3C-CTL",
     "REACH-Z1-CTL",
+    "HOMONYM-F2-CTL",
+    "HOMONYM-R1-CTL",
     "REACH-Z2-CTL",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
@@ -439,9 +446,11 @@ EXPECTED_ARMS = (
     ("ARGSHAPE y", 1),
     ("ARGSHAPE z", 1),
     ("ATTRIB-BENCH", 1),
+    ("ATTRIB-F2", 1),
     ("ATTRIB-KIND-CTL", 1),
     ("ATTRIB-KIND-ISOLATE", 1),
     ("ATTRIB-PRIV-CTL", 1),
+    ("ATTRIB-R1", 1),
     ("ATTRIB-W1", 1),
     ("ATTRIB-W2", 1),
     ("ATTRIB-W3", 1),
@@ -517,6 +526,8 @@ EXPECTED_ARMS = (
     ("GUARD-CTL y8", 1),
     ("GUARD-CTL y9", 1),
     ("HATCH", 1),
+    ("HOMONYM-F2-CTL", 1),
+    ("HOMONYM-R1-CTL", 1),
     ("I1-conc PASS", 1),
     ("IDENT-RULE", 1),
     ("INTEGRITY-MUT a", 1),
@@ -663,7 +674,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "a450d4c174a5f2b98225a3a3db3919ed6551ce4e2a151603baa519309ffd6dcf"
+EXPECTED_SEAL = "79d1263b1e1ee788e3fdc26d3b1b9370e54c11225bd4359a739e14ba1a9fb653"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not

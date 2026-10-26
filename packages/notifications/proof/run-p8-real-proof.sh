@@ -2253,13 +2253,27 @@ ROLLBACK;
 SQL
 } > "$WB/dynsql.sql"
 # The HONEST case, the other direction of W-4: a row case whose payload carries
-# the word `exception` inside a string literal. `pg_class` is the subject
-# because it has a row for every relation in every configuration, so this arm
-# needs no fixture of its own.
+# the word `exception` inside a string literal.
+#
+# ROUND 37, the coordinator's 6.2. The subject used to be `pg_class`, chosen
+# only because it has a row in every configuration and so needed no fixture.
+# That choice put this probe inside the one window round 36's reach term left
+# unmeasured: `pg_class` is a relation even its OWNER may not update, so the
+# definer's own EXPLAIN refused, and the reach was left unread. Both reviews of
+# `54f3a53` measured a case walking into that window on purpose and passing
+# while reaching a second relation the role cannot read. The subject here is
+# now `businesses`, an ordinary relation the worker may READ and may not
+# write, and one its owner certainly may touch, so the window has no occupant
+# and the branch that opened it is deleted from the law. It needs no fixture
+# either: the baseline's own rows are there at this stage, which is what the
+# witness reads. `notifications` is NOT — its rows live inside the case files'
+# own transactions, measured when this probe was first re-aimed there and
+# refused by name for an absent witness. What this arm measures is unchanged:
+# the payload still carries the word `exception` inside a literal.
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_row('FB-i an honest row case with the word exception in a literal',
-  $q$UPDATE @REL@ SET relname = 'B1|exception noted'$q$,
-  'permission denied', 'pg_class', 'relname', 'notifications');
+  $q$UPDATE @REL@ SET store_slug = 'B1|exception noted'$q$,
+  'permission denied', 'businesses', 'id', 'bbbbbbbb-0000-4000-8000-000000000001');
 ROLLBACK;
 SQL
 } > "$WB/literal.sql"
@@ -3392,12 +3406,63 @@ END $t$;
 DROP TRIGGER IF EXISTS p8bench_y1 ON public.p8bench_y1t;
 CREATE TRIGGER p8bench_y1 BEFORE INSERT ON public.p8bench_y1t
   FOR EACH ROW EXECUTE FUNCTION public.p8bench_y1();
+-- ROUND 37. A relation whose name is carried by NOTHING else in this
+-- database: the subject for every probe that must reach the attribution terms
+-- and pass, now that a homonym is itself a refusal. `p8bench_ro` has a twin
+-- for W3's sake, so the two probes that used it as an honest subject —
+-- ATTRIB-KIND-ISOLATE's control and RELATION-BIND-ISOLATE's — move here, and
+-- keep isolating the one term each was built for.
+CREATE TABLE IF NOT EXISTS public.p8bench_solo(k TEXT PRIMARY KEY);
+INSERT INTO public.p8bench_solo VALUES ('a') ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_solo FROM PUBLIC;
+GRANT SELECT ON public.p8bench_solo TO daftar_worker;
+-- ROUND 37, R27-F-1 R1: the ROW half of the class. A BEFORE UPDATE trigger on
+-- the declared relation reads a SAME-NAMED relation in another schema, and the
+-- UPDATE grant is COLUMN-scoped. A non-ANALYZE plan does not enter the
+-- trigger, so the twin is not in the plan; the server's message is
+-- byte-identical because it names no schema; and `has_table_privilege`
+-- answers FALSE for a column grant, so the privilege term is silent. All
+-- three terms are satisfied and the refusal is about the twin.
+CREATE TABLE IF NOT EXISTS public.p8bench_tw(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_tw VALUES ('a', 1) ON CONFLICT DO NOTHING;
+-- The twin's column is `j` for the same reason `p8other.p8bench_rel`'s is:
+-- the row form composes its own predicate on the declared key.
+CREATE TABLE IF NOT EXISTS p8other.p8bench_tw(j TEXT PRIMARY KEY);
+INSERT INTO p8other.p8bench_tw VALUES ('x') ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_tw, p8other.p8bench_tw FROM PUBLIC;
+GRANT SELECT, UPDATE (v) ON public.p8bench_tw TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_twtg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+DECLARE n BIGINT;
+BEGIN
+  SELECT count(*) INTO n FROM p8other.p8bench_tw;
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_twtg ON public.p8bench_tw;
+CREATE TRIGGER p8bench_twtg BEFORE UPDATE ON public.p8bench_tw
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_twtg();
+-- ROUND 37, R27-F-1 F2: the RELATION half, which the twenty-seventh challenge
+-- reported closed and which this author measured OPEN. IMMUTABLE on purpose
+-- and measured: the planner FOLDS it, so its body's read of the twin is not in
+-- the plan AND the refusal reproduces under EXPLAIN, which is precisely what
+-- the construction asks for. Written VOLATILE the construction reds the case
+-- instead — measured both ways, which is what makes plan-time folding the
+-- whole of the split.
+CREATE OR REPLACE FUNCTION public.p8bench_foldread() RETURNS TEXT
+LANGUAGE plpgsql IMMUTABLE SECURITY INVOKER AS $f$
+DECLARE n BIGINT;
+BEGIN
+  SELECT count(*) INTO n FROM p8other.p8bench_ro;
+  RETURN 'z';
+END $f$;
+REVOKE ALL ON FUNCTION public.p8bench_foldread() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.p8bench_foldread() TO daftar_worker;
 SQL
 if [ -s "$WB/abench.log" ] && grep -qi "^ERROR" "$WB/abench.log"; then
   say "ATTRIB-BENCH: PLANT NOT ESTABLISHED — the attribution bench could not be built: $(tail -1 "$WB/abench.log")"
   FAILED=1
 else
-  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation and a row-conditional trigger — so a case can declare one subject while the refusal it reads is about another, and every grant here is an ordinary one (R25-F-1, the coordinator's 3.2 and 3.3)"
+  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation, a row-conditional trigger, a relation whose name is carried by nothing else, a twin reached by a per-row trigger under a column-scoped grant and a twin reached by a function the planner FOLDS — so a case can declare one subject while the refusal it reads is about another, by four different routes, and every grant here is an ordinary one (R25-F-1, the coordinator's 3.2 and 3.3, R27-F-1)"
 fi
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T1 a relation case refused about a SECOND relation',
@@ -3482,13 +3547,13 @@ SQL
 } > "$WB/x5.sql"
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T5 a refusal about a function, where the role genuinely LACKS the privilege',
-  $q$INSERT INTO @REL@ VALUES (public.p8bench_sectext())$q$, 'permission denied', 'p8bench_ro');
+  $q$INSERT INTO @REL@ VALUES (public.p8bench_sectext())$q$, 'permission denied', 'p8bench_solo');
 ROLLBACK;
 SQL
 } > "$WB/t5.sql"
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T6 a refusal genuinely about the declared relation, from a statement not built from it',
-  $q$INSERT INTO "p8bench_ro" VALUES ('z')$q$, 'permission denied', 'p8bench_ro');
+  $q$INSERT INTO "p8bench_solo" VALUES ('z')$q$, 'permission denied', 'p8bench_solo');
 ROLLBACK;
 SQL
 } > "$WB/t6.sql"
@@ -3560,6 +3625,20 @@ SELECT p8.case_refuses_row('Z2 the coordinator''s column label, row form',
 ROLLBACK;
 SQL
 } > "$WB/z2.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('R1 the row form, where a TRIGGER reaches the same-named twin',
+  $q$UPDATE @REL@ SET v = 2$q$,
+  'permission denied', 'p8bench_tw', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/r1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_relation('F2 the relation form, where a FOLDED function reaches the same-named twin',
+  $q$INSERT INTO @REL@ VALUES (public.p8bench_foldread())$q$,
+  'permission denied', 'p8bench_ro');
+ROLLBACK;
+SQL
+} > "$WB/f2.sql"
 wb_probe w1.sql "ATTRIB-W1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R26-F-1 W1, which passed at rc 0 on this head's parent: X2 with ONE extra DECLARED keyword as a column alias, which made the privilege conjunction smaller and took the term out of the law — and 'expect' spells the declared relation's name in full, so nothing in the case's wording is doing the work"
 wb_probe w2.sql "ATTRIB-W2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
@@ -3572,6 +3651,10 @@ wb_probe z1.sql "ATTRIB-Z1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATI
   "the coordinator's Z1 at 'd418171', the same column-label attack carrying 'expect' as a bare phrase"
 wb_probe z2.sql "ATTRIB-Z2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "the coordinator's Z2, the row form of the same"
+wb_probe r1.sql "ATTRIB-R1" "THE DECLARED RELATION'S NAME DOES NOT NAME ONE OBJECT" \
+  "R27-F-1 R1, which passed at rc 0 on this head's parent and is the ROW half of a class now in its fourth round: a BEFORE UPDATE trigger on the declared relation reads a twin wearing its name, under a COLUMN-scoped grant. The plan does not enter the trigger, the server's message carries no schema, and the catalogue answers FALSE for a column grant — so all three terms are satisfied while the refusal is about the twin"
+wb_probe f2.sql "ATTRIB-F2" "THE DECLARED RELATION'S NAME DOES NOT NAME ONE OBJECT" \
+  "R27-F-1 F2, the RELATION half, which the twenty-seventh challenge reported closed and this author measured open: an IMMUTABLE function is FOLDED at plan time, so its read of the twin is absent from the plan AND the refusal reproduces under EXPLAIN, which is what the construction asks for. Written VOLATILE the construction reds it, so plan-time folding is the whole of the split"
 wl_sub_ctl "REACH-W1-CTL" w1.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
@@ -3582,8 +3665,8 @@ wl_sub_ctl "REACH-W2-CTL" w2.sql \
   "with the reach term deleted W2 is still refused by the positional privilege term, the same way as W1, so the row form is covered twice over and reach is not what this shape needs"
 wl_sub_ctl "REACH-W3-CTL" w3.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
-  pass "PASS refused by permission denied" \
-  "with the reach term deleted ALONE W3 passes again, and this is the one that matters most: no privilege question asked of the DECLARED relation can ever see it, because the privilege the role lacks is on the other one"
+  refuse "THE DECLARED RELATION'S NAME DOES NOT NAME ONE OBJECT" \
+  "with the reach term deleted ALONE W3 is still refused, and by the term ROUND 37 added rather than by any privilege question: no privilege asked of the DECLARED relation can ever see W3, because the privilege the role lacks is on the other one, and what catches it instead is that the other one WEARS the declared name. Round 36 attributed this control to the privilege term and that attribution is withdrawn — measured here, it never reached it"
 wl_sub_ctl "REACH-W3C-CTL" w3c.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
@@ -3596,6 +3679,14 @@ wl_sub_ctl "REACH-Z2-CTL" z2.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
   "with the reach term deleted the coordinator's Z2 is still refused by the positional privilege term, the row form of the same"
+wl_sub_ctl "HOMONYM-R1-CTL" r1.sql \
+  "        IF homonyms <> '' THEN" "        IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the name-uniqueness term deleted ALONE the row trigger's twin passes again, so that one term is what catches R1 and nothing beside it does — which is the finding: reach cannot see into a trigger, arrival cannot see a schema, and a column-scoped grant makes the catalogue answer FALSE for the relation the case DID declare (R27-F-1)"
+wl_sub_ctl "HOMONYM-F2-CTL" f2.sql \
+  "        IF homonyms <> '' THEN" "        IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the same one term deleted the FOLDED function's twin passes again, in the RELATION form, where the EXPLAIN construction is satisfied rather than bypassed — so the term is what closes both halves of the class (R27-F-1 F2)"
 wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
