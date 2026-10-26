@@ -230,7 +230,13 @@ export function foldCustomerAging(
     }
     return {
       label,
-      fromDays: previousBoundary === null ? 0 : previousBoundary + 1,
+      // `null` and not `0` for the first band: it has NO lower bound. Its
+      // members are the invoices whose days-past-due does not exceed
+      // `bucketDays[0]`, and that figure is negative for everything not yet
+      // due, so `0` was a false statement about which money the band holds
+      // (DR-10). Under the standard `[0, 30, 60, 90]` this band IS the not-due
+      // one; under a caller's own `[30, 60, 90]` it is the one that mixes.
+      fromDays: previousBoundary === null ? null : previousBoundary + 1,
       toDays: upperBoundary,
       baseMinor: '0',
       byCurrency: [],

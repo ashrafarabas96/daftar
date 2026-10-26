@@ -140,12 +140,40 @@ export const MAX_AGING_BUCKETS = 6;
 /** The largest day boundary a caller may state: ten years, so a boundary is always a real horizon. */
 export const MAX_AGING_BUCKET_DAY = 3650;
 
+/**
+ * THE STANDARD RECEIVABLES AGING (DR-10, 2026-10-26).
+ *
+ *     not due | 1-30 | 31-60 | 61-90 | over 90
+ *
+ * The lock decides no bucket policy, and the server still invents none: these
+ * boundaries are a PRODUCT CONSTANT the client sends, not a default the reader
+ * falls back to. What makes them the standard is the leading **0**.
+ *
+ * The band arithmetic is `1 + <count of boundaries that (as_of - due_date)
+ * STRICTLY exceeds>`, so a boundary of `0` splits on the due date itself:
+ * `(as_of - due_date) > 0` is false up to and including the due date and true
+ * after it. The first band is therefore everything NOT YET DUE — which, before
+ * this decision, was folded into the band labelled `0-30` and counted as money
+ * the merchant was owed late.
+ *
+ * The sum across these bands is the customer's TOTAL RECEIVABLE, not overdue
+ * debt, and the client must name it so.
+ */
+export const STANDARD_AGING_BUCKET_DAYS: readonly number[] = Object.freeze([0, 30, 60, 90]);
+
 export type AgingBucketProblem = 'bucket_days_empty' | 'bucket_days_too_many' | 'bucket_days_not_ascending' | 'bucket_days_out_of_range';
 
 /**
- * A supplied set of day boundaries, judged. `[30, 60, 90]` asks for four
- * buckets: `0..30`, `31..60`, `61..90` and `over 90`, each counted in whole
- * days from the invoice's own due date to the supplied as-of date.
+ * A supplied set of day boundaries, judged. `[0, 30, 60, 90]` asks for the five
+ * standard bands: not due, `1..30`, `31..60`, `61..90` and `over 90`, each
+ * counted in whole days from the invoice's own due date to the supplied as-of
+ * date.
+ *
+ * **`0` is a legal boundary, and only as the first.** It is what asks for the
+ * not-due band (DR-10); strictly ascending integers make a second `0`, or a
+ * `0` after any boundary, unreachable, so the band cannot be asked for twice
+ * and the rule needs no clause of its own. A NEGATIVE boundary is out of
+ * range: it would ask for a band of invoices more-than-not-due.
  *
  * Strictly ascending, because two equal boundaries would produce an empty
  * bucket the merchant cannot interpret, and a descending pair would silently
@@ -155,22 +183,27 @@ export function validateAgingBucketDays(days: readonly number[]): readonly Aging
   const problems: AgingBucketProblem[] = [];
   if (days.length === 0) problems.push('bucket_days_empty');
   if (days.length > MAX_AGING_BUCKETS) problems.push('bucket_days_too_many');
-  if (days.some((d) => !Number.isSafeInteger(d) || d < 1 || d > MAX_AGING_BUCKET_DAY)) problems.push('bucket_days_out_of_range');
+  if (days.some((d) => !Number.isSafeInteger(d) || d < 0 || d > MAX_AGING_BUCKET_DAY)) problems.push('bucket_days_out_of_range');
   if (days.some((d, i) => i > 0 && d <= (days[i - 1] as number))) problems.push('bucket_days_not_ascending');
   return Object.freeze(problems);
 }
 
 /**
  * The labels an aging answer carries, derived from the supplied boundaries.
- * `"0-30"`, `"31-60"`, … and a final `"over-90"`. A label is a stable machine
- * token for the client to translate; it is never rendered raw to a merchant
- * (P4-AL-54).
+ * `"not-due"`, `"1-30"`, `"31-60"`, … and a final `"over-90"`. A label is a
+ * stable machine token for the client to translate; it is never rendered raw to
+ * a merchant (P4-AL-54).
+ *
+ * A band whose UPPER boundary is `0` is `"not-due"` rather than `"0-0"`: it
+ * holds every invoice up to and including its due date, forty-five days early
+ * as readily as on the day, so no pair of day numbers describes it. The bands
+ * after it read from `1` up, because the first day late is day one.
  */
 export function agingBucketLabels(days: readonly number[]): readonly string[] {
   const labels: string[] = [];
   let lower = 0;
   for (const boundary of days) {
-    labels.push(`${lower}-${boundary}`);
+    labels.push(boundary === 0 ? 'not-due' : `${lower}-${boundary}`);
     lower = boundary + 1;
   }
   const last = days[days.length - 1];

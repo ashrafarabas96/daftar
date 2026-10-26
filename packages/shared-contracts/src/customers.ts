@@ -190,10 +190,21 @@ export interface CustomerReceivableDto {
 
 /** One bucket of an aging answer. */
 export interface CustomerAgingBucketDto {
-  /** A stable machine token — `"0-30"`, `"31-60"`, `"over-90"` — which the client translates (P4-AL-54). */
+  /** A stable machine token — `"not-due"`, `"1-30"`, `"31-60"`, `"over-90"` — which the client translates (P4-AL-54). */
   label: string;
-  /** Inclusive lower bound in whole days past due; 0 for the first bucket. */
-  fromDays: number;
+  /**
+   * Inclusive lower bound in whole days past due, and **`null` for the first
+   * bucket, which has none** (DR-10).
+   *
+   * The first bucket holds every invoice whose days-past-due does not exceed
+   * `bucketDays[0]`, and days-past-due is NEGATIVE for an invoice not yet due,
+   * so the bound is open below. It used to be reported as `0`, which was a
+   * false statement about a money figure: under the standard boundaries
+   * `[0, 30, 60, 90]` this bucket is exactly the NOT-DUE one, and under a
+   * caller's own `[30, 60, 90]` it is the one that mixes not-due invoices in
+   * with those up to thirty days late.
+   */
+  fromDays: number | null;
   /** Inclusive upper bound, or `null` for the final open bucket. */
   toDays: number | null;
   baseMinor: string;
@@ -223,7 +234,16 @@ export interface CustomerAgingDto {
   bucketDays: number[];
   /** `bucketDays.length + 1` buckets, in ascending age order, the open bucket last. */
   buckets: CustomerAgingBucketDto[];
-  /** Σ of the buckets, in base minor units. Equal to `receivable.baseMinor` restricted to open invoices. */
+  /**
+   * Σ of the buckets, in base minor units. Equal to `receivable.baseMinor`
+   * restricted to open invoices.
+   *
+   * **This is the TOTAL RECEIVABLE — "إجمالي الذمم" — and not overdue debt**
+   * (DR-10). It includes the first bucket, which under the standard boundaries
+   * is the money NOT YET DUE. A client that labels this figure as late, or as
+   * what the customer owes in arrears, misstates it; the overdue total is the
+   * sum of the buckets AFTER the not-due one.
+   */
   totalBaseMinor: string;
 }
 

@@ -367,7 +367,9 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     expect(buckets.map((b) => b.baseMinor)).toEqual(['0', '0', '0', '0']);
     expect(buckets.map((b) => b.invoiceCount)).toEqual([0, 0, 0, 0]);
     expect(buckets.map((b) => b.byCurrency)).toEqual([[], [], [], []]);
-    expect(buckets.map((b) => b.fromDays)).toEqual([0, 31, 61, 91]);
+    // The first band's lower bound is `null` since DR-10: it has none, because
+    // days-past-due is negative for an invoice not yet due.
+    expect(buckets.map((b) => b.fromDays)).toEqual([null, 31, 61, 91]);
     expect(buckets.map((b) => b.toDays)).toEqual([30, 60, 90, null]);
     expect(totalBaseMinor).toBe('0');
     expect(sumBucketBase(buckets)).toBe(sumBase([]));
@@ -450,7 +452,17 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
       const { buckets } = foldCustomerAging([], { labels: agingBucketLabels(days), bucketDays: days });
       expect(buckets.length, `${days.length} boundaries`).toBe(days.length + 1);
       for (const [i, b] of buckets.entries()) {
-        expect(Number.isFinite(b.fromDays), `${days.length} boundaries, band ${i} fromDays=${String(b.fromDays)}`).toBe(true);
+        // Since DR-10 the FIRST band's lower bound is `null` — the one band
+        // that genuinely has none. That is an absent bound and not a broken
+        // number, so the guard is split rather than relaxed: band 0 must be
+        // exactly `null`, and every other band must still be a real finite
+        // number. `NaN` remains refused everywhere, which is what this case is
+        // here to catch.
+        if (i === 0) {
+          expect(b.fromDays, `${days.length} boundaries, band 0 fromDays`).toBeNull();
+        } else {
+          expect(Number.isFinite(b.fromDays), `${days.length} boundaries, band ${i} fromDays=${String(b.fromDays)}`).toBe(true);
+        }
         expect(Number.isNaN(b.fromDays)).toBe(false);
         if (b.toDays !== null) expect(Number.isFinite(b.toDays)).toBe(true);
       }

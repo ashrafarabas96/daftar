@@ -68,7 +68,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Response } from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { agingBucketLabels } from '@daftar/domain-core';
+import { STANDARD_AGING_BUCKET_DAYS, agingBucketLabels } from '@daftar/domain-core';
 import { ownerPool } from '../helpers/test-app';
 import { must } from '../golden-regression/phase4-s4/harness';
 import { confirmSale } from '../golden-regression/phase4-s2/sale-path';
@@ -116,6 +116,15 @@ let http: Response | undefined;
 /** The same function at a horizon inside each band: the 1-based sweep. */
 let sweep: readonly { readonly days: number; readonly bucketNos: readonly number[] }[] = [];
 
+/**
+ * DR-10 — the same installed function under the STANDARD boundaries
+ * `[0, 30, 60, 90]`, swept across every boundary the decision names, plus the
+ * route's answer on both sides of the due date.
+ */
+let standardSweep: readonly { readonly days: number; readonly bucketNos: readonly number[] }[] = [];
+let standardHttpOverdue: Response | undefined;
+let standardHttpNotDue: Response | undefined;
+
 /** `date + n days`, computed in UTC and re-measured in the database before anything rests on it. */
 function plusDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00Z`);
@@ -130,6 +139,17 @@ async function agingRows(at: string): Promise<readonly AgingRow[]> {
        FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
       ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
     [w.shop.businessId, customerId, at, [...BUCKET_DAYS]],
+  );
+  return r.rows;
+}
+
+/** The installed `customer_ar_aging` under the STANDARD boundaries (DR-10). */
+async function agingStandardRows(at: string): Promise<readonly AgingRow[]> {
+  const r = await ownerPool().query<AgingRow>(
+    `SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count
+       FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
+      ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
+    [w.shop.businessId, customerId, at, [...STANDARD_AGING_BUCKET_DAYS]],
   );
   return r.rows;
 }
@@ -168,6 +188,11 @@ function oldFold(rows: readonly AgingRow[]): { readonly bands: readonly string[]
 /** The aging route, as a merchant client asks it. */
 function agingPath(at: string): string {
   return `/v1/customers/${customerId}/receivable/aging?asOf=${at}&bucketDays=${BUCKET_DAYS.join(',')}`;
+}
+
+/** The same route under the standard boundaries, which is also the proof the schema ACCEPTS a leading zero. */
+function standardAgingPath(at: string): string {
+  return `/v1/customers/${customerId}/receivable/aging?asOf=${at}&bucketDays=${STANDARD_AGING_BUCKET_DAYS.join(',')}`;
 }
 
 beforeAll(async () => {
@@ -241,6 +266,20 @@ beforeAll(async () => {
     collected.push({ days, bucketNos: rows.map((r) => r.bucket_no) });
   }
   sweep = collected;
+
+  // DR-10. The SAME installed function, the SAME invoice, the standard
+  // boundaries — asked at every boundary the decision names and one day either
+  // side of each, so an off-by-one cannot hide between two probes.
+  const standardProbes = [-45, -1, 0, 1, 30, 31, 60, 61, 90, 91];
+  const standardCollected: { days: number; bucketNos: number[] }[] = [];
+  for (const days of standardProbes) {
+    const rows = await agingStandardRows(plusDays(statedDueDate, days));
+    standardCollected.push({ days, bucketNos: rows.map((r) => r.bucket_no) });
+  }
+  standardSweep = standardCollected;
+
+  standardHttpOverdue = await w.t.request.get(standardAgingPath(plusDays(statedDueDate, 45))).set(w.headers);
+  standardHttpNotDue = await w.t.request.get(standardAgingPath(plusDays(statedDueDate, -10))).set(w.headers);
 });
 
 describe('§0 the measurement has a subject', () => {
@@ -406,5 +445,96 @@ describe('§C the old fold, run over the rows the installed function really prod
       const wrong = oldFold([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '1', base_minor: '1', invoice_count: 1 }]);
       expect(wrong.bands[0], `bucket_no ${bucketNo} must not be able to write the not-yet-due band`).toBe('0');
     }
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §E DR-10 — THE STANDARD AGING, AGAINST THE INSTALLED FUNCTION.
+//
+// The guard suite proves the FOLD under the standard boundaries with no
+// database. What it cannot prove is that PostgreSQL bands the days the way the
+// decision reads them, because the band arithmetic is in SQL. These cases ask
+// the installed `customer_ar_aging` itself, over a real open credit invoice
+// with a real due date, at every boundary the decision names — and one day
+// either side of each, so an off-by-one cannot hide between two probes.
+//
+// `STANDARD_LABELS` is derived from product code, not written out here, so a
+// change of label cannot pass by agreement with a copy in a test.
+// ─────────────────────────────────────────────────────────────────────────────
+const STANDARD_LABELS = agingBucketLabels([...STANDARD_AGING_BUCKET_DAYS]);
+
+describe('§E DR-10 the standard aging as the database computes it', () => {
+  it('the route ACCEPTS a leading zero, which is what asks for the not-due band', () => {
+    // The schema used to refuse `0` outright (`min(1)`), so this is the
+    // boundary case of the decision and not a formality.
+    expect(standardHttpOverdue?.status, `bucketDays=0,30,60,90 is accepted: ${JSON.stringify(standardHttpOverdue?.body)}`).toBe(200);
+    expect(standardHttpNotDue?.status).toBe(200);
+    const body = standardHttpOverdue?.body as { buckets?: { label?: string; fromDays?: number | null; toDays?: number | null }[]; bucketDays?: number[] };
+    expect(body.bucketDays).toEqual([...STANDARD_AGING_BUCKET_DAYS]);
+    expect(body.buckets?.map((b) => b.label)).toEqual([...STANDARD_LABELS]);
+    expect(body.buckets?.map((b) => b.fromDays)).toEqual([null, 1, 31, 61, 91]);
+    expect(body.buckets?.map((b) => b.toDays)).toEqual([0, 30, 60, 90, null]);
+  });
+
+  it('every boundary the decision names falls on the side the decision names, as POSTGRESQL measures it', () => {
+    expect(standardSweep.length).toBe(10); // non-vacuity: the sweep ran
+    expect(standardSweep.map((s) => s.days)).toEqual([-45, -1, 0, 1, 30, 31, 60, 61, 90, 91]);
+    for (const s of standardSweep) expect(s.bucketNos.length, `horizon ${s.days} returned no row`).toBe(1);
+    // not due, not due, THE DUE DATE ITSELF, then 1-30 twice, 31-60 twice,
+    // 61-90 twice, and the open band.
+    expect(standardSweep.map((s) => s.bucketNos[0])).toEqual([1, 1, 1, 2, 2, 3, 3, 4, 4, 5]);
+  });
+
+  it('ON THE DUE DATE the invoice is NOT YET LATE: it is in the not-due band and in no overdue band', () => {
+    const onDueDate = must(
+      standardSweep.find((s) => s.days === 0),
+      'the horizon on the due date',
+    );
+    expect(onDueDate.bucketNos).toEqual([1]);
+    const firstLate = must(
+      standardSweep.find((s) => s.days === 1),
+      'the horizon one day after the due date',
+    );
+    expect(firstLate.bucketNos).toEqual([2]);
+  });
+
+  it('THE DEFECT DR-10 REMOVES: money not yet due is reported as not due, and the total is still the whole receivable', async () => {
+    const owed = BigInt(must(outstandingBaseMinor, 'the product’s own outstanding figure'));
+    const body = standardHttpNotDue?.body as { buckets?: { label?: string; baseMinor?: string; invoiceCount?: number }[]; totalBaseMinor?: string };
+
+    // Ten days BEFORE the due date. Under the old standard `[30, 60, 90]` this
+    // same invoice came back in the band labelled `0-30` — reported to the
+    // merchant as up to thirty days late, when nobody owed it yet.
+    const notDue = must(body.buckets?.[0], 'the not-due band');
+    expect(notDue.label).toBe('not-due');
+    expect(notDue.baseMinor).toBe(owed.toString());
+    expect(notDue.invoiceCount).toBe(1);
+
+    // And NOTHING in any overdue band: not the money, not the count.
+    const overdue = body.buckets?.slice(1) ?? [];
+    expect(overdue.length).toBe(STANDARD_AGING_BUCKET_DAYS.length);
+    expect(overdue.map((b) => b.baseMinor)).toEqual(overdue.map(() => '0'));
+    expect(overdue.map((b) => b.invoiceCount)).toEqual(overdue.map(() => 0));
+
+    // The total is the TOTAL RECEIVABLE and not overdue debt (DR-10), so it
+    // still carries the full amount — the figure is unchanged, its MEANING is
+    // what the decision pins. Checked against the product's own reader.
+    expect(body.totalBaseMinor).toBe(owed.toString());
+    const sqlRowsNotDue = await agingStandardRows(plusDays(statedDueDate, -10));
+    expect(sumBase(sqlRowsNotDue).toString()).toBe(owed.toString());
+    expect(sqlRowsNotDue.map((r) => r.bucket_no)).toEqual([1]);
+  });
+
+  it('and once it IS late, the overdue bands carry it and the not-due band is empty', () => {
+    const owed = BigInt(must(outstandingBaseMinor, 'the product’s own outstanding figure'));
+    const body = standardHttpOverdue?.body as { buckets?: { label?: string; baseMinor?: string }[]; totalBaseMinor?: string };
+    // Forty-five days past due: past 30, not past 60 — the `31-60` band.
+    expect(body.buckets?.[0]?.baseMinor).toBe('0');
+    expect(body.buckets?.[2]?.label).toBe('31-60');
+    expect(body.buckets?.[2]?.baseMinor).toBe(owed.toString());
+    expect(body.totalBaseMinor).toBe(owed.toString());
+    const overdue = (body.buckets?.slice(1) ?? []).reduce((s, b) => s + BigInt(b.baseMinor ?? '0'), 0n);
+    // Here — and only here — the overdue total and the receivable coincide.
+    expect(overdue.toString()).toBe(owed.toString());
   });
 });
