@@ -1481,20 +1481,22 @@ describe('PROOF 4(b) — no amount disappears AT THE API READ EITHER (a defect f
     expect(agingBucketLabels(DAYS)[DAYS.length + 1]).toBeUndefined();
   });
 
-  it('MEASURED: the shipped read surface indexes the labels with the raw bucket number, so the oldest bucket is dropped', () => {
-    // The exact shipped text, so this law is about the code and not about a
-    // description of it. When the repair lands this assertion turns red and
-    // points at itself to be retired.
-    expect(READ_SURFACE).toMatch(/const bucket = buckets\[r\.bucket_no\];/);
-    expect(READ_SURFACE).toMatch(/if \(bucket === undefined\) continue;/);
-    // `continue` on an undefined slot means the oldest bucket's money is
-    // dropped from `baseMinor`, from `invoiceCount` AND from
-    // `totalBaseMinor`, which is the one figure the screen shows as the
-    // customer's aged debt. The remaining three are reported one band too
-    // old: bucket 1 (not yet due) is labelled '31-60'.
+  it('REPAIRED (C-1, f6f2e0b): the read surface maps bucket_no one-based and refuses a bucket it cannot place', () => {
+    // This was the MEASURED pin of the defect: `buckets[r.bucket_no]` with
+    // `if (bucket === undefined) continue;`, which dropped the oldest band's
+    // money from `baseMinor`, `invoiceCount` and `totalBaseMinor`, and
+    // reported every other band one band too old. It turned red when the
+    // repair landed, as it said it would, and is retired into the law the
+    // repair makes true — still about the exact shipped text.
+    expect(READ_SURFACE).not.toMatch(/const bucket = buckets\[r\.bucket_no\];/);
+    expect(READ_SURFACE).not.toMatch(/if \(bucket === undefined\) continue;/);
+    expect(READ_SURFACE).toMatch(/const bucket = buckets\[r\.bucket_no - 1\];/);
+    expect(READ_SURFACE).toMatch(/if \(bucket === undefined\) throw sellingRefusal\('customer\.aging_bucket_mapping_invalid'\);/);
+    // The raw index the defect used is still the wrong one, and still shows
+    // why: it labels the not-yet-due money overdue and has no slot for over-90.
     const shifted = (bucketNo: number): string | undefined => agingBucketLabels(DAYS)[bucketNo];
-    expect(shifted(1)).toBe('31-60'); // the NOT-YET-DUE money, labelled overdue
-    expect(shifted(4)).toBeUndefined(); // the over-90 money, labelled nothing and dropped
+    expect(shifted(1)).toBe('31-60');
+    expect(shifted(4)).toBeUndefined();
   });
 
   it('the correct mapping is total and order-preserving, and loses nothing', () => {
