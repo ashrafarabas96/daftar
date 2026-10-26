@@ -120,15 +120,55 @@ export interface PlanAnalysis {
 const bySliceNo = (a: string, b: string): number => Number(a.slice(1)) - Number(b.slice(1));
 
 /**
- * Total BY CONSTRUCTION, not by matching a format. Every occurrence of `P4-SN` anywhere in the plan registers slice N,
- * so no heading style, table row or prose can hide a slice: merely naming it records it. Each registered slice must then be
- * either a captured "**Gate.** `gate:phase4:sN`" line or a declared classification (UNGATED_HEADINGS); anything else is a
- * named problem. Every mention of `gate:phase4:sN` / `gate:phase4:release` is cross-checked the same way, and a Gate line for
- * a slice the plan never names is a problem too. Transient mentions ("composes s4") concern slices that are registered
- * already, so they raise nothing.
+ * An attempt to write a slice reference in characters the parser cannot read (a non-breaking hyphen, a zero-width space, an
+ * Arabic-Indic digit, a suffix such as "s5b") must be NAMED, never skipped. Runs on NFKC-normalised text, so full-width digits
+ * have already become ASCII; what is left that is not plain ASCII in the symbol position is reported with its line and code points.
  */
-export function analysePlan(text: string): PlanAnalysis {
-  const problems: string[] = [];
+export function unreadableReferences(text: string): string[] {
+  const out: string[] = [];
+  const cp = (s: string): string => [...s].map((c) => `U+${(c.codePointAt(0) as number).toString(16).toUpperCase().padStart(4, '0')}`).join(' ');
+  // A non-ASCII letter, digit or invisible format character (punctuation such as an em dash is prose, not a symbol).
+  const symbolish = /^[\p{L}\p{N}\p{Cf}]/u;
+  const nonAscii = /\P{ASCII}/u;
+  text.split('\n').forEach((line, i) => {
+    const report = (token: string): void => {
+      out.push(
+        `${PLAN_DOC}:${String(i + 1)} mentions a slice with a non-ASCII or malformed reference ${JSON.stringify(token)} (${cp(token)}) — it was not read as a slice; write P4-SN and gate:phase4:sN in plain ASCII`,
+      );
+    };
+    for (const m of line.matchAll(/P4([^\sA-Za-z0-9]{1,2}?)(S|[^\p{ASCII}\s])(\S{0,3})/gu)) {
+      const sep = m[1] as string;
+      const s = m[2] as string;
+      const rest = m[3] as string;
+      const badRest = nonAscii.test(rest.charAt(0)) && symbolish.test(rest) ? true : /^\d+[A-Za-z]/.test(rest);
+      if (sep !== '-' || s !== 'S' || badRest) report(m[0]);
+    }
+    for (const m of line.matchAll(/gate:phase4:(\S{0,8})/gu)) {
+      const rest = m[1] as string;
+      // plain forms: s<digits> or release, followed by something that is not a letter or digit
+      const plain = /^(?:s\d+|release)(?![A-Za-z0-9\p{L}\p{N}\p{Cf}])/u.test(rest);
+      // only complain about a reference that looks like it tries to be one: starts with s or release, or starts with a non-ASCII symbol character
+      const tries = /^(?:s|release)/.test(rest) || (nonAscii.test(rest.charAt(0)) && symbolish.test(rest));
+      if (tries && !plain && !/^s[^\p{L}\p{N}\p{Cf}]/u.test(rest)) report(m[0]);
+    }
+  });
+  return out;
+}
+
+/**
+ * Total with respect to WHAT THE PLAN DOCUMENT SAYS, after NFKC normalisation — not total in the absolute. Every occurrence
+ * of `P4-SN` anywhere in the (normalised) plan registers slice N, so no heading style, table row or prose can hide a slice:
+ * merely naming it records it. Each registered slice must then be either a captured "**Gate.** `gate:phase4:sN`" line or a
+ * declared classification (UNGATED_HEADINGS); anything else is a named problem. Every mention of `gate:phase4:sN` /
+ * `gate:phase4:release` is cross-checked the same way; a Gate line for a slice the plan never names, or for a slice that is
+ * classified as ungated, is a problem too; and any mention in characters that cannot be read (non-ASCII in the symbol
+ * position, a suffix) is NAMED rather than ignored. Transient mentions ("composes s4") concern slices that are registered
+ * already, so they raise nothing. THE LIMIT, stated plainly: a slice the plan never mentions in any readable form cannot be
+ * known to exist by this gate (see NOT_GATE_CHECKABLE).
+ */
+export function analysePlan(raw: string): PlanAnalysis {
+  const text = raw.normalize('NFKC');
+  const problems: string[] = [...unreadableReferences(text)];
   const slices: string[] = [];
   for (const m of text.matchAll(/\*\*Gate\.\*\*\s+`gate:phase4:(s\d+)`/g)) {
     const s = m[1] as string;
@@ -153,6 +193,11 @@ export function analysePlan(text: string): PlanAnalysis {
       );
   }
   for (const s of slices) {
+    if (UNGATED_HEADINGS[s] !== undefined) {
+      problems.push(
+        `P4-${s.toUpperCase()} is classified as ungated (${UNGATED_HEADINGS[s]}) yet ${PLAN_DOC} gives it a Gate line — the classification and the plan disagree`,
+      );
+    }
     if (!named.includes(s)) problems.push(`${PLAN_DOC} has a Gate line for gate:phase4:${s} but never names P4-${s.toUpperCase()}`);
   }
   const mentioned = new Set<string>();
@@ -245,18 +290,56 @@ export function measureTree(root: string, plan?: { sha256: string | null }): Tre
   return { root: abs, head, dirty, dirtyEntries, planSha256, manifestSha256, notes, problems };
 }
 
-/** Workspaces whose package.json has a `test` script that the root `test` script does not run. A sixth workspace must not be silently unmeasured. */
+/** The tree measured before the steps and the tree measured after them must be the same tree: a seal describes the disk the run ended with, not only the one it began with. */
+export function identityDrift(before: TreeIdentity, after: TreeIdentity): string[] {
+  const out: string[] = [];
+  if (before.head !== after.head) out.push(`HEAD changed during the run (${String(before.head)} → ${String(after.head)})`);
+  if (before.planSha256 !== after.planSha256) out.push('the plan document changed during the run — the roster that was judged is not the roster on disk now');
+  if (after.dirty === true) out.push(`the tree is DIRTY after the run (${String(after.dirtyEntries)} entries) — the run left changes on the disk it measured`);
+  if (before.dirty !== after.dirty && after.dirty !== true)
+    out.push(`the dirty state changed during the run (${String(before.dirty)} → ${String(after.dirty)})`);
+  return out;
+}
+
+/**
+ * The unit-test floor is read from package.json, which this gate also guards, so a shortfall there must be a NAMED failure and
+ * never a quietly lower floor: every package.json under apps/* and packages/* must be a declared workspace; every workspace
+ * the root `test` script runs must exist and have a `test` script; and every workspace with a `test` script must be run.
+ */
 export function unitWorkspaces(root: string): { names: string[]; problems: string[] } {
   const problems: string[] = [];
   if (!existsSync(join(root, 'package.json'))) return { names: [], problems: [`${join(root, 'package.json')} is missing`] };
   const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { workspaces?: string[]; scripts?: Record<string, string> };
   const names = [...(pkg.scripts?.['test'] ?? '').matchAll(/npm run test -w (@[\w./-]+)/g)].map((m) => m[1] as string);
-  for (const dir of pkg.workspaces ?? []) {
+  const declared = pkg.workspaces ?? [];
+  const present: { dir: string; name: string | undefined; hasTest: boolean }[] = [];
+  for (const dir of declared) {
     const p = join(root, dir, 'package.json');
-    if (!existsSync(p)) continue;
+    if (!existsSync(p)) {
+      problems.push(`workspaces[] lists ${dir} but ${dir}/package.json does not exist`);
+      continue;
+    }
     const w = JSON.parse(readFileSync(p, 'utf8')) as { name?: string; scripts?: Record<string, string> };
-    if (w.scripts?.['test'] !== undefined && w.name !== undefined && !names.includes(w.name)) {
+    present.push({ dir, name: w.name, hasTest: w.scripts?.['test'] !== undefined });
+  }
+  for (const n of names) {
+    const w = present.find((x) => x.name === n);
+    if (w === undefined)
+      problems.push(`the root "npm test" runs ${n} but no declared workspace has that name — a workspace was removed from workspaces[] or renamed`);
+    else if (!w.hasTest) problems.push(`the root "npm test" runs ${n} but ${w.dir}/package.json has no test script — the test script was removed`);
+  }
+  for (const w of present) {
+    if (w.hasTest && w.name !== undefined && !names.includes(w.name)) {
       problems.push(`workspace ${w.name} has a test script that the root "npm test" does not run — its summary would never be counted`);
+    }
+  }
+  for (const parent of ['apps', 'packages']) {
+    const base = join(root, parent);
+    if (!existsSync(base)) continue;
+    for (const entry of readdirSync(base)) {
+      if (existsSync(join(base, entry, 'package.json')) && !declared.includes(`${parent}/${entry}`)) {
+        problems.push(`${parent}/${entry}/package.json exists but ${parent}/${entry} is not in workspaces[] — its tests are outside the unit floor`);
+      }
     }
   }
   return { names, problems };
@@ -267,6 +350,8 @@ const sliceCommand = (s: string): string => `tsx scripts/phase4-${s}-gate.ts`;
 
 /** Things no script can decide. They are printed and recorded, never silently omitted. */
 export const NOT_GATE_CHECKABLE: readonly string[] = [
+  'the plan roster is never more complete than the plan DOCUMENT: a slice the document never mentions in any readable form cannot be known to exist by this gate. This is a design limit, not a defect fixable here; it needs a guard on the plan document itself (a separate card)',
+  'main() is only exercised with --structural-only by the red proofs: the step loop, the evidence validators on real command output and the log writing are not planted or measured here (that needs the live database)',
   'a slice gate the plan declares and the tree has not built is not "not checkable": it FAILS by name (unbuiltSlices in the evidence). Until P4-S5 … P4-S8 are built no run of this gate can be a PASS',
   'DR-01/DR-02/DR-03: owner decisions on 07c782f, the C-1 fix and migrations 0080–0086 (OWNER_DECISIONS_AR.md)',
   'independent review of the exact head, and the signature that belongs to that one SHA only',
@@ -514,6 +599,8 @@ async function tamperedMigrationProof(root: string): Promise<string[]> {
   const problems: string[] = [];
   try {
     await client.connect();
+    // a previous run killed between plant and cleanup would leave the foreign row behind and poison verify:history for everyone after
+    await client.query("DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'");
     await client.query("INSERT INTO schema_migrations(name, sha256) VALUES ('9999_foreign_tamper.sql', 'deadbeef')");
     try {
       const res = spawnSync(npm, ['run', 'verify:history'], { cwd: root, encoding: 'utf8', env: process.env, shell: win });
@@ -571,7 +658,7 @@ export function sealPlan(
       name: 'preflight: the roster agrees with the tree; no mandatory skip is set',
       kind: 'in-process',
       structural: true,
-      fn: () => rosterProblems(o.root, slices, explicitPlanned, analysis),
+      fn: () => [...rosterProblems(o.root, slices, explicitPlanned, analysis), ...unitWorkspaces(o.root).problems],
     },
     {
       id: 'identity',
@@ -1018,6 +1105,140 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
     })(),
     /P4-S5 is named in/,
   );
+  // Round 5: unreadable spellings are NAMED (never skipped), one proof per spelling. Each doc below mentions S5 ONLY in the odd spelling.
+  {
+    const base = `### P4-S0 — x\n### P4-S1 — x\n${gl('s1')}\n### P4-S9 — x\ngate:phase4:release\n`;
+    const odd: Record<string, string> = {
+      'U+2011 non-breaking hyphen': 'P4‑S5',
+      'U+200B zero-width space': 'P4-​S5',
+      'U+0665 Arabic-Indic digit': 'P4-S٥',
+      'suffix s5b': 'P4-S5b',
+      'gate reference with U+0665': 'gate:phase4:s٥',
+      'gate reference with suffix s5b': 'gate:phase4:s5b',
+    };
+    for (const [shape, text] of Object.entries(odd)) {
+      expectRed(`unreadable spelling ${shape} → named, not skipped`, analysePlan(`${base}### ${text} — x\n`).problems, /non-ASCII or malformed reference/);
+    }
+    const fw = analysePlan(`${base}### P4-S５ — x\n`).problems;
+    expectRed('full-width U+FF15 is captured after NFKC (P4-S5 is registered, then needs a Gate line)', fw, /P4-S5 is named in/);
+    proofs.push({
+      name: 'full-width U+FF15 is not reported as unreadable (normalisation made it readable)',
+      caught: !fw.some((x) => /non-ASCII or malformed/.test(x)),
+      by: 'analysePlan',
+    });
+    proofs.push({
+      name: 'no false positive: an em dash next to a slice, "gate:phase4:s1…s8", and "P4-S1-R3" prose raise nothing',
+      caught: analysePlan(`${base}P4-S1—x and \`gate:phase4:s1\`…\`gate:phase4:s1\` and P4-S1-R3 and P4-AL-57\n`).problems.length === 0,
+      by: 'analysePlan',
+    });
+    expectRed(
+      'a Gate line for a slice classified as ungated is a named conflict, not silence',
+      analysePlan(`${base}${gl('s0')}\n`).problems,
+      /P4-S0 is classified as ungated .* gives it a Gate line/,
+    );
+    proofs.push({
+      name: 'UNGATED_HEADINGS is exactly {s0, s9}: widening it is a deliberate, reviewed change',
+      caught: Object.keys(UNGATED_HEADINGS).sort().join() === 's0,s9',
+      by: Object.keys(UNGATED_HEADINGS).sort().join(),
+    });
+  }
+  // Round 5: the unit floor cannot shrink quietly.
+  {
+    const mk = (workspaces: string[], rootTest: string, wsTests: Record<string, boolean>, extraDirs: string[] = []): string[] => {
+      const d = mkdtempSync(join(tmpdir(), 'phase4-gate-uw-'));
+      try {
+        for (const w of ['a', 'b']) {
+          mkdirSync(join(d, 'apps', w), { recursive: true });
+          writeFileSync(join(d, 'apps', w, 'package.json'), JSON.stringify({ name: `@x/${w}`, scripts: wsTests[w] === true ? { test: 'vitest run' } : {} }));
+        }
+        for (const e of extraDirs) {
+          mkdirSync(join(d, 'packages', e), { recursive: true });
+          writeFileSync(join(d, 'packages', e, 'package.json'), JSON.stringify({ name: `@x/${e}`, scripts: { test: 'vitest run' } }));
+        }
+        writeFileSync(join(d, 'package.json'), JSON.stringify({ workspaces, scripts: { test: rootTest } }));
+        return unitWorkspaces(d).problems;
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    };
+    const both = 'npm run test -w @x/a && npm run test -w @x/b';
+    proofs.push({
+      name: 'unit floor control: both workspaces declared, tested and run → no problem',
+      caught: mk(['apps/a', 'apps/b'], both, { a: true, b: true }).length === 0,
+      by: 'unitWorkspaces',
+    });
+    expectRed(
+      'unit floor: a workspace removed from workspaces[] (one line) is a named failure',
+      mk(['apps/a'], both, { a: true, b: true }),
+      /no declared workspace has that name/,
+    );
+    expectRed(
+      'unit floor: …and its directory is named as outside workspaces[]',
+      mk(['apps/a'], both, { a: true, b: true }),
+      /apps\/b is not in workspaces\[\]/,
+    );
+    expectRed(
+      'unit floor: a workspace test script removed is a named failure',
+      mk(['apps/a', 'apps/b'], both, { a: true, b: false }),
+      /has no test script — the test script was removed/,
+    );
+    expectRed(
+      'unit floor: a name removed from the root test script alone is named',
+      mk(['apps/a', 'apps/b'], 'npm run test -w @x/a', { a: true, b: true }),
+      /does not run/,
+    );
+    expectRed(
+      'unit floor: a new package directory not in workspaces[] is named',
+      mk(['apps/a', 'apps/b'], both, { a: true, b: true }, ['fresh']),
+      /packages\/fresh is not in workspaces\[\]/,
+    );
+    expectRed(
+      'unit floor: a listed workspace with no package.json is named',
+      mk(['apps/a', 'apps/b', 'apps/ghost'], both, { a: true, b: true }),
+      /apps\/ghost\/package.json does not exist/,
+    );
+  }
+  // Round 5: what the artefact says about identity, before and after.
+  {
+    const t = (o: Partial<TreeIdentity>): TreeIdentity => ({
+      root: '/r',
+      head: 'a'.repeat(40),
+      dirty: false,
+      dirtyEntries: 0,
+      planSha256: 'p',
+      manifestSha256: null,
+      notes: [],
+      problems: [],
+      ...o,
+    });
+    proofs.push({
+      name: 'identity drift control: the same tree before and after → nothing',
+      caught: identityDrift(t({}), t({})).length === 0,
+      by: 'identityDrift',
+    });
+    expectRed('identity drift: a different HEAD after the run', identityDrift(t({}), t({ head: 'b'.repeat(40) })), /HEAD changed during the run/);
+    expectRed('identity drift: a tree left dirty by the run', identityDrift(t({}), t({ dirty: true, dirtyEntries: 2 })), /DIRTY after the run/);
+    expectRed('identity drift: the plan document changed mid-run', identityDrift(t({}), t({ planSha256: 'q' })), /plan document changed during the run/);
+  }
+  // Round 5: NOT_GATE_CHECKABLE is text; these assertions pin what it must keep saying.
+  for (const [what, needle] of [
+    ['the roster is never more complete than the plan document', /never more complete than the plan DOCUMENT/],
+    ['main() is only exercised structurally by the proofs', /main\(\) is only exercised with --structural-only/],
+    ['unbuilt slices fail by name', /FAILS by name/],
+    ['owner decisions and the signature stay outside the gate', /owner decisions/],
+  ] as const) {
+    proofs.push({ name: `NOT_GATE_CHECKABLE still says: ${what}`, caught: NOT_GATE_CHECKABLE.some((x) => needle.test(x)), by: 'NOT_GATE_CHECKABLE' });
+  }
+  proofs.push({
+    name: 'tamper proof removes a previous killed run before it plants (source order, a text check)',
+    caught: (() => {
+      const src = tamperedMigrationProof.toString();
+      const del = src.indexOf('DELETE FROM schema_migrations');
+      const ins = src.indexOf('INSERT INTO schema_migrations');
+      return del >= 0 && ins >= 0 && del < ins;
+    })(),
+    by: 'tamperedMigrationProof',
+  });
   // 8. main() itself (review note 4): run the real runner against a scratch tree and read its exit code and text.
   const scratch = mkdtempSync(join(tmpdir(), 'phase4-gate-main-'));
   try {
@@ -1027,6 +1248,11 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
       mkdirSync(join(dir, 'scripts'), { recursive: true });
       mkdirSync(join(dir, 'docs'), { recursive: true });
       copyFileSync(join(real, 'package.json'), join(dir, 'package.json'));
+      // the unit floor reads the workspaces, so the scratch tree carries their package.json files too
+      for (const w of (JSON.parse(readFileSync(join(real, 'package.json'), 'utf8')) as { workspaces: string[] }).workspaces) {
+        mkdirSync(join(dir, w), { recursive: true });
+        copyFileSync(join(real, w, 'package.json'), join(dir, w, 'package.json'));
+      }
       for (const s of SLICES) writeFileSync(join(dir, 'scripts', `phase4-${s}-gate.ts`), '');
       const heads: Record<string, string> = { s0: '', s9: 'closes with `gate:phase4:release`' };
       for (const s of planSlices) heads[s] = gateLine(s);
@@ -1119,6 +1345,37 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
       /P4-S5 is named in[\s\S]*P4-S6 is named in/,
     );
     mainProof('main(): --root with no value → exit 1, not a swallowed flag', run(built, [], {}, ['--root', '--structural-only']), 1, /--root needs a value/);
+    {
+      // the unit floor through main(): one workspace removed from workspaces[] (one line) makes the structural run red, by name
+      const short = tree(['s1', 's2', 's3', 's4'], 'ws-short');
+      const pj = JSON.parse(readFileSync(join(short, 'package.json'), 'utf8')) as { workspaces: string[] };
+      pj.workspaces = pj.workspaces.filter((w) => w !== 'packages/inventory');
+      writeFileSync(join(short, 'package.json'), JSON.stringify(pj));
+      mainProof(
+        'main(): a workspace removed from workspaces[] → exit 1 naming it (the floor cannot shrink quietly)',
+        run(short, []),
+        1,
+        /no declared workspace has that name/,
+      );
+      // N-5: an option error is one line and exit 1, never a raw stack; the artefact carries both identity measurements.
+      const bad = run(built, ['--no-such-flag']);
+      proofs.push({
+        name: 'main(): an option error is one line and exit 1, no stack trace',
+        caught: bad.status === 1 && /phase4-gate: unknown option --no-such-flag/.test(bad.out) && !/\n\s+at /.test(bad.out),
+        by: `main() exit ${String(bad.status)}`,
+      });
+      let after: { tree?: { head?: string | null }; treeAfter?: { head?: string | null; dirty?: boolean | null }; identityDrift?: string[] } = {};
+      try {
+        after = JSON.parse(readFileSync(run(built, []).evidence, 'utf8')) as typeof after;
+      } catch {
+        /* stays empty */
+      }
+      proofs.push({
+        name: 'main(): the artefact records the tree before and after, and no drift on a quiet run',
+        caught: after.treeAfter !== undefined && after.tree !== undefined && after.identityDrift?.length === 0 && after.treeAfter.head === after.tree.head,
+        by: `drift ${String(after.identityDrift?.length)}`,
+      });
+    }
     // B-2 through main(): the evidence of a git tree carries that tree's own HEAD, clean state and plan hash.
     const gitTree = tree(['s1', 's2', 's3', 's4'], 'gitclean');
     rmSync(join(gitTree, 'DELIVERY_MANIFEST.json'));
@@ -1159,7 +1416,13 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
 // ─────────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const o = parseOptions(process.argv.slice(2));
+  let o: Options;
+  try {
+    o = parseOptions(process.argv.slice(2));
+  } catch (e) {
+    console.error(`phase4-gate: ${e instanceof Error ? e.message : String(e)}`);
+    process.exit(1);
+  }
 
   // Refused before anything else, --prove-red and --list included: a skip switch in the environment poisons every verdict.
   const skips = Object.keys(process.env).filter((k) => k.startsWith('RELEASE_GATE_SKIP_'));
@@ -1256,7 +1519,13 @@ async function main(): Promise<void> {
   const planned = plan0.slices;
   const judgedRoster = [...new Set([...SLICES, ...planned])];
   const tree = measuredTree ?? measureTree(o.root, plan0);
-  const { verdict: judged, reasons, hard } = judge(fullPlan, results, judgedRoster);
+  const judgement = judge(fullPlan, results, judgedRoster);
+  // Measured again AFTER the steps: the artefact records both, and any drift between them is a hard failure.
+  const treeAfter = measureTree(o.root);
+  const drift = identityDrift(tree, treeAfter);
+  const reasons = [...judgement.reasons, ...drift];
+  const hard = [...judgement.hard, ...drift];
+  const judged: 'PASS' | 'FAIL' = judgement.verdict === 'PASS' && drift.length === 0 ? 'PASS' : 'FAIL';
   // Decided on declared failures, never on the wording of a message.
   const verdict = o.structuralOnly ? (hard.length > 0 ? 'FAIL' : 'STRUCTURAL_ONLY_NOT_A_SEAL') : judged;
   const artefact = {
@@ -1266,6 +1535,8 @@ async function main(): Promise<void> {
     roster: judgedRoster,
     composedSlices: SLICES,
     tree: { ...tree, planDoc: PLAN_DOC, planClassifiedWithoutGate: plan0.classified, planNamed: plan0.named },
+    treeAfter,
+    identityDrift: drift,
     plannedByDocs: planned,
     unbuiltSlices: planned.filter((x) => !SLICES.includes(x)),
     structuralOnly: o.structuralOnly,
