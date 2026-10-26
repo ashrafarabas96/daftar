@@ -2313,6 +2313,14 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'the contract-shaped settlement text is accepted, and the silence is about real subjects',
   },
   {
+    suite: 'tests/guards/p4s4-standard-aging-not-due-band.test.ts',
+    title: 'DR-10 the standard receivables aging',
+    // Ten cases, and the floor is the whole point of recording it: the owner's
+    // decision is a boundary table, and a block that quietly shed the due-date
+    // case or the not-due case would still be a passing block.
+    cases: 12,
+  },
+  {
     suite: 'tests/guards/p4s4-vocabulary-live-arm.test.ts',
     title: 'VL-A — the hole itself: the TEXT half is silent about a relation the vocabulary forbids by name',
   },

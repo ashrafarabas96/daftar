@@ -51,7 +51,7 @@
  * database and therefore CI.
  */
 import { describe, expect, it } from 'vitest';
-import { STANDARD_AGING_BUCKET_DAYS, agingBucketLabels, validateAgingBucketDays } from '@daftar/domain-core';
+import { AppError, STANDARD_AGING_BUCKET_DAYS, agingBucketLabels, validateAgingBucketDays } from '@daftar/domain-core';
 import { foldCustomerAging, type CustomerAgingShape, type CustomerAgingSqlRow } from '../../apps/api/src/modules/selling/customer-reads';
 
 const STANDARD = [...STANDARD_AGING_BUCKET_DAYS];
@@ -200,6 +200,42 @@ describe('DR-10 the standard receivables aging', () => {
     expect(validateAgingBucketDays([30, 0])).toEqual(['bucket_days_not_ascending']);
     expect(validateAgingBucketDays([-1])).toEqual(['bucket_days_out_of_range']);
     expect(validateAgingBucketDays([0, 3651])).toEqual(['bucket_days_out_of_range']);
+  });
+
+  it('red: a planted ordinal past the standard’s FIVE bands is refused, not folded into the last one', () => {
+    // The plant, and the reason the fifth band is where it bites: the standard
+    // set has one more band than the old one, so an ordinal that was the
+    // oldest band under `[30, 60, 90]` (4) is now a legitimate middle band,
+    // and the first unplaceable ordinal is 6. A fold that clamped instead of
+    // refusing would put that money in `over-90` silently — the C-1 failure
+    // mode, moved one place along.
+    expect(() => foldCustomerAging([row(STANDARD.length + 2, '500')], SHAPE)).toThrow(AppError);
+    try {
+      foldCustomerAging([row(STANDARD.length + 2, '500')], SHAPE);
+      expect.unreachable('the planted ordinal was folded instead of refused');
+    } catch (error) {
+      expect((error as AppError).details?.['sellingCode']).toBe('customer.aging_bucket_mapping_invalid');
+    }
+    // And the arm that makes the bound a bound: the LAST legitimate ordinal is
+    // accepted and keeps its money.
+    expect(foldCustomerAging([row(STANDARD.length + 1, '500')], SHAPE).totalBaseMinor).toBe('500');
+  });
+
+  it('red: the OLD boundaries cannot name the not-due band at all — the defect this decision removes', () => {
+    const legacy = [30, 60, 90];
+    const legacyLabels = agingBucketLabels(legacy);
+    // No label in the old set says "not due", so there was nowhere for that
+    // money to be reported as what it is.
+    expect([...legacyLabels]).not.toContain('not-due');
+    // And it was not merely unlabelled: the SQL bands a not-yet-due invoice as
+    // ordinal 1 under either set, so under the old one it landed in the band
+    // the client renders as "up to thirty days late".
+    expect(bandOf(-45, legacy)).toBe(1);
+    const old = foldCustomerAging([row(1, '500000')], { labels: legacyLabels, bucketDays: legacy });
+    expect(old.buckets[0]?.label).toBe('0-30');
+    expect(old.buckets[0]?.baseMinor).toBe('500000');
+    // Under the standard set the same row is named correctly.
+    expect(foldCustomerAging([row(1, '500000')], SHAPE).buckets[0]?.label).toBe('not-due');
   });
 
   it('a caller may still ask for the OLD boundaries, and then the first band is honest about mixing', () => {
