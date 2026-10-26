@@ -593,7 +593,7 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID) IS
 CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])
 RETURNS TABLE (invoice_id UUID, paid_txn_minor BIGINT, paid_base_minor BIGINT,
                outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT,
-               currency_code TEXT, due_date DATE)
+               currency_code TEXT, due_date DATE, issue_date DATE)
 LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
 DECLARE
   v_found BIGINT;
@@ -612,7 +612,13 @@ BEGIN
            CASE WHEN i.status <> 'open' OR s.settlement_mode = 'cash' THEN 0::BIGINT
                 ELSE (i.total_base_minor - coalesce(r.paid_base, 0))::BIGINT END,
            i.currency_code::TEXT,
-           i.due_date
+           i.due_date,
+           -- DR-13: the aging reader needs a date even when the document
+           -- states no term, and this routine already has the `invoices` row
+           -- in hand. An ADDITIVE column, so `due_date` keeps meaning exactly
+           -- what it meant — the open-invoice page returns it to the client,
+           -- and "no due date" has to keep reading as no due date there.
+           i.issue_date
       FROM public.invoices i
       JOIN public.sales s ON s.business_id = i.business_id AND s.id = i.sale_id
       LEFT JOIN (
@@ -705,9 +711,20 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
          pg_catalog.sum(b.base_minor)::BIGINT,
          pg_catalog.count(*)::INTEGER
     FROM (
+      -- DR-13 (owner, 2026-10-26): an invoice that states NO due date is due
+      -- from its own issue date, so it ages like any other.
+      --
+      -- This guard used to read `o.due_date IS NOT NULL AND …`, which made a
+      -- termless receivable exceed NO threshold however old it got: it sat in
+      -- band 1 forever — the not-due band since DR-10, the `0-30` band before
+      -- it — so debt could leave an aging report by omission instead of by
+      -- payment. `coalesce` is total here: `invoices.issue_date` is NOT NULL,
+      -- and `invoices_due_date_ck` enforces `due_date >= issue_date`, so the
+      -- substitute can only ever make an invoice MORE overdue than the missing
+      -- date did, never less.
       SELECT (1 + (SELECT pg_catalog.count(*)
                      FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
-                    WHERE o.due_date IS NOT NULL AND (p_as_of - o.due_date) > t.threshold))::INTEGER AS bucket_no,
+                    WHERE (p_as_of - coalesce(o.due_date, o.issue_date)) > t.threshold))::INTEGER AS bucket_no,
              o.currency_code AS currency_code,
              o.outstanding_txn_minor AS txn_minor,
              o.outstanding_base_minor AS base_minor

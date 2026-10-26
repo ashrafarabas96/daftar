@@ -125,6 +125,20 @@ let standardSweep: readonly { readonly days: number; readonly bucketNos: readonl
 let standardHttpOverdue: Response | undefined;
 let standardHttpNotDue: Response | undefined;
 
+/**
+ * DR-13 — a SECOND customer, whose only invoice states NO due date. It is kept
+ * apart from the subject above on purpose: adding an invoice to that customer
+ * would move every total §A to §C measures, and a proof that moves its own
+ * subject proves nothing.
+ */
+let termlessCustomerId: string;
+let termlessIssueDate: string;
+let termlessOutstandingBaseMinor: string | null = null;
+let termlessRows: readonly AgingRow[] = [];
+let termlessSweep: readonly { readonly days: number; readonly bucketNos: readonly number[] }[] = [];
+/** The route asked for the boundaries DR-14 retired, so the refusal is measured and not assumed. */
+let legacyBucketDaysHttp: Response | undefined;
+
 /** `date + n days`, computed in UTC and re-measured in the database before anything rests on it. */
 function plusDays(day: string, n: number): string {
   const d = new Date(`${day}T00:00:00Z`);
@@ -150,6 +164,17 @@ async function agingStandardRows(at: string): Promise<readonly AgingRow[]> {
        FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
       ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
     [w.shop.businessId, customerId, at, [...STANDARD_AGING_BUCKET_DAYS]],
+  );
+  return r.rows;
+}
+
+/** The installed function under the STANDARD boundaries, for any customer. */
+async function agingStandardRowsFor(id: string, at: string): Promise<readonly AgingRow[]> {
+  const r = await ownerPool().query<AgingRow>(
+    `SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count
+       FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
+      ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
+    [w.shop.businessId, id, at, [...STANDARD_AGING_BUCKET_DAYS]],
   );
   return r.rows;
 }
@@ -185,9 +210,18 @@ function oldFold(rows: readonly AgingRow[]): { readonly bands: readonly string[]
   return { bands: buckets, totalBaseMinor: total.toString() };
 }
 
-/** The aging route, as a merchant client asks it. */
+/**
+ * The aging route, as a merchant client asks it.
+ *
+ * The boundaries here are the STANDARD set and not this suite's `BUCKET_DAYS`,
+ * because DR-14 makes the standard set the only one the route offers: asking
+ * for `30,60,90` now answers 400 `VALIDATION_FAILED`. `BUCKET_DAYS` is still
+ * what §A and §C ask the installed FUNCTION directly, which takes any
+ * well-formed set — the restriction is the product's, at the edge, not the
+ * database's.
+ */
 function agingPath(at: string): string {
-  return `/v1/customers/${customerId}/receivable/aging?asOf=${at}&bucketDays=${BUCKET_DAYS.join(',')}`;
+  return `/v1/customers/${customerId}/receivable/aging?asOf=${at}&bucketDays=${STANDARD_AGING_BUCKET_DAYS.join(',')}`;
 }
 
 /** The same route under the standard boundaries, which is also the proof the schema ACCEPTS a leading zero. */
@@ -280,6 +314,55 @@ beforeAll(async () => {
 
   standardHttpOverdue = await w.t.request.get(standardAgingPath(plusDays(statedDueDate, 45))).set(w.headers);
   standardHttpNotDue = await w.t.request.get(standardAgingPath(plusDays(statedDueDate, -10))).set(w.headers);
+
+  // DR-14, measured at the edge: the boundaries the product used before are
+  // refused now. Asked here rather than asserted from the schema, because the
+  // claim is about what a client gets back.
+  legacyBucketDaysHttp = await w.t.request.get(`/v1/customers/${customerId}/receivable/aging?asOf=${asOf}&bucketDays=${BUCKET_DAYS.join(',')}`).set(w.headers);
+
+  // DR-13: a credit sale with NO due date. `dueDate` is `.nullable()` and not
+  // optional, so stating null is the lawful way to say "no term" — and that is
+  // the document this decision is about.
+  termlessCustomerId = await newCustomer(w);
+  termlessIssueDate = w.day;
+  const termlessSaleId = randomUUID();
+  const termlessSale = await confirmSale(w.t, w.headers, {
+    saleId: termlessSaleId,
+    customerId: termlessCustomerId,
+    warehouseId: w.shop.w1,
+    branchId: w.shop.branchX,
+    occurredOn: termlessIssueDate,
+    dueDate: null,
+    lines: [{ productId: w.shop.piece.productId, quantity: '2' }],
+  });
+  expect(termlessSale.status, `the termless credit sale commits: ${JSON.stringify(termlessSale.body)}`).toBeLessThan(300);
+
+  const termlessInv = await ownerPool().query<{ invoice_id: string; due_date: string | null; issue_date: string }>(
+    `SELECT i.id::text AS invoice_id, i.due_date::text AS due_date, i.issue_date::text AS issue_date
+       FROM sales s JOIN invoices i ON i.business_id = s.business_id AND i.sale_id = s.id
+      WHERE s.business_id = $1 AND s.id = $2`,
+    [w.shop.businessId, termlessSaleId],
+  );
+  const ti = must(termlessInv.rows[0], 'the termless invoice');
+  // Non-vacuity: the document really states no due date, and really has an
+  // issue date to fall back on.
+  expect(ti.due_date, 'the termless invoice must have NO due date, or §F proves nothing').toBeNull();
+  expect(ti.issue_date).toBe(termlessIssueDate);
+
+  const termlessOut = await ownerPool().query<{ outstanding_base_minor: string }>(
+    `SELECT o.outstanding_base_minor::text AS outstanding_base_minor FROM invoice_outstanding($1::uuid, ARRAY[$2::uuid]) o`,
+    [w.shop.businessId, ti.invoice_id],
+  );
+  termlessOutstandingBaseMinor = must(termlessOut.rows[0], 'the termless outstanding').outstanding_base_minor;
+
+  termlessRows = await agingStandardRowsFor(termlessCustomerId, plusDays(termlessIssueDate, 265));
+  const termlessProbes = [0, 1, 30, 31, 91];
+  const collectedTermless: { days: number; bucketNos: number[] }[] = [];
+  for (const days of termlessProbes) {
+    const rows = await agingStandardRowsFor(termlessCustomerId, plusDays(termlessIssueDate, days));
+    collectedTermless.push({ days, bucketNos: rows.map((r) => r.bucket_no) });
+  }
+  termlessSweep = collectedTermless;
 });
 
 describe('§0 the measurement has a subject', () => {
@@ -343,12 +426,14 @@ describe('§A the ORDINAL BASE of the installed customer_ar_aging', () => {
 });
 
 describe('§B the DTO, from the database to the screen', () => {
-  it('the route answers 200 with the four supplied bands, in order', () => {
+  it('the route answers 200 with the five standard bands, in order', () => {
     expect(http?.status, `the aging read is accepted: ${JSON.stringify(http?.body)}`).toBe(200);
     const body = http?.body as { buckets?: { label?: string }[]; bucketDays?: number[] };
-    expect(body.buckets?.length).toBe(LABELS.length);
-    expect(body.buckets?.map((b) => b.label)).toEqual([...LABELS]);
-    expect(body.bucketDays).toEqual([...BUCKET_DAYS]);
+    // Five since DR-10, and the standard set since DR-14 — the route offers no
+    // other, so this is the shape every client sees.
+    expect(body.buckets?.length).toBe(STANDARD_AGING_BUCKET_DAYS.length + 1);
+    expect(body.buckets?.map((b) => b.label)).toEqual([...agingBucketLabels([...STANDARD_AGING_BUCKET_DAYS])]);
+    expect(body.bucketDays).toEqual([...STANDARD_AGING_BUCKET_DAYS]);
   });
 
   it(`a receivable ${DAYS_PAST_DUE} days past due is in the FINAL band, and its money is in totalBaseMinor`, () => {
@@ -380,7 +465,8 @@ describe('§B the DTO, from the database to the screen', () => {
     // empty. The first band being `'0'` is correct here and is NOT evidence of
     // the fix on its own — under the old fold it was `'0'` too, because index 0
     // was unreachable. The evidence is the total and the final band together.
-    expect(buckets.slice(0, -1).map((b) => b.baseMinor)).toEqual(['0', '0', '0']);
+    // FOUR younger bands since DR-10 added the not-due one.
+    expect(buckets.slice(0, -1).map((b) => b.baseMinor)).toEqual(['0', '0', '0', '0']);
     expect(buckets[buckets.length - 1]?.baseMinor).toBe(outstandingBaseMinor);
   });
 
@@ -536,5 +622,56 @@ describe('§E DR-10 the standard aging as the database computes it', () => {
     const overdue = (body.buckets?.slice(1) ?? []).reduce((s, b) => s + BigInt(b.baseMinor ?? '0'), 0n);
     // Here — and only here — the overdue total and the receivable coincide.
     expect(overdue.toString()).toBe(owed.toString());
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §F DR-13 and DR-14 — the termless invoice, and the boundaries on offer.
+//
+// §E proved the standard bands against a document that STATES a due date. This
+// section is about the two decisions that followed:
+//
+//   DR-13 — an invoice with no stated term is due from its own issue date. The
+//   old reader guarded with `due_date IS NOT NULL`, so such an invoice exceeded
+//   no threshold however old it got and sat in band 1 forever: debt leaving an
+//   aging report by omission rather than by payment.
+//
+//   DR-14 — the first release offers the standard boundaries and no others.
+//
+// Both are measured here against the INSTALLED function and the real route.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§F DR-13 a termless invoice ages from its issue date, and DR-14 fixes what may be asked', () => {
+  it('the subject exists and is really termless', () => {
+    // Non-vacuity before anything rests on it.
+    expect(termlessRows.length).toBeGreaterThan(0);
+    expect(BigInt(termlessOutstandingBaseMinor ?? '0') > 0n).toBe(true);
+  });
+
+  it('265 days after its ISSUE date it is in the OPEN band — not parked in not-due', () => {
+    expect(termlessRows.length).toBe(1);
+    const only = must(termlessRows[0], 'the one aging row');
+    // Band five of five: the open band. Under the retired guard this was band
+    // ONE, with the same document and the same horizon.
+    expect(only.bucket_no).toBe(STANDARD_AGING_BUCKET_DAYS.length + 1);
+    expect(only.bucket_no).not.toBe(1);
+    expect(only.base_minor).toBe(termlessOutstandingBaseMinor);
+    expect(only.invoice_count).toBe(1);
+  });
+
+  it('and it crosses each boundary on the day the decision says, measured from the issue date', () => {
+    expect(termlessSweep.map((s) => s.days)).toEqual([0, 1, 30, 31, 91]);
+    for (const s of termlessSweep) expect(s.bucketNos.length, `horizon +${s.days} returned no row`).toBe(1);
+    // On the issue date itself the term is zero days, so it is not yet late.
+    expect(termlessSweep.map((s) => s.bucketNos[0])).toEqual([1, 2, 2, 3, 5]);
+  });
+
+  it('DR-14: the route REFUSES the boundaries the product used before, by name', () => {
+    expect(legacyBucketDaysHttp?.status, `bucketDays=30,60,90 must be refused: ${JSON.stringify(legacyBucketDaysHttp?.body)}`).toBe(400);
+    const body = legacyBucketDaysHttp?.body as { error?: { code?: string; details?: { issues?: { path?: string }[] } } };
+    expect(body.error?.code).toBe('VALIDATION_FAILED');
+    expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');
+    // And the set that IS on offer still answers 200, so the refusal is about
+    // the value and not about the route.
+    expect(standardHttpOverdue?.status).toBe(200);
   });
 });

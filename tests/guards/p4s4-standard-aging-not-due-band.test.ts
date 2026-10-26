@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 /**
  * DR-10 — THE STANDARD RECEIVABLES AGING, AND THE BAND THAT WAS MISSING.
  *
@@ -52,8 +54,10 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AppError, STANDARD_AGING_BUCKET_DAYS, agingBucketLabels, validateAgingBucketDays } from '@daftar/domain-core';
+import { CustomerAgingQuerySchema } from '../../apps/api/src/modules/selling/selling.schemas';
 import { foldCustomerAging, type CustomerAgingShape, type CustomerAgingSqlRow } from '../../apps/api/src/modules/selling/customer-reads';
 
+const ROOT = join(__dirname, '..', '..');
 const STANDARD = [...STANDARD_AGING_BUCKET_DAYS];
 const LABELS = agingBucketLabels(STANDARD);
 const SHAPE: CustomerAgingShape = { labels: LABELS, bucketDays: STANDARD };
@@ -67,11 +71,19 @@ const row = (bucketNo: number, baseMinor: string, invoices = 1): CustomerAgingSq
 });
 
 /**
- * The SQL's band arithmetic, restated. `null` is a missing due date, which the
- * function's `o.due_date IS NOT NULL AND ...` guard makes exceed no threshold.
+ * The SQL's band arithmetic, restated. Since DR-13 there is no `null` arm: the
+ * function measures against `coalesce(due_date, issue_date)`, which is never
+ * null because `invoices.issue_date` is `NOT NULL`.
  */
-const bandOf = (daysPastDue: number | null, thresholds: readonly number[]): number =>
-  1 + (daysPastDue === null ? 0 : thresholds.filter((t) => daysPastDue > t).length);
+const bandOf = (daysPastDue: number, thresholds: readonly number[]): number => 1 + thresholds.filter((t) => daysPastDue > t).length;
+
+/**
+ * DR-13's effective due date: the stated one, or the invoice's own issue date
+ * when none was stated. `invoices_due_date_ck` guarantees
+ * `due_date >= issue_date`, so this can only ever make an invoice MORE overdue
+ * than a missing date did, never less — which is the point of the decision.
+ */
+const effectiveDueDate = (dueDate: string | null, issueDate: string): string => dueDate ?? issueDate;
 
 /** Whole civil days between two `YYYY-MM-DD` dates, as PostgreSQL's `date - date` counts them: no clock, no zone. */
 const civilDaysPastDue = (asOf: string, dueDate: string): number => {
@@ -99,7 +111,7 @@ describe('DR-10 the standard receivables aging', () => {
   });
 
   it('every boundary the decision names falls on the side the decision names', () => {
-    const cases: readonly (readonly [number | null, number, string])[] = [
+    const cases: readonly (readonly [number, number, string])[] = [
       [-365, 1, 'a year from due — not due'],
       [-45, 1, 'forty-five days from due — not due, and the case the old standard mis-banded'],
       [-1, 1, 'the day before the due date — not due'],
@@ -112,7 +124,6 @@ describe('DR-10 the standard receivables aging', () => {
       [90, 4, 'ninety — still 61-90'],
       [91, 5, 'ninety-one — the open band opens'],
       [3650, 5, 'ten years late — the open band has no upper bound'],
-      [null, 1, 'NO DUE DATE: nothing is late by a date nobody set, so not due'],
     ];
     for (const [daysPastDue, expectedBand, why] of cases) {
       expect(bandOf(daysPastDue, STANDARD), why).toBe(expectedBand);
@@ -245,5 +256,182 @@ describe('DR-10 the standard receivables aging', () => {
     const { buckets } = foldCustomerAging([], { labels: agingBucketLabels(legacy), bucketDays: legacy });
     expect(buckets.map((b) => b.fromDays)).toEqual([null, 31, 61, 91]);
     expect(buckets[0]?.toDays).toBe(30);
+  });
+});
+
+/**
+ * DR-13 — AN INVOICE WITH NO DUE DATE IS DUE FROM ITS OWN ISSUE DATE.
+ *
+ * The owner's decision of 2026-10-26 closes the question DR-10 left open. The
+ * old behaviour was not designed: `customer_ar_aging` guarded its band
+ * arithmetic with `o.due_date IS NOT NULL AND …`, so an invoice with no stated
+ * due date exceeded no threshold and landed in band 1 — the not-due band since
+ * DR-10, and the `0-30` band before it. Either way a receivable with no stated
+ * term could sit forever in the youngest band and never age, which is a way
+ * for debt to disappear from a report by omission rather than by payment.
+ *
+ * The decision: `coalesce(due_date, issue_date)`. `invoices.issue_date` is
+ * `NOT NULL` and `invoices_due_date_ck` enforces `due_date >= issue_date`, so
+ * the substitute is always present and can only ever make an invoice MORE
+ * overdue than the missing date did, never less.
+ *
+ * WHERE THE CHANGE LIVES. `invoice_outstanding` already scans `invoices` and
+ * already returns `due_date`, so `issue_date` is added to its result — an
+ * ADDITIVE column that changes no existing one's meaning — and
+ * `customer_ar_aging` coalesces the two. The alternative, joining `invoices`
+ * back inside the aging reader, is refused: `0084` removed exactly that join
+ * so the routine visits `invoices` once (R-104), and DR-13 is not a reason to
+ * put it back. The `due_date` column itself is left alone, because the
+ * open-invoice page returns it to the client and "no due date" must keep
+ * reading as no due date there.
+ *
+ * Migration `0084` is edited in place rather than superseded: `frozenThrough`
+ * is `0079`, and DR-03 keeps `0080`–`0086` candidates until the Phase 4 gate
+ * is sealed. The static case below reads the migration text, because the
+ * behavioural proof is PostgreSQL's and belongs to the live suite.
+ */
+describe('DR-13 an invoice with no due date ages from its issue date', () => {
+  const MIGRATION = 'infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql';
+  const sql = (): string => readFileSync(join(ROOT, MIGRATION), 'utf8');
+
+  it('the aging reader measures against coalesce(due_date, issue_date)', () => {
+    const body = sql();
+    expect(body).toMatch(/coalesce\(\s*o\.due_date\s*,\s*o\.issue_date\s*\)/i);
+  });
+
+  it('red: the retired NULL guard is gone — a missing due date no longer exceeds nothing by construction', () => {
+    // The exact expression that made a termless receivable immortal. Its
+    // presence anywhere in the aging reader is the defect.
+    expect(sql()).not.toMatch(/o\.due_date\s+IS\s+NOT\s+NULL\s+AND\s+\(p_as_of/i);
+  });
+
+  it('invoice_outstanding carries issue_date, so the reader visits invoices once (R-104)', () => {
+    const body = sql();
+    expect(body).toMatch(/RETURNS TABLE \(invoice_id UUID[\s\S]*?issue_date DATE\)/);
+    // And the aging reader did NOT get its join back.
+    const aging = body.slice(body.indexOf('CREATE FUNCTION customer_ar_aging'));
+    const fn = aging.slice(0, aging.indexOf('$fn$;'));
+    expect(fn).not.toMatch(/JOIN\s+public\.invoices/i);
+  });
+
+  it('the effective due date is the stated one, and the issue date only when none was stated', () => {
+    expect(effectiveDueDate('2026-03-31', '2026-01-31')).toBe('2026-03-31');
+    expect(effectiveDueDate(null, '2026-01-31')).toBe('2026-01-31');
+    // A termless invoice issued sixty-one days ago is in 61-90, not in not-due.
+    const days = civilDaysPastDue('2026-04-02', effectiveDueDate(null, '2026-01-31'));
+    expect(days).toBe(61);
+    expect(bandOf(days, STANDARD)).toBe(4);
+    // And one issued today is not yet late, because the term is zero days.
+    expect(bandOf(civilDaysPastDue('2026-01-31', effectiveDueDate(null, '2026-01-31')), STANDARD)).toBe(1);
+  });
+});
+
+/**
+ * DR-14 — THE FIRST RELEASE ACCEPTS THE STANDARD SET AND NOTHING ELSE.
+ *
+ * DR-10 settled what the bands are; this settles who may choose them. The
+ * answer for release one is nobody: the server takes `bucketDays` and refuses
+ * any value but `0,30,60,90` with `VALIDATION_FAILED`.
+ *
+ * This does NOT re-open the lock's "the server decides no bucket policy". The
+ * boundaries are still a required input the client states and the answer still
+ * echoes them, so the reader invents nothing; what the owner has fixed is the
+ * SET OF ACCEPTABLE VALUES, which is a product decision and recorded as one.
+ * `validateAgingBucketDays` keeps admitting every shape it admitted, because
+ * it is the domain's own rule about well-formed boundaries and not the
+ * product's about which are offered — widening the release later is then a
+ * change to one schema and not to the domain.
+ */
+describe('DR-14 the aging endpoint takes the standard set only', () => {
+  const parse = (v: string) => CustomerAgingQuerySchema.safeParse({ asOf: '2026-10-26', bucketDays: v });
+
+  it('the standard set is accepted, and comes through as the five-band shape', () => {
+    const ok = parse('0,30,60,90');
+    expect(ok.success).toBe(true);
+    if (ok.success) expect(ok.data.bucketDays).toEqual([...STANDARD_AGING_BUCKET_DAYS]);
+  });
+
+  it('red: every other well-formed set is REFUSED, including the one the product used before', () => {
+    for (const bad of ['30,60,90', '0,30,60', '0,30,60,90,120', '0,15,30,60', '7', '0']) {
+      const r = parse(bad);
+      expect(r.success, `bucketDays=${bad} must be refused`).toBe(false);
+    }
+    // The refusal names the field, which is what DR-11 makes contractual.
+    const r = parse('30,60,90');
+    expect(r.success).toBe(false);
+    if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');
+  });
+
+  it('the DOMAIN rule is untouched: those sets are still well-formed, they are just not offered', () => {
+    // The distinction matters. If DR-14 had been written into
+    // `validateAgingBucketDays`, widening the release later would mean
+    // changing a domain law, and every test that states what a well-formed
+    // boundary set is would have to move with it.
+    expect(validateAgingBucketDays([30, 60, 90])).toEqual([]);
+    expect(validateAgingBucketDays([0, 15, 30, 60])).toEqual([]);
+  });
+});
+
+/**
+ * C-1 Q-1 — THE CONTRACT THE DEFECT WENT THROUGH.
+ *
+ * The independent review package asks: is the ordinal base PINNED or merely
+ * ASSUMED? The C-1 repair maps `bucket_no - 1` and refuses anything out of
+ * range, but nothing stated that `customer_ar_aging` must keep producing
+ * 1-based ordinals — so a later migration could renumber from 0, every test
+ * would stay green, and the money would move one band without a word.
+ *
+ * DR-10 made that worse rather than better: five bands instead of four, so a
+ * wrong base loses a larger slice.
+ *
+ * This block is that missing contract, in three statements a renumbering
+ * cannot satisfy: the SMALLEST ordinal the reader accepts is 1 and 0 is
+ * refused; the standard answer has exactly 5 bands; and the bands sum to
+ * `totalBaseMinor` EXACTLY, with no rounding and no remainder.
+ */
+describe('C-1 Q-1 the aging contract: 1-based, five bands, exact sum', () => {
+  it('the ordinal base is ONE: zero is refused, and refused as a defect rather than skipped', () => {
+    expect(() => foldCustomerAging([row(0, '100')], SHAPE)).toThrow(AppError);
+    try {
+      foldCustomerAging([row(0, '100')], SHAPE);
+      expect.unreachable('bucket_no 0 was accepted');
+    } catch (error) {
+      expect((error as AppError).details?.['sellingCode']).toBe('customer.aging_bucket_mapping_invalid');
+      expect((error as AppError).httpStatus).toBe(500);
+    }
+    // And one is accepted, so the refusal is about the base and not about the row.
+    expect(foldCustomerAging([row(1, '100')], SHAPE).totalBaseMinor).toBe('100');
+  });
+
+  it('the SQL function itself numbers from one, read off the migration', () => {
+    const body = readFileSync(join(ROOT, 'infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql'), 'utf8');
+    const aging = body.slice(body.indexOf('CREATE FUNCTION customer_ar_aging'));
+    // `1 + <count>`: the literal that makes the base one. A renumbering to
+    // zero-based would have to delete it, and this case would name the loss.
+    expect(aging.slice(0, aging.indexOf('$fn$;'))).toMatch(/SELECT\s+\(1\s*\+\s*\(SELECT pg_catalog\.count\(\*\)/);
+  });
+
+  it('the standard answer has exactly FIVE bands, in order, open last', () => {
+    const { buckets } = foldCustomerAging([], SHAPE);
+    expect(buckets.length).toBe(5);
+    expect(buckets.map((b) => b.label)).toEqual(['not-due', '1-30', '31-60', '61-90', 'over-90']);
+    expect(buckets.filter((b) => b.toDays === null).length).toBe(1);
+    expect(buckets[4]?.toDays).toBeNull();
+  });
+
+  it('the bands sum to totalBaseMinor EXACTLY, over every ordinal and a mixed sign', () => {
+    const rows = [row(1, '1000'), row(2, '-250'), row(3, '7'), row(4, '0'), row(5, '9007199254740993')];
+    const { buckets, totalBaseMinor } = foldCustomerAging(rows, SHAPE);
+    const summed = buckets.reduce((s, b) => s + BigInt(b.baseMinor), 0n);
+    expect(summed.toString()).toBe(totalBaseMinor);
+    // Stated absolutely, not just as an identity between two sums of mine.
+    expect(totalBaseMinor).toBe('9007199254741750');
+    // No band was skipped on the way: each ordinal reached its own band.
+    expect(buckets.map((b) => b.baseMinor)).toEqual(['1000', '-250', '7', '0', '9007199254740993']);
+  });
+
+  it('red: a count that disagrees with the labels is refused, so the five is a FIVE and not a length', () => {
+    const four = { labels: agingBucketLabels([30, 60, 90]), bucketDays: [...STANDARD] };
+    expect(() => foldCustomerAging([], four)).toThrow(AppError);
   });
 });
