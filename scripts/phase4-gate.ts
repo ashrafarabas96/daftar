@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 /**
  * ─────────────────────────────────────────────────────────────────────────
- * PHASE 4 SEAL GATE — `npm run gate:phase4`
+ * PHASE 4 SEAL GATE — `npm run gate:phase4:release` (alias `gate:phase4`)
  * ─────────────────────────────────────────────────────────────────────────
  *
  * Phase 1 has `gate:phase1:release`, Phase 2 `gate:phase2:release`, Phase 3
@@ -18,9 +18,13 @@
  *     predecessor;
  *   — the live database steps CI runs before the slices: migrate, re-migrate,
  *     history verify, integration + security, golden regression;
- *   — EVERY Phase 4 slice gate (`gate:phase4:s1` … `s4`, discovered from
- *     package.json and compared with the roster below, in BOTH directions),
- *     with the measured budget suites CI runs between them;
+ *   — EVERY Phase 4 slice gate the PLAN declares. The roster is read from
+ *     docs/PHASE_4_EXECUTION_PLAN.md (the Gate line of each slice), not from
+ *     what happens to be built. A slice the plan declares and the tree does not
+ *     build (today P4-S5 … P4-S8) is a FAIL that names it; a slice the tree
+ *     builds and the plan does not declare is a FAIL too. The built slices
+ *     (gate:phase4:s1 …) are composed with the measured budget suites CI runs
+ *     between them;
  *   — the closing CI steps: process-composition red proof, plan-evidence
  *     contract and target measurement, the tampered-migration hard-fail
  *     proof, the database-from-zero contract and the API build.
@@ -46,7 +50,7 @@
  *
  * FALSIFIABILITY
  *
- *   `npm run gate:phase4 -- --prove-red` plants defects in the verdict
+ *   `npm run gate:phase4:release -- --prove-red` plants defects in the verdict
  *   machinery (a slice whose gate exits 0 but says it did not run its
  *   runtime checks, a slice dropped from the plan, a skipped step, a vitest
  *   step with skipped tests, a slice gate that failed, …) and exits 0 only if
@@ -66,13 +70,19 @@
  *   on a predecessor gate that skips its own steps, and a predecessor gate
  *   with a skip switch is a weakened gate. Nothing is relaxed; time is spent.
  *
+ * NAME
+ *
+ *   The plan calls the closing gate `gate:phase4:release`. That is the canonical
+ *   script; `gate:phase4` is kept as an alias of the identical command, and the
+ *   preflight fails if either differs from `tsx scripts/phase4-gate.ts`.
+ *
  * Usage:
- *   npm run gate:phase4 [-- --evidence=<file.json>] [--log-dir=<dir>] [--list]
+ *   npm run gate:phase4:release [-- --evidence=<file.json>] [--log-dir=<dir>] [--list]
  *                       [--root <dir> --structural-only] [--prove-red]
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { arch, platform } from 'node:os';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { arch, platform, tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { Client } from 'pg';
 import { libraryBuildOrder } from './phase3-release-gate';
@@ -87,11 +97,31 @@ const win = process.platform === 'win32';
 
 export const SLICES: readonly string[] = ['s1', 's2', 's3', 's4'];
 
+export const PLAN_DOC = 'docs/PHASE_4_EXECUTION_PLAN.md';
+
+/** The slices the execution plan declares a gate for: the "**Gate.** `gate:phase4:sN`" line of each slice. */
+export function parsePlannedSlices(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\*\*Gate\.\*\*\s+`gate:phase4:(s\d+)`/g)) {
+    const s = m[1] as string;
+    if (!out.includes(s)) out.push(s);
+  }
+  return out.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+}
+
+export function plannedSlices(root: string): { slices: string[]; problems: string[] } {
+  const path = join(root, PLAN_DOC);
+  if (!existsSync(path)) return { slices: [], problems: [`${PLAN_DOC} is missing — the roster is derived from the plan, so without it no seal can be judged`] };
+  const slices = parsePlannedSlices(readFileSync(path, 'utf8'));
+  return slices.length === 0 ? { slices, problems: [`${PLAN_DOC} declares no gate:phase4:sN gate`] } : { slices, problems: [] };
+}
+
 /** What a script must say, verbatim, for a slice to be the accepted gate (a flag added to weaken it is a finding). */
 const sliceCommand = (s: string): string => `tsx scripts/phase4-${s}-gate.ts`;
 
 /** Things no script can decide. They are printed and recorded, never silently omitted. */
 export const NOT_GATE_CHECKABLE: readonly string[] = [
+  'a slice gate the plan declares and the tree has not built is not "not checkable": it FAILS by name (unbuiltSlices in the evidence). Until P4-S5 … P4-S8 are built no run of this gate can be a PASS',
   'DR-01/DR-02/DR-03: owner decisions on 07c782f, the C-1 fix and migrations 0080–0086 (OWNER_DECISIONS_AR.md)',
   'independent review of the exact head, and the signature that belongs to that one SHA only',
   'red-before-green ORDER of DR-10 / DR-13 / DR-14 (a property of commit history; an extracted archive carries none)',
@@ -99,8 +129,22 @@ export const NOT_GATE_CHECKABLE: readonly string[] = [
   'removal of the CANDIDATE-TENSE fence at acceptance (the s4 gate polices its presence, the owner decides the acceptance)',
 ];
 
-export function rosterProblems(root: string, declared: readonly string[] = SLICES): string[] {
+export function rosterProblems(root: string, declared: readonly string[] = SLICES, planned?: readonly string[]): string[] {
   const problems: string[] = [];
+  let plan: readonly string[];
+  if (planned !== undefined) plan = planned;
+  else {
+    const r = plannedSlices(root);
+    problems.push(...r.problems);
+    plan = r.slices;
+  }
+  for (const s of plan) {
+    if (!declared.includes(s))
+      problems.push(`P4-${s.toUpperCase()} is declared by ${PLAN_DOC} but its slice gate is not built into this tree — the seal gate refuses to pass over it`);
+  }
+  for (const s of declared) {
+    if (plan.length > 0 && !plan.includes(s)) problems.push(`slice ${s} is composed by the seal gate but ${PLAN_DOC} does not declare it`);
+  }
   const pkgPath = join(root, 'package.json');
   if (!existsSync(pkgPath)) return [`${pkgPath} is missing`];
   const scripts = (JSON.parse(readFileSync(pkgPath, 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
@@ -125,7 +169,11 @@ export function rosterProblems(root: string, declared: readonly string[] = SLICE
       problems.push(`gate:phase4:${s} is "${cmd}" — the accepted command is "${sliceCommand(s)}" (an added flag is a weakened gate)`);
     }
   }
-  if (!('gate:phase4' in scripts)) problems.push('package.json has no gate:phase4 script');
+  for (const name of ['gate:phase4:release', 'gate:phase4']) {
+    const c = scripts[name];
+    if (c === undefined) problems.push(`package.json has no ${name} script`);
+    else if (c.trim() !== 'tsx scripts/phase4-gate.ts') problems.push(`${name} is "${c}" — the accepted command is "tsx scripts/phase4-gate.ts"`);
+  }
   return problems;
 }
 
@@ -320,20 +368,35 @@ const cmd = (id: string, name: string, args: readonly string[], extra: Partial<P
   ...extra,
 });
 
-export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly string[] = SLICES): readonly Step[] {
+/** A slice the plan declares and the tree does not build: a step that can only fail, by name. */
+const unbuiltStep = (s: string): Step => ({
+  id: `slice-${s}`,
+  name: `Phase 4 slice gate — P4-${s.toUpperCase()} (declared by the plan, NOT BUILT)`,
+  kind: 'in-process',
+  structural: true,
+  slice: s,
+  fn: () => [`P4-${s.toUpperCase()} is declared by ${PLAN_DOC} but gate:phase4:${s} does not exist in this tree — an unbuilt slice cannot be sealed over`],
+});
+
+export function sealPlan(
+  o: Pick<Options, 'root' | 'logDir'>,
+  slices: readonly string[] = SLICES,
+  planned: readonly string[] = plannedSlices(o.root).slices,
+): readonly Step[] {
   const sliceStep = (s: string): Step =>
     cmd(`slice-${s}`, `Phase 4 slice gate — P4-${s.toUpperCase()}`, ['run', '-s', `gate:phase4:${s}`], { validate: sliceEvidence(s), slice: s });
   const bySlice = new Map(slices.map((s) => [s, sliceStep(s)]));
   const slice = (s: string): readonly Step[] => (bySlice.has(s) ? [bySlice.get(s) as Step] : []);
   // Any slice the roster names that has no fixed position below still runs, after s4.
   const extra = slices.filter((s) => !['s1', 's2', 's3', 's4'].includes(s)).flatMap(slice);
+  const unbuilt = planned.filter((s) => !slices.includes(s)).map(unbuiltStep);
   return [
     {
       id: 'preflight',
       name: 'preflight: the roster agrees with the tree; no mandatory skip is set',
       kind: 'in-process',
       structural: true,
-      fn: () => rosterProblems(o.root, slices),
+      fn: () => rosterProblems(o.root, slices, planned.length > 0 ? planned : undefined),
     },
     {
       id: 'identity',
@@ -411,6 +474,7 @@ export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly s
     }),
     ...slice('s4'),
     ...extra,
+    ...unbuilt,
     cmd('composition-red', 'process composition guard — planted-defect red proof', ['run', '-s', 'proof:composition:red']),
     cmd('plan-contract', 'plan-evidence contract', ['run', '-s', 'plan-evidence:contract'], { validate: vitestEvidence('plan-evidence-contract') }),
     cmd('plan-target', 'plan-evidence target measurement', ['run', '-s', 'plan-evidence:target', '--', '--measure']),
@@ -539,6 +603,89 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
     ),
     /slice gate s4 exists in the tree .* does not compose it/,
   );
+
+  // 7. The PLAN is the roster, not the build (review blocker 1). A slice the plan declares and the tree does
+  //    not build must turn the verdict red BY NAME — through the plan, the roster check and the real runner.
+  const planned8 = ['s1', 's2', 's3', 's4', 's5', 's6', 's7', 's8'];
+  const planned = sealPlan(o, SLICES, planned8);
+  const unbuiltIds = ['s5', 's6', 's7', 's8'].map((s) => `slice-${s}`);
+  proofs.push({
+    name: 'the plan carries a step for every declared slice',
+    caught: unbuiltIds.every((id) => planned.some((st) => st.id === id)),
+    by: 'sealPlan',
+  });
+  for (const s of ['s5', 's6', 's7', 's8']) {
+    const step = planned.find((st) => st.id === `slice-${s}`);
+    expectRed(
+      `slice ${s} is declared by the plan but not built`,
+      step?.fn !== undefined ? (step.fn() as string[]) : [],
+      new RegExp(`P4-${s.toUpperCase()} is declared .* does not exist`),
+    );
+    expectRed(
+      `roster check: slice ${s} declared, not built`,
+      rosterProblems(join(__dirname, '..'), SLICES, planned8),
+      new RegExp(`P4-${s.toUpperCase()} is declared by .* not built`),
+    );
+  }
+  expectRed(
+    'roster check: a built slice the plan does not declare',
+    rosterProblems(join(__dirname, '..'), SLICES, ['s1', 's2', 's3']),
+    /slice s4 is composed by the seal gate but .* does not declare it/,
+  );
+  expectRed(
+    'the plan document is missing → no roster, no seal',
+    plannedSlices(join(tmpdir(), 'phase4-gate-no-such-root')).problems,
+    /is missing — the roster is derived from the plan/,
+  );
+  proofs.push({
+    name: 'the plan parser reads s1…s8 from the Gate lines',
+    caught:
+      parsePlannedSlices('**Gate.** `gate:phase4:s2` x\n**Gate.** `gate:phase4:s10` y\n**Gate.** `gate:phase4:s1`\nprose `gate:phase4:s9`').join() ===
+      's1,s2,s10',
+    by: 'parsePlannedSlices',
+  });
+  // 8. main() itself (review note 4): run the real runner against a scratch tree and read its exit code and text.
+  const scratch = mkdtempSync(join(tmpdir(), 'phase4-gate-main-'));
+  try {
+    const real = join(__dirname, '..');
+    const tree = (planSlices: readonly string[], name: string): string => {
+      const dir = join(scratch, name);
+      mkdirSync(join(dir, 'scripts'), { recursive: true });
+      mkdirSync(join(dir, 'docs'), { recursive: true });
+      copyFileSync(join(real, 'package.json'), join(dir, 'package.json'));
+      for (const s of SLICES) writeFileSync(join(dir, 'scripts', `phase4-${s}-gate.ts`), '');
+      writeFileSync(join(dir, PLAN_DOC), planSlices.map((s) => `**Gate.** \`gate:phase4:${s}\` — x`).join('\n'));
+      return dir;
+    };
+    const run = (root: string, extra: readonly string[], env: Record<string, string> = {}): { status: number | null; out: string } => {
+      const res = spawnSync(
+        npm,
+        ['exec', '--', 'tsx', 'scripts/phase4-gate.ts', '--root', root, '--structural-only', `--evidence=${join(root, 'ev.json')}`, ...extra],
+        {
+          cwd: real,
+          encoding: 'utf8',
+          shell: win,
+          env: { ...process.env, ...env },
+        },
+      );
+      return { status: res.status, out: clean(`${res.stdout ?? ''}${res.stderr ?? ''}`) };
+    };
+    const mainProof = (name: string, r: { status: number | null; out: string }, status: number, needle: RegExp): void => {
+      proofs.push({ name, caught: r.status === status && needle.test(r.out), by: `main() exit ${String(r.status)}` });
+    };
+    const unbuiltRun = run(tree(planned8, 'unbuilt'), []);
+    mainProof('main(): a plan declaring s5–s8 → exit 1 naming P4-S5', unbuiltRun, 1, /P4-S5 is declared by/);
+    mainProof('main(): the verdict line is not a pass', unbuiltRun, 1, /PHASE 4 SEAL GATE: FAIL/);
+    mainProof(
+      'main(): a fully built plan, structural only → exit 3, never 0',
+      run(tree(['s1', 's2', 's3', 's4'], 'built'), []),
+      3,
+      /STRUCTURAL_ONLY_NOT_A_SEAL/,
+    );
+    mainProof('main(): RELEASE_GATE_SKIP_X → REFUSED, exit 1', run(tree(['s1', 's2', 's3', 's4'], 'skip'), [], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
   return proofs;
 }
 
@@ -633,13 +780,16 @@ async function main(): Promise<void> {
     }
   }
 
-  const { verdict: judged, reasons } = judge(fullPlan, results);
+  const planned = plannedSlices(o.root).slices;
+  const { verdict: judged, reasons } = judge(fullPlan, results, [...new Set([...SLICES, ...planned])]);
   const verdict = o.structuralOnly ? (reasons.some((x) => !/NOT_RUN/.test(x)) ? 'FAIL' : 'STRUCTURAL_ONLY_NOT_A_SEAL') : judged;
   const artefact = {
     produced: 'scripts/phase4-gate.ts',
     producedAt: new Date().toISOString(),
     phase: 4,
     roster: SLICES,
+    plannedByDocs: planned,
+    unbuiltSlices: planned.filter((x) => !SLICES.includes(x)),
     structuralOnly: o.structuralOnly,
     environment: { node: process.version, platform: `${platform()}-${arch()}` },
     mandatorySkips: skips,
