@@ -2279,6 +2279,15 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   { suite: 'tests/guards/p4s4-budget-ratchet-law.test.ts', title: 'the accepted copy agrees with the lock, and the tree as it stands is clean' },
   { suite: 'tests/guards/p4s4-command-refusal-audit-law.test.ts', title: 'P4-AL-48 — the gate law: every Phase 4 command audits its refusals' },
   {
+    suite: 'tests/guards/p4s4-customer-aging-bucket-mapping.test.ts',
+    title: '\u00a7A foldCustomerAging: the 1-based \u2192 0-based mapping',
+    // The owner required TWELVE cases for the bucket off-by-one. Thirteen are
+    // written, so the floor is recorded: losing one of them is losing part of
+    // the obligation, and a block that quietly sheds a case is exactly what a
+    // case floor is for.
+    cases: 13,
+  },
+  {
     suite: 'tests/guards/p4s4-gate-execution.test.ts',
     title: 'the roster rule derives a real set from the tree, and refuses the ways it can be empty or wrong',
   },
@@ -2304,6 +2313,14 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'the contract-shaped settlement text is accepted, and the silence is about real subjects',
   },
   {
+    suite: 'tests/guards/p4s4-standard-aging-not-due-band.test.ts',
+    title: 'DR-10 the standard receivables aging',
+    // Ten cases, and the floor is the whole point of recording it: the owner's
+    // decision is a boundary table, and a block that quietly shed the due-date
+    // case or the not-due case would still be a passing block.
+    cases: 12,
+  },
+  {
     suite: 'tests/guards/p4s4-vocabulary-live-arm.test.ts',
     title: 'VL-A — the hole itself: the TEXT half is silent about a relation the vocabulary forbids by name',
   },
@@ -2316,6 +2333,11 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   { suite: 'tests/integration/p4s4-checkout-owner-replay.test.ts', title: '§A the lawful checkout' },
   { suite: 'tests/integration/p4s4-checkout-permission-replay.test.ts', title: '§A the lawful discounted checkout' },
   { suite: 'tests/integration/p4s4-credit-application-customer-replay.test.ts', title: '§A the lawful application' },
+  {
+    suite: 'tests/integration/p4s4-customer-aging-oldest-band-live.test.ts',
+    title: '\u00a7A the ORDINAL BASE of the installed customer_ar_aging',
+    cases: 2,
+  },
   { suite: 'tests/integration/p4s4-customer-identity-pin.test.ts', title: 'P4-S4 the customer identity pin' },
   {
     suite: 'tests/integration/p4s4-departure-b-method-account-mutability.test.ts',

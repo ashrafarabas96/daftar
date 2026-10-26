@@ -8,6 +8,7 @@ import {
   NUMBERED_DOCUMENT_KINDS,
   SALE_SETTLEMENT_MODES,
   SALE_STRUCTURAL_ZERO_TAX_MINOR,
+  STANDARD_AGING_BUCKET_DAYS,
   SALE_TEXT_BOUNDS,
 } from '@daftar/domain-core';
 
@@ -166,8 +167,14 @@ export const CustomerListQuerySchema = z
   .strict();
 
 /**
- * The supplied aging boundaries: `"30,60,90"`. Ascending, 1..6 of them, each
- * 1..3650 days.
+ * The supplied aging boundaries: `"0,30,60,90"` — the standard set (DR-10).
+ * Ascending, 1..6 of them, each 0..3650 days.
+ *
+ * `0` is accepted, and strict ascent confines it to the FIRST position. It is
+ * what asks for the not-due band: the band arithmetic exceeds a boundary
+ * strictly, so `0` splits on the due date itself and the invoices nobody owes
+ * yet stop being counted as late (`@daftar/domain-core`'s
+ * `STANDARD_AGING_BUCKET_DAYS`).
  *
  * They are a REQUIRED input because the lock decides no bucket policy
  * (`OD-P4-03` OPTION A says the aging is shown; it does not say in what
@@ -181,10 +188,20 @@ const bucketDays = z
   .transform((s) => s.split(',').map((d) => Number.parseInt(d, 10)))
   .pipe(
     z
-      .array(z.number().int().min(1).max(MAX_AGING_BUCKET_DAY))
+      .array(z.number().int().min(0).max(MAX_AGING_BUCKET_DAY))
       .min(1)
       .max(MAX_AGING_BUCKETS)
-      .refine((days) => days.every((d, i) => i === 0 || d > (days[i - 1] as number)), 'day boundaries are strictly ascending'),
+      .refine((days) => days.every((d, i) => i === 0 || d > (days[i - 1] as number)), 'day boundaries are strictly ascending')
+      // DR-14 (owner, 2026-10-26): the first release OFFERS one set. Any other
+      // well-formed set is refused here rather than in the domain rule, so
+      // widening the release later changes this schema and not the law about
+      // what a well-formed boundary set is. The boundaries stay a required
+      // input the client states and the answer echoes, so the reader still
+      // invents no policy — what is fixed is which values are on offer.
+      .refine(
+        (days) => days.length === STANDARD_AGING_BUCKET_DAYS.length && days.every((d, i) => d === (STANDARD_AGING_BUCKET_DAYS[i] as number)),
+        `the only aging boundaries this release offers are ${STANDARD_AGING_BUCKET_DAYS.join(',')}`,
+      ),
   );
 
 /** `GET /v1/customers/:customerId/receivable/aging`. Both inputs are required. */
