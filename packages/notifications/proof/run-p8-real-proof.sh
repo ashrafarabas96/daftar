@@ -3492,12 +3492,69 @@ END $t$;
 DROP TRIGGER IF EXISTS p8bench_rlstg ON public.p8bench_rlsd;
 CREATE TRIGGER p8bench_rlstg BEFORE UPDATE ON public.p8bench_rlsd
   FOR EACH ROW EXECUTE FUNCTION public.p8bench_rlstg();
+-- ROUND 39, R29-F-1: both arrival terms READ a name out of the server's
+-- prose, and the server writes that name unescaped. So a relation whose own
+-- NAME carries the delimiter injects a field. Two relations below are named
+-- that way: one carries a policy, one is a twin reached by a trigger. The
+-- names are ordinary CREATE TABLE names -- nothing here needs a superuser or
+-- a schema the role cannot see.
+CREATE TABLE IF NOT EXISTS public."z"" for table ""p8bench_inj"(k TEXT PRIMARY KEY);
+ALTER TABLE public."z"" for table ""p8bench_inj" ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS p8bench_injp ON public."z"" for table ""p8bench_inj";
+CREATE POLICY p8bench_injp ON public."z"" for table ""p8bench_inj"
+  FOR ALL USING (true) WITH CHECK (k = 'OWNED');
+REVOKE ALL ON public."z"" for table ""p8bench_inj" FROM PUBLIC;
+GRANT SELECT, INSERT ON public."z"" for table ""p8bench_inj" TO daftar_worker;
+CREATE TABLE IF NOT EXISTS public.p8bench_inj(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_inj VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_inj FROM PUBLIC;
+GRANT SELECT, UPDATE (v) ON public.p8bench_inj TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_injtg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  INSERT INTO public."z"" for table ""p8bench_inj" VALUES ('NOT-OWNED');
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_injtg ON public.p8bench_inj;
+CREATE TRIGGER p8bench_injtg BEFORE UPDATE ON public.p8bench_inj
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_injtg();
+CREATE TABLE IF NOT EXISTS public."p8bench_tws x"(j TEXT);
+REVOKE ALL ON public."p8bench_tws x" FROM PUBLIC;
+CREATE TABLE IF NOT EXISTS public.p8bench_tws(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_tws VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_tws FROM PUBLIC;
+GRANT SELECT, UPDATE (v) ON public.p8bench_tws TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_twstg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+DECLARE n BIGINT;
+BEGIN
+  SELECT count(*) INTO n FROM public."p8bench_tws x";
+  RETURN NEW;
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_twstg ON public.p8bench_tws;
+CREATE TRIGGER p8bench_twstg BEFORE UPDATE ON public.p8bench_tws
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_twstg();
+-- ROUND 39, R29-F-2: a relation the role may genuinely update, whose trigger
+-- RAISES the server's own privilege prose at 42501. Nothing here is the
+-- server's decision; the string is the trigger author's.
+CREATE TABLE IF NOT EXISTS public.p8bench_imp(k TEXT PRIMARY KEY, v INT NOT NULL DEFAULT 1);
+INSERT INTO public.p8bench_imp VALUES ('a', 1) ON CONFLICT DO NOTHING;
+REVOKE ALL ON public.p8bench_imp FROM PUBLIC;
+GRANT SELECT, UPDATE ON public.p8bench_imp TO daftar_worker;
+CREATE OR REPLACE FUNCTION public.p8bench_imptg() RETURNS trigger
+LANGUAGE plpgsql SECURITY INVOKER AS $t$
+BEGIN
+  RAISE EXCEPTION 'permission denied for table p8bench_imp' USING ERRCODE = '42501';
+END $t$;
+DROP TRIGGER IF EXISTS p8bench_imptg ON public.p8bench_imp;
+CREATE TRIGGER p8bench_imptg BEFORE UPDATE ON public.p8bench_imp
+  FOR EACH ROW EXECUTE FUNCTION public.p8bench_imptg();
 SQL
 if [ -s "$WB/abench.log" ] && grep -qi "^ERROR" "$WB/abench.log"; then
   say "ATTRIB-BENCH: PLANT NOT ESTABLISHED — the attribution bench could not be built: $(tail -1 "$WB/abench.log")"
   FAILED=1
 else
-  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation, a row-conditional trigger, a relation whose name is carried by nothing else, a twin reached by a per-row trigger under a column-scoped grant, a twin reached by a function the planner FOLDS under a column-scoped grant, and a POLICY on a relation the declared one's trigger writes into — so a case can declare one subject while the refusal it reads is about another, by five different routes, and every grant here is an ordinary one (R25-F-1, the coordinator's 3.2 and 3.3, R27-F-1, R28-F-1)"
+  say "ATTRIB-BENCH: a relation the worker may read, one it may not, a function it may not execute, a function wearing a granted relation's own name, a SAME-NAMED relation in another schema, a read-only relation, a row-conditional trigger, a relation whose name is carried by nothing else, a twin reached by a per-row trigger under a column-scoped grant, a twin reached by a function the planner FOLDS under a column-scoped grant, and a POLICY on a relation the declared one's trigger writes into, a POLICY on a relation whose NAME carries the delimiter the server's row-level message uses, a twin whose NAME carries a space, and a relation the role may genuinely update whose trigger RAISES the server's own privilege prose at 42501 — so a case can declare one subject while the refusal it reads is about another, by eight different routes, and every grant and every name here is one any role could create (R25-F-1, the coordinator's 3.2 and 3.3, R27-F-1, R28-F-1, R29-F-1, R29-F-2)"
 fi
 { wb_head; cat <<'SQL'
 SELECT p8.case_refuses_relation('T1 a relation case refused about a SECOND relation',
@@ -3688,6 +3745,25 @@ SELECT p8.case_refuses_row('A1b the same, with expect naming the other relation 
 ROLLBACK;
 SQL
 } > "$WB/a1b.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('H1 a policy on a relation whose NAME injects a field',
+  $q$UPDATE @REL@ SET v = 2$q$,
+  'row-level security policy', 'p8bench_inj', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/h1.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('H3 a twin whose NAME ends the server name field',
+  $q$UPDATE @REL@ SET v = 2$q$, 'permission denied', 'p8bench_tws', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/h3.sql"
+{ wb_head; cat <<'SQL'
+SELECT p8.case_refuses_row('H2 a trigger RAISING the server own privilege prose',
+  $q$UPDATE @REL@ SET v = 2$q$, 'permission denied', 'p8bench_imp', 'k', 'a');
+ROLLBACK;
+SQL
+} > "$WB/h2.sql"
 wb_probe w1.sql "ATTRIB-W1" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
   "R26-F-1 W1, which passed at rc 0 on this head's parent: X2 with ONE extra DECLARED keyword as a column alias, which made the privilege conjunction smaller and took the term out of the law — and 'expect' spells the declared relation's name in full, so nothing in the case's wording is doing the work"
 wb_probe w2.sql "ATTRIB-W2" "THE STATEMENT REACHES MORE THAN THE DECLARED RELATION" \
@@ -3708,6 +3784,12 @@ wb_probe a1.sql "ATTRIB-A1" "THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION" \
   "R28-F-1, which passed at rc 0 on this head's parent: every attribution term sat inside the grant-decision condition, which EXCLUDES the row-level-security class, and for a ROW case nothing else asked which relation the refusal named — assert_arriving_class admits 42501 outright, the handler ban reads the statement's own block, and the EXPLAIN construction is relation-only. A policy on a relation the declared one's trigger writes into refused a row that has nothing to do with the case"
 wb_probe a1b.sql "ATTRIB-A1B" "THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION" \
   "the same, with 'expect' spelling the OTHER relation's name in full — so nothing in the case's own wording is doing the work, and the only thing that ever let it through was the class exclusion"
+wb_probe h1.sql "ATTRIB-H1" "THE ROW-LEVEL REFUSAL IS ABOUT ANOTHER RELATION" \
+  "R29-F-1 ATK-H1, which passed at rc 0 on this head's parent: the policy sits on a relation NAMED 'z\" for table \"p8bench_inj', so the server writes 'for table \"z\" for table \"p8bench_inj\"' and the suffix anchor round 38 used read the INJECTED last field as the refused object. No anchor fixes it, because the server prints the name unescaped and the message is genuinely ambiguous; this head BUILDS the five messages PostgreSQL 16 would write for a policy on the declared relation, from the catalogue, and requires byte equality"
+wb_probe h3.sql "ATTRIB-H3" "THE REFUSAL IS NOT ABOUT THE DECLARED RELATION" \
+  "R29-F-1 ATK-H3, the grant half of the same class: a twin NAMED 'p8bench_tws x', reached by a per-row trigger under a column-scoped grant, makes the server write 'permission denied for table p8bench_tws x' — which round 38's boundary regex accepted, because a space IS the boundary it allowed after the declared name. The arrival term is now byte equality against the two messages the server can write for this relation's kind"
+wb_probe h2.sql "ATTRIB-H2" "A CODE-RAISED 42501 IS ASSERTED AS A SERVER PRIVILEGE REFUSAL" \
+  "R29-F-2, which passed at rc 0 on this head's parent and is what falsifies the bound round 38 published as withdrawn: a trigger whose whole body RAISES the server's own privilege prose at 42501, on a relation the role MAY update — 'ALTER TABLE public.p8bench_imp DISABLE TRIGGER p8bench_imptg' and the same UPDATE by the same role returns UPDATE 1. assert_arriving_class admits 42501 for a row case, the handler ban reads the statement's own block and this trigger has none, and the EXPLAIN construction is the relation form's. What this head refuses is the ASSERTION: a code-raised 42501 may not be published in prose the server itself would print for the declared relation"
 wl_sub_ctl "REACH-W1-CTL" w1.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \
@@ -3748,6 +3830,23 @@ wl_sub_ctl "RLS-A1B-CTL" a1b.sql \
   "      IF rlsdecision THEN" "      IF false THEN" \
   pass "PASS refused by new row violates row-level security policy" \
   "the same with 'expect' naming the other relation in full, which is the measurement that shows no text test on the case's own wording was ever going to close it (R28-F-1)"
+wl_sub_ctl "INJECT-H1-CTL" h1.sql \
+  "SELECT bool_or(lower(coalesce(msg,'')) = cand) INTO named FROM (" \
+  "SELECT bool_or(lower(coalesce(msg,'')) = cand OR lower(substring(coalesce(msg,'') from 'for table \"([^\"]*)\"[^\"]*\$')) = lower(relation)) INTO named FROM (" \
+  pass "PASS refused by row-level security policy" \
+  "with round 38's PARSE restored beside the construction — one change, and the only one — the injected name passes again at rc 0, so the hole was the reading of the message and not the placement of the term. The parse and the construction disagree only here, which is the measurement that says building the message is what closed it (R29-F-1)"
+wl_sub_ctl "INJECT-H3-CTL" h3.sql \
+  "        named := lower(coalesce(msg,'')) IN
+                   ('permission denied for ' || kindword || ' ' || lower(relation),
+                    'permission denied for relation ' || lower(relation));" \
+  "        named := lower(coalesce(msg,'')) ~ ('permission denied for (' || kindword
+                 || '|relation) ' || lower(relation) || '([^a-z0-9_]|\$)');" \
+  pass "PASS refused by permission denied" \
+  "with round 38's boundary regex restored in place of byte equality the spaced twin passes again, which is the whole of R29-F-1's grant half: the term allowed ANY non-identifier character after the declared name, and a name may contain a space, so the server's own field had no end the regex could find"
+wl_sub_ctl "IMPOSTOR-H2-CTL" h2.sql \
+  "      IF raisedpriv AND coalesce(expect, '') <> '' THEN" "      IF false THEN" \
+  pass "PASS refused by permission denied" \
+  "with the one term this round added deleted the trigger's imitation passes again at rc 0, and nothing else in the law catches it — which is what makes the withdrawn sentence false rather than merely imprecise (R29-F-2)"
 wl_sub_ctl "ATTRIB-PRIV-CTL" x2.sql \
   "        IF reach <> ARRAY[relid] THEN" "        IF false THEN" \
   refuse "THE ROLE HOLDS EVERY PRIVILEGE THE STATEMENT NEEDS" \

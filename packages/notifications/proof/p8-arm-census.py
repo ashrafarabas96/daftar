@@ -291,6 +291,15 @@ ARM_LABELS = (
     "RLS-A1-CTL",
     "RLS-A1B-CTL",
     "REACH-Z2-CTL",
+    # Round 39, R29-F-1 and R29-F-2: the two arrival terms stopped reading the
+    # server's prose and started building it, and a code-raised 42501 may no
+    # longer be published as the server's own privilege decision.
+    "ATTRIB-H1",
+    "ATTRIB-H2",
+    "ATTRIB-H3",
+    "INJECT-H1-CTL",
+    "INJECT-H3-CTL",
+    "IMPOSTOR-H2-CTL",
     # Round 34, the coordinator's section 5 and 6.1 and 6.4, and the
     # twenty-fourth challenge's residual 1: the guard reads behaviour now, so
     # each term has an arm that measures what the behaviour test admits or
@@ -453,6 +462,9 @@ EXPECTED_ARMS = (
     ("ATTRIB-A1B", 1),
     ("ATTRIB-BENCH", 1),
     ("ATTRIB-F2", 1),
+    ("ATTRIB-H1", 1),
+    ("ATTRIB-H2", 1),
+    ("ATTRIB-H3", 1),
     ("ATTRIB-KIND-CTL", 1),
     ("ATTRIB-KIND-ISOLATE", 1),
     ("ATTRIB-PRIV-CTL", 1),
@@ -536,6 +548,9 @@ EXPECTED_ARMS = (
     ("HOMONYM-R1-CTL", 1),
     ("I1-conc PASS", 1),
     ("IDENT-RULE", 1),
+    ("IMPOSTOR-H2-CTL", 1),
+    ("INJECT-H1-CTL", 1),
+    ("INJECT-H3-CTL", 1),
     ("INTEGRITY-MUT a", 1),
     ("INTEGRITY-MUT b", 1),
     ("INTEGRITY-MUT c", 1),
@@ -682,7 +697,7 @@ EXPECTED_ARMS = (
     ("WITNESS-SQLSTATE", 1),
     ("WITNESS-SQLSTATE-CTL", 1),
 )
-EXPECTED_SEAL = "265977107ed47c1de202bce9d3dcd5337b96b028143ede5f89fd60ae623a7e55"
+EXPECTED_SEAL = "abcdcb0ff72ee14b79b172e51ce2b5d60a8bf6995e39a145adcbf01bc686317d"
 
 # An arm-shaped line: a label, optionally an id, then a colon. `I1-conc` is
 # lower-case after the first token, which is why the head pattern does not
