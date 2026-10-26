@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Card, colors, spacing, typography } from '@daftar/design-system';
 import { listBusinesses, listSupportSessions, listTenants, listUsers } from '@/lib/admin-api';
+import { useT } from '@/lib/i18n';
 import { Shell } from './Shell';
 
 interface Counts {
@@ -12,6 +13,7 @@ interface Counts {
 }
 
 export default function OverviewPage() {
+  const t = useT();
   const [counts, setCounts] = useState<Counts>({ tenants: null, businesses: null, users: null, supportSessions: null });
 
   useEffect(() => {
@@ -40,12 +42,12 @@ export default function OverviewPage() {
 
   return (
     <Shell active="overview">
-      <h1 style={{ fontFamily: typography.fontFamily.base }}>Overview</h1>
+      <h1 style={{ fontFamily: typography.fontFamily.base }}>{t('overview.title')}</h1>
       <div style={{ display: 'flex', gap: spacing[4], flexWrap: 'wrap' }}>
-        {tile('Tenants', counts.tenants)}
-        {tile('Businesses', counts.businesses)}
-        {tile('Users', counts.users)}
-        {tile('Active support sessions', counts.supportSessions)}
+        {tile(t('overview.tile.tenants'), counts.tenants)}
+        {tile(t('overview.tile.businesses'), counts.businesses)}
+        {tile(t('overview.tile.users'), counts.users)}
+        {tile(t('overview.tile.activeSupportSessions'), counts.supportSessions)}
       </div>
     </Shell>
   );

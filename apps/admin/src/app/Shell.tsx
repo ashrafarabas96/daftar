@@ -2,19 +2,20 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { Button, Card, spacing, typography } from '@daftar/design-system';
+import { useT } from '@/lib/i18n';
 import { logout, refreshSession, retrySessionNow, sessionState, subscribeSession, type SessionState } from '@/lib/client';
 
 const NAV = [
-  { key: 'overview', label: 'Overview', path: '/' },
-  { key: 'tenants', label: 'Tenants', path: '/tenants' },
-  { key: 'businesses', label: 'Businesses', path: '/businesses' },
-  { key: 'users', label: 'Users', path: '/users' },
-  { key: 'plans', label: 'Plans', path: '/plans' },
-  { key: 'overrides', label: 'Overrides', path: '/overrides' },
-  { key: 'flags', label: 'Feature flags', path: '/flags' },
-  { key: 'support-sessions', label: 'Support sessions', path: '/support-sessions' },
-  { key: 'audit', label: 'Audit', path: '/audit' },
-  { key: 'operations', label: 'Operations', path: '/operations' },
+  { key: 'overview', label: 'nav.overview', path: '/' },
+  { key: 'tenants', label: 'nav.tenants', path: '/tenants' },
+  { key: 'businesses', label: 'nav.businesses', path: '/businesses' },
+  { key: 'users', label: 'nav.users', path: '/users' },
+  { key: 'plans', label: 'nav.plans', path: '/plans' },
+  { key: 'overrides', label: 'nav.overrides', path: '/overrides' },
+  { key: 'flags', label: 'nav.flags', path: '/flags' },
+  { key: 'support-sessions', label: 'nav.supportSessions', path: '/support-sessions' },
+  { key: 'audit', label: 'nav.audit', path: '/audit' },
+  { key: 'operations', label: 'nav.operations', path: '/operations' },
 ] as const;
 
 const SESSION_OK: SessionState = { kind: 'ok' };
@@ -22,9 +23,10 @@ const SESSION_OK: SessionState = { kind: 'ok' };
 /**
  * TD-19: while the console's refresh waits out a rate limit or an outage, say
  * so — the operator is still signed in — instead of a blank page or a
- * redirect to the login page. The console is English-only.
+ * redirect to the login page. Text comes from the admin message catalogs (ar/en/tr).
  */
 export function SessionRetryNotice({ onRetry }: { onRetry: () => void }) {
+  const t = useT();
   return (
     <div
       role="status"
@@ -43,9 +45,9 @@ export function SessionRetryNotice({ onRetry }: { onRetry: () => void }) {
         fontFamily: typography.fontFamily.base,
       }}
     >
-      <span style={{ flex: '1 1 16rem' }}>The connection is busy right now. You&apos;re still signed in — we&apos;ll try again in a moment.</span>
+      <span style={{ flex: '1 1 16rem' }}>{t('shell.retryNotice')}</span>
       <Button variant="secondary" onClick={onRetry}>
-        Try again
+        {t('shell.retryAction')}
       </Button>
     </div>
   );
@@ -53,6 +55,7 @@ export function SessionRetryNotice({ onRetry }: { onRetry: () => void }) {
 
 export function Shell({ active, children }: { active: string; children: ReactNode }) {
   const router = useRouter();
+  const t = useT();
   const [ready, setReady] = useState(false);
   const session = useSyncExternalStore(subscribeSession, sessionState, () => SESSION_OK);
 
@@ -73,7 +76,7 @@ export function Shell({ active, children }: { active: string; children: ReactNod
       <aside
         style={{ width: '14rem', background: '#0F172A', color: '#E2E8F0', padding: spacing[4], display: 'flex', flexDirection: 'column', gap: spacing[1] }}
       >
-        <strong style={{ color: '#60A5FA', fontSize: typography.size.lg, marginBottom: spacing[4] }}>DAFTAR Admin</strong>
+        <strong style={{ color: '#60A5FA', fontSize: typography.size.lg, marginBottom: spacing[4] }}>{t('shell.brand')}</strong>
         {NAV.map((item) => (
           <a
             key={item.key}
@@ -91,7 +94,7 @@ export function Shell({ active, children }: { active: string; children: ReactNod
               alignItems: 'center',
             }}
           >
-            {item.label}
+            {t(item.label)}
           </a>
         ))}
         <div style={{ flex: 1 }} />
@@ -104,7 +107,7 @@ export function Shell({ active, children }: { active: string; children: ReactNod
             router.push('/login');
           }}
         >
-          Log out
+          {t('shell.logout')}
         </Button>
       </aside>
       <main style={{ flex: 1, background: '#F1F5F9', padding: spacing[6] }}>
