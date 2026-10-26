@@ -81,9 +81,10 @@
  *                       [--root <dir> --structural-only] [--prove-red]
  */
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { arch, platform, tmpdir } from 'node:os';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 import { Client } from 'pg';
 import { libraryBuildOrder } from './phase3-release-gate';
 
@@ -99,21 +100,162 @@ export const SLICES: readonly string[] = ['s1', 's2', 's3', 's4'];
 
 export const PLAN_DOC = 'docs/PHASE_4_EXECUTION_PLAN.md';
 
-/** The slices the execution plan declares a gate for: the "**Gate.** `gate:phase4:sN`" line of each slice. */
-export function parsePlannedSlices(text: string): string[] {
-  const out: string[] = [];
-  for (const m of text.matchAll(/\*\*Gate\.\*\*\s+`gate:phase4:(s\d+)`/g)) {
-    const s = m[1] as string;
-    if (!out.includes(s)) out.push(s);
-  }
-  return out.sort((a, b) => Number(a.slice(1)) - Number(b.slice(1)));
+/**
+ * Slices that legitimately have a heading and no gate line. Each is classified with its reason, so the
+ * roster is total: every `P4-SN` heading is either a captured Gate line or listed here, and anything else is a FAIL.
+ */
+export const UNGATED_HEADINGS: Readonly<Record<string, string>> = {
+  s0: 'the architecture lock: a design slice that has no gate',
+  s9: 'release closure: its gate IS gate:phase4:release, that is this script',
+};
+
+export interface PlanAnalysis {
+  readonly slices: string[];
+  readonly headings: string[];
+  readonly classified: Record<string, string>;
+  readonly problems: string[];
 }
 
-export function plannedSlices(root: string): { slices: string[]; problems: string[] } {
+const bySliceNo = (a: string, b: string): number => Number(a.slice(1)) - Number(b.slice(1));
+
+/**
+ * Total parse of the plan. Three independent views must agree: the `P4-SN` headings, the "**Gate.** `gate:phase4:sN`" lines,
+ * and every mention of `gate:phase4:sN` / `gate:phase4:release` anywhere in the text. A heading with no Gate line and
+ * no classification, a mention nobody declared, or a Gate line without a heading is a named problem — never silence.
+ */
+export function analysePlan(text: string): PlanAnalysis {
+  const problems: string[] = [];
+  const slices: string[] = [];
+  for (const m of text.matchAll(/\*\*Gate\.\*\*\s+`gate:phase4:(s\d+)`/g)) {
+    const s = m[1] as string;
+    if (!slices.includes(s)) slices.push(s);
+  }
+  slices.sort(bySliceNo);
+  const headings: string[] = [];
+  for (const m of text.matchAll(/^#{2,4}[ \t]*P4-S(\d+)\b/gm)) {
+    const s = `s${m[1] as string}`;
+    if (!headings.includes(s)) headings.push(s);
+  }
+  headings.sort(bySliceNo);
+  const classified: Record<string, string> = {};
+  if (headings.length === 0) problems.push(`${PLAN_DOC} has no "P4-SN" heading — nothing to derive a roster from`);
+  for (const s of headings) {
+    if (slices.includes(s)) continue;
+    const why = UNGATED_HEADINGS[s];
+    if (why !== undefined) classified[s] = why;
+    else
+      problems.push(
+        `P4-${s.toUpperCase()} has a heading in ${PLAN_DOC} but no "**Gate.** \`gate:phase4:${s}\`" line and no declared classification — the roster would silently omit it`,
+      );
+  }
+  for (const s of slices) {
+    if (!headings.includes(s)) problems.push(`${PLAN_DOC} has a Gate line for gate:phase4:${s} but no P4-${s.toUpperCase()} heading`);
+  }
+  const mentioned = new Set<string>();
+  for (const m of text.matchAll(/gate:phase4:(s\d+|release)\b/g)) mentioned.add(m[1] as string);
+  for (const s of [...mentioned].filter((x) => x !== 'release').sort(bySliceNo)) {
+    if (!slices.includes(s)) problems.push(`${PLAN_DOC} mentions gate:phase4:${s} but no Gate line declares it — the analysis did not capture it`);
+  }
+  if (mentioned.has('release') && classified['s9'] === undefined) {
+    problems.push(`${PLAN_DOC} mentions gate:phase4:release but no P4-S9 heading classifies it as the release gate`);
+  }
+  return { slices, headings, classified, problems };
+}
+
+export function parsePlannedSlices(text: string): string[] {
+  return analysePlan(text).slices;
+}
+
+export function plannedSlices(root: string): PlanAnalysis & { sha256: string | null } {
   const path = join(root, PLAN_DOC);
-  if (!existsSync(path)) return { slices: [], problems: [`${PLAN_DOC} is missing — the roster is derived from the plan, so without it no seal can be judged`] };
-  const slices = parsePlannedSlices(readFileSync(path, 'utf8'));
-  return slices.length === 0 ? { slices, problems: [`${PLAN_DOC} declares no gate:phase4:sN gate`] } : { slices, problems: [] };
+  if (!existsSync(path)) {
+    return {
+      slices: [],
+      headings: [],
+      classified: {},
+      sha256: null,
+      problems: [`${PLAN_DOC} is missing — the roster is derived from the plan, so without it no seal can be judged`],
+    };
+  }
+  const raw = readFileSync(path);
+  const a = analysePlan(raw.toString('utf8'));
+  return {
+    ...a,
+    sha256: createHash('sha256').update(raw).digest('hex'),
+    problems: a.slices.length === 0 ? [...a.problems, `${PLAN_DOC} declares no gate:phase4:sN gate`] : a.problems,
+  };
+}
+
+export interface TreeIdentity {
+  readonly root: string;
+  readonly head: string | null;
+  readonly dirty: boolean | null;
+  readonly dirtyEntries: number | null;
+  readonly planSha256: string | null;
+  readonly manifestSha256: string | null;
+  readonly notes: string[];
+  readonly problems: string[];
+}
+
+const norm = (x: string): string => resolve(x).split(sep).join('/').toLowerCase();
+const same = (a: string, b: string): boolean => norm(a) === norm(b);
+
+/** What was measured: the resolved root, its HEAD, whether it is dirty, and the sha256 of the plan the roster came from. Measured, never inferred. */
+export function measureTree(root: string): TreeIdentity {
+  const problems: string[] = [];
+  const notes: string[] = [];
+  const abs = resolve(root);
+  const git = (...args: string[]): { ok: boolean; out: string } => {
+    const r = spawnSync('git', ['-C', abs, ...args], { encoding: 'utf8' });
+    return { ok: r.status === 0 && r.error === undefined, out: (r.stdout ?? '').trim() };
+  };
+  const manifestPath = join(abs, 'DELIVERY_MANIFEST.json');
+  const manifestSha256 = existsSync(manifestPath) ? createHash('sha256').update(readFileSync(manifestPath)).digest('hex') : null;
+  let head: string | null = null;
+  let dirty: boolean | null = null;
+  let dirtyEntries: number | null = null;
+  const top = git('rev-parse', '--show-toplevel');
+  if (!top.ok || !same(top.out, abs)) {
+    if (manifestSha256 === null) {
+      problems.push(
+        `HEAD could not be measured: ${abs} is not the root of a git tree and carries no DELIVERY_MANIFEST.json — a result cannot be attributed to one fingerprint`,
+      );
+    } else notes.push(`HEAD not measured: ${abs} is not a git tree; identified by the sha256 of its DELIVERY_MANIFEST.json only`);
+  } else {
+    const h = git('rev-parse', 'HEAD');
+    if (h.ok && /^[0-9a-f]{40}$/.test(h.out)) head = h.out;
+    else problems.push('HEAD could not be measured: git rev-parse HEAD failed');
+    const st = git('status', '--porcelain');
+    if (!st.ok) problems.push('git status --porcelain failed — whether the tree is dirty is unknown');
+    else {
+      dirtyEntries = st.out === '' ? 0 : st.out.split('\n').length;
+      dirty = dirtyEntries > 0;
+      if (dirty)
+        problems.push(
+          `the tree is DIRTY (${dirtyEntries} entr${dirtyEntries === 1 ? 'y' : 'ies'} in git status --porcelain) — a seal cannot be claimed on a tree that is not exactly HEAD`,
+        );
+    }
+  }
+  const planSha256 = plannedSlices(abs).sha256;
+  if (planSha256 === null) problems.push(`${PLAN_DOC} could not be hashed — the roster's source is not identified`);
+  return { root: abs, head, dirty, dirtyEntries, planSha256, manifestSha256, notes, problems };
+}
+
+/** Workspaces whose package.json has a `test` script that the root `test` script does not run. A sixth workspace must not be silently unmeasured. */
+export function unitWorkspaces(root: string): { names: string[]; problems: string[] } {
+  const problems: string[] = [];
+  if (!existsSync(join(root, 'package.json'))) return { names: [], problems: [`${join(root, 'package.json')} is missing`] };
+  const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { workspaces?: string[]; scripts?: Record<string, string> };
+  const names = [...(pkg.scripts?.['test'] ?? '').matchAll(/npm run test -w (@[\w./-]+)/g)].map((m) => m[1] as string);
+  for (const dir of pkg.workspaces ?? []) {
+    const p = join(root, dir, 'package.json');
+    if (!existsSync(p)) continue;
+    const w = JSON.parse(readFileSync(p, 'utf8')) as { name?: string; scripts?: Record<string, string> };
+    if (w.scripts?.['test'] !== undefined && w.name !== undefined && !names.includes(w.name)) {
+      problems.push(`workspace ${w.name} has a test script that the root "npm test" does not run — its summary would never be counted`);
+    }
+  }
+  return { names, problems };
 }
 
 /** What a script must say, verbatim, for a slice to be the accepted gate (a flag added to weaken it is a finding). */
@@ -177,10 +319,13 @@ export function rosterProblems(root: string, declared: readonly string[] = SLICE
   return problems;
 }
 
+/** Set by the identity step; the evidence artefact records exactly what that step measured. */
+let measuredTree: TreeIdentity | undefined;
+
 function treeIsAPhase4Candidate(root: string): string[] {
   const manifestPath = join(root, 'DELIVERY_MANIFEST.json');
   if (!existsSync(manifestPath)) {
-    console.log('   (a source checkout carries no delivery manifest — its identity is the checkout itself)');
+    console.log('   (no delivery manifest — the identity is the measured git root, HEAD and clean/dirty state recorded in the evidence)');
     return [];
   }
   let phase: unknown;
@@ -302,7 +447,10 @@ export function parseOptions(argv: readonly string[]): Options {
     const eq = argv.find((a) => a.startsWith(`--${name}=`));
     if (eq !== undefined) return eq.slice(name.length + 3);
     const i = argv.indexOf(`--${name}`);
-    return i >= 0 ? argv[i + 1] : undefined;
+    if (i < 0) return undefined;
+    const v = argv[i + 1];
+    if (v === undefined || v.startsWith('--')) throw new Error(`--${name} needs a value (got ${v === undefined ? 'nothing' : JSON.stringify(v)})`);
+    return v;
   };
   const rootArg = value('root');
   const root = rootArg !== undefined ? resolve(rootArg) : join(__dirname, '..');
@@ -378,17 +526,15 @@ const unbuiltStep = (s: string): Step => ({
   fn: () => [`P4-${s.toUpperCase()} is declared by ${PLAN_DOC} but gate:phase4:${s} does not exist in this tree — an unbuilt slice cannot be sealed over`],
 });
 
-export function sealPlan(
-  o: Pick<Options, 'root' | 'logDir'>,
-  slices: readonly string[] = SLICES,
-  planned: readonly string[] = plannedSlices(o.root).slices,
-): readonly Step[] {
+export function sealPlan(o: Pick<Options, 'root' | 'logDir'>, slices: readonly string[] = SLICES, explicitPlanned?: readonly string[]): readonly Step[] {
+  const planned = explicitPlanned ?? plannedSlices(o.root).slices;
   const sliceStep = (s: string): Step =>
     cmd(`slice-${s}`, `Phase 4 slice gate — P4-${s.toUpperCase()}`, ['run', '-s', `gate:phase4:${s}`], { validate: sliceEvidence(s), slice: s });
   const bySlice = new Map(slices.map((s) => [s, sliceStep(s)]));
   const slice = (s: string): readonly Step[] => (bySlice.has(s) ? [bySlice.get(s) as Step] : []);
   // Any slice the roster names that has no fixed position below still runs, after s4.
   const extra = slices.filter((s) => !['s1', 's2', 's3', 's4'].includes(s)).flatMap(slice);
+  const unit = unitWorkspaces(o.root);
   const unbuilt = planned.filter((s) => !slices.includes(s)).map(unbuiltStep);
   return [
     {
@@ -396,14 +542,17 @@ export function sealPlan(
       name: 'preflight: the roster agrees with the tree; no mandatory skip is set',
       kind: 'in-process',
       structural: true,
-      fn: () => rosterProblems(o.root, slices, planned.length > 0 ? planned : undefined),
+      fn: () => rosterProblems(o.root, slices, explicitPlanned),
     },
     {
       id: 'identity',
-      name: 'tree identity; a delivery manifest, if present, says phase 4',
+      name: 'tree identity: root, HEAD, clean/dirty and the plan hash are measured; a delivery manifest, if present, says phase 4',
       kind: 'in-process',
       structural: true,
-      fn: () => treeIsAPhase4Candidate(o.root),
+      fn: () => {
+        measuredTree = measureTree(o.root);
+        return [...measuredTree.problems, ...treeIsAPhase4Candidate(o.root)];
+      },
     },
     {
       id: 'libs',
@@ -428,7 +577,13 @@ export function sealPlan(
     cmd('format', 'format', ['run', '-s', 'format']),
     cmd('lint', 'lint (no warning permitted)', ['run', '-s', 'lint'], { env: { NODE_OPTIONS: '--max-old-space-size=6144' } }),
     cmd('typecheck', 'typecheck', ['run', '-s', 'typecheck']),
-    cmd('unit', 'unit tests (every workspace must report a Vitest summary)', ['test'], { validate: vitestEvidence('npm test', 5) }),
+    cmd('unit', `unit tests (one Vitest summary per workspace: ${unit.names.join(', ') || 'NONE FOUND'})`, ['test'], {
+      validate: (out) => [
+        ...unit.problems,
+        ...(unit.names.length === 0 ? ['no workspace test commands were found in the root "test" script'] : []),
+        ...vitestEvidence('npm test', unit.names.length)(out),
+      ],
+    }),
     // The predecessor chain, verbatim. Phase 4 is sealed over Phase 3, never beside it.
     cmd(
       'predecessor-phase3',
@@ -644,45 +799,203 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
       's1,s2,s10',
     by: 'parsePlannedSlices',
   });
+  // 7b. The analysis is total (coordinator blocker B-1): headings, Gate lines and mentions must agree, or it is a named FAIL.
+  const doc = (heads: Record<string, string>, extra = ''): string =>
+    `${Object.entries(heads)
+      .map(([n, gate]) => `### P4-${n.toUpperCase()} — x\n${gate}\n`)
+      .join('\n')}${extra}`;
+  const gl = (s: string): string => `**Gate.** \`gate:phase4:${s}\` — x`;
+  const full = { s0: '', s1: gl('s1'), s5: gl('s5'), s9: 'closes with `gate:phase4:release`' };
+  proofs.push({ name: 'analysis control: a consistent plan has no problem', caught: analysePlan(doc(full)).problems.length === 0, by: 'analysePlan' });
+  const reworded = analysePlan(doc({ ...full, s5: '**Gate:** `gate:phase4:s5`' })).problems;
+  expectRed('plan: S5 Gate line reworded ("**Gate:**") → the slice is not silently dropped', reworded, /P4-S5 has a heading .* no declared classification/);
+  expectRed('plan: S5 Gate line reworded → the uncaptured mention is named too', reworded, /mentions gate:phase4:s5 but no Gate line declares it/);
+  expectRed('plan: S5 Gate line without the backticks', analysePlan(doc({ ...full, s5: '**Gate.** gate:phase4:s5' })).problems, /P4-S5 has a heading/);
+  expectRed('plan: a heading with no Gate line and no classification', analysePlan(doc({ ...full, s7: 'no gate here' })).problems, /P4-S7 has a heading/);
+  expectRed(
+    'plan: a mention nobody declared (prose names gate:phase4:s6)',
+    analysePlan(doc(full, '\nsee also gate:phase4:s6\n')).problems,
+    /mentions gate:phase4:s6 but no Gate line declares it/,
+  );
+  expectRed('plan: a Gate line without a heading', analysePlan(`${doc(full)}\n${gl('s4')}\n`).problems, /Gate line for gate:phase4:s4 but no P4-S4 heading/);
+  expectRed(
+    'plan: gate:phase4:release named but no S9 heading classifies it',
+    analysePlan(doc({ s1: gl('s1') }, '\ngate:phase4:release\n')).problems,
+    /mentions gate:phase4:release but no P4-S9 heading/,
+  );
+  expectRed('plan: no P4 heading at all', analysePlan('nothing').problems, /no "P4-SN" heading/);
+  {
+    const real = plannedSlices(join(__dirname, '..'));
+    proofs.push({
+      name: 'the real plan is total: every heading is a Gate line or a declared classification, every mention is captured',
+      caught: real.problems.length === 0 && real.headings.length === real.slices.length + Object.keys(real.classified).length,
+      by: real.problems[0] ?? `${real.slices.join(',')} + ${Object.keys(real.classified).join(',')}`,
+    });
+  }
+  // 7c. The artefact names the tree it measured (coordinator blocker B-2). Real git trees, built on the spot.
+  const idRoot = mkdtempSync(join(tmpdir(), 'phase4-gate-id-'));
+  try {
+    const sh = (cwd: string, ...args: string[]): void => {
+      spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], {
+        cwd,
+        encoding: 'utf8',
+      });
+    };
+    const repo = join(idRoot, 'repo');
+    mkdirSync(join(repo, 'docs'), { recursive: true });
+    writeFileSync(join(repo, PLAN_DOC), doc(full));
+    sh(repo, 'init', '-q');
+    sh(repo, 'add', '-A');
+    sh(repo, 'commit', '-q', '-m', 'x');
+    const headNow = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).stdout.trim();
+    const clean0 = measureTree(repo);
+    proofs.push({
+      name: 'tree identity: a clean git tree records its own HEAD, clean, and the plan hash',
+      caught: clean0.head === headNow && clean0.dirty === false && clean0.problems.length === 0 && /^[0-9a-f]{64}$/.test(clean0.planSha256 ?? ''),
+      by: `head ${clean0.head ?? 'null'}`,
+    });
+    const nested = join(repo, 'sub');
+    mkdirSync(nested);
+    expectRed('tree identity: a sub-directory of a git tree is not that tree root', measureTree(nested).problems, /not the root of a git tree/);
+    writeFileSync(join(repo, 'stray.txt'), 'x');
+    expectRed('tree identity: an untracked file makes the tree DIRTY (no seal claimed)', measureTree(repo).problems, /tree is DIRTY/);
+    rmSync(join(repo, 'stray.txt'));
+    writeFileSync(join(repo, PLAN_DOC), `${doc(full)}\nedited`);
+    expectRed('tree identity: an edited plan document is DIRTY too', measureTree(repo).problems, /tree is DIRTY/);
+    proofs.push({
+      name: 'tree identity: editing the plan changes its recorded sha256',
+      caught: measureTree(repo).planSha256 !== clean0.planSha256,
+      by: 'planSha256',
+    });
+    const bare = join(idRoot, 'bare');
+    mkdirSync(join(bare, 'docs'), { recursive: true });
+    writeFileSync(join(bare, PLAN_DOC), doc(full));
+    expectRed(
+      'tree identity: not a git tree and no manifest → HEAD unmeasured is a reason, not silence',
+      measureTree(bare).problems,
+      /HEAD could not be measured/,
+    );
+    writeFileSync(join(bare, 'DELIVERY_MANIFEST.json'), '{"phase":4}');
+    const arch = measureTree(bare);
+    proofs.push({
+      name: 'tree identity: an archive is identified by its manifest hash and says HEAD was not measured',
+      caught: arch.head === null && arch.manifestSha256 !== null && arch.notes.some((n) => /HEAD not measured/.test(n)),
+      by: arch.notes[0] ?? '(no note)',
+    });
+    // N-3: the workspace floor is read from the source and names its workspaces.
+    const ws = join(idRoot, 'ws');
+    mkdirSync(join(ws, 'a'), { recursive: true });
+    mkdirSync(join(ws, 'b'), { recursive: true });
+    writeFileSync(join(ws, 'package.json'), JSON.stringify({ workspaces: ['a', 'b'], scripts: { test: 'npm run test -w @x/a' } }));
+    writeFileSync(join(ws, 'a', 'package.json'), JSON.stringify({ name: '@x/a', scripts: { test: 'vitest run' } }));
+    writeFileSync(join(ws, 'b', 'package.json'), JSON.stringify({ name: '@x/b', scripts: { test: 'vitest run' } }));
+    const uw = unitWorkspaces(ws);
+    proofs.push({ name: 'unit floor: names are read from the root test script', caught: uw.names.join() === '@x/a', by: uw.names.join() });
+    expectRed('unit floor: a workspace with tests that npm test does not run is named', uw.problems, /workspace @x\/b has a test script/);
+    const rootUw = unitWorkspaces(join(__dirname, '..'));
+    proofs.push({
+      name: 'unit floor: the real tree runs every workspace test script, and the floor is read, not typed',
+      caught: rootUw.problems.length === 0 && rootUw.names.length >= 5,
+      by: rootUw.names.join(','),
+    });
+  } finally {
+    rmSync(idRoot, { recursive: true, force: true });
+  }
+  const optionsError = (argv: readonly string[]): string[] => {
+    try {
+      parseOptions(argv);
+      return [];
+    } catch (e) {
+      return [String(e)];
+    }
+  };
+  expectRed('options: --root with no value is refused, not swallowed', optionsError(['--root', '--structural-only']), /--root needs a value/);
+  expectRed('options: --root as the last token is refused', optionsError(['--root']), /--root needs a value/);
   // 8. main() itself (review note 4): run the real runner against a scratch tree and read its exit code and text.
   const scratch = mkdtempSync(join(tmpdir(), 'phase4-gate-main-'));
   try {
     const real = join(__dirname, '..');
-    const tree = (planSlices: readonly string[], name: string): string => {
+    const tree = (planSlices: readonly string[], name: string, gateLine: (s: string) => string = gl): string => {
       const dir = join(scratch, name);
       mkdirSync(join(dir, 'scripts'), { recursive: true });
       mkdirSync(join(dir, 'docs'), { recursive: true });
       copyFileSync(join(real, 'package.json'), join(dir, 'package.json'));
       for (const s of SLICES) writeFileSync(join(dir, 'scripts', `phase4-${s}-gate.ts`), '');
-      writeFileSync(join(dir, PLAN_DOC), planSlices.map((s) => `**Gate.** \`gate:phase4:${s}\` — x`).join('\n'));
+      const heads: Record<string, string> = { s0: '', s9: 'closes with `gate:phase4:release`' };
+      for (const s of planSlices) heads[s] = gateLine(s);
+      writeFileSync(join(dir, PLAN_DOC), doc(heads));
+      writeFileSync(join(dir, 'DELIVERY_MANIFEST.json'), '{"phase":4}');
       return dir;
     };
-    const run = (root: string, extra: readonly string[], env: Record<string, string> = {}): { status: number | null; out: string } => {
-      const res = spawnSync(
-        npm,
-        ['exec', '--', 'tsx', 'scripts/phase4-gate.ts', '--root', root, '--structural-only', `--evidence=${join(root, 'ev.json')}`, ...extra],
-        {
-          cwd: real,
-          encoding: 'utf8',
-          shell: win,
-          env: { ...process.env, ...env },
-        },
-      );
-      return { status: res.status, out: clean(`${res.stdout ?? ''}${res.stderr ?? ''}`) };
+    interface Ran {
+      status: number | null;
+      out: string;
+      evidence: string;
+    }
+    const run = (
+      root: string,
+      extra: readonly string[],
+      env: Record<string, string> = {},
+      flags: readonly string[] = ['--root', root, '--structural-only'],
+    ): Ran => {
+      const evidence = join(scratch, `${String(proofs.length)}-ev.json`);
+      const res = spawnSync(npm, ['exec', '--', 'tsx', 'scripts/phase4-gate.ts', ...flags, `--evidence=${evidence}`, ...extra], {
+        cwd: real,
+        encoding: 'utf8',
+        shell: win,
+        env: { ...process.env, ...env },
+      });
+      return { status: res.status, out: clean(`${res.stdout ?? ''}${res.stderr ?? ''}`), evidence };
     };
-    const mainProof = (name: string, r: { status: number | null; out: string }, status: number, needle: RegExp): void => {
+    const mainProof = (name: string, r: Ran, status: number, needle: RegExp): void => {
       proofs.push({ name, caught: r.status === status && needle.test(r.out), by: `main() exit ${String(r.status)}` });
     };
     const unbuiltRun = run(tree(planned8, 'unbuilt'), []);
     mainProof('main(): a plan declaring s5–s8 → exit 1 naming P4-S5', unbuiltRun, 1, /P4-S5 is declared by/);
     mainProof('main(): the verdict line is not a pass', unbuiltRun, 1, /PHASE 4 SEAL GATE: FAIL/);
+    const built = tree(['s1', 's2', 's3', 's4'], 'built');
+    mainProof('main(): a fully built plan (archive, manifest), structural only → exit 3, never 0', run(built, []), 3, /STRUCTURAL_ONLY_NOT_A_SEAL/);
+    mainProof('main(): RELEASE_GATE_SKIP_X → REFUSED, exit 1', run(built, [], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
+    mainProof('main(): RELEASE_GATE_SKIP_X with --list is refused too', run(built, ['--list'], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
     mainProof(
-      'main(): a fully built plan, structural only → exit 3, never 0',
-      run(tree(['s1', 's2', 's3', 's4'], 'built'), []),
-      3,
-      /STRUCTURAL_ONLY_NOT_A_SEAL/,
+      'main(): S5 and S6 Gate lines reworded → exit 1, no clean exit 3 (B-1)',
+      run(
+        tree(planned8, 'reworded', (s) => (s === 's5' || s === 's6' ? `**Gate:** \`gate:phase4:${s}\`` : gl(s))),
+        [],
+      ),
+      1,
+      /P4-S5 has a heading[\s\S]*P4-S6 has a heading/,
     );
-    mainProof('main(): RELEASE_GATE_SKIP_X → REFUSED, exit 1', run(tree(['s1', 's2', 's3', 's4'], 'skip'), [], { RELEASE_GATE_SKIP_X: '1' }), 1, /REFUSED/);
+    mainProof('main(): --root with no value → exit 1, not a swallowed flag', run(built, [], {}, ['--root', '--structural-only']), 1, /--root needs a value/);
+    // B-2 through main(): the evidence of a git tree carries that tree's own HEAD, clean state and plan hash.
+    const gitTree = tree(['s1', 's2', 's3', 's4'], 'gitclean');
+    rmSync(join(gitTree, 'DELIVERY_MANIFEST.json'));
+    const g = (...a: string[]): string =>
+      spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], {
+        cwd: gitTree,
+        encoding: 'utf8',
+      }).stdout.trim();
+    g('init', '-q');
+    g('add', '-A');
+    g('commit', '-q', '-m', 'x');
+    const cleanRun = run(gitTree, []);
+    mainProof('main(): a clean git tree, built plan → exit 3', cleanRun, 3, /STRUCTURAL_ONLY_NOT_A_SEAL/);
+    let recorded: { root?: string; head?: string | null; dirty?: boolean | null; planSha256?: string | null } = {};
+    try {
+      recorded = (JSON.parse(readFileSync(cleanRun.evidence, 'utf8')) as { tree: typeof recorded }).tree;
+    } catch {
+      /* stays empty → the proof below fails */
+    }
+    const planHash = createHash('sha256')
+      .update(readFileSync(join(gitTree, PLAN_DOC)))
+      .digest('hex');
+    proofs.push({
+      name: 'main(): the evidence records the resolved root, the measured HEAD, dirty=false and the plan sha256',
+      caught: recorded.head === g('rev-parse', 'HEAD') && recorded.dirty === false && recorded.planSha256 === planHash && same(recorded.root ?? '', gitTree),
+      by: `head ${String(recorded.head)}`,
+    });
+    writeFileSync(join(gitTree, 'stray.txt'), 'x');
+    mainProof('main(): a dirty tree → exit 1 naming DIRTY (no seal on a dirty tree)', run(gitTree, []), 1, /tree is DIRTY/);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -713,7 +1026,7 @@ async function main(): Promise<void> {
   console.log(`PHASE 4 SEAL GATE${o.structuralOnly ? ' (structural checks only — NOT A SEAL)' : ''}\n`);
 
   const skips = Object.keys(process.env).filter((k) => k.startsWith('RELEASE_GATE_SKIP_'));
-  if (skips.length > 0 && !o.list) {
+  if (skips.length > 0) {
     console.error(`REFUSED: a seal verdict may not be produced with ${skips.join(', ')} set.`);
     mkdirSync(dirname(o.evidence), { recursive: true });
     writeFileSync(o.evidence, `${JSON.stringify({ verdict: 'FAIL', mandatorySkips: skips, steps: [], producedAt: new Date().toISOString() }, null, 2)}\n`);
@@ -780,7 +1093,9 @@ async function main(): Promise<void> {
     }
   }
 
-  const planned = plannedSlices(o.root).slices;
+  const plannedDoc = plannedSlices(o.root);
+  const planned = plannedDoc.slices;
+  const tree = measuredTree ?? measureTree(o.root);
   const { verdict: judged, reasons } = judge(fullPlan, results, [...new Set([...SLICES, ...planned])]);
   const verdict = o.structuralOnly ? (reasons.some((x) => !/NOT_RUN/.test(x)) ? 'FAIL' : 'STRUCTURAL_ONLY_NOT_A_SEAL') : judged;
   const artefact = {
@@ -788,6 +1103,7 @@ async function main(): Promise<void> {
     producedAt: new Date().toISOString(),
     phase: 4,
     roster: SLICES,
+    tree: { ...tree, planDoc: PLAN_DOC, planSha256: plannedDoc.sha256, planClassifiedWithoutGate: plannedDoc.classified, planHeadings: plannedDoc.headings },
     plannedByDocs: planned,
     unbuiltSlices: planned.filter((x) => !SLICES.includes(x)),
     structuralOnly: o.structuralOnly,
