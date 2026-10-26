@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -42,6 +43,7 @@ import app.daftar.data.ApiClient
 import app.daftar.data.Money
 import app.daftar.data.ProductDetail
 import app.daftar.data.Result
+import app.daftar.ui.theme.ButtonMinHeight
 import java.math.BigDecimal
 import java.math.BigInteger
 import kotlinx.coroutines.Dispatchers
@@ -179,14 +181,14 @@ fun ProductEditScreen(api: ApiClient, productId: String?, onDone: () -> Unit) {
             )
             message?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 12.dp)) }
             Row(modifier = Modifier.fillMaxWidth().padding(top = 24.dp)) {
-                Button(onClick = { save() }, enabled = !busy && name.isNotBlank() && price.isNotBlank() && currency.isNotBlank(), modifier = Modifier.weight(1f)) {
+                Button(onClick = { save() }, enabled = !busy && name.isNotBlank() && price.isNotBlank() && currency.isNotBlank(), modifier = Modifier.weight(1f).heightIn(min = ButtonMinHeight)) {
                     Text(stringResource(R.string.common_save))
                 }
             }
             if (product != null) {
                 Text(stringResource(R.string.catalog_media), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 24.dp))
                 Text("${product?.media?.size ?: 0}", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { picker.launch("image/*") }, enabled = !busy, modifier = Modifier.padding(top = 8.dp)) {
+                OutlinedButton(onClick = { picker.launch("image/*") }, enabled = !busy, modifier = Modifier.padding(top = 8.dp).heightIn(min = ButtonMinHeight)) {
                     Text(stringResource(R.string.catalog_add_photo))
                 }
             }

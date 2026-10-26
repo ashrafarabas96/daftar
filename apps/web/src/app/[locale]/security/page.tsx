@@ -1,7 +1,7 @@
 'use client';
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, ConfirmationDialog, colors, spacing, typography } from '@daftar/design-system';
+import { Button, ConfirmationDialog, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ensureSession } from '@/lib/client';
 import { logoutAllSessions } from '@/lib/merchant-api';
@@ -42,7 +42,7 @@ export default function SecurityPage({ params }: { params: Promise<{ locale: Loc
           {t('security.logoutAll')}
         </Button>
         {done ? (
-          <p role="status" style={{ color: colors.semantic.success }}>
+          <p role="status" style={{ color: textColors.success }}>
             {t('security.done')}
           </p>
         ) : null}

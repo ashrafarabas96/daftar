@@ -1,6 +1,6 @@
 'use client';
 import type { CSSProperties, ReactNode } from 'react';
-import { colors, radius, spacing, typography } from '../tokens';
+import { colors, radius, spacing, textColors, typography } from '../tokens';
 import { Button } from './buttons';
 
 export function Spinner({ label }: { label?: string }) {
@@ -22,7 +22,7 @@ export function Spinner({ label }: { label?: string }) {
         }}
       />
       <style>{'@keyframes daftar-spin { to { transform: rotate(360deg); } }'}</style>
-      {label ? <span style={{ fontSize: typography.size.sm, color: colors.neutral[500] }}>{label}</span> : null}
+      {label ? <span style={{ fontSize: typography.size.sm, color: textColors.secondary }}>{label}</span> : null}
     </div>
   );
 }
@@ -51,7 +51,7 @@ function StateShell(props: { icon: string; title: string; description?: string; 
         {props.icon}
       </div>
       <h3 style={{ margin: `0 0 ${spacing[2]}`, fontSize: typography.size.lg, color: colors.neutral[900] }}>{props.title}</h3>
-      {props.description ? <p style={{ margin: `0 0 ${spacing[4]}`, color: colors.neutral[500], fontSize: typography.size.sm }}>{props.description}</p> : null}
+      {props.description ? <p style={{ margin: `0 0 ${spacing[4]}`, color: textColors.secondary, fontSize: typography.size.sm }}>{props.description}</p> : null}
       {props.action}
     </div>
   );
