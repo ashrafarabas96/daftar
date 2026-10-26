@@ -3134,11 +3134,11 @@ then reported that the real run does not name its own refusals.
 ```text
 the price of the last decoration removal, measured:
 
-candidates with the guard deleted      156
-document lines that would red          91
-distinct tokens in them                39
+candidates with the guard deleted      158
+document lines that would red          93
+distinct tokens in them                40
 
-deleting `inline code span` would red 91 document line(s) carrying 39 distinct token(s); it is a disclosed bound and not a hole
+deleting `inline code span` would red 93 document line(s) carrying 40 distinct token(s); it is a disclosed bound and not a hole
 ```
 
 <!-- END GENERATED backtick-cost -->
@@ -5400,6 +5400,14 @@ CLASSIFICATION.
 
 ### What this commit does — two halves, and neither enumerates a spelling
 
+> **CORRECTED by `R40-F1` (§7.44), and the heading above is part of what was
+> wrong.** The round-40 challenger measured three routes past this law, so two
+> sentences of this section are FALSE as published and are marked where they
+> appear: the law did NOT ask the negation of "classified" — it admitted every
+> `Attribute` callee unconditionally and tested a list of twenty-seven NAMES
+> before the bindings — and the two halves DID enumerate, which is what route
+> (c) turned on. §7.44 holds the measurement and the repair.
+
 **The emission test stops being a list of method names.** `EMITTING_METHODS`
 adds `writelines`, and ANY method call on the process's own output stream is an
 emission — `OUTPUT_STREAMS` names `stdout`, `stderr`, `__stdout__` and
@@ -5418,6 +5426,16 @@ module-level function of this file), or when its callee is an `Attribute`,
 where the receiver decides and `_is_an_emission` now reads it. Anything else is
 a FINDING. `getattr` is deliberately NOT admitted: a name bound from it is a
 name this file cannot read, which is the defect itself.
+
+> **FALSE as published, measured by `R40-F1`:** *"where the receiver decides
+> and `_is_an_emission` now reads it"*. The code admitted every `Attribute`
+> callee with a bare `continue`, and `_is_an_emission` reads the method name
+> and the receiver EXPRESSION — never the ARGUMENTS. So
+> `shutil.copyfileobj(io.StringIO(…), sys.stdout)` reached `sys.stdout`
+> itself, and `os.system(…)` reached the reader through a child process. Also
+> false: the `ADMITTED_CALLEES` clause was tested BEFORE the binding clause,
+> so a local shadowing `chr` was admitted on the strength of its identifier.
+> §7.44 turns the polarity over.
 
 ### The challenger's five plants, rebuilt COMMITTED against this head
 
@@ -5454,6 +5472,11 @@ line.
 * **`R39-S3` (`P3`, environment) — `npm run lint` aborts at node's default
   heap** in this container. **Not addressed here**: it is a repository-gate
   environment matter, not Phase 11 code, and it belongs with `G6`.
+  **Description corrected by the round-40 challenger:** with
+  `NODE_OPTIONS=--max-old-space-size=8192` it does not abort at all — it
+  completes and returns **rc 1 with 4798 errors**, at the subject, at the
+  previous head and at the merge-base alike. "Aborts" was the symptom of this
+  container's default heap, not the state of the gate.
 
 ### What is still not done
 
@@ -5462,9 +5485,131 @@ line.
 ever run this pack**, no migration number exists anywhere in it, `OD-P11-07`
 is the owner's alone, and `READY_TO_PROMOTE` = **NO**.
 
+## 7.44 ROUND 41 (round-40 challenge: **`NO-SIGN`**, `R40-F1` at `P1`) — the polarity was never turned over
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-2374bfa78737dda322c0e3353d7dc77a20769f40.md`, sha256 `c0dc95236557d5553f1b10c30eef62698353bae0cf97685544848f208b5fc08c`; Arabic `…-AR.md` beside it. Re-computed here before this section was written |
+| verdict | **`NO-SIGN`**, one blocker. `2374bfa` therefore carries no signature, and the challenger confirmed every other claim of §7.43: the provenance, the fast-forward, the repaired `--amend`, the 1436-line run reproduced from zero, the four published digests, and the five round-39 plants red |
+| what blocked | `R40-F1` (`P1`): `C37-S1`'s cell is still occupied, by three routes that are nobody's earlier spelling. Each is ONE committed edit at this pack's own live `enrolled > 4` site, and each returned `EXIT_SCRIPT 0` with the pin-free `UNHELD:` paragraph in front of a reader |
+
+### The three routes, as the challenger measured them
+
+| | the call | why it was green |
+|---|---|---|
+| **(a)** | `os.system("printf %s … UNHELD …")` | every `Attribute` callee was admitted with a bare `continue`. No door, no finding, and ARRIVAL cannot see it either, because the bytes leave through a CHILD PROCESS. **Green at a PROVOKED site as well — twenty-seven paragraphs, every arrival arm green.** Bounded by nothing at all |
+| **(b)** | `shutil.copyfileobj(io.StringIO(…), sys.stdout)` | `_is_an_emission` reads the method name and the receiver EXPRESSION. The stream was in the ARGUMENTS, where nothing looked — and it was `sys.stdout` itself, the stream this file says it reads by receiver |
+| **(c)** | `tbl = (sys.stdout.write,)` ; `chr = tbl[0]` ; `chr(…)` | `ADMITTED_CALLEES` was tested BEFORE `_bindings_in`, so the local was admitted on the strength of its identifier. The same three lines with `q` instead of `chr` were a finding. **The whole discriminator was a name** — this pack's own `R20-F1` defect, for the third time |
+
+Route (a) is the one that matters most: every plant of round 39 was held
+*somewhere*, if not by the census then by arrival at a provoked site. This one
+was held nowhere. It is the plant this round drove END TO END against the new
+law rather than measuring statically — `EXIT_SCRIPT 1`, from zero, in its own
+clone with its own cluster.
+
+### What this commit does — the polarity turns over, and the lists become POSITIVE
+
+Three rounds in a row asked which forms were FORBIDDEN, and three times the
+answer was walked around by a form nobody had thought of. The question is now
+the other way round, so a route does not have to be thought of in advance: **a
+call is refused by not being ADMITTED.**
+
+* **`ADMITTED_METHODS`, ten names, and its complement is a FINDING.** A verdict
+  may call `join`, `split`, `strip`, `rstrip`, `findall`, `get`, `append`,
+  `read`, `unescape`, `relpath` — string, list, dict, regex and path
+  operations that cannot reach a reader. Every other method, on every receiver,
+  is named by function and line. `os.system`, `logging.warning`,
+  `warnings.warn`, `syslog.syslog`, `subprocess.run` and an object of this
+  file's own are refused by the same clause, none of them by name.
+* **The ARGUMENTS are read as well as the receiver.** No part of an admitted
+  call — receiver, positional argument or keyword — may mention an output
+  stream or an emission, which is route (b) whatever the callee is called.
+* **The BINDINGS are asked first, before any list of names.** A callee the
+  function binds is whatever it was bound from; `ADMITTED_CALLEES` and the
+  module-level set are consulted only for a name the function does NOT bind.
+  Shadowing an admitted builtin now admits nothing, which is route (c).
+* **`_a_readable_binding` loses two terms.** An `Attribute` is readable only
+  when its method is one of the ten, so `h = os.system` then `h(…)` is a
+  finding; and `ast.Constant` is gone, which is `R40-S3` — a constant cannot be
+  called, so the term decided nothing and misled the reader of the law.
+* **`emitting_class_methods` (`R40-S1`, the `ClassDef` half).** A method of a
+  class of this file that emits, or that reaches an emission through a
+  module-level helper, is a finding in its own right. The harness may print
+  from module-level functions; a class of it may not. That is a design
+  constraint of this pack's own instruments, stated rather than discovered, and
+  it is what bounds a sink reached through an admitted method name.
+
+**The declared bound, stated because an undeclared one becomes the next
+finding:** for a FREE name as a receiver (`CASE_REF.findall`, `html.unescape`)
+this file reads the METHOD, not the OBJECT. It does not claim to have
+identified the object. What bounds that is the ten-method list plus
+`emitting_class_methods` — not an identification. And arrival is unchanged: it
+reads this process, so a route that leaves through a child process is held by
+the STATIC law and by nothing else. Where round 40 published closure it did not
+have, this section publishes the bound.
+
+### The challenger's routes, rebuilt COMMITTED against this head
+
+Each is one committed edit in a throwaway clone of mine; nothing was written to
+the working tree, and no frozen file was mutated.
+
+| plant | the route | site | at `2374bfa` | at this commit |
+|---|---|---|---|---|
+| `7534291` | (a) `os.system` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines, paragraph printed | **rc 1, named**: `1 unclassifiable call(s)` — *the method `system` is not one of the 10 this file admits* |
+| `c36fb4d` | (a) `os.system` | **provoked** | `EXIT_SCRIPT 0`, 0 failed lines, 27 paragraphs | **`EXIT_SCRIPT 1`** — driven end to end from zero, own clone, own cluster, 1442 lines; redded by the `C37-S1` row, the same clause |
+| `9233cea` | (b) handed `sys.stdout` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines | **rc 1, 2 named**: `io.StringIO` and `shutil.copyfileobj`, both as unadmitted methods |
+| `5f9560e` | (c) `chr = tbl[0]` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines | **rc 1, named**: *the callee `chr` is bound from `tbl[0]`, which this file does not read* |
+| `4b183b7` | (c) `chr = tbl[0]` | provoked | rc 1 (arrival only) | **rc 1, 8 failed lines**: the `C37-S1` row AND the arrival arms |
+
+A sixth plant of mine, `04b8b7b`, shadowed `sorted` instead of `chr` and
+**aborted for my own bug**, not for the law: `check_blocks` calls `sorted`
+itself, so the plant raised `UnboundLocalError` before the law ran. It is
+recorded here rather than dropped, for the same reason the challenger recorded
+theirs — the round-40 challenger made the identical mistake with `len`. The
+`chr` plants above are the measurement.
+
+**The clean tree names NOTHING:** `0 unclassifiable call(s)`, `21 door(s)`,
+`10 site(s)`, `0 site(s) unreached`, `0 class method(s) that emit`, and no
+failed selftest line. The arm now plants five bodies rather than two — the
+clean one, the subscript, and one for each of the three routes — and derives
+the synthetic bodies' own doors the same two ways `emission_sites` derives the
+real ones, because a hand-written list of lines in a plant is a plant
+certifying itself.
+
+### The residuals, each named
+
+* **`R40-S1` (`P2`) — half closed.** The `ClassDef` gap is closed by
+  `emitting_class_methods`. The other half is `R39-S1`/`R38-S1`/`R37-S1`
+  unchanged: the law's SCOPE is still the hand-written `EMITTING_VERDICTS`
+  tuple, so the same question sits one frame out at the next printing helper.
+  Closing that means deriving the set from the functions a verdict path
+  reaches, which is a round of its own.
+* **`R40-S2` (`P3`) — `_bindings_in` does not read every binding form.** No
+  `NamedExpr`, no parameter, no `import`, no `except … as`, no `match`
+  capture. **Deliberately not changed**: the challenger probed every one of
+  them and each fails CLOSED, so a callee bound that way is already named as
+  "a name this file cannot account for". Adding the forms could only turn
+  findings into non-findings, which is the wrong direction to move a law in.
+* **`R40-S3` (`P3`) — closed.** `ast.Constant` is out of
+  `_a_readable_binding`.
+* **`R39-S3` (`P3`, environment) — description corrected, not addressed.** At
+  `NODE_OPTIONS=--max-old-space-size=8192` the repository's `lint` does not
+  abort: it returns rc 1 with 4798 errors, at the subject, the previous head
+  and the merge-base alike. It belongs with `G6`.
+
+### What is still not done
+
+`R39-S1`, `R38-S1` and `R37-S1` stand as stated limits, and `R40-S1`'s second
+half is the same limit. `R33-S1`, `A-35-F1` (`P3`), `C28-F1` (`P1`), `R27-S1`
+and `R39-S3` stand unchanged. **No CI has ever run this pack**, no migration
+number exists anywhere in it, `OD-P11-07` is the owner's alone, and
+`READY_TO_PROMOTE` = **NO**. This round quotes no run figures inside the
+repository: the authoritative run is made on the commit that is PUSHED
+UNCHANGED and published beside it, as `R39-S2` requires.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA. **`24da267` carries NO signature and never will**: the round-39 challenger returned `NO-SIGN` on `R39-F1` (§7.43) and the coordinator skipped its own review of that head because a blocker already stood. **No one has signed THIS head either**, and both reviews are owed on it.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA. **`24da267` carries NO signature and never will**: the round-39 challenger returned `NO-SIGN` on `R39-F1` (§7.43) and the coordinator skipped its own review of that head because a blocker already stood. **`2374bfa` carries NO signature either**: the round-40 challenger returned **`NO-SIGN`** on `R40-F1` (§7.44, sha256 `c0dc9523…`), confirming every other claim of §7.43 — the provenance, the repaired `--amend`, the run reproduced from zero, the four digests and the five round-39 plants red — but measuring three routes still past `C37-S1`. **No one has signed THIS head**, and both reviews are owed on it.
 
 ---
 

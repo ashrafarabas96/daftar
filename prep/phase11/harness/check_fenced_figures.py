@@ -8302,42 +8302,72 @@ ADMITTED_CALLEES = (
     "ord", "chr",
 )
 
+# `R40-F1`: the methods a verdict may call. This list is POSITIVE and its
+# complement is a FINDING, which is the opposite polarity to every list this
+# chain has written before it. The challenger's three routes -- `os.system`,
+# `shutil.copyfileobj(io.StringIO(...), sys.stdout)` and a local shadowing an
+# admitted builtin -- were none of them a variant of an earlier spelling, and
+# all three were green because the rule asked which spellings were FORBIDDEN.
+# Nothing is forbidden here. Ten methods are ALLOWED, all of them string, list,
+# dict, regex and path operations, and a receiver or a method this file cannot
+# speak for is named rather than assumed harmless. The cost is declared: a
+# verdict of this pack may call these ten, and widening the list is an edit a
+# reviewer sees in the diff.
+ADMITTED_METHODS = (
+    "join", "split", "strip", "rstrip", "findall", "get", "append", "read",
+    "unescape", "relpath",
+)
+ADMITTED_METHOD_COUNT = 10
+
 
 def unclassifiable_calls(bodies=None, doors=None):
-    """`C37-S1` as `R39-F1` corrected it: calls a verdict makes that this file
-    did not CLASSIFY and whose callee it cannot ACCOUNT for.
+    """`C37-S1`, as `R40-F1` corrected it a second time: every call a verdict
+    makes must be ACCOUNTED FOR, and the burden is on the call.
 
-    The round before this asked the wrong question. It tested the callee's AST
-    NODE TYPE -- is it a `Name` or an `Attribute` -- which is the COMPLEMENT of
-    the one spelling the review had planted, not the NEGATION of "this file can
-    read what this call does". The challenger committed
-    `w = getattr(sys.stdout, "write")` then `w(...)` at the live site no arm
-    provokes: the callee IS a `Name`, so the node-type test passed it, the
-    alias census read only a direct attribute so no door was derived, and the
-    whole driver returned `EXIT_SCRIPT 0` while printing a pin-free criterion
-    paragraph to a reader. A whitelist of NODE TYPES is not a test of
-    classification, exactly as `R20-F1` ruled that a whitelist of NAMES is not
-    one of BEHAVIOURS.
+    Two rounds asked which forms were FORBIDDEN. `R39-F1` showed that a
+    whitelist of NODE TYPES is not a test of classification. `R40-F1` showed
+    that the correction had kept the same polarity, and so had the same hole
+    three times over, by three routes that were nobody's earlier spelling:
 
-    So the question here is the negation. A call is accounted for when:
+      * every `Attribute` callee was admitted unconditionally, on the reasoning
+        that the receiver decides and `_is_an_emission` reads it. So
+        `os.system("printf ... UNHELD ...")` was no door, no finding, and
+        invisible to arrival -- green even at a site every arm provokes,
+        twenty-seven paragraphs to a reader, because the bytes left through a
+        CHILD PROCESS that no instrument of this process can see;
+      * `shutil.copyfileobj(io.StringIO(...), sys.stdout)` reached the very
+        stream this file says it reads by receiver, because nothing looked at
+        the ARGUMENTS;
+      * `ADMITTED_CALLEES` was tested BEFORE the bindings, so `chr = tbl[0]`
+        then `chr(...)` was admitted on the strength of the identifier while
+        the same three lines named `q` were a finding. The whole discriminator
+        was a name -- this pack's own `R20-F1` defect, for the third time.
+
+    So the polarity turns over. A call is accounted for when, and only when:
 
       * `emission_sites` derived a DOOR at its line -- the file classified it;
-      * its callee is a `Name` that the commit defines at module level (the
-        helper fixed point then decides whether it emits);
-      * its callee is a `Name` in `ADMITTED_CALLEES`;
-      * its callee is a `Name` bound in this function, and EVERY binding of it
-        is a form the derivation reads -- a `Name`, an `Attribute`, or a call
-        to a module-level function of this file. A binding from anything else
-        (`getattr`, a subscript, a conditional, a tuple index) is a callee
-        this file cannot read;
-      * its callee is an `Attribute`. The receiver is what decides there, and
-        `_is_an_emission` now reads it: any method on the output stream, and
-        `write`/`writelines`/`print` on anything, is a door, so an `Attribute`
-        that reaches this point does not reach the stream.
+      * its callee is a `Name` the function BINDS, and every binding of it is a
+        form the derivation reads. The bindings are asked FIRST, before any
+        list of names, so shadowing an admitted builtin now admits nothing;
+      * its callee is a `Name` the function does not bind, and the commit
+        defines it at module level (the helper fixed point then decides whether
+        it emits) or it is one of `ADMITTED_CALLEES`;
+      * its callee is an `Attribute` that passes `_unadmitted_attribute`: the
+        method is one of the ten in `ADMITTED_METHODS`, the receiver is an
+        object this file can read, and NEITHER the receiver NOR any argument
+        mentions an output stream or an emission.
 
-    Anything else is a FINDING, named by function and line. That is the shape
-    the coordinator asked for -- the next spelling does not have to be thought
-    of in advance, because the rule does not enumerate spellings at all.
+    Anything else is a FINDING, named by function and line -- every receiver
+    this file cannot speak for included. That is what makes the next route
+    unnecessary to think of in advance: a route is not refused by name, it is
+    refused by not being admitted.
+
+    What this does NOT close, stated here because the chain's lesson is that an
+    undeclared bound becomes the next finding: for a FREE name as a receiver
+    (`CASE_REF.findall`, `html.unescape`) this file reads the METHOD, not the
+    object. What bounds that is the ten-method list plus
+    `emitting_class_methods`, which makes a class method that emits a finding
+    in its own right -- not a claim that the object was identified.
     """
     if bodies is None:
         bodies = {}
@@ -8360,13 +8390,13 @@ def unclassifiable_calls(bodies=None, doors=None):
             if (name, node.lineno) in doors:
                 continue
             f = node.func
-            if isinstance(f, ast.Attribute):
-                continue
             if isinstance(f, ast.Name):
-                if f.id in module_level or f.id in ADMITTED_CALLEES:
-                    continue
+                # `R40-F1` route (c): the BINDINGS decide, and they are asked
+                # before any list of names. A local called `chr` is whatever it
+                # was bound from.
                 if f.id in bound:
-                    unreadable = [v for v in bound[f.id] if not _a_readable_binding(v, module_level)]
+                    unreadable = [v for v in bound[f.id]
+                                  if not _a_readable_binding(v, module_level)]
                     if not unreadable:
                         continue
                     out.append((name, node.lineno,
@@ -8374,14 +8404,88 @@ def unclassifiable_calls(bodies=None, doors=None):
                                 "does not read"
                                 % (f.id, ast.unparse(unreadable[0]))))
                     continue
+                if f.id in module_level or f.id in ADMITTED_CALLEES:
+                    continue
                 out.append((name, node.lineno,
                             "the callee `%s` is a name this file cannot account for"
                             % f.id))
+                continue
+            if isinstance(f, ast.Attribute):
+                why = _unadmitted_attribute(f, node, bound, module_level)
+                if why is None:
+                    continue
+                out.append((name, node.lineno, why))
                 continue
             out.append((name, node.lineno,
                         "the callee is a %s, which this file cannot read"
                         % type(f).__name__))
     return sorted(out)
+
+
+def _unadmitted_attribute(f, call, bound, module_level):
+    """Why this `Attribute` call is not accounted for, or `None` if it is.
+
+    `R40-F1`, routes (a) and (b). Three positive conditions: the METHOD is one
+    of `ADMITTED_METHODS`; the RECEIVER is an object this file can read; and no
+    part of the call -- receiver, positional argument or keyword -- mentions
+    the process's own output stream or an emission. The last condition is the
+    route that HANDED the stream to a method which never names it.
+    """
+    if f.attr not in ADMITTED_METHODS:
+        return ("the method `%s` is not one of the %d this file admits, so nothing "
+                "it reads says where `%s` puts the line"
+                % (f.attr, ADMITTED_METHOD_COUNT, ast.unparse(f)))
+    if not _a_readable_object(f.value, bound, module_level):
+        return ("the receiver of `%s` is a %s this file cannot read, so it cannot say "
+                "what object the method runs on"
+                % (ast.unparse(f), type(f.value).__name__))
+    if _mentions_an_emission(f.value):
+        return ("the receiver of `%s` mentions an emission, so this call is a door the "
+                "census did not derive" % ast.unparse(f))
+    for arg in list(call.args) + [k.value for k in call.keywords]:
+        if _mentions_an_emission(arg):
+            return ("`%s` is HANDED `%s`, so the stream is in the call although the "
+                    "callee does not name it" % (ast.unparse(f), ast.unparse(arg)))
+    return None
+
+
+def _a_readable_object(value, bound, module_level):
+    """Is this an object whose provenance this file can see?
+
+    A literal; a name the function binds only from readable objects; a free
+    name (the declared bound in `unclassifiable_calls`); an attribute path of
+    such names; a call to a module-level function of the commit or to an
+    admitted builtin; an admitted method call on a readable object. NOT a
+    subscript and NOT a conditional: an object taken out of a container or
+    chosen at run time is an object this file would have to guess at, which is
+    the whole of `R40-F1` route (c) on the receiver side.
+    """
+    if isinstance(value, (ast.Constant, ast.List, ast.Tuple, ast.Dict, ast.Set,
+                          ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+                          ast.JoinedStr, ast.FormattedValue)):
+        return True
+    if isinstance(value, ast.BinOp):
+        return (_a_readable_object(value.left, bound, module_level)
+                and _a_readable_object(value.right, bound, module_level))
+    if isinstance(value, ast.Name):
+        if value.id in bound:
+            return all(_a_readable_object(v, bound, module_level)
+                       for v in bound[value.id])
+        return True
+    if isinstance(value, ast.Attribute):
+        return _a_readable_object(value.value, bound, module_level)
+    if isinstance(value, ast.Call):
+        g = value.func
+        if isinstance(g, ast.Name):
+            return (g.id in module_level or g.id in ADMITTED_CALLEES
+                    or (g.id in bound
+                        and all(_a_readable_binding(v, module_level)
+                                for v in bound[g.id])))
+        if isinstance(g, ast.Attribute):
+            return (g.attr in ADMITTED_METHODS
+                    and _a_readable_object(g.value, bound, module_level))
+        return False
+    return False
 
 
 def _bindings_in(body):
@@ -8407,32 +8511,65 @@ def _bindings_in(body):
 
 
 def _a_readable_binding(value, module_level):
-    """Is this a value the derivation can read a callee out of?
+    """Is this a value the derivation can read a CALLEE out of?
 
-    A `Name`, an `Attribute`, or a call to a module-level function of this
-    file. Not `getattr`, not a subscript, not a conditional -- those are the
-    forms `R39-F1` used, and a callee bound from one is a callee nobody can
-    say anything about.
+    A `Name`; an `Attribute` whose method is one of `ADMITTED_METHODS`, so the
+    bound method is one of the ten a verdict may call; or a call to a
+    module-level function of this file. Not `getattr`, not a subscript, not a
+    conditional -- the forms `R39-F1` used.
+
+    `R40-F1` took two terms out of this. An `Attribute` is no longer readable
+    merely for being an `Attribute`: `h = os.system` then `h(...)` was a callee
+    bound from a receiver this file cannot speak for, admitted because the node
+    was the right type. And `ast.Constant` is gone -- `R40-S3`: a constant
+    cannot be called, so the term decided nothing and misled the reader of the
+    law. A name bound only from constants and then called is now a finding,
+    which is what it deserves to be.
     """
-    if isinstance(value, (ast.Name, ast.Attribute, ast.Constant)):
+    if isinstance(value, ast.Name):
         return True
+    if isinstance(value, ast.Attribute):
+        return value.attr in ADMITTED_METHODS
     if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
         return value.func.id in module_level
     return False
 
 
 def unclassifiable_call_arm():
-    """The plant for the rule above, on a SYNTHETIC body and not on this file.
+    """The plants for the rule above, on SYNTHETIC bodies and not on this file.
 
     A rule that names nothing in the commit it ships in is decorative until a
-    plant shows it names something. Both directions, because a rule that names
-    everything is no better: a body whose calls are all classifiable must come
-    back empty, and the same body with ONE subscript call must come back with
-    that call's line.
+    plant shows it names something, and a rule that names everything is no
+    better -- so a clean body must come back empty.
 
-    The body is parsed from a string here, never written to the tree: a frozen
-    file is not mutated to prove a law about it, not even temporarily.
+    `R40-F1` is why there are now five. The round before this had two, and both
+    were about the FORM of the callee, which is why three routes that are not
+    forms of a callee at all walked past the law: a receiver this file cannot
+    speak for (`os.system`, and a child process it cannot see), an admitted
+    call HANDED the stream, and a local whose only protection was being named
+    after an admitted builtin. Each of the three has its own arm here, beside
+    the subscript the previous round planted.
+
+    Every body is parsed from a string: a frozen file is not mutated to prove a
+    law about it, not even temporarily.
     """
+    def synthetic_doors(body):
+        # The doors of a synthetic body, DERIVED the same two ways
+        # `emission_sites` derives the real ones -- an emission, or a call
+        # through a name bound from an expression that reaches one -- because
+        # a hand-written list of lines here would be a plant certifying
+        # itself. The real bodies get theirs from `emission_sites`; these
+        # bodies have no commit to read.
+        aliases = _emission_aliases(body)
+        doors = {}
+        for x in ast.walk(body):
+            if not isinstance(x, ast.Call):
+                continue
+            if (_is_an_emission(x)
+                    or (isinstance(x.func, ast.Name) and x.func.id in aliases)):
+                doors[("v", x.lineno)] = ((x.lineno, x.lineno), "derived here")
+        return doors
+
     ok = True
     clean = ast.parse(
         "def v():\n"
@@ -8440,23 +8577,58 @@ def unclassifiable_call_arm():
         "    sys.stdout.write('b')\n"
         "    out = sys.stdout.write\n"
         "    out('c')\n"
+        "    xs = []\n"
+        "    xs.append(', '.join(sorted({})))\n"
     ).body[0]
-    planted = ast.parse(
+    subscript = ast.parse(
         "def v():\n"
         "    print('a')\n"
         "    doors = {'w': sys.stdout.write}\n"
         "    doors['w']('c')\n"
     ).body[0]
+    foreign_receiver = ast.parse(
+        "def v():\n"
+        "    print('a')\n"
+        "    os.system('printf %s UNHELD')\n"
+    ).body[0]
+    handed_the_stream = ast.parse(
+        "def v():\n"
+        "    print('a')\n"
+        "    xs = []\n"
+        "    xs.append(sys.stdout)\n"
+    ).body[0]
+    admitted_name_shadow = ast.parse(
+        "def v():\n"
+        "    print('a')\n"
+        "    tbl = (sys.stdout.write,)\n"
+        "    chr = tbl[0]\n"
+        "    chr('UNHELD')\n"
+    ).body[0]
     for label, body, want in (
         ("a body whose calls this file can all read names nothing", clean, 0),
-        ("one SUBSCRIPT call in the same body is named", planted, 1),
+        ("one SUBSCRIPT call in the same body is named", subscript, 1),
+        ("R40-F1(a) a receiver this file cannot speak for is named",
+         foreign_receiver, 1),
+        ("R40-F1(b) an admitted call HANDED the stream is named",
+         handed_the_stream, 1),
+        ("R40-F1(c) a local named after an admitted builtin is named",
+         admitted_name_shadow, 1),
     ):
-        got = unclassifiable_calls({"v": body})
+        got = unclassifiable_calls({"v": body}, doors=synthetic_doors(body))
         good = len(got) == want
         ok = ok and good
         print("  sites C37-S1 %-50s %-40s -> %s"
               % (label, "%d named, want %d" % (len(got), want),
                  "as required" if good else "**SELFTEST FAILED**"))
+    strange = emitting_class_methods()
+    good = not strange
+    ok = ok and good
+    print("  sites R40-S1 %-50s %-40s -> %s"
+          % ("no method of a class of this file emits",
+             "%d class method(s) that emit" % len(strange),
+             "as required" if good else "**SELFTEST FAILED**"))
+    for cls, meth, line, why in strange:
+        print("    CLASS-METHOD-EMITS: %s.%s, line %d: %s" % (cls, meth, line, why))
     return ok
 
 
@@ -8689,6 +8861,49 @@ def _emitting_helpers(funcs):
                     moved = True
                     break
     return emits
+
+
+def emitting_class_methods():
+    """`R40-S1`: a method of a class that emits is neither a helper nor a
+    verdict, so it is a FINDING in its own right.
+
+    `_emitting_helpers` closes over module-level `FunctionDef`s, and
+    `EMITTING_VERDICTS` names three of them. A `ClassDef` body sits outside
+    both: a printing method was reachable from a verdict through a receiver
+    this file reads (`_ArmShape.strip` is the shape the gap has today), and
+    neither the door census nor the arrival law would have said a word.
+
+    Rather than widen the door derivation to every method of every class --
+    which would need the receiver's TYPE, something this file cannot know --
+    this names the emission where it is written. The harness may print from
+    module-level functions; a class of it may not. That is a design constraint
+    of this pack's own instruments, and it reds the gate by line when a later
+    edit breaks it.
+    """
+    out = []
+    tree = None
+    if _COMMITTED_AST:
+        _msgs, text = committed_text(os.path.basename(os.path.realpath(__file__)))
+        if text is not None:
+            tree = ast.parse(text)
+    if tree is None:                                           # pragma: no cover
+        return out
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    emits = _emitting_helpers(funcs)
+    for cls in [n for n in tree.body if isinstance(n, ast.ClassDef)]:
+        for m in [n for n in cls.body
+                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            for x in ast.walk(m):
+                if _is_an_emission(x):
+                    out.append((cls.name, m.name, x.lineno,
+                                "`%s` emits" % ast.unparse(x.func)))
+                    break
+                if (isinstance(x, ast.Call) and isinstance(x.func, ast.Name)
+                        and x.func.id in emits):
+                    out.append((cls.name, m.name, x.lineno,
+                                "`%s` reaches an emission" % x.func.id))
+                    break
+    return sorted(out)
 
 
 # `R39-F1`: the two sets this file reads instead of one list of method names.
