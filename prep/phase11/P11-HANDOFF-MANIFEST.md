@@ -5172,10 +5172,13 @@ other two laws **exactly where an arm provokes the site**, and that much is
 measured rather than claimed: a fourth committed plant emitting through a
 SUBSCRIPT, which `ast` cannot classify and the proxy does not see, reds
 **seven arrival arms** at a provoked site, among them *every printed paragraph
-is a finding or a declared one*. **`C37-S1` corrected this sentence**, which
-said "bounded by the other two laws" without that condition: the same plant at
-a site NO arm provokes redded nothing, because arrival's census is the
-paragraphs the arms provoke. §7.42 closes that cell by construction. Three
+is a finding or a declared one*. **`C37-S1` corrected this sentence** once, and **`R39-F1`
+corrected it again**: the same plant at a site NO arm provokes redded nothing,
+because arrival's census is the paragraphs the arms provoke -- and a plant
+writing to `sys.__stdout__` at a PROVOKED site printed twenty-seven times with
+arrival silent, because `redirect_stdout` replaces `sys.stdout` and not
+`sys.__stdout__`. The measured bound is "however it was printed **to
+`sys.stdout`**", and §7.43 is what holds the remainder. §7.42 closes that cell by construction. Three
 laws hold three forms, none is credited with all three, and the cell between
 them is now named rather than described as covered.
 
@@ -5368,9 +5371,100 @@ authoritative run, its figures quoted in this section, and no second
 confirming run of a tree that only this file's own addition would have moved.
 The three pinned records of rounds 33, 36 and 37 are untouched by that choice.
 
+## 7.43 ROUND 40 (round-39 challenge: **`NO-SIGN`**, `R39-F1` at `P1`) — the law asked the complement, not the negation
+
+| | |
+|---|---|
+| report | `/mnt/project-files/phase11/P11-CHALLENGE-24da267ba5fff59a8c5ef269c4da140d44de3253.md`, sha256 `d5ad54e51bead4355f6adcc563033d847c271cba71ba3f919e9d598602791684`; Arabic `…-AR.md`, sha256 `919141e3914579a8bc0a6e66078fe631f9455764ec29ec0c3161d3d961d6e751`. Both re-computed here before this section was written |
+| verdict | **NO BLOCKING DEFECT was not the verdict: `NO-SIGN`**, one blocker. The coordinator skipped its own diff review of `24da267` because the head already carried one, so `24da267` has NO signature of any kind and never will |
+| what blocked | `R39-F1` (`P1`): `unclassifiable_calls` tested the callee's AST NODE TYPE, which is the complement of the one spelling the previous review had planted, not the negation of "this file can read what this call does" |
+
+### The defect, as measured rather than as described
+
+`w = getattr(sys.stdout, "write")` then `w(...)`, committed at the live
+`enrolled > 4` site no arm provokes: the callee IS a `Name`, so the node-type
+test passed it; `_emission_aliases` read only a name bound DIRECTLY from an
+emission attribute, so no door was derived; and the whole driver returned
+**`EXIT_SCRIPT 0`** with `--check-blocks` rc 0 while printing the pin-free
+`UNHELD:` criterion paragraph to a reader, this round's own law printing
+`0 unclassifiable call(s) -> as required` beside it. Three published sentences
+of round 39 were false as measured, one of them in the owner-facing Arabic
+report, and a fourth — §7.40's *"however it was printed"* — was falsified by a
+plant writing to `sys.__stdout__` at a PROVOKED site, which printed
+twenty-seven times with arrival silent, because `redirect_stdout` replaces
+`sys.stdout` and not `sys.__stdout__`.
+
+**The pack's own ruling applies to its own law:** `R20-F1` said a whitelist of
+NAMES is not one of BEHAVIOURS. A whitelist of NODE TYPES is not a test of
+CLASSIFICATION.
+
+### What this commit does — two halves, and neither enumerates a spelling
+
+**The emission test stops being a list of method names.** `EMITTING_METHODS`
+adds `writelines`, and ANY method call on the process's own output stream is an
+emission — `OUTPUT_STREAMS` names `stdout`, `stderr`, `__stdout__` and
+`__stderr__`, because the second pair is what `redirect_stdout` does not
+replace. `_emission_aliases` now binds a name from ANY expression that REACHES
+an emission, not only from the attribute itself, so `getattr(sys.stdout,
+"write")`, a subscript of a table of writers and a conditional all bind one.
+
+**The law becomes the negation of "classified".** A call inside a verdict is
+accounted for when the derivation produced a DOOR at its line, when its callee
+is a `Name` the commit defines at module level (the helper fixed point then
+decides), when its callee is in the small `ADMITTED_CALLEES` list of builtins,
+when its callee is a `Name` bound in the function and EVERY binding of it is a
+form the derivation reads (a `Name`, an `Attribute`, a constant, or a call to a
+module-level function of this file), or when its callee is an `Attribute`,
+where the receiver decides and `_is_an_emission` now reads it. Anything else is
+a FINDING. `getattr` is deliberately NOT admitted: a name bound from it is a
+name this file cannot read, which is the defect itself.
+
+### The challenger's five plants, rebuilt COMMITTED against this head
+
+| | the call | site | at `24da267` | at this commit |
+|---|---|---|---|---|
+| **F** | `w = getattr(sys.stdout, "write")`; `w(…)` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines, paragraph printed | **rc 5, 2 failed lines**: `1 unclassifiable call(s)`, `22 door(s), want 21` |
+| **A** | the same on `sys.__stdout__` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines | **rc 5, 2 failed lines**, same two |
+| **B** | the same, at a PROVOKED site (printed 27 times, arrival silent) | provoked | `EXIT_SCRIPT 0`, 0 failed lines | **rc 5, 2 failed lines**, same two |
+| **D** | `sys.__stdout__.writelines([…])` | unprovoked | `EXIT_SCRIPT 0`, 0 failed lines | **rc 5, 4 failed lines**: `1 site(s) unreached of 11`, `11 want 10`, `22 door(s), want 21`, `5 … want 4` |
+| **C** | `{"w": sys.__stdout__.write}["w"](…)` — their control | unprovoked | rc 5, named | **rc 5**, named by function and line |
+
+`D` reds as a DIRECT site because a call on the stream is now an emission
+whatever the method is named; `F`, `A` and `B` red twice over — as an
+unaccounted callee AND as a door the count did not expect, which is the
+belt-and-braces the two halves give each other. The clean tree names NOTHING:
+`21 door(s)`, `10 site(s)`, `0 unclassifiable call(s)`, selftest with no failed
+line.
+
+### The three residuals
+
+* **`R39-S1` (`P2`) — the law's SCOPE is the hand-written tuple.** A new
+  printing helper becomes a door, but its own body is never asked this
+  question, so the same cell sits one frame out. Today the only helper is
+  `_finding`, which is in the tuple. **Not closed here**, and named: it is
+  `R37-S1`/`R38-S1` with a consequence, and closing it means deriving the
+  tuple from the functions a verdict path reaches, which is a round of its own.
+* **`R39-S2` (`P2`) — the published run named a commit no reader can obtain.**
+  Fixed by construction rather than by prose: **this round quotes no run
+  figures inside the repository.** The authoritative run is made on the commit
+  that is then PUSHED UNCHANGED, and its figures are published beside it in
+  `/mnt/project-files/phase11/P11-PUBLISHED-<sha>.md`, so the subject of every
+  figure a reader sees is a SHA on the remote branch. Nothing is edited after
+  the run, which is what made the previous subject unreachable.
+* **`R39-S3` (`P3`, environment) — `npm run lint` aborts at node's default
+  heap** in this container. **Not addressed here**: it is a repository-gate
+  environment matter, not Phase 11 code, and it belongs with `G6`.
+
+### What is still not done
+
+`R39-S1`, `R38-S1` and `R37-S1` stand as stated limits. `R33-S1`, `A-35-F1`
+(`P3`), `C28-F1` (`P1`), `R27-S1` and `R39-S3` stand unchanged. **No CI has
+ever run this pack**, no migration number exists anywhere in it, `OD-P11-07`
+is the owner's alone, and `READY_TO_PROMOTE` = **NO**.
+
 ## 8. Coordinator state
 
-**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA — **no one has signed THIS head**, and both reviews are owed on it.
+**No promotion signature, and that is the only signature promotion needs.** Phase 11 cannot promote: Phase 4 is not sealed and Phases 5–10 have not started, and §88's promotion order is serial even though preparation is parallel. What HAS been signed is the review chain, one SHA at a time: `3f4b630` (§7.31), then `ad57c1c` (§7.32), then `1024c3b` (§7.34), and now **`493d135`, which is this phase's last fully signed head** — an independent challenger found no blocking defect in it (§7.35) and the coordinator's diff review of the same head returned `SIGN` (§7.36). `2f2a910`, between them, is **NOT signed** and never will be: the coordinator's review of it is `NO-SIGN` on `C33-F1`, which `493d135` answered. None of these is a promotion verdict and none covers any other SHA. `e3a2df4` has both of its reviews and is **NOT signed**: the round-36 challenger found no blocking defect in it (§7.37), and the coordinator's diff review of it is **`NO-SIGN`** on `C35-F1` (§7.38), which this commit answers. **`5190159` is FULLY SIGNED**: the round-37 independent challenger found no blocking defect in it (§7.39) and the coordinator's diff review of the same head returned **`SIGN`** (§7.40, sha256 `577abb61…`), with `C36-S1` at `P1` and two `P3`s, which this commit answers. That signature covers `5190159` and no other SHA — **no one has signed THIS head**. **`f9186c8` is FULLY SIGNED**: the round-38 challenger found no blocking defect in it (§7.41) and the coordinator's diff review of that head returned **`SIGN`** (§7.42, sha256 `fe428c51…`), with `C37-S1` at `P1`, which this commit answers. That signature covers `f9186c8` and no other SHA. **`24da267` carries NO signature and never will**: the round-39 challenger returned `NO-SIGN` on `R39-F1` (§7.43) and the coordinator skipped its own review of that head because a blocker already stood. **No one has signed THIS head either**, and both reviews are owed on it.
 
 ---
 

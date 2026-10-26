@@ -7936,7 +7936,7 @@ EMITTING_VERDICTS = ("scan", "check_blocks", "_finding")
 # Both are re-counted by the run that prints them, never edited to match it.
 SITE_COUNT = 10
 BLIND_COUNT = 4
-DOOR_COUNT = 16
+DOOR_COUNT = 21
 
 
 def _verdict_spans():
@@ -8061,10 +8061,16 @@ def _emission_aliases(body, module_only=False):
         if value is None:                                      # pragma: no cover
             continue
         held = None
-        if isinstance(value, ast.Attribute) and value.attr in ("print", "write"):
+        if isinstance(value, ast.Attribute) and value.attr in EMITTING_METHODS:
             held = "`%s`" % ast.unparse(value)
         elif isinstance(value, ast.Name) and value.id == "print":
             held = "`print`"
+        elif _mentions_an_emission(value):
+            # `R39-F1`: not the attribute itself, but an expression that
+            # REACHES one -- `getattr(sys.stdout, "write")`, a subscript of a
+            # table of them, a conditional. The name holds an emission either
+            # way, and which spelling was used is not the question.
+            held = "an expression reaching an emission: `%s`" % ast.unparse(value)
         if held is None:
             continue
         targets = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -8107,9 +8113,15 @@ def _record_emissions(run):
         site every arm provokes reds arrival arms; the SAME plant at a site no
         arm provokes redded NOTHING, which is `C37-S1` and is why
         `unclassifiable_calls` now makes that form a finding by CONSTRUCTION.
-        `C37-S1` corrected this paragraph too: it used to say the form was
-        bounded by the other two laws, full stop, and arrival's reach is the
-        arms' worlds, not every run.
+        `C37-S1` corrected this paragraph once -- it used to say
+        the form was bounded by the other two laws, full stop -- and `R39-F1`
+        corrected it again: arrival's reach is the arms' worlds AND the stream
+        `redirect_stdout` actually replaces. A plant writing to
+        `sys.__stdout__` at a PROVOKED site printed twenty-seven times with
+        arrival silent, so "however it was printed" is false and "however it
+        was printed TO `sys.stdout`" is the measured bound. What holds the rest
+        is `unclassifiable_calls`, and `OUTPUT_STREAMS` names both streams so
+        such a call is a door.
       * the whole CHAIN of this file's frames is recorded, not the printing
         frame alone. A call to a helper that prints is an emission site of the
         caller -- that is what `_can_reach_a_print` says -- so the line that
@@ -8270,36 +8282,62 @@ def emission_site_census():
         print("    UNREACHED: %s, lines %d-%d" % (name, span[0], span[1]))
     for name, line in undeclared:
         print("    EMITTED FROM AN UNDECLARED SITE: %s, line %d" % (name, line))
-    for name, line, kind in strange:
-        print("    VERDICT-CALL-UNCLASSIFIABLE: %s, line %d: the call's function "
-              "is a %s, which this file cannot classify, so nothing holds what it "
-              "emits" % (name, line, kind))
+    for name, line, why in strange:
+        print("    VERDICT-CALL-UNCLASSIFIABLE: %s, line %d: %s, so nothing this "
+              "file reads holds what that call emits" % (name, line, why))
     for name, span in blind:
         print("    reached only by the branch family: %s, lines %d-%d"
               % (name, span[0], span[1]))
     return ok
 
 
-def unclassifiable_calls(bodies=None):
-    """`C37-S1`: calls inside a verdict in a form the derivation cannot read.
+ADMITTED_CALLEES = (
+    # Builtins a verdict may call whose result this file does not have to
+    # account for, because they are not ways of binding a callee: a length, a
+    # sort, a string. `getattr` is deliberately NOT here -- a name bound from
+    # it is a name this file cannot read, which is `R39-F1`.
+    "len", "sorted", "open", "isinstance", "enumerate", "range", "repr",
+    "str", "int", "bool", "list", "dict", "set", "tuple", "any", "all",
+    "min", "max", "abs", "zip", "sum", "next", "iter", "type", "print",
+    "ord", "chr",
+)
 
-    The coordinator measured the cell the three laws leave empty: a form `ast`
-    cannot classify (`Call.func` neither a `Name` nor an `Attribute` -- a
-    subscript, a `getattr` result, anything computed) AT A SITE NO ARM
-    PROVOKES. The door count holds the forms `ast` reads; the converse law and
-    arrival hold what an ARM runs; so that cell fell between all three, and at
-    the live `enrolled > 4` site it printed a pin-free criterion claim at
-    `--check-blocks` rc 0 with the selftest green.
 
-    Closed by CONSTRUCTION rather than by one more spelling, which is the
-    coordinator's prescription and the right one: the NEXT spelling does not
-    have to be thought of in advance. Inside a verdict, such a call is itself a
-    FINDING, named here by function and line. A verdict emits through a form
-    this file can read, or it does not emit.
+def unclassifiable_calls(bodies=None, doors=None):
+    """`C37-S1` as `R39-F1` corrected it: calls a verdict makes that this file
+    did not CLASSIFY and whose callee it cannot ACCOUNT for.
 
-    Today this names nothing: 68 calls live inside the three verdicts and none
-    of them is in that form. That is the measurement, not the law's reason --
-    the law exists so that the next one is named the moment it is written.
+    The round before this asked the wrong question. It tested the callee's AST
+    NODE TYPE -- is it a `Name` or an `Attribute` -- which is the COMPLEMENT of
+    the one spelling the review had planted, not the NEGATION of "this file can
+    read what this call does". The challenger committed
+    `w = getattr(sys.stdout, "write")` then `w(...)` at the live site no arm
+    provokes: the callee IS a `Name`, so the node-type test passed it, the
+    alias census read only a direct attribute so no door was derived, and the
+    whole driver returned `EXIT_SCRIPT 0` while printing a pin-free criterion
+    paragraph to a reader. A whitelist of NODE TYPES is not a test of
+    classification, exactly as `R20-F1` ruled that a whitelist of NAMES is not
+    one of BEHAVIOURS.
+
+    So the question here is the negation. A call is accounted for when:
+
+      * `emission_sites` derived a DOOR at its line -- the file classified it;
+      * its callee is a `Name` that the commit defines at module level (the
+        helper fixed point then decides whether it emits);
+      * its callee is a `Name` in `ADMITTED_CALLEES`;
+      * its callee is a `Name` bound in this function, and EVERY binding of it
+        is a form the derivation reads -- a `Name`, an `Attribute`, or a call
+        to a module-level function of this file. A binding from anything else
+        (`getattr`, a subscript, a conditional, a tuple index) is a callee
+        this file cannot read;
+      * its callee is an `Attribute`. The receiver is what decides there, and
+        `_is_an_emission` now reads it: any method on the output stream, and
+        `write`/`writelines`/`print` on anything, is a door, so an `Attribute`
+        that reaches this point does not reach the stream.
+
+    Anything else is a FINDING, named by function and line. That is the shape
+    the coordinator asked for -- the next spelling does not have to be thought
+    of in advance, because the rule does not enumerate spellings at all.
     """
     if bodies is None:
         bodies = {}
@@ -8308,15 +8346,79 @@ def unclassifiable_calls(bodies=None):
             if body is None:
                 body = _source_of(globals()[name])
             bodies[name] = body
+    if doors is None and bodies is not None and set(bodies) == set(EMITTING_VERDICTS):
+        doors = emission_sites()
+    doors = doors or {}
+    module_level = set(_COMMITTED_AST) if _COMMITTED_AST else set()
     out = []
     for name in sorted(bodies):
-        for node in ast.walk(bodies[name]):
+        body = bodies[name]
+        bound = _bindings_in(body)
+        for node in ast.walk(body):
             if not isinstance(node, ast.Call):
                 continue
-            if isinstance(node.func, (ast.Name, ast.Attribute)):
+            if (name, node.lineno) in doors:
                 continue
-            out.append((name, node.lineno, type(node.func).__name__))
+            f = node.func
+            if isinstance(f, ast.Attribute):
+                continue
+            if isinstance(f, ast.Name):
+                if f.id in module_level or f.id in ADMITTED_CALLEES:
+                    continue
+                if f.id in bound:
+                    unreadable = [v for v in bound[f.id] if not _a_readable_binding(v, module_level)]
+                    if not unreadable:
+                        continue
+                    out.append((name, node.lineno,
+                                "the callee `%s` is bound from `%s`, which this file "
+                                "does not read"
+                                % (f.id, ast.unparse(unreadable[0]))))
+                    continue
+                out.append((name, node.lineno,
+                            "the callee `%s` is a name this file cannot account for"
+                            % f.id))
+                continue
+            out.append((name, node.lineno,
+                        "the callee is a %s, which this file cannot read"
+                        % type(f).__name__))
     return sorted(out)
+
+
+def _bindings_in(body):
+    """{name: [every value it is bound from]} inside one function body."""
+    out = {}
+    for node in ast.walk(body):
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            targets, value = [node.target], node.value
+        elif isinstance(node, (ast.For, ast.comprehension)):
+            targets, value = [node.target], getattr(node, "iter", None)
+        elif isinstance(node, ast.withitem):
+            targets, value = ([node.optional_vars] if node.optional_vars else []), node.context_expr
+        else:
+            continue
+        for t in targets:
+            for sub in ast.walk(t):
+                if isinstance(sub, ast.Name) and value is not None:
+                    out.setdefault(sub.id, []).append(value)
+    return out
+
+
+def _a_readable_binding(value, module_level):
+    """Is this a value the derivation can read a callee out of?
+
+    A `Name`, an `Attribute`, or a call to a module-level function of this
+    file. Not `getattr`, not a subscript, not a conditional -- those are the
+    forms `R39-F1` used, and a callee bound from one is a callee nobody can
+    say anything about.
+    """
+    if isinstance(value, (ast.Name, ast.Attribute, ast.Constant)):
+        return True
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        return value.func.id in module_level
+    return False
 
 
 def unclassifiable_call_arm():
@@ -8589,19 +8691,63 @@ def _emitting_helpers(funcs):
     return emits
 
 
+# `R39-F1`: the two sets this file reads instead of one list of method names.
+# `writelines` was the second family the challenger's plants used, and a
+# whitelist of METHOD NAMES is the `R20-F1` defect -- so a call on the PROCESS'S
+# OWN OUTPUT STREAM is an emission whatever the method is called. `sys.stdout`
+# and `sys.__stdout__` are both named, because `redirect_stdout` replaces the
+# first and not the second, which is how a plant printed 27 times to a reader
+# with arrival silent.
+EMITTING_METHODS = ("print", "write", "writelines")
+OUTPUT_STREAMS = ("stdout", "stderr", "__stdout__", "__stderr__")
+
+
+def _mentions_an_output_stream(node):
+    """Does this expression reach the process's own output stream?"""
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and sub.attr in OUTPUT_STREAMS:
+            return True
+    return False
+
+
+def _mentions_an_emission(node):
+    """Does this expression mention a way of putting a line in front of a
+    reader -- a writing method, or the output stream itself?
+
+    `R39-F1`: `_emission_aliases` used to read a name bound DIRECTLY from an
+    emission attribute, so `w = getattr(sys.stdout, "write")` bound nothing and
+    `w(...)` was classified as an ordinary call. Any expression that MENTIONS
+    the stream or a writing method now binds an alias: one token of computation
+    between the stream and the name is exactly how the previous round's law was
+    walked around.
+    """
+    if _mentions_an_output_stream(node):
+        return True
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Attribute) and sub.attr in EMITTING_METHODS:
+            return True
+        if isinstance(sub, ast.Name) and sub.id == "print":
+            return True
+    return False
+
+
 def _is_an_emission(node):
     """Is this call a way of putting a line in front of a reader?
 
-    `print`, `builtins.print`, and `write` on anything -- `sys.stdout.write`,
-    `os.write`, a file handle. Named by the CALL and not by a list of modules,
-    because the list is what `C33-F1` walked around.
+    `print`, `builtins.print`, `write` and `writelines` on anything, and ANY
+    method on the process's own output stream. Named by the CALL and by the
+    RECEIVER, not by a list of modules and not by a list of method names --
+    `C33-F1` walked around the module list and `R39-F1` walked around the
+    method list.
     """
     if not isinstance(node, ast.Call):
         return False
     f = node.func
     if isinstance(f, ast.Name) and f.id == "print":
         return True
-    return isinstance(f, ast.Attribute) and f.attr in ("print", "write")
+    if not isinstance(f, ast.Attribute):
+        return False
+    return f.attr in EMITTING_METHODS or _mentions_an_output_stream(f.value)
 
 
 def emitters_in_the_finding_loops(text):
