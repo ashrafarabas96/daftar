@@ -135,9 +135,7 @@ function decodedBody(raw: string): string {
   const body = headerEnd === -1 ? '' : raw.slice(headerEnd + 2);
   if (/content-transfer-encoding:\s*base64/i.test(headers)) return Buffer.from(body.replace(/\n/g, ''), 'base64').toString('utf8');
   if (/content-transfer-encoding:\s*quoted-printable/i.test(headers)) {
-    return body
-      .replace(/=\n/g, '')
-      .replace(/=([0-9A-F]{2})/gi, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
+    return body.replace(/=\n/g, '').replace(/=([0-9A-F]{2})/gi, (_m, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)));
   }
   return body;
 }

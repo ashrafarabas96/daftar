@@ -96,20 +96,14 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
     // `FileInterceptor('file', …)` binds one field name. A part sent under any
     // other name must leave the handler with no file — the same refusal as
     // sending none, never an upload the caller did not ask for.
-    const res = await t.request
-      .post('/v1/catalog/media')
-      .set(auth())
-      .attach('attachment', noise(64), { filename: 'x.png', contentType: 'image/png' });
+    const res = await t.request.post('/v1/catalog/media').set(auth()).attach('attachment', noise(64), { filename: 'x.png', contentType: 'image/png' });
 
     expect(res.status).toBe(400);
     expect(res.body?.error?.code).toBe('VALIDATION_FAILED');
   });
 
   it('an empty file is refused, and not mistaken for a missing one', async () => {
-    const res = await t.request
-      .post('/v1/catalog/media')
-      .set(auth())
-      .attach('file', Buffer.alloc(0), { filename: 'empty.png', contentType: 'image/png' });
+    const res = await t.request.post('/v1/catalog/media').set(auth()).attach('file', Buffer.alloc(0), { filename: 'empty.png', contentType: 'image/png' });
 
     expect(res.status).toBeGreaterThanOrEqual(400);
     expect(res.status).toBeLessThan(500);
