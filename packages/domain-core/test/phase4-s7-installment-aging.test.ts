@@ -6031,3 +6031,361 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     expect(only.baseMinor).toBeGreaterThan(0n);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-27 (owner, 2026-10-27) — A CREDIT BALANCE STAYS IN ITS OWN DOCUMENT'S
+// BAND, AND ITS POSITION THERE DOES NOT CHANGE WITH THE BUCKETING.
+//
+// THE DELIVERABLE THIS BLOCK IS. DR-27 settles S-20 — no automatic allocation
+// of a credit balance in the first release — and it ends with a requirement:
+// «a test proving that the credit's position in its band does not change with
+// bucketing». That requirement was recorded as DECIDED while its deliverable
+// was not written, which is how a requirement disappears; the owner confirmed
+// the finding. The TRACKED record is this repository's own
+// `TECHNICAL_DEBT.md`, under «Phase 4 money cards and decisions (DR-24)»,
+// card `OVERPAY-AGING`, entry `S-18`, which names these cases.
+//
+// WHAT «DOES NOT CHANGE WITH BUCKETING» MEANS HERE, STATED PRECISELY ENOUGH TO
+// BE FALSIFIABLE. For a credit balance on document D, the triple the report
+// shows for D — (band, transaction amount, carrying amount) — together with
+// the date the projection SAYS it placed D at, is a function of D's OWN date
+// and D's OWN value and of nothing else. Three «nothing else» clauses, and
+// each one is a separate case below:
+//
+//   (1) NOT OF THE OTHER DOCUMENTS. Asked alone and asked inside a portfolio,
+//       D's contributions are IDENTICAL — including when a debt sits in the
+//       very same band, which is the arrangement an oldest-first allocation
+//       would net it against. And not of the ORDER: reversing the rows
+//       changes nothing.  → `dr27_1`
+//
+//   (2) NOT OF THE BANDS' TOTALS. Adding D to a portfolio changes exactly ONE
+//       band — D's own — and changes it by exactly D's own figures, on both
+//       the transaction and the carrying side. Every other band is untouched
+//       to the minor unit. A credit SPREAD across bands, or applied to older
+//       debt before bucketing, moves two bands or more and this fails.
+//       → `dr27_2`
+//
+//   (3) NOT OF THE CHOICE OF THRESHOLDS. Re-expressed in a way that should not
+//       move it — the same thresholds permuted, a coarser set, a finer set,
+//       and a new threshold ON D's own age where `>` is strict — D keeps its
+//       amount, keeps the date it reports, and lands in the band D's own age
+//       falls in under the set in force. The expected band is a HAND-WRITTEN
+//       table, not a second call to the banding function, because a law that
+//       computes its expectation the way the subject does states `f(x) = f(x)`
+//       and can refuse nothing.  → `dr27_3`
+//
+// AND THE CONVERSE, WITHOUT WHICH ALL THREE ARE SATISFIED BY A PROJECTION THAT
+// ANSWERS ONE BAND FOR EVERY CREDIT: D's OWN date must move it, over the
+// standard boundaries, on each side and ON them, inside a portfolio held
+// fixed.  → `dr27_4`
+//
+// WHAT IS DELIBERATELY NOT HERE. `invoiceCount` is asserted nowhere in this
+// block: whether that counter is additive across bands is `S-19`, which stays
+// OPEN as DR-29's subject, and a case that pinned it here would decide it by
+// accident. Nor is the INSTALLED SQL body measured — there is no database in
+// this package — so what these cases establish is the REFERENCE MODEL's
+// behaviour, executed. DR-23 ruled the model correct and the body bound to
+// match it, and `dr23_5`–`dr23_7` judge the body's TEXT; the same fixtures
+// asked of the installed routine are owed by the seal run (DR-26) and are
+// NOT_RUN, recorded as owed rather than implied.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("DR-27 a credit's position in its band is a function of its own document, not of the bucketing", () => {
+  const CREDIT_ID = 'inv-dr27-credit';
+
+  /**
+   * THE SUBJECT: a TERMLESS invoice under an ACTIVE plan, overpaid by 5 000.
+   * Termless on purpose — a document that states no term is placed by
+   * `coalesce(due_date, issue_date)` (DR-13, DR-21, DR-30), so its date is the
+   * one a wrong implementation is most likely to re-derive from somewhere
+   * else. The schedule declares the whole 100 000, so the sum law is intact
+   * and nothing below is explained by a broken one.
+   */
+  const dr27Credit = (age: number): OpenInvoiceRow =>
+    termlessRow(age, {
+      invoiceId: CREDIT_ID,
+      paidTxnMinor: 105_000n,
+      paidBaseMinor: 88_703n,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    });
+
+  const DR27_CREDIT_PLAN: InstallmentPlan = Object.freeze({
+    invoiceId: CREDIT_ID,
+    status: 'active' as const,
+    downPaymentMinor: 0n,
+    downPaymentDueDate: daysBefore(395),
+    installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 100_000n }],
+  });
+
+  /** 400 days old, so band 5 under `STANDARD` — the credit's own age for most cases here. */
+  const CREDIT_AGE = 400;
+  /** The civil date that age resolves to, written down so the fixture is not defined by its own helper. */
+  const DOC_DATE = '2025-09-02';
+
+  /**
+   * THE NEIGHBOURS. One debt in the credit's OWN band — the arrangement an
+   * oldest-first allocation would consume the credit against — and two in
+   * other bands, so «exactly one band changed» is a restriction over three
+   * bands and not a statement about an empty report.
+   */
+  const OLD_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(400, { invoiceId: 'inv-dr27-old-debt', outstandingTxnMinor: 700_000n, outstandingBaseMinor: 591_521n }),
+  );
+  const YOUNG_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(10, { invoiceId: 'inv-dr27-young-debt', outstandingTxnMinor: 250_000n, outstandingBaseMinor: 211_257n }),
+  );
+  const FUTURE_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(-20, { invoiceId: 'inv-dr27-future-debt', outstandingTxnMinor: 90_000n, outstandingBaseMinor: 76_052n }),
+  );
+  const NEIGHBOURS: readonly OpenInvoiceRow[] = Object.freeze([OLD_DEBT, YOUNG_DEBT, FUTURE_DEBT]);
+
+  /** The credit's own contributions, extracted from a whole-portfolio projection. */
+  const creditIn = (
+    rows: readonly OpenInvoiceRow[],
+    plans: readonly InstallmentPlan[],
+    thresholds: readonly number[],
+    policy: ProjectionPolicy = CORRECT_POLICY,
+  ): readonly AgingContribution[] => contributionsFor(rows, plans, AS_OF, thresholds, policy).filter((c) => c.invoiceId === CREDIT_ID);
+
+  /** Band totals keyed by band and currency, with `invoiceCount` deliberately dropped (S-19). */
+  const bandTotals = (
+    rows: readonly OpenInvoiceRow[],
+    plans: readonly InstallmentPlan[],
+    thresholds: readonly number[],
+  ): Map<string, readonly [bigint, bigint]> => {
+    const out = new Map<string, readonly [bigint, bigint]>();
+    for (const b of projectCustomerAging(rows, plans, AS_OF, thresholds)) {
+      out.set(`${b.bucketNo}\u0000${b.currencyCode}`, [b.txnMinor, b.baseMinor]);
+    }
+    return out;
+  };
+
+  const CREDIT_BAND_KEY = `${OLDEST_STANDARD}\u0000SAR`;
+
+  it('dr27_0: the fixtures are what the cases below claim they are — a well-formed overpaid termless document, and a neighbour in its own band', () => {
+    // NON-VACUITY FIRST, so no case below is explained by a dormant plan, a
+    // broken sum law, a document that states a term after all, or a civil date
+    // that drifted with the helper that builds it.
+    const row = dr27Credit(CREDIT_AGE);
+    expect(row.dueDate, 'the subject states a term, so these cases measure the wrong document').toBeNull();
+    expect(row.issueDate, 'the fixture drifted off its hand-written civil date').toBe(DOC_DATE);
+    expect(epochDay(AS_OF) - epochDay(DOC_DATE), '2025-09-02 to 2026-10-07 is 400 civil days: 30 to 2025-10-02, then 365, then 5').toBe(400);
+    expect(DR27_CREDIT_PLAN.status).toBe('active');
+    const scheduleSum = DR27_CREDIT_PLAN.downPaymentMinor + DR27_CREDIT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    expect(scheduleSum, 'the schedule must add up to the invoice total, or this is proof 4 and not DR-27').toBe(row.paidTxnMinor + row.outstandingTxnMinor);
+    expect(row.outstandingTxnMinor, 'the subject is not a credit at all').toBeLessThan(0n);
+    expect(row.outstandingBaseMinor).toBeLessThan(0n);
+    // THE NEIGHBOUR REALLY IS IN THE CREDIT'S OWN BAND. Without this, clause
+    // (1)'s «a debt in the very same band» is a claim about nothing.
+    const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(solo).toHaveLength(1);
+    expect((solo[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    const neighbour = projectInvoice(OLD_DEBT, undefined, AS_OF, STANDARD);
+    expect(neighbour).toHaveLength(1);
+    const debt = neighbour[0] as AgingContribution;
+    expect(debt.bucketNo, 'the neighbour left the credit band, so nothing here could absorb the credit').toBe(OLDEST_STANDARD);
+    // AND IT IS BIGGER THAN THE CREDIT, so an allocation against it would be
+    // visible in full rather than capped and half-hidden.
+    expect(debt.txnMinor, 'the neighbour is smaller than the credit, so an allocation would be capped and harder to see').toBeGreaterThan(
+      -row.outstandingTxnMinor,
+    );
+  });
+
+  it('dr27_1: «يبقى في خانة وثيقته» — the same credit, asked alone and asked inside a portfolio, in any order, gives the IDENTICAL contribution', () => {
+    // DR-27's words carried here: the credit STAYS IN ITS OWN DOCUMENT'S BAND.
+    // The band, the two figures and the date are compared as a whole tuple, so
+    // a change to any one of them fails this.
+    const row = dr27Credit(CREDIT_AGE);
+    const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, STANDARD);
+    const only = solo[0] as AgingContribution;
+    // PINNED AS LITERALS, not as a comparison between two calls: this is the
+    // answer the report must show, written down.
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+    expect(only.txnMinor, 'a credit reported as zero or clamped is money leaving the report by omission').toBe(-5_000n);
+    expect(only.baseMinor).toBe(-4_200n);
+    expect(only.scheduleDate, 'the credit reports a date other than its own document date').toBe(DOC_DATE);
+
+    // (1) THE PORTFOLIO DOES NOT MOVE IT — with a debt in its very own band.
+    expect(creditIn([row, OLD_DEBT], [DR27_CREDIT_PLAN], STANDARD), 'a debt in the credit band changed the credit').toEqual(solo);
+    expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD), 'the surrounding portfolio changed the credit').toEqual(solo);
+    // A neighbour LARGER than everything else, in the credit's band, is the
+    // shape that would swallow the credit whole. Above 2^53, so a float path
+    // would lose minor units here as well.
+    const huge = termlessRow(400, {
+      invoiceId: 'inv-dr27-huge-debt',
+      outstandingTxnMinor: 9_007_199_254_740_993n,
+      outstandingBaseMinor: 9_007_199_254_740_992n,
+    });
+    expect(creditIn([row, huge], [DR27_CREDIT_PLAN], STANDARD), 'a very large debt in the same band changed the credit').toEqual(solo);
+
+    // (1) AND THE ORDER DOES NOT MOVE IT. A reduction that folds documents in
+    // sequence is order-sensitive; this is the cheapest way to see that.
+    const reversed = creditIn([row, ...NEIGHBOURS].reverse(), [DR27_CREDIT_PLAN], STANDARD);
+    expect(reversed, 'the credit moved when the documents were processed in the other order').toEqual(solo);
+    // AND IT IS STILL THE WHOLE FIGURE IN ONE PLACE, asked as a length and as
+    // a sum, so a second contribution smuggling part of it elsewhere fails.
+    expect(reversed, 'the credit was split across more than one contribution').toHaveLength(1);
+    expect(sum(reversed)).toBe(-5_000n);
+  });
+
+  it('dr27_2: «لا تخصيص تلقائي» — adding the credit changes EXACTLY its own band, by exactly its own figures, and no other band by one minor unit', () => {
+    // DR-27's words carried here: NO AUTOMATIC ALLOCATION of a credit to other
+    // invoices, and «الصافي الكلي يبقى مطابقًا لـDR-23» — the overall net stays
+    // the one DR-23 fixed. This is the clause an allocating implementation
+    // breaks: applying the credit to the oldest debt first leaves the NET
+    // identical while moving money between bands, so a conservation law cannot
+    // see it and this difference law can.
+    const row = dr27Credit(CREDIT_AGE);
+    const without = bandTotals([...NEIGHBOURS], [], STANDARD);
+    const withCredit = bandTotals([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD);
+
+    // NON-VACUITY: three bands, and the credit's own band is NOT empty before
+    // the credit arrives, so «unchanged elsewhere» is a real restriction.
+    expect([...without.keys()].sort(), 'the portfolio stopped spanning bands 1, 2 and 5; the difference law below is weaker than it reads').toEqual(
+      ['1\u0000SAR', '2\u0000SAR', CREDIT_BAND_KEY].sort(),
+    );
+    expect(without.get(CREDIT_BAND_KEY)).toEqual([700_000n, 591_521n]);
+    expect(without.get('2\u0000SAR')).toEqual([250_000n, 211_257n]);
+    expect(without.get('1\u0000SAR')).toEqual([90_000n, 76_052n]);
+
+    // THE DIFFERENCE LAW, over the UNION of the two band sets so a band that
+    // appears in only one of them cannot escape it.
+    for (const key of new Set([...without.keys(), ...withCredit.keys()])) {
+      const [beforeTxn, beforeBase] = without.get(key) ?? ([0n, 0n] as const);
+      const [afterTxn, afterBase] = withCredit.get(key) ?? ([0n, 0n] as const);
+      const isCreditBand = key === CREDIT_BAND_KEY;
+      const where = key.replace('\u0000', '/');
+      expect(
+        afterTxn - beforeTxn,
+        `band ${where}: adding a credit must change its OWN band by exactly the credit and every other band by nothing — a credit allocated to older debt before bucketing moves two bands and leaves the net untouched (DR-27)`,
+      ).toBe(isCreditBand ? -5_000n : 0n);
+      expect(afterBase - beforeBase, `band ${where}: the same law on the CARRYING side, which is the half an allocation would hide (DR-27, R-81)`).toBe(
+        isCreditBand ? -4_200n : 0n,
+      );
+    }
+
+    // AND THE NET, by hand: 700 000 + 250 000 + 90 000 − 5 000.
+    expect(
+      [...withCredit.values()].reduce((a, [txn]) => a + txn, 0n),
+      'the bands must total NET receivables EXACTLY (DR-23)',
+    ).toBe(1_035_000n);
+    // ...and by hand on the carrying side: 591 521 + 211 257 + 76 052 − 4 200.
+    expect(
+      [...withCredit.values()].reduce((a, [, base]) => a + base, 0n),
+      'the bands must total the NET CARRYING value exactly too (DR-23, R-81)',
+    ).toBe(874_630n);
+    // THE CREDIT IS VISIBLE AS A CREDIT rather than absorbed into the positive
+    // band it shares: that band's total fell by the credit instead of standing
+    // still, and the figure is written down rather than derived.
+    expect(withCredit.get(CREDIT_BAND_KEY)).toEqual([695_000n, 587_321n]);
+  });
+
+  it('dr27_3: THE DELIVERABLE — re-expressing the thresholds does not move the credit: same amount, same date, and the band its own age earns', () => {
+    // DR-27's closing requirement, carried here: «ويُضاف اختبار يُثبت أن موقع
+    // الدائن في الخانة لا يتغيّر بالتبويب».
+    //
+    // WHAT MUST BE INVARIANT AND WHAT MAY NOT BE. The band NUMBER is an index
+    // into the set in force — `1 + |{t in S : age > t}|` — so a DIFFERENT set
+    // may legitimately give a different index, and demanding one number for
+    // every set would be demanding the wrong thing. What may not change is:
+    // the credit's AMOUNT, the DATE it reports, the fact that it is in exactly
+    // ONE band, and that the index is the one ITS OWN AGE earns under that
+    // set. The expectations are HAND-COMPUTED from age 400 and `>` strict, so
+    // this is not `bucketOf` checked against `bucketOf`.
+    const row = dr27Credit(CREDIT_AGE);
+    const table: readonly (readonly [readonly number[], number])[] = [
+      [[0, 30, 60, 90], 5], // the standard set (DR-10, DR-14): 400 > 0, 30, 60, 90 ⇒ 1 + 4
+      [[90, 60, 30, 0], 5], // THE SAME SET PERMUTED — a pure re-expression, and it must be a no-op
+      [[0, 90], 3], // coarser: 400 > 0, 90 ⇒ 1 + 2
+      [[0], 2], // coarsest that still has a boundary: 400 > 0 ⇒ 1 + 1
+      [[0, 30, 60, 90, 365], 6], // finer, and the credit crosses the new one ⇒ 1 + 5
+      [[0, 30, 60, 90, 400], 5], // A NEW THRESHOLD ON ITS OWN AGE: `>` is strict, so 400 > 400 is false ⇒ 1 + 4
+      [[0, 30, 60, 90, 500], 5], // finer, and the credit does not reach the new one ⇒ 1 + 4
+    ];
+    for (const [thresholds, band] of table) {
+      const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, thresholds);
+      const label = `thresholds [${thresholds.join(', ')}]`;
+      expect(solo, `${label}: exactly one contribution must carry the whole credit`).toHaveLength(1);
+      const only = solo[0] as AgingContribution;
+      expect(
+        only.bucketNo,
+        `${label}: a credit 400 days past its own document date belongs in the band that age earns under the set in force — band ${band}, computed by hand with the thresholds strict. DR-27 forbids the bucketing from moving it anywhere else.`,
+      ).toBe(band);
+      // THE AMOUNT AND THE DATE ARE THE SAME UNDER EVERY SET — the literal
+      // reading of «does not change with bucketing».
+      expect(only.txnMinor, `${label}: the choice of thresholds changed the credit's amount`).toBe(-5_000n);
+      expect(only.baseMinor, `${label}: the choice of thresholds changed the credit's carrying amount`).toBe(-4_200n);
+      expect(only.scheduleDate, `${label}: the credit's date was re-derived from the bucketing`).toBe(DOC_DATE);
+      expect(sum(solo), `${label}: conservation`).toBe(-5_000n);
+      // AND THE PORTFOLIO STILL DOES NOT MOVE IT UNDER THIS SET: clause (1)
+      // and clause (3) hold TOGETHER, which neither case proves alone.
+      expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], thresholds), `${label}: the portfolio moved the credit under this set`).toEqual(solo);
+    }
+  });
+
+  it('dr27_4: THE CONVERSE — its OWN date does move it, over every standard boundary, inside a portfolio held fixed', () => {
+    // WITHOUT THIS, EVERY CASE ABOVE IS SATISFIED BY A PROJECTION THAT ANSWERS
+    // ONE BAND FOR EVERY CREDIT: «the portfolio did not move it» and «the
+    // thresholds did not move it» are both true of a constant. Here the
+    // portfolio is held fixed and only the credit's OWN issue date varies, so
+    // what is measured is that the placement is a function OF THAT DATE —
+    // the other half of «it stays in its own document's band».
+    //
+    // The boundaries are strict `>` (DR-10): 30, 60 and 90 stay in the younger
+    // band, and a document not yet issued is not yet due. `dr23_9` pins these
+    // for a credit asked ALONE; what is new here is that they survive a
+    // portfolio.
+    for (const [age, band] of [
+      [-45, 1],
+      [0, 1],
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+      [400, 5],
+    ] as const) {
+      const row = dr27Credit(age);
+      const inPortfolio = creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD);
+      expect(inPortfolio, `age ${age}: exactly one contribution must carry the whole credit`).toHaveLength(1);
+      const only = inPortfolio[0] as AgingContribution;
+      expect(
+        only.bucketNo,
+        `age ${age}: the credit is placed by ITS OWN document date — ${age} day(s) past it, from \`coalesce(due_date, issue_date)\` per DR-13, DR-21 and DR-30, with the 30/60/90 thresholds strict — so band ${band} is the one in force, portfolio or no portfolio.`,
+      ).toBe(band);
+      expect(only.scheduleDate, `age ${age}: the date reported is not the document's own`).toBe(row.issueDate);
+      expect(only.txnMinor, `age ${age}: the amount moved with the date`).toBe(-5_000n);
+      expect(sum(inPortfolio), `age ${age}: conservation`).toBe(-5_000n);
+    }
+  });
+
+  it('dr27_5: THE POSITIVE CONTROL — these laws CAN fail: under the retired placement rule the same credit, in the same portfolio, lands elsewhere', () => {
+    // A GUARD THAT CANNOT GO RED IS A CLAIM. The retired rule is reachable
+    // through the `termlessFallback` knob — it is the pre-DR-13 behaviour, in
+    // which a document with no stated term had no bucket date at all — so this
+    // control needs no edit to any file: `mutate('termlessFallback', 'none')`.
+    //
+    // It shows that the band and the date asserted above are PRODUCED by the
+    // placement rule and are not constants of the fixture. It does NOT stand
+    // in for the two wrong implementations DR-27 is actually about — a credit
+    // ALLOCATED across bands, and a credit MOVED by a neighbour — which no
+    // policy knob expresses; those are planted by hand, and the card's
+    // evidence records the plant and the named failure, not this case.
+    const row = dr27Credit(CREDIT_AGE);
+    const retired = creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD, mutate('termlessFallback', 'none'));
+    expect(retired, 'the mutant emitted nothing, so the comparison below proves nothing').toHaveLength(1);
+    const only = retired[0] as AgingContribution;
+    expect(only.bucketNo, 'the retired rule no longer parks a termless credit in the first band, so this control is blind').toBe(1);
+    expect(only.scheduleDate, 'the retired rule now reports a date, so this control no longer reproduces it').toBeNull();
+    // THE FIGURES DO NOT MOVE EVEN UNDER THE MUTANT — the retired defect was
+    // always about PLACEMENT and never about the amount, and saying so keeps
+    // this control from being read as a conservation failure.
+    expect(only.txnMinor).toBe(-5_000n);
+    expect(sum(retired)).toBe(-5_000n);
+    // AND THE CORRECT POLICY ANSWERS DIFFERENTLY ON THE SAME INPUT, which is
+    // what makes the line above a control rather than a second fixture.
+    expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD)[0]?.bucketNo).toBe(OLDEST_STANDARD);
+  });
+});
