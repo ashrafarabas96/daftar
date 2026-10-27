@@ -5435,8 +5435,14 @@ describe('DR-13-SPEC the termless receivable ages from its issue date in every a
     // this slice: ten money proofs asserted conservation, none of them
     // asserted PLACEMENT, and the titles did not say so.
     //
-    // WHAT IS NOT MEASURED HERE, OR ANYWHERE IN THIS SUITE, NAMED RATHER THAN
-    // LEFT TO BE DISCOVERED AGAIN (card `OVERPAY-AGING`):
+    // WHAT NO TEST IN THIS SUITE MEASURES IS THE BODY'S BEHAVIOUR IN ONE
+    // STATE — and the state itself IS measured, on the model, which is why
+    // this heading says «the body's behaviour» and not «the state». An
+    // earlier draft of it read «what is not measured here, or anywhere in
+    // this suite», and that was the very sin the narrowing above indicts: a
+    // universal claim standing over a part. Named rather than left to be
+    // discovered again (card
+    // `.local-context/cards/OVERPAY_AGING_CARD_AR.md`, `OVERPAY-AGING`):
     //
     //   AN INVOICE UNDER AN ACTIVE PLAN WITH A NEGATIVE OUTSTANDING — an
     //   OVERPAYMENT. `installment_schedule_verify()` holds
@@ -5451,8 +5457,17 @@ describe('DR-13-SPEC the termless receivable ages from its issue date in every a
     //   IT IS A DIVERGENCE BETWEEN THIS MODEL AND THE BODY, not a defect of
     //   the model: `projectInvoice` carries a totality arm for `O <= 0n`
     //   (`phase4-s7-aging-reference-model.ts`) that emits the whole figure as
-    //   a residual, and the SQL body has no such arm. So this suite cannot
-    //   see it at all — the model is right where the body is wrong.
+    //   a residual, and the SQL body has no such arm. The MODEL side is
+    //   already measured — `a negative outstanding is carried too, rather
+    //   than clamped away` puts `-5_000n` on `PLANNED_INVOICE` under `PLAN`,
+    //   whose `status` is `'active'`, and requires the contributions to total
+    //   `-5_000n`. So the model is right where the body is wrong, and what
+    //   this suite cannot see is the BODY.
+    //
+    //   AND THAT TEST IS `OVERPAY-AGING`'s RED, ALREADY WRITTEN. The same
+    //   fixture asked of the INSTALLED function, expecting `-5_000n`, is the
+    //   divergence proved directly: that card needs no invented case, only a
+    //   database.
     //
     //   The state is reachable with NO guard weakened: the invoice total is
     //   immutable and a payment does not touch `installments`. It is PRIOR to
