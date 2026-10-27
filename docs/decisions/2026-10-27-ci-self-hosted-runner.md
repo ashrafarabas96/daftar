@@ -17,8 +17,14 @@ labelled `[self-hosted, daftar-wsl]` (Ubuntu 24.04 under WSL2 on the owner's mac
 
 **Nothing was removed, skipped, weakened or narrowed to achieve this.** `--max-warnings 0`,
 the lint scope and rule set, `NODE_OPTIONS=--max-old-space-size=6144`, the `permissions:`
-block on `hygiene` and the `postgres:16` service all stand unchanged, and the per-job step
-counts are unchanged.
+block on `hygiene` and the `postgres:16` service all stand unchanged.
+
+**Step counts: no step was removed, and exactly one was added to each of the six jobs** --
+the workspace purge, which has to run before the checkout. Counting `- name:` steps, the
+total goes 47 to 53; counting `- uses:` steps as well it goes 64 to 70. An earlier draft of
+this file said the per-job counts were "unchanged", which was simply false, and the review
+that caught it was right to treat a false measurement in a tracked record as blocking even
+though the substance -- nothing removed, nothing weakened -- was correct.
 
 ## Follow-ups that are open, with what is and is not measured
 
@@ -30,7 +36,8 @@ counts are unchanged.
 | 4 | **Three workflows were left on GitHub-hosted runners** — `phase2-s8-evidence.yml`, `phase2-s9-release.yml`, `phase3-s9-release.yml`. They remain blocked while the account block stands. Out of scope here, deliberately. | open |
 | 5 | **The `browser` job's apt step needs root and `embedded-postgres` refuses to run as root**, which is why that job needed the out-of-band install rather than a `sudo` rule. No `NOPASSWD` rule was added: a `NOPASSWD` entry for `apt-get` is root in practice, since apt runs maintainer scripts as root. | resolved without a sudo rule |
 | 6 | **YAML was not validated by a parser** — neither `js-yaml` nor PyYAML is installed locally. The evidence that the file parses is GitHub's own execution of it. | not measured |
-| 7 | **Inserting a first step into six jobs is unverified against the Phase 4 gate.** `scripts/phase4-s4-gate.ts` reads this workflow and asserts step ordering, and it does not exist on `main`. This must be checked when the Phase 4 gate is wired into CI, not here. | NOT_RUN |
+| 7 | **Inserting a first step into six jobs is unverified against the Phase 4 gate.** `scripts/phase4-s4-gate.ts` reads this workflow and asserts step ordering, and it does not exist on `main` (`git cat-file -e` on this head returns 128). This must be checked when the Phase 4 gate is wired into CI, not here. | NOT_RUN |
+| 8 | **The guard allows a three-component path.** `depth >= 3` is the floor, so a parent directory that happens to sit three levels down is permitted. In the real runner the dangerous parents (`/home`, `/root`, `/`) are all caught by name or by the floor, but the floor is a heuristic and not a proof. | accepted, stated |
 
 ## Two defects found by independent review of this change and fixed in it
 
@@ -43,6 +50,37 @@ counts are unchanged.
 - The workspace-purge guard was narrower than it claimed. `/home/*/` demands a trailing slash, so a
   workspace equal to the runner user's home (`/home/laptop`) would have passed the guard and been
   deleted. The guard now refuses system paths, the user's home itself, and any path less than three
-  components deep. Every arm was exercised directly before commit, which is how a second hole was
-  caught: stripping the trailing slash turns `/` into the empty string, which fell through the
-  original replacement and made the depth test error on an empty operand.
+  components deep.
+
+Each round of this guard was fixed by **running its arms, not reading them**, and each round that
+way exposed the next hole:
+
+- Stripping the trailing slash turns `/` into the empty string, which fell through the first
+  replacement's `case` and made the depth test error on an empty operand, so `/` would have been
+  allowed -- worse than the original.
+- `${GITHUB_WORKSPACE%/}` strips exactly **one** slash, so `/home/laptop//` and `/home/laptop/..`
+  both still got through. Trimming cannot close this class. The guard now **resolves** the path with
+  `pwd -P`, which collapses repeated slashes and resolves `..` and symlinks.
+- Resolving the path exposed a third problem of its own: the guard checked the resolved value while
+  the deletion still named the raw variable, so it validated one path and would have wiped another
+  whenever the two differed. Every operation after the guard now uses the value the guard checked.
+
+## The concurrency key, and why the double run must stay
+
+A fix round changed the group key to the branch name on both events, so that a `push` run and a
+`pull_request` run of one branch shared a group and the newer cancelled the older. **That was
+wrong, and review caught it.**
+
+The two runs are not duplicates. A `pull_request` run checks out the merge commit, so it is
+equivalent-tree evidence only; the `push` run checks out the literal pushed SHA.
+`docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md` closure requirement E-1 demands a run whose checkout is
+the exact candidate SHA and **names this push trigger as what provides it**. Unifying the groups
+under `cancel-in-progress` therefore let a pull-request event destroy the only evidence E-1
+accepts -- and a cancelled run is not evidence under this project's own rule.
+
+So the **double run is intentional and required**, and the premise that it was a defect to be
+suppressed was mistaken. The key now includes `github.event_name`, so the two event kinds can never
+cancel each other, and superseding happens only within one event kind for one ref. Pull requests
+are keyed on their number rather than the branch, which also keeps two pull requests opened from a
+single head branch against different bases in separate groups -- something the branch-name key had
+collapsed into one.

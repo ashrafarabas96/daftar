@@ -25,24 +25,30 @@ env:
 # own terms: a push that replaces a head makes the older run's result evidence
 # for a tree nobody will merge.
 #
-# The group key is the BRANCH NAME, reached by a different expression on each
-# event. That is what stops the DOUBLE RUN: a branch under `phase/**` with an
-# open pull request fires both the `push` and the `pull_request` trigger, and
-# without this the two race for the single runner. `github.head_ref` is set
-# only on `pull_request` and holds the source branch; it is empty on `push`,
-# where `github.ref_name` holds the same branch. Both events of one branch
-# therefore land in one group and the newer cancels the older.
+# The key deliberately includes `github.event_name`, so a `push` run and a
+# `pull_request` run NEVER share a group and can never cancel each other.
+# Superseding happens only within one event kind and one ref: a newer push to a
+# branch cancels the older push run for that branch, and a new head on a pull
+# request cancels the older run for that pull request.
 #
-# Keying on `github.event.pull_request.number || github.ref` does NOT do this,
-# and this comment used to claim that it did. On `push` there is no
-# `pull_request` context, so the key fell back to `refs/heads/<branch>` while
-# the `pull_request` event keyed on `N` -- two different groups, so the two
-# events never shared one and the race survived.
+# The DOUBLE RUN is therefore NOT suppressed, and must not be. This comment
+# used to claim that suppressing it was the point, and an earlier fix made the
+# key actually do it. Both were wrong, because the two runs are not duplicates:
+# a `pull_request` run checks out the merge commit and is equivalent-tree
+# evidence only, while the `push` run checks out the literal pushed SHA, and
+# `docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md` closure requirement E-1 demands an
+# exact-SHA run and names this trigger as what provides it. Merging the two
+# groups under `cancel-in-progress` would let a pull-request event destroy that
+# evidence, and a cancelled run is not evidence by this project's own rule.
+#
+# Keying pull requests on their NUMBER rather than the branch also keeps two
+# pull requests opened from one head branch against different bases apart,
+# which a branch-name key would have collapsed into one group.
 #
 # `main` is deliberately NOT exempted: its runs are serialised the same way,
 # and the surviving run is always the newest head.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -98,16 +104,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -119,11 +129,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       - uses: actions/checkout@v4
@@ -206,16 +218,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -227,11 +243,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       # Full history: the corrective gate runs the explicit Phase 3 secret
@@ -567,16 +585,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -588,11 +610,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       - uses: actions/checkout@v4
@@ -651,16 +675,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -672,11 +700,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       - uses: actions/checkout@v4
@@ -748,16 +778,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -769,11 +803,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       - uses: actions/checkout@v4
@@ -895,16 +931,20 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          # Refuse anything shallow or home-like before deleting. The earlier
-          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
-          # trailing slash, so a workspace that WAS the runner user's home would
-          # have passed the guard and been wiped.
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
           #
-          # `""` is listed and is reachable: stripping the trailing slash turns
-          # a workspace of `/` into the empty string, so without that arm `/`
-          # would fall through this case AND make the depth arithmetic error on
-          # an empty operand. Exercising the arms is what caught it.
-          ws=${GITHUB_WORKSPACE%/}
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive,
+          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
             ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
               echo "refusing to wipe system path '$ws'"; exit 1 ;;
@@ -916,11 +956,13 @@ jobs:
           if [ "$depth" -lt 3 ]; then
             echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
           fi
-          mkdir -p "$GITHUB_WORKSPACE"
-          before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
-          after=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
-          echo "work folder: $GITHUB_WORKSPACE"
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
           echo "top-level entries removed: $before -> $after"
           test "$after" -eq 0
       # Full history: gitleaks scans the pull request's commit RANGE, so with the
