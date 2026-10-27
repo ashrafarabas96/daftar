@@ -212,7 +212,8 @@ async function main(): Promise<void> {
     }
     const table = coverage.table();
     console.log('proxied requests per route — seen = paced + answered locally:');
-    for (const r of table.slice(0, 12)) console.log(`  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`);
+    for (const r of table.slice(0, 12))
+      console.log(`  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`);
     exitCode = verdict(o, records, coverage);
   } finally {
     await stack.stop();

@@ -369,7 +369,11 @@ export async function runFlows(run: Run): Promise<void> {
       await page.route(read, (route) => {
         // Answered here, so it spends no API budget and owes the pacer nothing.
         run.answeredLocally(route.request().method(), route.request().url());
-        return route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'UNAVAILABLE', message: 'refused by the browser gate' }) });
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'UNAVAILABLE', message: 'refused by the browser gate' }),
+        });
       });
       await nav(run, 'purchases');
       const retry = run.button(T('common.tryAgain'));

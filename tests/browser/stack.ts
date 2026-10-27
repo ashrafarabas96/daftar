@@ -19,7 +19,8 @@
  * the environment is set before the dynamic import below.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
 import { Pool } from 'pg';
@@ -61,11 +62,25 @@ async function stopChild(child: ChildProcess): Promise<void> {
   clearTimeout(timer);
 }
 
+/** The last few lines a dead child wrote, so its own account of why travels with the parent's error. */
+function logTail(logFile: string, lines = 8): string {
+  try {
+    const text = readFileSync(logFile, 'utf8').trimEnd();
+    if (text === '') return '(its log is empty)';
+    return text.split('\n').slice(-lines).join('\n');
+  } catch {
+    return '(its log could not be read)';
+  }
+}
+
 /** Poll `url` until it answers 2xx, or fail when `child` dies or the deadline passes. */
-async function waitForHttp(url: string, child: ChildProcess, what: string, timeoutMs = 90_000): Promise<void> {
+async function waitForHttp(url: string, child: ChildProcess, what: string, logFile: string, timeoutMs = 90_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) throw new Error(`${what} exited with code ${child.exitCode} before it answered ${url}`);
+    // The exit code alone is a description of the symptom. What the process
+    // said before dying is the cause, and it is one file read away.
+    if (child.exitCode !== null)
+      throw new Error(`${what} exited with code ${child.exitCode} before it answered ${url}\n--- ${logFile} ---\n${logTail(logFile)}`);
     try {
       const res = await fetch(url);
       if (res.ok) return;
@@ -83,14 +98,46 @@ async function waitForHttp(url: string, child: ChildProcess, what: string, timeo
  * earlier run) while the process under test dies on EADDRINUSE, and the gate
  * would check the wrong build.
  */
-async function assertNothingAnswers(url: string, what: string): Promise<void> {
-  try {
-    await fetch(url);
-  } catch (error) {
-    if (error instanceof TypeError) return; // connection refused: the port is free
-    throw error;
+/**
+ * Refuse to start when the port is TAKEN — which is not the same question as
+ * whether anything ANSWERS on it, and the difference has cost a run.
+ *
+ * This used to fetch the URL and treat a connection error as "free". A gate
+ * that is killed mid-run can leave its web server bound; if that leftover is
+ * bound to `::` while the check asks `localhost`, or is bound but no longer
+ * serving, the fetch fails, the check calls the port free, and `listen` then
+ * dies with EADDRINUSE several seconds later — reported, from the parent, as
+ * "the server exited before it answered". The real reason sat in the server's
+ * own log the whole time.
+ *
+ * So the check now does the one thing that is actually about to happen: it
+ * binds. On both families, because binding `0.0.0.0` and binding `::` are
+ * different claims and a leftover may hold either.
+ */
+async function assertPortFree(port: number, what: string): Promise<void> {
+  for (const host of ['0.0.0.0', '::']) {
+    await new Promise<void>((resolve, reject) => {
+      const probe = createServer();
+      probe.once('error', (error: NodeJS.ErrnoException) => {
+        if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+          reject(
+            new Error(
+              `port ${port} is already in use on ${host}; refusing to start ${what}. ` +
+                `A previous gate run on this machine was probably killed before it could stop its own processes — ` +
+                `the ports are fixed, so the next run inherits the collision.`,
+            ),
+          );
+          return;
+        }
+        if (error.code === 'EAFNOSUPPORT' || error.code === 'EADDRNOTAVAIL') {
+          resolve(); // this machine has no such family; nothing can be holding it there
+          return;
+        }
+        reject(error);
+      });
+      probe.listen({ port, host, exclusive: true }, () => probe.close(() => resolve()));
+    });
   }
-  throw new Error(`something already answers ${url}; refusing to start ${what} behind it`);
 }
 
 function startProcess(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv, logFile: string): ChildProcess {
@@ -175,10 +222,11 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
       TRUSTED_PROXIES: '127.0.0.1,::1',
       LOG_LEVEL: 'warn',
     };
-    await assertNothingAnswers(apiUrl, 'the merchant API');
-    const api = startProcess(process.execPath, ['dist/main.js'], join(ROOT, 'apps/api'), apiEnv, join(logDir, 'api.log'));
+    await assertPortFree(ports.api, 'the merchant API');
+    const apiLog = join(logDir, 'api.log');
+    const api = startProcess(process.execPath, ['dist/main.js'], join(ROOT, 'apps/api'), apiEnv, apiLog);
     children.push(api);
-    await waitForHttp(`${apiUrl}/v1/health/ready`, api, 'the merchant API');
+    await waitForHttp(`${apiUrl}/v1/health/ready`, api, 'the merchant API', apiLog);
 
     const webEnv: NodeJS.ProcessEnv = {
       PATH: process.env['PATH'],
@@ -190,10 +238,11 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
     };
     // The production entry, exactly as `npm start` runs it: Node's own type
     // stripping, no flags, no loader.
-    await assertNothingAnswers(webUrl, 'the web server');
-    const web = startProcess(process.execPath, ['server.mts'], join(ROOT, 'apps/web'), webEnv, join(logDir, 'web.log'));
+    await assertPortFree(ports.web, 'the web server');
+    const webLog = join(logDir, 'web.log');
+    const web = startProcess(process.execPath, ['server.mts'], join(ROOT, 'apps/web'), webEnv, webLog);
     children.push(web);
-    await waitForHttp(`${webUrl}/en/login`, web, 'the web server (node server.mts)');
+    await waitForHttp(`${webUrl}/en/login`, web, 'the web server (node server.mts)', webLog);
     return { apiUrl, webUrl, migrations: applied.length, stop };
   } catch (error) {
     await stop();
