@@ -65,7 +65,18 @@ import {
   isAuthoritativeSalesColumn,
   isForbiddenSalesTable,
 } from '../../../scripts/guards/no-authoritative-balance';
-import { assertPinnedBodiesComplete, bodyDigests, declaredBodyDigests, dollarQuotedBody, routineHeads } from '../../../scripts/guards/p4s7-body-digests';
+import {
+  assertDr13AgingFallback,
+  assertPinnedBodiesComplete,
+  bodyDigests,
+  declaredBodyDigests,
+  dollarQuotedBody,
+  dr13AgingFindings,
+  plantRetiredNullGuard,
+  routineHeads,
+  shippedAgingBody,
+  specAgingBody,
+} from '../../../scripts/guards/p4s7-body-digests';
 import { agingBucketLabels } from '../src/invoice';
 import { apRelease } from '../../inventory/src/supplier-settlement';
 import {
@@ -81,6 +92,7 @@ import {
   projectCustomerAging,
   projectInvoice,
   scheduledDueBy,
+  termlessBucketDate,
   type AgingContribution,
   type InstallmentPlan,
   type OpenInvoiceRow,
@@ -555,6 +567,17 @@ const MANDATORY: readonly MandatoryProof[] = Object.freeze([
     minAssertions: 3,
     file: 'phase4-s7-installment-aging.test.ts',
   }),
+  // DR-13-SPEC. The PLACEMENT law, and the only proof in this file whose
+  // mutation moves no money at all — which is exactly why the slice shipped
+  // with the termless defect while every conservation law stayed green.
+  Object.freeze({
+    id: 'proof_13',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('termlessFallback'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
   Object.freeze({
     id: 'proof_6',
     armTitleContains: 'FIRES',
@@ -602,6 +625,7 @@ const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: key
   Object.freeze({ proof: 'proof_2', knob: 'bucketBy' as const, to: 'invoice_due_date' }),
   Object.freeze({ proof: 'proof_3', knob: 'planlessArm' as const, to: 'every_invoice' }),
   Object.freeze({ proof: 'proof_4', knob: 'carryResidual' as const, to: false }),
+  Object.freeze({ proof: 'proof_13', knob: 'termlessFallback' as const, to: 'none' }),
   Object.freeze({ proof: 'proof_5', knob: 'outstandingSource' as const, to: 'plan_local' }),
   Object.freeze({ proof: 'proof_2', knob: 'scheduleDateShiftDays' as const, to: -200 }),
   Object.freeze({ proof: 'proof_10', knob: 'baseAllocation' as const, to: 'per_row_conversion' }),
@@ -638,6 +662,7 @@ const BOUNDARY_INVOICE: OpenInvoiceRow = Object.freeze({
   invoiceId: 'inv-boundary',
   currencyCode: 'SAR',
   dueDate: daysBefore(200),
+  issueDate: daysBefore(401),
   outstandingTxnMinor: 900_000n,
   paidTxnMinor: 300_000n,
   paidBaseMinor: 253_750n,
@@ -670,6 +695,7 @@ const PLANNED_INVOICE: OpenInvoiceRow = Object.freeze({
   invoiceId: 'inv-plan',
   currencyCode: 'SAR',
   dueDate: '2026-01-15',
+  issueDate: '2025-12-15',
   outstandingTxnMinor: 900_000n,
   // The other halves of the SAME authoritative row: three instalments
   // collected, and the carrying released for them. `total_base_minor` is
@@ -705,6 +731,7 @@ const PLAINLESS_INVOICE: OpenInvoiceRow = Object.freeze({
   invoiceId: 'inv-plain',
   currencyCode: 'SAR',
   dueDate: '2026-05-01',
+  issueDate: '2026-04-01',
   outstandingTxnMinor: 250_000n,
   paidTxnMinor: 0n,
   paidBaseMinor: 0n,
@@ -721,6 +748,7 @@ const SHORT_SCHEDULE_INVOICE: OpenInvoiceRow = Object.freeze({
   invoiceId: 'inv-short',
   currencyCode: 'SAR',
   dueDate: '2026-02-01',
+  issueDate: '2026-01-01',
   outstandingTxnMinor: 1_000_000n,
   paidTxnMinor: 0n,
   paidBaseMinor: 0n,
@@ -748,6 +776,7 @@ const OVER_SCHEDULED_INVOICE: OpenInvoiceRow = Object.freeze({
   invoiceId: 'inv-over',
   currencyCode: 'SAR',
   dueDate: '2026-01-15',
+  issueDate: '2025-12-15',
   outstandingTxnMinor: 900_000n,
   paidTxnMinor: 0n,
   paidBaseMinor: 0n,
@@ -763,6 +792,20 @@ const OVER_SCHEDULED_PLAN: InstallmentPlan = Object.freeze({
     Object.freeze({ seqNo: 2, dueDate: '2027-01-15', amountTxnMinor: 900_000n }),
   ]),
 });
+
+/**
+ * A bucket date that must be PRESENT, asserted rather than asserted-away.
+ *
+ * `AgingContribution.scheduleDate` stays nullable only because the
+ * `termlessFallback: 'none'` knob has to be expressible — that knob IS the
+ * defect DR-13 retired. Under any correct policy it is never null, so the
+ * tests below REFUSE a null here instead of casting it off with `as string`,
+ * which would hide exactly the state this card exists to make impossible.
+ */
+function mustDate(date: string | null, what: string): string {
+  expect(date, `${what}: a contribution with NO bucket date is the DR-13 defect, not a value to band`).not.toBeNull();
+  return date as string;
+}
 
 function sum(xs: readonly { readonly txnMinor: bigint }[]): bigint {
   return xs.reduce((a, x) => a + x.txnMinor, 0n);
@@ -915,7 +958,7 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
   // is in the mutant arm as well as the holds arm.
 
   /** The date the PLAN declares for this contribution, read from the plan. */
-  function declaredDate(c: AgingContribution, plan: InstallmentPlan, row: OpenInvoiceRow): string | null {
+  function declaredDate(c: AgingContribution, plan: InstallmentPlan, row: OpenInvoiceRow): string {
     if (c.origin === 'down_payment') return plan.downPaymentDueDate;
     if (c.origin === 'installment') {
       const i = plan.installments.find((x) => x.seqNo === c.seqNo);
@@ -923,8 +966,12 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
       return i.dueDate;
     }
     // `residual` and `whole_invoice` are money the schedule never named, and
-    // `invoices.due_date` is the only date with authority over it.
-    return row.dueDate;
+    // the document's own date is the only date with authority over it:
+    // `coalesce(due_date, issue_date)` (DR-13, DR-21). The SUBJECT of this
+    // oracle is the PLAN's and the DOCUMENT's declared dates, read
+    // independently of the projection — so it must carry the fallback too, or
+    // it would certify as correct the very band the defect produced.
+    return mustDate(termlessBucketDate(row), 'the declared document date');
   }
 
   /** Contributions whose DECLARED date has not arrived at `p_as_of`. */
@@ -1040,7 +1087,13 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
       expect(bucketIndexByBinarySearch(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
       expect(bucketOf(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
     }
-    expect(bucketIndexByBand(AS_OF, null, THRESHOLDS)).toBe(1);
+    // AND NOT «a null date is band 1» (DR-13, DR-21). The three derivations
+    // now agree on a TERMLESS document's RESOLVED date instead of agreeing
+    // with each other about a date nobody owns.
+    const termlessIssue = daysBefore(400);
+    expect(bucketIndexByBand(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    expect(bucketIndexByBinarySearch(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    expect(bucketOf(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
   });
 
   it('holds: money whose DECLARED date has not arrived is in bucket 1 and nowhere else', () => {
@@ -1072,7 +1125,9 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const c = contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS);
     const residual = c.filter((x) => x.origin === 'residual');
     expect(residual).toHaveLength(1);
-    expect(residual[0]?.bucketNo).toBe(bucketIndexByBand(AS_OF, SHORT_SCHEDULE_INVOICE.dueDate, THRESHOLDS));
+    expect(residual[0]?.bucketNo).toBe(
+      bucketIndexByBand(AS_OF, mustDate(termlessBucketDate(SHORT_SCHEDULE_INVOICE), 'the short-schedule document date'), THRESHOLDS),
+    );
     expect(residual[0]?.bucketNo).toBeGreaterThan(1);
     for (const i of SHORT_PLAN.installments) expect(epochDay(i.dueDate)).toBeGreaterThan(epochDay(AS_OF));
     // The honest reading: a sum-law VIOLATION signal, aged conservatively at
@@ -1106,10 +1161,10 @@ describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdu
     const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, m);
     // Self-consistent, which is why the old law stayed green:
     for (const x of c) {
-      expect(x.bucketNo).toBe(bucketOf(AS_OF, x.scheduleDate, THRESHOLDS));
+      expect(x.bucketNo).toBe(bucketOf(AS_OF, mustDate(x.scheduleDate, 'self-consistency'), THRESHOLDS));
     }
     // The plan-subject law sees it.
-    const wrong = c.filter((x) => x.bucketNo !== bucketOf(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS));
+    const wrong = c.filter((x) => x.bucketNo !== bucketOf(AS_OF, mustDate(declaredDate(x, PLAN, PLANNED_INVOICE), 'declared date'), THRESHOLDS));
     expect(wrong.length).toBeGreaterThan(0);
     // And the canary holds while the law fires: real not-yet-due money has
     // been aged into overdue buckets.
@@ -1169,6 +1224,7 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
       invoiceId: 'inv-empty',
       currencyCode: 'SAR',
       dueDate: '2026-01-15', // long past
+      issueDate: '2025-12-15',
       outstandingTxnMinor: 400n,
       paidTxnMinor: 0n,
       paidBaseMinor: 0n,
@@ -1180,7 +1236,7 @@ describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
     // NOT the plan-less arm, which would put the whole 400 at the invoice's
     // long-past due date in the oldest bucket — the opposite end of the aging.
     expect(c.some((x) => x.origin === 'whole_invoice')).toBe(false);
-    expect(bucketOf(AS_OF, row.dueDate, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    expect(bucketOf(AS_OF, mustDate(row.dueDate, 'the invoice due date'), THRESHOLDS)).toBe(THRESHOLDS.length + 1);
     // Totality is unaffected either way, which is why proofs 1 and 4 could
     // not see this.
     expect(sum(c)).toBe(row.outstandingTxnMinor);
@@ -1281,6 +1337,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         invoiceId: 'inv-b',
         currencyCode: 'SAR',
         dueDate: '2026-02-01',
+        issueDate: '2026-01-01',
         outstandingTxnMinor: O,
         paidTxnMinor: 0n,
         paidBaseMinor: 0n,
@@ -1310,6 +1367,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         invoiceId: 'inv-b',
         currencyCode: 'SAR',
         dueDate: '2026-02-01',
+        issueDate: '2026-01-01',
         outstandingTxnMinor: BigInt(n) * 50_000n,
         paidTxnMinor: 0n,
         paidBaseMinor: 0n,
@@ -1331,6 +1389,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
       invoiceId: 'inv-b',
       currencyCode: 'SAR',
       dueDate: '2026-02-01',
+      issueDate: '2026-01-01',
       outstandingTxnMinor: 100_000n,
       paidTxnMinor: 0n,
       paidBaseMinor: 0n,
@@ -1376,6 +1435,7 @@ describe('PROOF 4 [proof_4] — no amount disappears', () => {
         invoiceId: 'r',
         currencyCode: 'SAR',
         dueDate: '2026-06-01',
+        issueDate: '2026-05-01',
         outstandingTxnMinor: O,
         paidTxnMinor: P,
         paidBaseMinor: P > 0n ? P - P / 8n : 0n,
@@ -1470,8 +1530,23 @@ describe('PROOF 4(b) — no amount disappears AT THE API READ EITHER (a defect f
     expect(bucketOf(AS_OF, daysBefore(61), DAYS)).toBe(3);
     expect(bucketOf(AS_OF, daysBefore(91), DAYS)).toBe(4);
     expect(bucketOf(AS_OF, daysBefore(4000), DAYS)).toBe(DAYS.length + 1);
-    // Faithful to the shipped expression: a NULL due date is bucket 1.
-    expect(bucketOf(AS_OF, null, DAYS)).toBe(1);
+    // AND NO LONGER «a NULL due date is bucket 1» (DR-13, DR-21). That line
+    // stood here as a faithfulness claim about the shipped expression, and
+    // what it was faithful to was the retired `due_date IS NOT NULL AND …`
+    // guard: a receivable with no stated term exceeded no threshold however
+    // old it got. `bucketOf` no longer ACCEPTS a null — the parameter is
+    // total — and a termless receivable is banded from its own issue date.
+    const termless: OpenInvoiceRow = {
+      invoiceId: 'inv-null-due',
+      currencyCode: 'SAR',
+      dueDate: null,
+      issueDate: daysBefore(4000),
+      outstandingTxnMinor: 100_000n,
+      paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 84_503n,
+    };
+    expect(bucketOf(AS_OF, mustDate(termlessBucketDate(termless), 'a termless receivable'), DAYS)).toBe(DAYS.length + 1);
   });
 
   it('the label array is zero-based and has exactly k+1 slots, so the top bucket has no slot at its own number', () => {
@@ -2079,8 +2154,18 @@ describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_o
     expect(sketch).toMatch(/o\.paid_txn_minor \+ o\.outstanding_txn_minor/);
     expect(sketch).toMatch(/o\.paid_base_minor \+ o\.outstanding_base_minor/);
     expect(sketch).not.toMatch(/JOIN\s+public\.invoices/i);
-    // The shipped routine does the same, which is the precedent.
-    expect(readFileSync(SHIPPED_AGING_PATH, 'utf8')).toMatch(/o\.due_date IS NOT NULL/);
+    // The shipped routine does the same, which is the precedent — AND THIS
+    // ASSERTION WAS A THIRD COPY OF THE RETIRED RULE (DR-13-SPEC). It read
+    // `expect(readFileSync(SHIPPED_AGING_PATH)).toMatch(/o\.due_date IS NOT NULL/)`
+    // against the RAW migration, and `0084:727` has not contained that guard
+    // in code since DR-13: the only `o.due_date IS NOT NULL` left in that file
+    // is the SENTENCE at `0084:717` explaining why it was retired. So the law
+    // was green off a comment — the exact instrument class
+    // `TL-P4-COORD-R46` ruled on — while pinning the behaviour the owner had
+    // reversed. The subject is CODE now, and it is the resolution DR-13
+    // requires rather than the guard it retired.
+    expect(sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'))).toMatch(/coalesce\(o\.due_date, o\.issue_date\)/);
+    expect(sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'))).not.toMatch(/o\.due_date IS NOT NULL/);
     // The only `public.invoices` reference is the id list, as shipped.
     expect([...sketch.matchAll(/public\.invoices\b/g)]).toHaveLength(1);
   });
@@ -2578,6 +2663,151 @@ describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of
   });
 });
 
+/** The standard bands DR-10 fixed and DR-14 made the only set on offer. */
+const STANDARD = [0, 30, 60, 90] as const;
+/** `over-90` under `STANDARD`: five bands, so the oldest is 5. */
+const OLDEST_STANDARD = STANDARD.length + 1;
+
+/** A termless receivable: no stated term, issued `age` days before `AS_OF`. */
+function termlessRow(age: number, overrides: Partial<OpenInvoiceRow> = {}): OpenInvoiceRow {
+  return {
+    invoiceId: 'inv-termless',
+    currencyCode: 'SAR',
+    dueDate: null,
+    issueDate: daysBefore(age),
+    outstandingTxnMinor: 100_000n,
+    paidTxnMinor: 0n,
+    paidBaseMinor: 0n,
+    outstandingBaseMinor: 84_503n,
+    ...overrides,
+  };
+}
+
+/**
+ * THE PORTFOLIO FIXTURE THIS SUITE DID NOT HAVE, and its absence is the
+ * finding. `meta_2` requires every knob mutation to CHANGE the output, and it
+ * measured the portfolio: four invoices, every one of them stating a due
+ * date. On such a portfolio the termless fallback is INERT — which is the
+ * mechanism by which this specification carried a money defect past a suite
+ * of ten money proofs and nine meta gates. A termless document is now in the
+ * portfolio, so the inertness is gone rather than argued about.
+ */
+const TERMLESS_INVOICE: OpenInvoiceRow = Object.freeze(termlessRow(400, { invoiceId: 'inv-termless-portfolio' }));
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 13 [proof_13] — no receivable leaves the report by having no date', () => {
+  // THE SUBJECT NO OTHER PROOF HAS, and the reason this specification shipped
+  // the defect DR-13 had already retired from `0084`: every money law above is
+  // about WHICH FIGURE reaches a bucket, and this one is about WHICH BUCKET.
+  // The termless defect moves no money — the totals are exact under it, the
+  // base shares still telescope, proof 1 and proof 4 hold identically — it
+  // only parks the whole figure in the first band for ever. A suite that
+  // proves conservation and never proves PLACEMENT cannot see it, which is
+  // measured below: the FIRES arm leaves every sum untouched.
+
+  it('a termless receivable is placed by its ISSUE date, in the planless arm and in the residual arm alike', () => {
+    const row = termlessRow(400, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const planless = projectInvoice(row, undefined, AS_OF, STANDARD);
+    expect(planless).toHaveLength(1);
+    expect((planless[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(395),
+      installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 40_000n }],
+    };
+    const withPlan = projectInvoice(row, plan, AS_OF, STANDARD);
+    const residual = withPlan.filter((x) => x.origin === 'residual');
+    expect(residual).toHaveLength(1);
+    expect((residual[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // And a scheduled instalment is NOT dragged along with them (DR-21).
+    const scheduled = withPlan.filter((x) => x.origin === 'installment');
+    expect(scheduled).toHaveLength(1);
+    expect((scheduled[0] as AgingContribution).scheduleDate).toBe(plan.installments[0]?.dueDate);
+  });
+
+  it('FIRES under its mutation: the termless fallback is withdrawn and the receivable sits in band 1 for ever', () => {
+    const row = termlessRow(4000, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const defective = mutate('termlessFallback', 'none');
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD, defective);
+    expect(c).toHaveLength(1);
+    // ELEVEN YEARS OVERDUE, REPORTED AS NOT DUE. That is the retired
+    // `bucket_date IS NOT NULL AND …` guard, reached through the knob.
+    expect((c[0] as AgingContribution).bucketNo, 'the mutation is INERT — the law cannot refuse it').toBe(1);
+    expect((c[0] as AgingContribution).scheduleDate).toBeNull();
+    // THE DISCRIMINATION: unmutated, the same row is in the oldest band.
+    expect((projectInvoice(row, undefined, AS_OF, STANDARD)[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // AND THE REASON NOTHING ELSE CAUGHT IT: the mutation moves NO money. The
+    // totals are identical, so every conservation law in this file holds under
+    // the defect and only the placement is wrong.
+    expect(sum(c)).toBe(sum(projectInvoice(row, undefined, AS_OF, STANDARD)));
+    expect(sum(c)).toBe(100_000n);
+    recordProof('proof_13', 4, 'FIRES arm ran: withdrawing the issue-date fallback parks an 11-year-old receivable in band 1 while every total stays exact');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('DR-13-SPEC the body law is in the guard, and it has been seen to refuse', () => {
+  // The digests pin «the installed body is the body that was reviewed». They
+  // say nothing about what the body DOES, and that is how a body which aged a
+  // termless receivable at no date at all was pinned for the life of the
+  // slice. The law below is the one thing a text instrument can honestly
+  // carry: the retired guard is DETECTED and the DR-13 resolution is
+  // REQUIRED, on comment-stripped code, in both bodies of interest.
+
+  it('the SPECIFICATION body and the APPROVED `0084` body both satisfy the DR-13/DR-21 law', () => {
+    expect(dr13AgingFindings(specAgingBody(), 'spec')).toEqual([]);
+    // THE POSITIVE CONTROL, and it is the body of record the owner decided
+    // DR-13 against — not the file this law was written for.
+    expect(dr13AgingFindings(shippedAgingBody(), '0084')).toEqual([]);
+    expect(() => assertDr13AgingFallback(specAgingBody(), 'spec')).not.toThrow();
+    expect(() => assertDr13AgingFallback(shippedAgingBody(), '0084')).not.toThrow();
+  });
+
+  it('IT REFUSES: the retired guard planted back into each REAL body is named, not merely counted', () => {
+    for (const [where, body] of [
+      ['spec', specAgingBody()],
+      ['0084', shippedAgingBody()],
+    ] as const) {
+      const planted = plantRetiredNullGuard(body);
+      // The plant must have APPLIED, or the arm below proves nothing.
+      expect(planted, `${where}: the plant did not apply, so this arm has no subject`).not.toBe(body);
+      const findings = dr13AgingFindings(planted, where);
+      expect(
+        findings.map((f) => f.kind),
+        where,
+      ).toContain('retired_null_guard');
+      expect(() => assertDr13AgingFallback(planted, where)).toThrow(/retired/i);
+    }
+  });
+
+  it('IT REFUSES a body whose fallback is gone, and it is not satisfied by a SENTENCE describing either', () => {
+    // `coalesce` removed from the specification body: the resolution is gone
+    // and the law says so.
+    const noFallback = specAgingBody().replace(/coalesce\(oi\.due_date, oi\.issue_date\) AS due_date/g, 'oi.due_date');
+    expect(noFallback).not.toBe(specAgingBody());
+    expect(dr13AgingFindings(noFallback, 'spec').map((f) => f.kind)).toContain('fallback_absent');
+
+    // AND THE TRAP THIS ESTATE HAS BEEN CAUGHT BY FIVE TIMES: a comment is not
+    // code. A body whose ONLY `coalesce` is in a sentence is refused...
+    const prose = `${noFallback}\n-- coalesce(o.due_date, o.issue_date) is what DR-13 requires.\n`;
+    expect(dr13AgingFindings(prose, 'spec').map((f) => f.kind)).toContain('fallback_absent');
+    // ...and a body whose only RETIRED GUARD is in a sentence is NOT refused,
+    // which is why the law can be asked about `0084` at all: that migration
+    // deliberately carries a sentence naming the guard it retired.
+    const sentenceOnly = `${specAgingBody()}\n-- This guard used to read \`o.due_date IS NOT NULL AND …\`.\n`;
+    expect(dr13AgingFindings(sentenceOnly, 'spec')).toEqual([]);
+    expect(readFileSync(SHIPPED_AGING_PATH, 'utf8')).toMatch(/o\.due_date IS NOT NULL/); // the sentence really is there
+  });
+
+  it('IT REFUSES a non-strict boundary, so the law cannot pass over a `>=` it never found', () => {
+    const inclusive = specAgingBody().replace('(p_as_of - c.bucket_date) > t.threshold', '(p_as_of - c.bucket_date) >= t.threshold');
+    expect(inclusive).not.toBe(specAgingBody());
+    expect(dr13AgingFindings(inclusive, 'spec').map((f) => f.kind)).toContain('boundary_not_strict');
+  });
+});
+
 // ═════════════════════════════════════════════════════════════════════════
 describe('META — the proofs are not vacuous', () => {
   it('meta_1: every knob has a proof that exercises its defective value, AND that proof exists in this file', () => {
@@ -2728,7 +2958,7 @@ describe('META — the proofs are not vacuous', () => {
   });
 
   it('meta_2: every mutation actually CHANGES the output — an inert mutation proves nothing', () => {
-    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE, TERMLESS_INVOICE];
     const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
     // The over-scheduled fixture is in the portfolio because it is what makes
     // the upper-clamp mutation bite at all; without it that mutation is
@@ -2790,6 +3020,7 @@ describe('META — the proofs are not vacuous', () => {
       invoiceId: 'inv-tie',
       currencyCode: 'SAR',
       dueDate: '2026-03-01',
+      issueDate: '2026-02-01',
       outstandingTxnMinor: 50_000n,
       paidTxnMinor: 50_000n,
       paidBaseMinor: 42_251n,
@@ -5020,5 +5251,217 @@ describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm
     const r16 = findingsOf(asRound16);
     expect(r16, `round 16's own enumeration did not red; findings: ${r16.join(' | ')}`).toContain('stale/count');
     expect(r16, `dropping the fourth exit did not red; findings: ${r16.join(' | ')}`).toContain('stale/exits');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-13-SPEC — THE TERMLESS RECEIVABLE, IN EVERY ARM OF THIS SPECIFICATION.
+//
+// DR-13 (owner, 2026-10-26) and DR-21 (owner, 2026-10-27). `0084:727` already
+// ages an invoice with no stated term from its own issue date. THIS
+// SPECIFICATION REPLACED THAT BODY AND DID NOT CARRY THE DECISION: it derived
+// its bucket date from `due_date` ALONE and guarded the band arithmetic with
+// `bucket_date IS NOT NULL AND …`, so a receivable with no stated term
+// exceeded NO threshold however old it got and sat in the first band for ever
+// — debt leaving an aging report BY OMISSION rather than by payment. The
+// reference model and the oracles carried the same rule, which is why the
+// money proofs above could not see it: every one of them holds identically
+// under the defect, because the TOTALS are untouched and only the BAND moves.
+//
+// DR-21 settles the open accounting question S-15 for both arms at once:
+//
+//   * an amount with no stated term — the whole invoice, or the RESIDUAL the
+//     schedule does not declare — ages from `coalesce(due_date, issue_date)`;
+//   * a SCHEDULED instalment ages from ITS OWN due date and from nothing else,
+//     so the two arms are NOT levelled;
+//   * and no path takes a receivable out of the report except payment.
+//
+// The substitution has a SIGNED direction and it is the safe one:
+// `invoices.issue_date` is `NOT NULL` and `invoices_due_date_ck` enforces
+// `due_date >= issue_date`, so the substitute can only ever make a receivable
+// MORE overdue than the absent date did, never less.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('DR-13-SPEC the termless receivable ages from its issue date in every arm', () => {
+  it('dr13_1: a termless invoice 400 days old is reported in the OLDEST band, not the first', () => {
+    const row = termlessRow(400);
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — the planless arm emitted nothing, so the band below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('whole_invoice');
+    // THE ASSERTION THAT GOES RED ON THE DEFECT, and it is on the BAND NUMBER:
+    // under the retired rule this is 1 — `not-due` — for a receivable 400 days
+    // past its own issue date.
+    expect(only.bucketNo, 'a termless receivable 400 days old reported as not-due is debt leaving the report by omission').toBe(OLDEST_STANDARD);
+    expect((agingBucketLabels([...STANDARD]) as readonly string[])[only.bucketNo - 1]).toBe('over-90');
+    // The date the projection SAYS it used is the issue date, so the figure
+    // and its stated date cannot disagree.
+    expect(only.scheduleDate).toBe(row.issueDate);
+    // CONSERVATION, as an absolute value against the authoritative figure.
+    expect(sum(c)).toBe(100_000n);
+  });
+
+  it('dr13_2: the unscheduled RESIDUAL of a termless invoice ages from the issue date too (DR-21)', () => {
+    // A plan that declares 40 000 of a 100 000 invoice: 60 000 is residual,
+    // and the schedule gives it no date of its own.
+    const row = termlessRow(400, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(395),
+      installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 40_000n }],
+    };
+    const c = projectInvoice(row, plan, AS_OF, STANDARD);
+    const residual = c.filter((x) => x.origin === 'residual');
+    expect(residual, 'NO SUBJECT — no residual was emitted, so DR-21 has nothing to be wrong about').toHaveLength(1);
+    const r = residual[0] as AgingContribution;
+    expect(r.txnMinor).toBe(60_000n);
+    expect(r.bucketNo, 'an unscheduled residual reported as not-due is the same omission by another arm').toBe(OLDEST_STANDARD);
+    expect(r.scheduleDate).toBe(row.issueDate);
+    // And the arms still PARTITION the authoritative outstanding exactly.
+    expect(sum(c)).toBe(100_000n);
+  });
+
+  it('dr13_3: a SCHEDULED instalment ages from its OWN due date and not from the issue date (DR-21)', () => {
+    // The two arms are not levelled: this instalment is not yet due although
+    // the invoice was issued 400 days ago.
+    const row = termlessRow(400, { outstandingTxnMinor: 40_000n, outstandingBaseMinor: 33_801n });
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(-60),
+      installments: [{ seqNo: 1, dueDate: daysBefore(-30), amountTxnMinor: 40_000n }],
+    };
+    const c = projectInvoice(row, plan, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('installment');
+    expect(only.bucketNo, 'a future instalment aged from the invoice issue date would be the opposite error').toBe(1);
+    expect(only.scheduleDate).toBe(plan.installments[0]?.dueDate);
+  });
+
+  it('dr13_4: a STATED due date still governs, and the older issue date does not pull it older', () => {
+    const row: OpenInvoiceRow = { ...termlessRow(400), dueDate: daysBefore(0) };
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD);
+    const only = c[0] as AgingContribution;
+    // Nothing is overdue on the due date itself: `>` is strict.
+    expect(only.bucketNo).toBe(1);
+    expect(only.scheduleDate).toBe(row.dueDate);
+  });
+
+  it('dr13_5: every boundary of the fallback, on each side and ON it', () => {
+    // The thresholds are `[0, 30, 60, 90]` and the comparison is STRICT `>`,
+    // so the issue date itself is band 1 and one day later is band 2.
+    const expected: readonly [number, number][] = [
+      [0, 1], // the issue day itself — nothing is overdue yet
+      [1, 2],
+      [29, 2],
+      [30, 2], // ON the boundary: `>` is strict, so still `1-30`
+      [31, 3],
+      [59, 3],
+      [60, 3],
+      [61, 4],
+      [89, 4],
+      [90, 4],
+      [91, 5],
+      [3650, 5],
+    ];
+    for (const [age, band] of expected) {
+      const c = projectInvoice(termlessRow(age), undefined, AS_OF, STANDARD);
+      expect((c[0] as AgingContribution).bucketNo, `a termless receivable ${age} day(s) past its issue date`).toBe(band);
+    }
+    // A FUTURE issue date is not negatively overdue; it is not overdue.
+    expect((projectInvoice(termlessRow(-45), undefined, AS_OF, STANDARD)[0] as AgingContribution).bucketNo).toBe(1);
+  });
+
+  it('dr13_6: the fallback is a CIVIL date difference — leap day, year end, month end, and a DST crossing', () => {
+    // Each pair is (issue date, as-of) with the EXACT number of civil days
+    // between them, so no host offset and no clock can move a band.
+    const pairs: readonly { issue: string; asOf: string; days: number }[] = [
+      { issue: '2024-02-29', asOf: '2024-03-30', days: 30 }, // a leap day, ON the boundary
+      { issue: '2024-02-29', asOf: '2024-03-31', days: 31 },
+      { issue: '2025-12-31', asOf: '2026-01-30', days: 30 }, // across a year end
+      { issue: '2026-01-31', asOf: '2026-03-02', days: 30 }, // across a short month
+      { issue: '2026-03-27', asOf: '2026-04-26', days: 30 }, // across a spring DST change
+      { issue: '2026-10-23', asOf: '2026-11-22', days: 30 }, // across an autumn DST change
+    ];
+    for (const { issue, asOf, days } of pairs) {
+      expect(epochDay(asOf) - epochDay(issue), `${issue} to ${asOf}`).toBe(days);
+      const row = termlessRow(0, { issueDate: issue });
+      const c = projectInvoice(row, undefined, asOf, STANDARD);
+      expect((c[0] as AgingContribution).bucketNo, `${issue} to ${asOf} is ${days} civil days`).toBe(days > 30 ? 3 : 2);
+    }
+  });
+
+  it('dr13_7: the money — one minor unit on each side, a negative, and a figure above 2^53', () => {
+    // ONE MINOR UNIT, aged past the oldest boundary. The smallest amount the
+    // report can carry must still move bands.
+    const tiny = projectInvoice(termlessRow(91, { outstandingTxnMinor: 1n, outstandingBaseMinor: 1n }), undefined, AS_OF, STANDARD);
+    expect((tiny[0] as AgingContribution).txnMinor).toBe(1n);
+    expect((tiny[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // And one minor unit on the YOUNG side of the same boundary.
+    const tinyYoung = projectInvoice(termlessRow(90, { outstandingTxnMinor: 1n, outstandingBaseMinor: 1n }), undefined, AS_OF, STANDARD);
+    expect((tinyYoung[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD - 1);
+
+    // A CUSTOMER IN CREDIT on a termless document — a negative is a fact, not
+    // an error, and it must age rather than vanish.
+    const credit = projectInvoice(termlessRow(400, { outstandingTxnMinor: -2_500n, outstandingBaseMinor: -2_113n }), undefined, AS_OF, STANDARD);
+    expect((credit[0] as AgingContribution).txnMinor).toBe(-2_500n);
+    expect((credit[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    expect(sum(credit)).toBe(-2_500n);
+
+    // ABOVE 2^53, so a float would lose minor units. `9007199254740993` is
+    // 2^53 + 1 and is NOT representable as a double.
+    const huge = 9_007_199_254_740_993n;
+    expect(BigInt(Number(huge)), '2^53 + 1 survived a round trip through a double, so this case proves nothing').not.toBe(huge);
+    const big = projectInvoice(termlessRow(400, { outstandingTxnMinor: huge, outstandingBaseMinor: huge - 1n }), undefined, AS_OF, STANDARD);
+    expect((big[0] as AgingContribution).txnMinor).toBe(huge);
+    expect((big[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // CONSERVATION as an ABSOLUTE value, not as an identity between two sums
+    // computed the same way.
+    expect(sum(big)).toBe(huge);
+  });
+
+  it('dr13_8: no receivable leaves the aging report — the bands total the authoritative outstanding, termless or not', () => {
+    const rows: readonly OpenInvoiceRow[] = [
+      termlessRow(400, { invoiceId: 'a', outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n }),
+      { ...termlessRow(400, { invoiceId: 'b' }), dueDate: daysBefore(31), outstandingTxnMinor: 7n, outstandingBaseMinor: 6n },
+      termlessRow(0, { invoiceId: 'c', outstandingTxnMinor: -2_500n, outstandingBaseMinor: -2_113n }),
+      termlessRow(91, { invoiceId: 'd', outstandingTxnMinor: 9_007_199_254_740_993n, outstandingBaseMinor: 9_007_199_254_740_992n }),
+    ];
+    const buckets = projectCustomerAging(rows, [], AS_OF, STANDARD);
+    const total = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+    expect(
+      buckets.reduce((a, b) => a + b.txnMinor, 0n),
+      'the bands must total the authoritative outstanding EXACTLY',
+    ).toBe(total);
+    // And the 400-day termless receivable is really in the oldest band, so the
+    // identity above is not being satisfied by everything sitting in band 1.
+    const oldest = buckets.find((b) => b.bucketNo === OLDEST_STANDARD);
+    expect(oldest, 'NO SUBJECT — nothing reached the oldest band, so the totality law holds vacuously').toBeDefined();
+    expect((oldest as { txnMinor: bigint }).txnMinor).toBe(100_000n + 9_007_199_254_740_993n);
+  });
+
+  it('dr13_9: the SPECIFICATION resolves its bucket date the way `0084` does, and keeps no `IS NOT NULL` that drops a receivable', () => {
+    // CODE, not prose: `sqlCodeOnly` blanks comments and string literals
+    // outside a dollar-quoted body, which is the trap `TL-P4-COORD-R46` ruled
+    // on — the previous version of this law matched `o.due_date IS NOT NULL`
+    // in `0084` and was satisfied by a SENTENCE describing the retired guard.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/coalesce\(oi\.due_date,\s*oi\.issue_date\)/);
+    // And the guard that dropped the receivable is gone from the band
+    // arithmetic.
+    expect(sketch, 'a bucket-date NULL guard counts zero thresholds and parks the receivable in band 1 for ever').not.toMatch(/bucket_date IS NOT NULL/i);
+    // `issue_date` is carried OFF THE AUTHORITATIVE CALL (R-104: one visit to
+    // `invoices`), not fetched by a second join.
+    expect(sketch).toMatch(/SELECT o\.invoice_id, o\.currency_code, o\.due_date, o\.issue_date,/);
+    expect(sketch).not.toMatch(/JOIN\s+public\.invoices/i);
+    // THE APPROVED BODY, measured rather than recalled: `0084` resolves the
+    // same way in CODE and its own `IS NOT NULL` survives only in a sentence.
+    const shipped = sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'));
+    expect(shipped).toMatch(/coalesce\(o\.due_date,\s*o\.issue_date\)/);
+    expect(shipped).not.toMatch(/o\.due_date IS NOT NULL/);
   });
 });
