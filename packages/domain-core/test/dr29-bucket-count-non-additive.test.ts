@@ -188,11 +188,14 @@ describe('DR-29: the per-bucket counts do not partition the invoices', () => {
 
   it('dr29_19: ANTI-ORPHAN — the contract really declares the field these numbers are about', () => {
     // Without this, the file proves an arithmetic fact about a figure no
-    // interface offers, and would keep passing if `openInvoiceCount` were
+    // interface offers, and would keep passing if the DR-39 counters were
     // dropped tomorrow. This is the one case here that is RED before DR-29 is
     // implemented.
     const contract = readFileSync(join(__dirname, '..', '..', 'shared-contracts', 'src', 'customers.ts'), 'utf8');
-    expect(contract, 'the aging document must declare the distinct count').toMatch(/openInvoiceCount:\s*number;/);
+    // DR-39 amended the single figure into TWO per-currency counters, so what
+    // the document must declare is the PAIR.
+    expect(contract, 'the aging document must declare the distinct debit counter').toMatch(/openDebitCount:\s*number;/);
+    expect(contract, 'and the distinct credit counter').toMatch(/openCreditCount:\s*number;/);
     expect(contract, 'and it must warn that the per-bucket counts are not additive').toContain('NOT ADDITIVE');
   });
 });

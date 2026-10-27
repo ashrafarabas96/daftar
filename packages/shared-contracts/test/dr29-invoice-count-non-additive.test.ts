@@ -44,7 +44,8 @@ import type { CustomerAgingDto } from '../src';
  * with `CREATE OR REPLACE FUNCTION` — which cannot change a `RETURNS TABLE`
  * list at all (42P13). A sixth column was therefore never available:
  * appending one would have made the specification's own apply fail. The
- * distinct count is a SEPARATE routine, `customer_ar_open_invoice_count`, and
+ * distinct count is a SEPARATE routine - `customer_ar_open_document_counts`
+ * since DR-39 amended this card into TWO counters - and
  * section 4 of this file holds the aging shape UNCHANGED as a positive law, so
  * that a later hand cannot quietly take the cheaper-looking road.
  *
@@ -56,6 +57,15 @@ import type { CustomerAgingDto } from '../src';
  * need PostgreSQL. The arithmetic claim — that the sum and the distinct count
  * genuinely differ — is proved against the reference model in
  * `packages/domain-core/test/dr29-bucket-count-non-additive.test.ts`.
+ */
+
+/**
+ * AMENDED BY DR-39 (owner): the single `openInvoiceCount` this card added is
+ * RETIRED, because a zero-balance document belongs to NEITHER counter and so
+ * the figure was not "how many documents are open" under any reading. What
+ * stands of this card is the NON-ADDITIVITY law; what replaced the figure is
+ * the per-currency `openDebitCount` / `openCreditCount` pair, whose own laws
+ * are in `dr39-open-document-counts.test.ts`.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..', '..');
@@ -109,7 +119,8 @@ describe('section 1 DR-29: the contract says it, in words that cannot be read tw
       'an invoice under an active instalment plan contributes to SEVERAL buckets',
     );
     expect(contract, 'and it must say what the sum therefore is NOT').toContain('is not the number of open invoices and may exceed it');
-    expect(contract, 'and it must point at the field that DOES answer that question').toContain('openInvoiceCount');
+    expect(contract, 'and it must point at the figures that DO answer that question (DR-39)').toContain('openDebitCount');
+    expect(contract, 'both of them').toContain('openCreditCount');
   });
 
   it('dr29_2: the retired wording — a bare count with no word about adding — is gone', () => {
@@ -120,12 +131,15 @@ describe('section 1 DR-29: the contract says it, in words that cannot be read tw
     expect(contract, 'the one-line form said nothing about additivity and must not survive').not.toContain(retired);
   });
 
-  it('dr29_3: the document-level field is declared, and says it is measured independently', () => {
+  it('dr29_3: the document-level figures are declared, and say they are measured independently', () => {
     const live = tsLiveCode(CONTRACT);
-    expect(live, '`openInvoiceCount` must be declared in CODE and not only discussed in prose').toMatch(/openInvoiceCount:\s*number;/);
+    // DR-39: TWO counters, not one. The single figure this card first added is
+    // retired, and `dr39_5` is the negative control that keeps it retired.
+    expect(live, '`openDebitCount` must be declared in CODE and not only discussed in prose').toMatch(/openDebitCount:\s*number;/);
+    expect(live, '`openCreditCount` likewise').toMatch(/openCreditCount:\s*number;/);
     const contract = readFileSync(CONTRACT, 'utf8');
     expect(contract, 'the field must say it is NOT derived from the buckets').toContain('never derived from the buckets');
-    expect(contract, 'and it must name how it IS measured').toContain('count(DISTINCT invoice_id)');
+    expect(contract, 'and it must name how they ARE measured').toContain('count(DISTINCT invoice_id)');
   });
 
   it('dr29_4: the type requires the field — a client cannot omit it and cannot send null', () => {
@@ -136,9 +150,9 @@ describe('section 1 DR-29: the contract says it, in words that cannot be read tw
       bucketDays: [0, 30, 60, 90],
       buckets: [],
       totalBaseMinor: '0',
-      openInvoiceCount: 0,
+      openCounts: [],
     };
-    expect(complete.openInvoiceCount).toBe(0);
+    expect(complete.openCounts).toEqual([]);
 
     const withoutIt = {
       customerId: complete.customerId,
@@ -148,23 +162,27 @@ describe('section 1 DR-29: the contract says it, in words that cannot be read tw
       buckets: complete.buckets,
       totalBaseMinor: complete.totalBaseMinor,
     };
-    // @ts-expect-error DR-29: `openInvoiceCount` is REQUIRED. While it was absent from the interface this directive was UNUSED, which is TS2578 — the typecheck is where this case goes red.
+    // @ts-expect-error DR-29, as amended by DR-39: the document-level counters are REQUIRED. While `openCounts` was absent from the interface this directive was UNUSED, which is TS2578 — the typecheck is where this case goes red.
     const incomplete: CustomerAgingDto = withoutIt;
     expect(incomplete.customerId).toBe(complete.customerId);
 
-    // @ts-expect-error DR-29: a count is a count. `null` is not one, and an absent answer is not zero invoices.
-    const nulled: CustomerAgingDto = { ...complete, openInvoiceCount: null };
+    // @ts-expect-error DR-29, as amended by DR-39: an absent answer is not "no documents". `null` is not a list of per-currency counters.
+    const nulled: CustomerAgingDto = { ...complete, openCounts: null };
     expect(nulled.asOf).toBe('2026-10-27');
   });
 });
 
 // ── Section 2. The SQL computes it, independently, in its own routine ────
 
-describe('section 2 DR-29: `customer_ar_open_invoice_count` exists, counts DISTINCT, and is configured like its siblings', () => {
+describe('section 2 DR-29: the separate counting routine exists, counts DISTINCT, and is configured like its siblings', () => {
   it('dr29_5: the routine is declared, over the same population, by count(DISTINCT invoice_id)', () => {
     const sql = sqlLiveCode(AGING_MIGRATION);
+    // DR-39 replaced the single-INTEGER routine with a per-currency PAIR; the
+    // shape law for that is `dr39_7`, and what this case keeps asserting is
+    // the property DR-29 is about - a DISTINCT count over the bucket
+    // population, measured in a routine of its own.
     expect(sql, 'the routine must be created').toMatch(
-      /CREATE FUNCTION customer_ar_open_invoice_count\(p_business_id UUID, p_customer_id UUID\)\s*\n\s*RETURNS INTEGER/,
+      /CREATE FUNCTION customer_ar_open_document_counts\(p_business_id UUID, p_customer_id UUID\)/,
     );
     // THE WHOLE POINT: a DISTINCT count over the invoice ids, and not a count
     // of rows, and not a sum of anything.
@@ -176,17 +194,17 @@ describe('section 2 DR-29: `customer_ar_open_invoice_count` exists, counts DISTI
       "WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open'",
     );
     expect(sql, 'and the non-zero filter must be `<> 0`, so a credit balance is still an open invoice (DR-23)').toMatch(
-      /customer_ar_open_invoice_count[\s\S]{0,1600}?o\.outstanding_txn_minor <> 0/,
+      /customer_ar_open_document_counts[\s\S]{0,2600}?o\.outstanding_txn_minor <> 0/,
     );
   });
 
   it('dr29_6: it is STABLE, SECURITY INVOKER, path-pinned, and EXECUTE is exactly the two accepted roles', () => {
     const sql = sqlLiveCode(AGING_MIGRATION);
-    expect(sql).toMatch(/customer_ar_open_invoice_count[\s\S]{0,400}?LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp/);
-    expect(sql).toContain('REVOKE ALL ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) FROM PUBLIC;');
-    expect(sql).toContain('GRANT EXECUTE ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) TO daftar_app, daftar_inventory_internal;');
+    expect(sql).toMatch(/customer_ar_open_document_counts[\s\S]{0,400}?LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp/);
+    expect(sql).toContain('REVOKE ALL ON FUNCTION customer_ar_open_document_counts(UUID, UUID) FROM PUBLIC;');
+    expect(sql).toContain('GRANT EXECUTE ON FUNCTION customer_ar_open_document_counts(UUID, UUID) TO daftar_app, daftar_inventory_internal;');
     expect(sql, 'and it carries a COMMENT, like every reader of record in this file').toContain(
-      'COMMENT ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) IS',
+      'COMMENT ON FUNCTION customer_ar_open_document_counts(UUID, UUID) IS',
     );
   });
 
@@ -197,7 +215,7 @@ describe('section 2 DR-29: `customer_ar_open_invoice_count` exists, counts DISTI
     // number must both move.
     const sql = sqlLiveCode(AGING_MIGRATION);
     expect(sql, 'the new signature must join the 0084-E(6) configuration list').toMatch(
-      /UNION ALL SELECT 'public\.customer_ar_open_invoice_count\(UUID, UUID\)'/,
+      /UNION ALL SELECT 'public\.customer_ar_open_document_counts\(UUID, UUID\)'/,
     );
     expect(sql, 'and the examined-count must be raised, or the loop proves the old five and skips the new one').toContain('IF v_seen <> 6 THEN');
     expect(sql, 'and the stale expectation must be gone').not.toContain('IF v_seen <> 5 THEN');
@@ -211,24 +229,24 @@ describe('section 3 DR-29: the read surface carries the number and never derives
     const live = tsLiveCode(READER);
     // ONE round trip. A second `db.scoped` call in `aging` would pay row-security
     // setup and latency twice for a figure that fits in four bytes.
-    expect(live, 'the aging read must call the count routine').toContain('customer_ar_open_invoice_count($1::uuid, $2::uuid)');
+    expect(live, 'the aging read must call the count routine').toContain('customer_ar_open_document_counts($1::uuid, $2::uuid)');
     // `AS MATERIALIZED` is not decoration: without it a STABLE scalar in the
     // target list may be evaluated once PER ROW, which would re-scan the
     // customer's invoices once per bucket.
-    expect(live, 'the scalar must be forced to evaluate once').toMatch(/WITH n AS MATERIALIZED/);
-    expect(live, 'and the fold must receive it off the rows').toMatch(/open_invoice_count:\s*number;/);
+    expect(live, 'the counts must be forced to evaluate once').toMatch(/WITH c AS MATERIALIZED/);
+    expect(live, 'and the fold must receive them off the rows').toMatch(/open_debit_count:\s*number \| null;/);
   });
 
   it('dr29_9: the fold reports it, and the figure is not computed by adding the buckets', () => {
     const live = tsLiveCode(READER);
-    expect(live, 'the fold must return the distinct figure').toMatch(/openInvoiceCount/);
+    expect(live, 'the fold must return the distinct figures').toMatch(/openCounts/);
     // The ABSENCE law, and it is narrow on purpose: the fold still SUMS the
     // per-bucket counts into each bucket (`bucket.invoiceCount += …`), which is
     // correct and must stay. What must never exist is an accumulator that adds
     // bucket counts into the DOCUMENT-level figure.
-    expect(live, 'the document figure must never be accumulated from the rows').not.toMatch(/openInvoiceCount\s*\+=/);
-    expect(live, 'nor folded out of the buckets').not.toMatch(/openInvoiceCount\s*=\s*buckets\./);
-    expect(live, 'nor reduced out of them').not.toMatch(/openInvoiceCount[^\n]*reduce\(/);
+    expect(live, 'the document figures must never be accumulated from the rows').not.toMatch(/open(?:Debit|Credit)Count\s*\+=/);
+    expect(live, 'nor folded out of the buckets').not.toMatch(/open(?:Debit|Credit)Count\s*=\s*buckets\./);
+    expect(live, 'nor reduced out of them').not.toMatch(/open(?:Debit|Credit)Count[^\n]*reduce\(/);
   });
 
   it('dr29_10: a row set that disagrees with itself about the figure is REFUSED, not averaged or picked from', () => {
@@ -238,17 +256,17 @@ describe('section 3 DR-29: the read surface carries the number and never derives
     // "these aging rows are not a valid answer" is the right channel. Picking
     // the first, the maximum, or the last would be inventing a figure.
     expect(live, 'divergence across rows must raise the module refusal').toMatch(
-      /open_invoice_count[\s\S]{0,900}?sellingRefusal\('customer\.aging_bucket_mapping_invalid'\)/,
+      /open_debit_count[\s\S]{0,1400}?sellingRefusal\('customer\.aging_bucket_mapping_invalid'\)/,
     );
-    expect(live, 'and a non-integer or negative count is the same class of defect').toMatch(/Number\.isInteger\(r\.open_invoice_count\)/);
+    expect(live, 'and a non-integer or negative count is the same class of defect').toMatch(/Number\.isInteger\(r\.open_debit_count\)/);
     // And the empty answer is STATED. This one clause is read off the RAW
     // source and not the comment-stripped code, deliberately: the requirement
     // is that the module say out loud why an empty row set is zero invoices
     // rather than leave it to a default, and a requirement about prose has to
     // be checked against prose. The behaviour it describes is held by the code
     // laws above and by the fold's own cases.
-    expect(readFileSync(READER, 'utf8'), 'the empty answer is zero invoices, stated rather than left to a default').toContain(
-      'no rows at all means no open invoices',
+    expect(readFileSync(READER, 'utf8'), 'the empty answer is stated rather than left to a default').toContain(
+      'no rows at all means no currency has an open document',
     );
   });
 });
@@ -269,8 +287,8 @@ describe('section 4 DR-29: the five-column aging shape is held, which is WHY the
 
   it('dr29_12: the distinct count did NOT become a sixth column of the aging routine', () => {
     // The negative half of dr29_11, over the thing a later hand would try.
-    expect(sqlLiveCode(AGING_MIGRATION)).not.toMatch(/RETURNS TABLE \(bucket_no INTEGER[^)]*open_invoice_count/);
-    expect(sqlLiveCode(AGING_SPEC)).not.toMatch(/RETURNS TABLE \(bucket_no INTEGER[^)]*open_invoice_count/);
+    expect(sqlLiveCode(AGING_MIGRATION)).not.toMatch(/RETURNS TABLE \(bucket_no INTEGER[^)]*open_(?:debit|credit)_count/);
+    expect(sqlLiveCode(AGING_SPEC)).not.toMatch(/RETURNS TABLE \(bucket_no INTEGER[^)]*open_(?:debit|credit)_count/);
   });
 });
 
@@ -323,8 +341,9 @@ const COUNT_REFERENCE = /\binvoiceCount\b|\binvoice_count\b/;
 /**
  * An accumulation in the immediate neighbourhood of one.
  *
- * `openInvoiceCount` must NOT trip this, which is why `COUNT_REFERENCE` is
- * word-bounded: `openInvoiceCount` carries no standalone `invoiceCount` token.
+ * The DR-39 counters must NOT trip this, which is why `COUNT_REFERENCE` is
+ * word-bounded: `openDebitCount` carries no standalone `invoiceCount` token.
+ * Their own combination law is `dr39_18`.
  */
 const ACCUMULATION = /\breduce\b|\breduceRight\b|\bsumOf\b|\bsumBy\b|\bfold\b|\bsum\s*\(|\+=|\baccumulat/i;
 
@@ -346,7 +365,7 @@ export function bucketCountSummingProblems(source: string, where: string): strin
     const window = lines.slice(Math.max(0, i - 2), i + 3).join('\n');
     if (ACCUMULATION.test(window)) {
       problems.push(
-        `${where}:${i + 1} adds per-bucket invoice counts together — DR-29: the buckets do not partition the invoices, so the sum is not the number of open invoices. Read \`openInvoiceCount\` instead.`,
+        `${where}:${i + 1} adds per-bucket invoice counts together — DR-29: the buckets do not partition the invoices, so the sum is not the number of open invoices. Read the per-currency \`openCounts\` instead.`,
       );
     }
   }
@@ -374,10 +393,10 @@ describe('section 5 DR-29: no interface sums the per-bucket counts', () => {
     // And the lawful uses are NOT flagged, or the guard would forbid showing a
     // bucket's own count — which DR-29 permits and the screen needs.
     const display = 'return <span>{bucket.invoiceCount}</span>;';
-    const documentFigure = 'const total = aging.openInvoiceCount;';
+    const documentFigure = 'const n = counts.openDebitCount;';
     const sumOfMoney = ['const money = aging.buckets.reduce((acc, b) => acc + BigInt(b.baseMinor), 0n);', 'const n = bucket.invoiceCount;'].join('\n');
     expect(bucketCountSummingProblems(display, 'synthetic/Bucket.tsx'), 'rendering one bucket own count is lawful').toEqual([]);
-    expect(bucketCountSummingProblems(documentFigure, 'synthetic/Total.ts'), 'reading the document figure is the prescribed way').toEqual([]);
+    expect(bucketCountSummingProblems(documentFigure, 'synthetic/Total.ts'), 'reading a document-level counter is the prescribed way').toEqual([]);
     // DECLARED LIMIT, measured rather than claimed absent: summing MONEY two
     // lines from a count reference trips the window. The detector errs toward
     // naming a site, and a false name costs a reader one line of thought,

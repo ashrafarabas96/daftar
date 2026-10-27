@@ -76,20 +76,27 @@ const OLDEST_BUCKET_NO = BUCKET_DAYS.length + 1;
  * "multi-currency rows do not alter the base total" unfalsifiable.
  */
 /**
- * `open_invoice_count` is the DOCUMENT-level distinct count DR-29 added, and
- * the value below is deliberately NEITHER the sum of the per-band counts NOR
+ * `open_debit_count` and `open_credit_count` are the PER-CURRENCY document
+ * counters DR-39 put in place of DR-29's single `open_invoice_count`: open
+ * documents whose balance is `> 0` and whose balance is `< 0` respectively,
+ * with a zero balance counted in NEITHER, and they are **never added
+ * together** (DR-39 rule 5).
+ *
+ * The values below are deliberately NEITHER the sum of the per-band counts NOR
  * any one of them: since P4-S7 an invoice is aged across its instalment
  * schedule, so it reaches several bands and the sum counts it once per band.
- * Every row of one answer carries the SAME scalar, because `foldCustomerAging`
- * refuses a row set that disagrees with itself about a figure the whole
- * document is supposed to state once.
+ * Every row OF ONE CURRENCY carries the SAME pair, because `foldCustomerAging`
+ * refuses a row set that disagrees with itself about a figure the document is
+ * supposed to state once per currency — and the two currencies carry
+ * DIFFERENT pairs, so a fold that collapsed the counters across currencies
+ * could not produce this fixture's answer.
  */
 const ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
-  { bucket_no: 1, currency_code: 'USD', txn_minor: '1000', base_minor: '1000', invoice_count: 2, open_invoice_count: 7 },
-  { bucket_no: 2, currency_code: 'USD', txn_minor: '2000', base_minor: '2000', invoice_count: 1, open_invoice_count: 7 },
-  { bucket_no: 3, currency_code: 'EUR', txn_minor: '3000', base_minor: '3300', invoice_count: 3, open_invoice_count: 7 },
-  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'EUR', txn_minor: '5000', base_minor: '5500', invoice_count: 5, open_invoice_count: 7 },
-  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'USD', txn_minor: '4000', base_minor: '4000', invoice_count: 4, open_invoice_count: 7 },
+  { bucket_no: 1, currency_code: 'USD', txn_minor: '1000', base_minor: '1000', invoice_count: 2, open_debit_count: 3, open_credit_count: 1 },
+  { bucket_no: 2, currency_code: 'USD', txn_minor: '2000', base_minor: '2000', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
+  { bucket_no: 3, currency_code: 'EUR', txn_minor: '3000', base_minor: '3300', invoice_count: 3, open_debit_count: 2, open_credit_count: 0 },
+  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'EUR', txn_minor: '5000', base_minor: '5500', invoice_count: 5, open_debit_count: 2, open_credit_count: 0 },
+  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'USD', txn_minor: '4000', base_minor: '4000', invoice_count: 4, open_debit_count: 3, open_credit_count: 1 },
 ]);
 
 /** Σ `base_minor` over a row set — the ORACLE, summed from the input and never from the fold. */
@@ -307,7 +314,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
   // 8
   it('CASE 8 — multi-currency rows do not alter the BASE total', () => {
     // The same bands, the same base figures, but every row in one currency.
-    const singleCurrency = ROWS.map((r) => ({ ...r, currency_code: 'USD', txn_minor: r.base_minor }));
+    const singleCurrency = ROWS.map((r) => ({ ...r, currency_code: 'USD', txn_minor: r.base_minor, open_debit_count: 3, open_credit_count: 1 }));
     expect(ROWS.some((r) => r.currency_code !== 'USD')).toBe(true); // non-vacuity: the two sets really differ
     const multi = foldCustomerAging(ROWS, SHAPE);
     const single = foldCustomerAging(singleCurrency, SHAPE);
@@ -322,7 +329,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 9
   it('CASE 9 — `bucket_no = 0` is REFUSED as an internal invariant failure, not skipped', () => {
-    const impossible: CustomerAgingSqlRow[] = [{ bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1, open_invoice_count: 7 }];
+    const impossible: CustomerAgingSqlRow[] = [{ bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
     // Non-vacuity: the row carries money, so a silent skip would really lose it.
     expect(sumBase(impossible)).toBe(700n);
     let thrown: unknown;
@@ -347,7 +354,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 10
   it('CASE 10 — a `bucket_no` GREATER than the labels length is REFUSED', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: LABELS.length + 1, currency_code: 'USD', txn_minor: '900', base_minor: '900', invoice_count: 1, open_invoice_count: 7 };
+    const row: CustomerAgingSqlRow = { bucket_no: LABELS.length + 1, currency_code: 'USD', txn_minor: '900', base_minor: '900', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 };
     expect(row.bucket_no).toBe(5); // non-vacuity: it really is past the end
     expect(sumBase([row])).toBe(900n); // and it really carries money
     let thrown: unknown;
@@ -399,7 +406,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     // (b) EVERY legal ordinal places its row, one band and no other. A sweep,
     //     so a future shape change cannot quietly reopen the end of the range.
     for (let bucketNo = 1; bucketNo <= LABELS.length; bucketNo += 1) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1, open_invoice_count: 7 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
       const folded = foldCustomerAging(one, SHAPE);
       expect(BigInt(folded.totalBaseMinor), `band ${bucketNo} lost its row`).toBe(11n);
       const landedIndexes = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
@@ -413,7 +420,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     const impossibleOrdinals = [-1, 0, 0.5, 1.5, LABELS.length + 1, LABELS.length + 2, Number.NaN, Number.POSITIVE_INFINITY];
     expect(impossibleOrdinals.length).toBeGreaterThan(0);
     for (const bucketNo of impossibleOrdinals) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_invoice_count: 7 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
       let refused = false;
       let total: string | null = null;
       try {
@@ -432,7 +439,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
   // 13 — CHAL-4. `foldCustomerAging` is EXPORTED, so the shape is an input and
   // not an internal fact, and a malformed one used to reach the DTO.
   it('CASE 13 — a `labels` length that is not `bucketDays.length + 1` is REFUSED, and no DTO carries `fromDays: NaN`', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: 1, currency_code: 'USD', txn_minor: '55', base_minor: '55', invoice_count: 1, open_invoice_count: 7 };
+    const row: CustomerAgingSqlRow = { bucket_no: 1, currency_code: 'USD', txn_minor: '55', base_minor: '55', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 };
 
     // ONE TOO LONG. This is the NaN path: band index 4 read `bucketDays[3]`,
     // which is `undefined`, and `undefined + 1` is `NaN` — a money DTO with a
@@ -510,14 +517,14 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
       expect(labels.length, where).toBe(days.length + 1);
 
       // The oldest legal ordinal lands, in the LAST band.
-      const atBound = foldCustomerAging([{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_invoice_count: 7 }], shape);
+      const atBound = foldCustomerAging([{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }], shape);
       expect(atBound.totalBaseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.baseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.toDays, where).toBeNull();
 
       // One past it refuses — and 0 does too, at every shape.
       for (const bad of [0, labels.length + 1]) {
-        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_invoice_count: 7 }];
+        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
         expect(() => foldCustomerAging(one, shape), `${where}, bucket_no ${bad}`).toThrow(AppError);
       }
     }
@@ -531,7 +538,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
 
       // Every legal ordinal lands in exactly one band, at `bucket_no - 1`.
       for (let bucketNo = 1; bucketNo <= labels.length; bucketNo += 1) {
-        const folded = foldCustomerAging([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_invoice_count: 7 }], shape);
+        const folded = foldCustomerAging([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }], shape);
         expect(BigInt(folded.totalBaseMinor), `${where}, band ${bucketNo} lost its row`).toBe(9n);
         const landed = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
         expect(landed, `${where}, band ${bucketNo}`).toEqual([bucketNo - 1]);
@@ -540,7 +547,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
       // Every illegal ordinal refuses. Derived from the shape, so the sweep
       // widens with it rather than staying about three boundaries.
       for (const bad of [-1, 0, 0.5, labels.length + 1, labels.length + 2, Number.NaN, Number.POSITIVE_INFINITY]) {
-        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_invoice_count: 7 }];
+        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
         let refused = false;
         try {
           foldCustomerAging(one, shape);
@@ -560,7 +567,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
         currency_code: 'USD',
         txn_minor: String((i + 1) * 100),
         base_minor: String((i + 1) * 100),
-        invoice_count: i + 1, open_invoice_count: 7,
+        invoice_count: i + 1, open_debit_count: 3, open_credit_count: 1,
       }));
       const where = `${days.length} boundaries`;
       // Non-vacuity: a row per band, and real money in each.
@@ -654,7 +661,7 @@ describe('§B the OLD `buckets[r.bucket_no]` implementation goes RED under these
 
   it('RED 5 — CASES 9, 10 and 12 fail against the planted old implementation: an impossible ordinal is swallowed in silence', () => {
     for (const bucketNo of [0, LABELS.length + 1]) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_invoice_count: 7 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
       expect(sumBase(one)).toBe(13n); // non-vacuity: there is money on the row
       // The new fold refuses…
       expect(() => foldCustomerAging(one, SHAPE)).toThrow(AppError);
@@ -688,5 +695,294 @@ describe('§B the OLD `buckets[r.bucket_no]` implementation goes RED under these
     const rightOnOriginal = foldCustomerAging(unshifted, SHAPE);
     expect(wrongOnShifted.buckets.map((b) => b.baseMinor)).toEqual(rightOnOriginal.buckets.map((b) => b.baseMinor));
     expect(wrongOnShifted.totalBaseMinor).toBe(rightOnOriginal.totalBaseMinor);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §E DR-39 — THE TWO PER-CURRENCY DOCUMENT COUNTERS.
+//
+//    The owner's ruling: `open_debit_count` counts open documents whose
+//    balance is `> 0`, `open_credit_count` those whose balance is `< 0`
+//    (an overpayment's credit among them, DR-23), a document at exactly zero
+//    is counted in NEITHER, both are distinct at the level of the CUSTOMER
+//    AND THE CURRENCY and measured independently of the bands, and NO field
+//    may add the two together.
+//
+//    WHAT §E CAN AND CANNOT MEASURE, STATED BEFORE THE CASES. The SIGN SPLIT
+//    happens in SQL — `count(DISTINCT invoice_id) FILTER (WHERE … > 0)` and
+//    `… < 0` — so "a credit document lands in the credit counter" is a
+//    DATABASE claim and it is NOT_RUN here; the shipped predicates are held by
+//    text law in `packages/shared-contracts/test/dr39-open-document-counts.test.ts`
+//    §2. What §E measures is everything the FOLD is answerable for: that the
+//    pair reaches the document unchanged and per currency, that a document
+//    reaching several bands is counted ONCE and not once per band, that a
+//    currency netting to zero still appears (DR-33), and that a row set which
+//    contradicts itself is REFUSED rather than guessed at.
+//
+//    EVERY EXPECTED NUMBER BELOW IS WRITTEN BY HAND. None of them is produced
+//    by calling `foldCustomerAging`, and none by calling the local wrong folds
+//    either — those exist only to be shown FAILING.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** The DTO row shape §E asserts over, written out so the cases do not depend on an import. */
+interface OpenCountsRow {
+  currency: string;
+  openDebitCount: number;
+  openCreditCount: number;
+}
+
+/**
+ * A customer with BOTH a debit and a credit document open in one currency, and
+ * a second currency whose single document spans several bands.
+ *
+ * `JOD` is the NET-ZERO currency: `+4000` in band 1 and `-4000` in the oldest
+ * band, so its contribution to `totalBaseMinor` is nil while it still has two
+ * open documents — one debit, one credit. DR-33 says it must still appear.
+ *
+ * `KWD` is the SPANNING currency: one document, under an instalment plan,
+ * whose money reaches THREE bands. Its per-band `invoice_count` is 1 in each,
+ * summing to 3, while its `open_debit_count` is 1 — which is exactly the
+ * difference DR-29 named and DR-39 keeps.
+ */
+const DR39_ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
+  { bucket_no: 1, currency_code: 'JOD', txn_minor: '4000', base_minor: '4000', invoice_count: 1, open_debit_count: 1, open_credit_count: 1 },
+  { bucket_no: 1, currency_code: 'KWD', txn_minor: '600', base_minor: '600', invoice_count: 1, open_debit_count: 1, open_credit_count: 0 },
+  { bucket_no: 2, currency_code: 'KWD', txn_minor: '300', base_minor: '300', invoice_count: 1, open_debit_count: 1, open_credit_count: 0 },
+  { bucket_no: 3, currency_code: 'KWD', txn_minor: '100', base_minor: '100', invoice_count: 1, open_debit_count: 1, open_credit_count: 0 },
+  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'JOD', txn_minor: '-4000', base_minor: '-4000', invoice_count: 1, open_debit_count: 1, open_credit_count: 1 },
+]);
+
+/** The counters a row set declares for one currency, read straight off the fixture. */
+function declaredPair(rows: readonly CustomerAgingSqlRow[], currency: string): { debit: number; credit: number } {
+  const first = rows.find((r) => r.currency_code === currency);
+  if (first === undefined) throw new Error(`the fixture has no ${currency} row, so the case has no subject`);
+  return { debit: first.open_debit_count ?? -1, credit: first.open_credit_count ?? -1 };
+}
+
+/** Σ the per-band `invoice_count` of one currency — the figure DR-29 forbids as a document total. */
+function bandCountsOf(rows: readonly CustomerAgingSqlRow[], currency: string): number {
+  return rows.filter((r) => r.currency_code === currency).reduce((acc, r) => acc + r.invoice_count, 0);
+}
+
+/**
+ * WRONG FOLD 1 — IT COUNTS A DOCUMENT ONCE PER BAND.
+ *
+ * It differs from `foldCustomerAging` in exactly one respect: where the real
+ * fold ASSERTS that every row of a currency carries the same pair, this one
+ * ACCUMULATES the pair across rows. That is precisely the defect DR-39's
+ * negative control names — "a document counted twice" — and it is the mistake
+ * a hand reaches for naturally, because every other figure in that fold IS
+ * accumulated.
+ *
+ * DELIBERATELY NOT SHARED, and deliberately NOT a mutation of the production
+ * module. A red proof whose subject lives where the production code lives can
+ * be made green by editing the production code, and then the proof and the
+ * defect go green together and in silence.
+ */
+function doubleCountingFoldUnderTest(rows: readonly CustomerAgingSqlRow[]): OpenCountsRow[] {
+  const byCurrency = new Map<string, OpenCountsRow>();
+  for (const r of rows) {
+    if (r.currency_code === null || r.open_debit_count === null || r.open_credit_count === null) continue;
+    const seen = byCurrency.get(r.currency_code) ?? { currency: r.currency_code, openDebitCount: 0, openCreditCount: 0 };
+    seen.openDebitCount += r.open_debit_count; // ← THE DEFECT: once per band.
+    seen.openCreditCount += r.open_credit_count;
+    byCurrency.set(r.currency_code, seen);
+  }
+  return [...byCurrency.values()].sort((a, b) => (a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : 0));
+}
+
+/**
+ * WRONG FOLD 2 — IT READS A CREDIT DOCUMENT AS A DEBIT ONE.
+ *
+ * The two counters arrive as two columns of one row, and nothing in the shape
+ * of a row says which is which: swapping them is a one-token slip no type
+ * catches, both figures stay non-negative integers, and their SUM — the number
+ * DR-39 rule 5 forbids anyone from computing — is UNCHANGED. So a suite that
+ * only checked a total, or only checked that both counters are present, would
+ * be green on this. The case that catches it has to name the two figures
+ * SEPARATELY, which is what `E1` does.
+ */
+function signSwappingFoldUnderTest(rows: readonly CustomerAgingSqlRow[]): OpenCountsRow[] {
+  const byCurrency = new Map<string, OpenCountsRow>();
+  for (const r of rows) {
+    if (r.currency_code === null || r.open_debit_count === null || r.open_credit_count === null) continue;
+    // ← THE DEFECT: the credit column is reported as the debit counter.
+    byCurrency.set(r.currency_code, { currency: r.currency_code, openDebitCount: r.open_credit_count, openCreditCount: r.open_debit_count });
+  }
+  return [...byCurrency.values()].sort((a, b) => (a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : 0));
+}
+
+describe('§E0 the DR-39 fixture has a subject', () => {
+  it('the fixture really carries a debit side, a credit side, a net-zero currency and a spanning document', () => {
+    // Without these, every §E claim is a negative assertion over an absent
+    // subject and green about nothing.
+    expect(DR39_ROWS.length).toBeGreaterThan(0);
+    expect(new Set(DR39_ROWS.map((r) => r.currency_code)).size, 'the fixture must be multi-currency or per-currency distinctness is unfalsifiable').toBe(2);
+    expect(declaredPair(DR39_ROWS, 'JOD').credit, 'JOD must really have a credit document').toBeGreaterThan(0);
+    expect(declaredPair(DR39_ROWS, 'JOD').debit, 'and a debit one, so both counters are non-zero somewhere').toBeGreaterThan(0);
+    // The net-zero fact, by hand: +4000 and −4000.
+    expect(DR39_ROWS.filter((r) => r.currency_code === 'JOD').reduce((a, r) => a + BigInt(r.base_minor), 0n)).toBe(0n);
+    // And the spanning fact: three bands, three per-band counts, ONE document.
+    expect(DR39_ROWS.filter((r) => r.currency_code === 'KWD').length).toBe(3);
+    expect(bandCountsOf(DR39_ROWS, 'KWD')).toBe(3);
+    expect(declaredPair(DR39_ROWS, 'KWD').debit).toBe(1);
+    expect(bandCountsOf(DR39_ROWS, 'KWD')).not.toBe(declaredPair(DR39_ROWS, 'KWD').debit);
+    // The two currencies' pairs DIFFER, so a fold that collapsed the counters
+    // across currencies could not produce this fixture's answer.
+    expect(declaredPair(DR39_ROWS, 'JOD')).not.toEqual(declaredPair(DR39_ROWS, 'KWD'));
+  });
+});
+
+describe('§E DR-39: the two counters, per currency, independent of the bands', () => {
+  // E1 — the owner's first required case.
+  it('E1 — a customer with BOTH a debit and a credit document reports them as TWO figures, by hand', () => {
+    const { openCounts } = foldCustomerAging(DR39_ROWS, SHAPE);
+    // Hand-written, in full, and ordered by currency so the answer is stable.
+    expect(openCounts).toEqual([
+      { currency: 'JOD', openDebitCount: 1, openCreditCount: 1 },
+      { currency: 'KWD', openDebitCount: 1, openCreditCount: 0 },
+    ]);
+    // And the row carries NOTHING ELSE — rule 5: no combined field, however
+    // named, may ride along beside the pair.
+    for (const row of openCounts) {
+      expect(Object.keys(row).sort(), `${row.currency} carries a field beyond the pair and its key`).toEqual([
+        'currency',
+        'openCreditCount',
+        'openDebitCount',
+      ]);
+    }
+  });
+
+  // E2 — the owner's second required case, which is DR-33 seen from here.
+  it('E2 — a currency whose open documents NET TO ZERO still appears, with both counters standing', () => {
+    const jod = DR39_ROWS.filter((r) => r.currency_code === 'JOD');
+    expect(jod.reduce((a, r) => a + BigInt(r.base_minor), 0n), 'non-vacuity: the net really is zero').toBe(0n);
+    const { openCounts, buckets } = foldCustomerAging(DR39_ROWS, SHAPE);
+    const row = openCounts.find((c) => c.currency === 'JOD');
+    expect(row, 'a net of zero must not delete the currency from the answer (DR-33)').toEqual({
+      currency: 'JOD',
+      openDebitCount: 1,
+      openCreditCount: 1,
+    });
+    // And the money really did cancel in the bands, which is what makes the
+    // appearance non-trivial: the currency is present with a nil contribution.
+    const jodInBands = buckets.flatMap((b) => b.byCurrency).filter((c) => c.currency === 'JOD');
+    expect(jodInBands.map((c) => c.txnMinor)).toEqual(['4000', '-4000']);
+    expect(jodInBands.reduce((a, c) => a + BigInt(c.txnMinor), 0n)).toBe(0n);
+  });
+
+  // E3 — the owner's third required case.
+  it('E3 — ONE document spanning several bands is counted ONCE, not once per band', () => {
+    const spanned = bandCountsOf(DR39_ROWS, 'KWD');
+    expect(spanned, 'non-vacuity: the document really does reach more than one band').toBe(3);
+    const { openCounts, buckets } = foldCustomerAging(DR39_ROWS, SHAPE);
+    const row = openCounts.find((c) => c.currency === 'KWD');
+    expect(row?.openDebitCount, 'one document is one document, however many bands its money reaches').toBe(1);
+    expect(row?.openCreditCount).toBe(0);
+    // The DIFFERENCE is the point, so it is asserted and not left implied: the
+    // per-band figures for this currency come to three while the number of
+    // documents is one, and that sum is exactly what DR-29 forbids as a total.
+    const fromBands = buckets.reduce((acc, b) => acc + b.byCurrency.filter((c) => c.currency === 'KWD').length, 0);
+    expect(fromBands).toBe(3);
+    expect(row?.openDebitCount).not.toBe(fromBands);
+    expect(row?.openDebitCount).not.toBe(spanned);
+  });
+
+  // E4 — the refusals. A row the fold cannot place is a DEFECT and never a
+  //      merchant outcome, so it leaves through the module's one refusal
+  //      channel rather than as a clamp or a `continue`.
+  it('E4 — a row set that contradicts itself about a currency is REFUSED, not reconciled', () => {
+    const refuses = (rows: readonly CustomerAgingSqlRow[], why: string): void => {
+      let thrown: unknown;
+      try {
+        foldCustomerAging(rows, SHAPE);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown, why).toBeInstanceOf(AppError);
+      expect((thrown as AppError).httpStatus, why).toBe(500);
+      expect((thrown as AppError).details?.['sellingCode'], why).toBe('customer.aging_bucket_mapping_invalid');
+    };
+
+    const base = DR39_ROWS[1];
+    if (base === undefined) throw new Error('the fixture lost its KWD row, so E4 has no subject');
+
+    // (a) two bands of ONE currency disagreeing about the pair. Taking the
+    //     first, the largest or the last would be inventing a figure a
+    //     merchant reads next to a total out of a contradiction.
+    refuses([base, { ...base, bucket_no: 2, open_debit_count: 9 }], 'two rows of one currency disagreeing about the debit counter must be refused');
+    refuses([base, { ...base, bucket_no: 2, open_credit_count: 9 }], 'and about the credit counter');
+
+    // (b) a counter that is not a count. A negative DOCUMENT COUNT is not a
+    //     credit balance — it is a malformed answer.
+    refuses([{ ...base, open_debit_count: -1 }], 'a negative debit counter is a defect');
+    refuses([{ ...base, open_credit_count: -1 }], 'a negative credit counter is a defect');
+    refuses([{ ...base, open_debit_count: 1.5 }], 'a fractional counter is a defect');
+
+    // (c) a counter-bearing row with NO currency has no key, so it cannot be
+    //     placed per currency, and a guess would file it under some other
+    //     currency's name.
+    refuses([{ ...base, currency_code: null }], 'a counter row without a currency is a defect');
+
+    // (d) the FULL JOIN's orphans, in both directions. Impossible in a correct
+    //     database, representable in a row set, and refused rather than
+    //     dropped.
+    refuses([{ ...base, bucket_no: null }], 'a counter row with no band is a defect');
+    refuses([{ ...base, open_debit_count: null }], 'a band row with no counters is a defect');
+    refuses([{ ...base, open_credit_count: null }], 'in either column');
+
+    // The POSITIVE control for the whole of E4: the UNMUTATED row is accepted,
+    // or every refusal above would be a refusal of something else.
+    expect(foldCustomerAging([base], SHAPE).openCounts).toEqual([{ currency: 'KWD', openDebitCount: 1, openCreditCount: 0 }]);
+  });
+
+  // E5 — the empty answer is a STATEMENT.
+  it('E5 — no rows means no currency has an open document, stated as an empty list and not as a zero', () => {
+    const { openCounts, buckets, totalBaseMinor } = foldCustomerAging([], SHAPE);
+    expect(openCounts).toEqual([]);
+    expect(totalBaseMinor).toBe('0');
+    expect(buckets.length).toBe(LABELS.length);
+    // `[]` and not a row of zeroes under the base currency: there is no
+    // currency to name, and naming one would assert that the customer holds a
+    // zero-count position in it, which is a different claim.
+  });
+});
+
+describe('§E-RED DR-39: the two wrong folds, EXECUTED, going red under §E', () => {
+  it('RED-E1 — the DOUBLE-COUNTING fold is caught by E3, with the actual numbers on both sides', () => {
+    const right = foldCustomerAging(DR39_ROWS, SHAPE).openCounts;
+    const wrong = doubleCountingFoldUnderTest(DR39_ROWS);
+    // The defect, measured: the spanning document is counted once per band.
+    expect(wrong.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(3);
+    expect(right.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(1);
+    // And E3's assertion really does fail against it.
+    expect(() => expect(wrong.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(1)).toThrow();
+    // The credit side is hit too: JOD's credit counter doubles across its two
+    // bands, so "a credit balance is counted once" fails as well.
+    expect(wrong.find((c) => c.currency === 'JOD')).toEqual({ currency: 'JOD', openDebitCount: 2, openCreditCount: 2 });
+    expect(() => expect(wrong).toEqual(right)).toThrow();
+  });
+
+  it('RED-E2 — the SIGN-SWAPPING fold is caught by E1, and is INVISIBLE to any law about the pair sum', () => {
+    const right = foldCustomerAging(DR39_ROWS, SHAPE).openCounts;
+    const wrong = signSwappingFoldUnderTest(DR39_ROWS);
+    // KWD has one debit document and no credit one, so the swap is total: a
+    // real receivable is reported as a credit balance.
+    expect(wrong.find((c) => c.currency === 'KWD')).toEqual({ currency: 'KWD', openDebitCount: 0, openCreditCount: 1 });
+    expect(right.find((c) => c.currency === 'KWD')).toEqual({ currency: 'KWD', openDebitCount: 1, openCreditCount: 0 });
+    expect(() => expect(wrong).toEqual(right)).toThrow();
+    // AND THE REASON RULE 5 IS A RULE, demonstrated rather than argued: the
+    // SUM of the pair is IDENTICAL under the swap, currency by currency. A
+    // client that had added the two together would see nothing wrong, while a
+    // merchant would be chasing a customer who is in credit.
+    for (const currency of ['JOD', 'KWD']) {
+      const r = right.find((c) => c.currency === currency);
+      const w = wrong.find((c) => c.currency === currency);
+      expect((w?.openDebitCount ?? 0) + (w?.openCreditCount ?? 0)).toBe((r?.openDebitCount ?? 0) + (r?.openCreditCount ?? 0));
+    }
+    // JOD's pair is SYMMETRIC (1 and 1), so the swap is undetectable there —
+    // which is why E1 names a currency whose counters DIFFER. Stated, so a
+    // later hand does not "simplify" the fixture down to the symmetric case.
+    expect(wrong.find((c) => c.currency === 'JOD')).toEqual(right.find((c) => c.currency === 'JOD'));
   });
 });

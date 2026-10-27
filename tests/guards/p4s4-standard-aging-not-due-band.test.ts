@@ -63,20 +63,25 @@ const LABELS = agingBucketLabels(STANDARD);
 const SHAPE: CustomerAgingShape = { labels: LABELS, bucketDays: STANDARD };
 
 /**
- * `open_invoice_count` is the DOCUMENT-level distinct count DR-29 added, and
- * the value below is deliberately NEITHER the sum of the per-band counts NOR
+ * `open_debit_count` and `open_credit_count` are the PER-CURRENCY document
+ * counters DR-39 put in place of DR-29's single `open_invoice_count`: open
+ * documents whose balance is `> 0` and whose balance is `< 0`, with a zero
+ * balance counted in NEITHER, and never added together (DR-39 rule 5).
+ *
+ * The values below are deliberately NEITHER the sum of the per-band counts NOR
  * any one of them: since P4-S7 an invoice is aged across its instalment
  * schedule, so it reaches several bands and the sum counts it once per band.
- * Every row of one answer carries the SAME scalar, because `foldCustomerAging`
- * refuses a row set that disagrees with itself about a figure the whole
- * document is supposed to state once.
+ * Every row OF ONE CURRENCY carries the SAME pair, because `foldCustomerAging`
+ * refuses a row set that disagrees with itself about a figure the document is
+ * supposed to state once per currency — and this fixture is single-currency,
+ * so every row it builds carries the one pair.
  */
 const row = (bucketNo: number, baseMinor: string, invoices = 1): CustomerAgingSqlRow => ({
   bucket_no: bucketNo,
   currency_code: 'SAR',
   txn_minor: baseMinor,
   base_minor: baseMinor,
-  invoice_count: invoices, open_invoice_count: 7,
+  invoice_count: invoices, open_debit_count: 3, open_credit_count: 1,
 });
 
 /**

@@ -114,7 +114,7 @@ describe('every money field is an integer count of minor units, as a string', ()
       // equal the sum of the bands — which is lawful and is exactly why a
       // client must not learn the habit (DR-29). Neither invoice is under an
       // instalment plan, so neither reaches a second band.
-      openInvoiceCount: 2,
+      openCounts: [{ currency: 'USD', openDebitCount: 2, openCreditCount: 0 }],
     };
     // A contra receivable is negative and is never clamped to zero: a customer
     // in credit is a fact, not an error.
