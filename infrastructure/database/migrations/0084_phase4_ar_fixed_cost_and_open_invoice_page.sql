@@ -742,35 +742,73 @@ GRANT EXECUTE ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) TO daft
 COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
   'P4-S1, replaced by P4-S4 (0083, then 0084; P4-AL-05): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. There is no materialised aging table (P4-AL-06) and the routine does not read the clock (P4-AL-30). Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice; since 0084 it takes the currency and the due date off that call rather than joining invoices back onto it, so it visits invoices exactly once. The buckets, the thresholds and the answer are unchanged.';
 
--- ─────────────────────────────────────────────────────────────────────────
--- 6b. HOW MANY OPEN INVOICES THIS CUSTOMER HAS (DR-29).
+-- ──────────────────────────────────────────────────────────────────────────
+-- 6b. HOW MANY OPEN DOCUMENTS THIS CUSTOMER HAS, DEBIT AND CREDIT, PER
+--     CURRENCY (DR-39, amending DR-29).
 --
---     A DOCUMENT-LEVEL FIGURE THE BUCKETS CANNOT PRODUCE. `customer_ar_aging`
---     counts DISTINCT invoices WITHIN a band, and since P4-S7 one invoice is
---     aged ACROSS ITS SCHEDULE, so it reaches several bands and the sum of
---     those counts counts it once per band. That sum is not the number of open
---     invoices and may exceed it. Neither is the number any other function of
---     the per-band counts: two invoices each reaching two bands, and four
---     invoices each reaching one, give the same four counts. So it is
---     MEASURED, here, once, over the whole set.
+--     TWO COUNTERS AND NOT ONE, AND THE OWNER DECIDED IT. `open_debit_count`
+--     counts the open documents whose balance is `> 0`; `open_credit_count`
+--     those whose balance is `< 0`, which is where an overpaid invoice's
+--     credit sits (DR-23); AND A DOCUMENT AT EXACTLY ZERO IS COUNTED IN
+--     NEITHER. The two are never to be added together, and that prohibition is
+--     not fastidiousness: because zero belongs to neither counter, the sum is
+--     NOT "how many documents this customer has open" - it is "how many have a
+--     non-zero balance", and no label short enough for a screen says that.
 --
---     WHY A SEPARATE ROUTINE AND NOT A SIXTH COLUMN OF `customer_ar_aging`.
---     Not a preference - a sixth column was never available. The owner's
+--     WHICH IS WHY DR-29's SINGLE-FIGURE COUNTING ROUTINE IS GONE
+--     rather than kept beside these two. That routine computed exactly the
+--     forbidden sum, under a name that read like a document count. Leaving it
+--     in place would have left the wrong number easier to reach than the right
+--     ones, and a correct figure beside a tempting wrong one is how the wrong
+--     one gets read.
+--
+--     DISTINCT AT CUSTOMER *AND* CURRENCY, so: ONE ROW PER CURRENCY in which
+--     this customer has an open document - `GROUP BY o.currency_code` - and
+--     not a pair of scalars aggregated over all of their currencies. The
+--     ruling cites DR-33, which makes PRESENCE per currency ("appearance for
+--     every currency in which there is any open document, even at a net of
+--     zero"), and all-currency scalars cannot express a per-currency net-zero
+--     appearance at all. The two neighbouring readers of record,
+--     `customer_ar_outstanding` and `customer_ar_aging`, already key their
+--     answers by `currency_code`, so this is the shape they already have.
+--     THIS READING OF THE RULING IS THE COORDINATOR'S AND IS OVERTURNABLE BY
+--     ONE WORD FROM THE OWNER: the correction is to drop this `GROUP BY` and
+--     the `currency` key from the DTO row. It is recorded in
+--     `docs/decisions/2026-10-27-phase4-aging-decisions.md`.
+--
+--     THE SPLIT IS MADE HERE, IN SQL, BY EXPLICIT SIGN PREDICATES. `FILTER
+--     (WHERE o.outstanding_txn_minor > 0)` and `< 0`, and NOT a `<> 0` count
+--     divided up afterwards by the reader: a sign convention implemented in
+--     TypeScript would be a second place where "which way is a receivable"
+--     lives, and the two places disagree only under the numbers nobody tested.
+--
+--     A DOCUMENT-LEVEL FIGURE THE BUCKETS CANNOT PRODUCE, which is DR-29 and
+--     still holds. `customer_ar_aging` counts DISTINCT invoices WITHIN a band,
+--     and since P4-S7 one invoice is aged ACROSS ITS SCHEDULE, so it reaches
+--     several bands and the sum of those counts counts it once per band. That
+--     sum is not the number of open documents and may exceed it. Neither is
+--     the number any other function of the per-band counts: two invoices each
+--     reaching two bands, and four invoices each reaching one, give the same
+--     four counts. So it is MEASURED, here, once, over the whole set.
+--
+--     WHY A SEPARATE ROUTINE AND NOT MORE COLUMNS ON `customer_ar_aging`.
+--     Not a preference - more columns were never available. The owner's
 --     section 25 ruling pins that return shape, and the P4-S7 specification
 --     installs its body with `CREATE OR REPLACE FUNCTION`, which cannot change
---     a `RETURNS TABLE` list at all (42P13). Appending a column here would have
---     made that specification's own apply fail, so the figure has to come from
---     somewhere else - and a routine of its own is the somewhere that keeps the
---     count INDEPENDENTLY computed rather than folded out of the bands.
+--     a `RETURNS TABLE` list at all (42P13). Appending to it would have made
+--     that specification's own apply fail, so the figures have to come from
+--     somewhere else - and a routine of their own is the somewhere that keeps
+--     them INDEPENDENTLY computed rather than folded out of the bands.
 --
 --     THE SAME POPULATION, STATED THE SAME WAY. The subquery over
---     `public.invoices` and the non-zero filter are character for character the
---     ones section 6's aging body uses, so the two readers cannot come to
---     disagree about WHICH invoices are open. `<> 0` and not `> 0`: an
---     overpayment leaves a NEGATIVE outstanding and that invoice is still open
---     and still counted (DR-23). `count(DISTINCT o.invoice_id)` and not
---     `count(*)` because the honesty of the figure must not rest on the
---     set-based reader happening to return one row per invoice.
+--     `public.invoices` and the non-zero filter are character for character
+--     the ones section 6's aging body uses, so the two readers cannot come to
+--     disagree about WHICH documents are open. `<> 0` is where rule 3 lives:
+--     it is the ONE place the zero-balance document is excluded, rather than a
+--     third predicate that could drift from the aging body's. And
+--     `count(DISTINCT o.invoice_id)` rather than a row count, because the
+--     honesty of a figure must not rest on the set-based reader happening to
+--     return one row per invoice.
 --
 --     ONE VISIT TO `public.invoices` (R-104), in its own body, exactly as its
 --     two siblings. It is a SECOND relation for the caller to read and that
@@ -781,22 +819,25 @@ COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
 --     IT STORES NOTHING. No count column, no cached total and no new relation:
 --     an aggregation at the moment it is asked, which is what P4-AL-05 and
 --     P4-AL-06 require of every derived figure.
--- ─────────────────────────────────────────────────────────────────────────
-CREATE FUNCTION customer_ar_open_invoice_count(p_business_id UUID, p_customer_id UUID)
-RETURNS INTEGER
+-- ──────────────────────────────────────────────────────────────────────────
+CREATE FUNCTION customer_ar_open_document_counts(p_business_id UUID, p_customer_id UUID)
+RETURNS TABLE (currency_code TEXT, open_debit_count INTEGER, open_credit_count INTEGER)
 LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
-  SELECT pg_catalog.count(DISTINCT o.invoice_id)::INTEGER
+  SELECT o.currency_code,
+         pg_catalog.count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor > 0)::INTEGER,
+         pg_catalog.count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor < 0)::INTEGER
     FROM public.invoice_outstanding(
            p_business_id,
            (SELECT pg_catalog.array_agg(x.id)
               FROM public.invoices x
              WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
-   WHERE o.outstanding_txn_minor <> 0;
+   WHERE o.outstanding_txn_minor <> 0
+   GROUP BY o.currency_code;
 $fn$;
-REVOKE ALL ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) TO daftar_app, daftar_inventory_internal;
-COMMENT ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) IS
-  'P4-S4 (0084; DR-29): how many DISTINCT open invoices of this customer still have something outstanding. A DOCUMENT-LEVEL figure the aging buckets cannot produce, because since P4-S7 one invoice is aged across its instalment schedule and so reaches several buckets, which makes the sum of customer_ar_aging''s per-bucket invoice_count larger than the number of open invoices and makes it no function of them at all. It is NOT a sixth column of customer_ar_aging: that return shape is pinned by the owner''s section 25 ruling and the P4-S7 specification installs the body with CREATE OR REPLACE FUNCTION, which cannot change a RETURNS TABLE list (42P13), so appending one would have broken that apply. The population is character for character the one the aging body uses - this customer''s open invoices with a non-zero settlement sum, where <> 0 and not > 0 keeps an overpaid invoice''s negative figure counted (DR-23) - and the count is count(DISTINCT invoice_id) so the answer does not rest on the set-based reader happening to return one row per invoice. ONE visit to invoices (R-104). Stores nothing: no count column, no cached total, no new relation (P4-AL-05, P4-AL-06). Its answer is UNCHANGED by P4-S7, because that slice changes how an invoice is BANDED and not which invoices are open, which is why the specification does not replace it. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal.';
+REVOKE ALL ON FUNCTION customer_ar_open_document_counts(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION customer_ar_open_document_counts(UUID, UUID) TO daftar_app, daftar_inventory_internal;
+COMMENT ON FUNCTION customer_ar_open_document_counts(UUID, UUID) IS
+  'P4-S4 (0084; DR-29 as amended by DR-39): how many DISTINCT open documents of this customer still have something outstanding, split into TWO counters and reported ONE ROW PER CURRENCY. open_debit_count counts the documents whose balance is > 0; open_credit_count those whose balance is < 0, which is where an overpaid invoice''s credit balance sits (DR-23); and a document at EXACTLY ZERO is counted in NEITHER. THE TWO MUST NEVER BE ADDED TOGETHER: because zero belongs to neither counter, their sum is not the number of documents this customer has open but the number with a non-zero balance, which is not a figure any short label states correctly - and that forbidden sum is precisely what DR-29''s retired single-figure counting routine computed. The split is made HERE, by explicit FILTER predicates on the sign, and not by dividing a <> 0 count afterwards in the reader, so the sign convention lives in one place. These are DOCUMENT-LEVEL figures the aging buckets cannot produce, because since P4-S7 one invoice is aged across its instalment schedule and so reaches several buckets, which makes the sum of customer_ar_aging''s per-bucket invoice_count larger than the number of open documents and makes it no function of them at all. They are NOT extra columns of customer_ar_aging: that return shape is pinned by the owner''s section 25 ruling and the P4-S7 specification installs the body with CREATE OR REPLACE FUNCTION, which cannot change a RETURNS TABLE list (42P13), so appending would have broken that apply. The population is character for character the one the aging body uses - this customer''s open invoices with a non-zero settlement sum - and each counter is count(DISTINCT invoice_id) so the answer does not rest on the set-based reader returning one row per invoice. GROUP BY currency_code, so a currency whose open documents net to zero still appears with both counters standing (DR-33). ONE visit to invoices (R-104). Stores nothing: no count column, no cached total, no new relation (P4-AL-05, P4-AL-06). Its answer is UNCHANGED by P4-S7, because that slice changes how a document is BANDED and not which documents are open, which is why the specification does not replace it. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. THE OPEN-INVOICE PAGE READER (R-105, R-106).
@@ -1168,7 +1209,7 @@ BEGIN
   END IF;
 
   -- 0084-E(6). And the accepted configuration stated ABSOLUTELY, over all
-  -- SIX routines, the new page reader and DR-29's open-invoice count among them — a capture compared against
+  -- SIX routines, the new page reader and DR-39's per-currency open-document counters among them — a capture compared against
   -- itself proves nothing if the configuration was already wrong before this
   -- file ran, and the page reader has no capture at all because it did not
   -- exist. STABLE, invoker's rights, the pinned `search_path`, EXECUTE for
@@ -1181,7 +1222,7 @@ BEGIN
             UNION ALL SELECT 'public.invoice_outstanding(UUID, UUID[])'
             UNION ALL SELECT 'public.customer_ar_outstanding(UUID, UUID)'
             UNION ALL SELECT 'public.customer_ar_aging(UUID, UUID, DATE, INTEGER[])'
-            UNION ALL SELECT 'public.customer_ar_open_invoice_count(UUID, UUID)'
+            UNION ALL SELECT 'public.customer_ar_open_document_counts(UUID, UUID)'
             UNION ALL SELECT 'public.customer_open_invoices_page(UUID, UUID, DATE, UUID, INTEGER)') f
   LOOP
     IF to_regprocedure(v_name) IS NULL THEN

@@ -7,6 +7,7 @@ import type {
   CustomerCurrencyAmountDto,
   CustomerDto,
   CustomerListItemDto,
+  CustomerOpenDocumentCountsDto,
   CustomerOpenInvoiceDto,
   CustomerOpenInvoicesDto,
   CustomerPageDto,
@@ -177,30 +178,50 @@ export interface CustomerAgingSqlRow {
    * thresholds the invoice's days-past-due exceeds>`, so for
    * `bucketDays = [30, 60, 90]` the four bands arrive as 1, 2, 3, 4 — and 4 is
    * the oldest band, `over-90`, not an overflow.
+   *
+   * **NULLABLE since DR-39**, and the null is the FULL JOIN's doing rather
+   * than the aging routine's: a per-currency counter row that no band matches
+   * arrives with no band at all. That is impossible in a correct database and
+   * REPRESENTABLE in a row set, so the ordinal guard in `foldCustomerAging`
+   * refuses it instead of placing it somewhere.
    */
-  bucket_no: number;
+  bucket_no: number | null;
   currency_code: string | null;
   txn_minor: string | null;
-  base_minor: string;
-  invoice_count: number;
+  /** Nullable for the same reason as `bucket_no`: a counter row carries no band money. */
+  base_minor: string | null;
+  /** Likewise. */
+  invoice_count: number | null;
   /**
-   * HOW MANY DISTINCT OPEN INVOICES THE WHOLE ANSWER IS ABOUT (DR-29) — a
-   * DOCUMENT-LEVEL figure repeated on every row, because a `RETURNS TABLE` has
-   * nowhere else to put one.
+   * HOW MANY DISTINCT OPEN DEBIT DOCUMENTS THIS CURRENCY HAS — balance `> 0`
+   * (DR-39, amending DR-29). A PER-CURRENCY figure repeated on every band row
+   * of that currency, because a `RETURNS TABLE` has nowhere else to put one.
    *
    * It does NOT come from `customer_ar_aging`. That routine's return shape is
    * pinned by the owner's section 25 ruling, and the P4-S7 specification
    * installs its body with `CREATE OR REPLACE FUNCTION`, which cannot change a
-   * `RETURNS TABLE` list at all (42P13) — so a sixth column was never
-   * available. It comes from `customer_ar_open_invoice_count`, joined on in the
-   * same statement, which measures `count(DISTINCT invoice_id)` over the same
-   * population the bands are built from.
+   * `RETURNS TABLE` list at all (42P13) — so extra columns were never
+   * available. It comes from `customer_ar_open_document_counts`, joined on in
+   * the same statement, which measures `count(DISTINCT invoice_id)` under an
+   * explicit sign filter over the same population the bands are built from.
    *
    * It is NOT the sum of `invoice_count`, and it is not any function of the
    * per-band counts: since P4-S7 one invoice is aged across its instalment
    * schedule, so it reaches several bands and that sum counts it once per band.
+   *
+   * `null` is the FULL JOIN's other orphan — a band row whose currency the
+   * counters do not know about — and is refused, not defaulted to zero.
    */
-  open_invoice_count: number;
+  open_debit_count: number | null;
+  /**
+   * HOW MANY DISTINCT OPEN CREDIT DOCUMENTS THIS CURRENCY HAS — balance `< 0`,
+   * which is where an overpaid invoice's credit sits (DR-23).
+   *
+   * **NEVER ADDED TO `open_debit_count`** (DR-39 rule 5): a document at
+   * exactly zero is counted in neither, so the sum is not the number of open
+   * documents.
+   */
+  open_credit_count: number | null;
 }
 
 /** The bucket SHAPE a fold folds into: the labels and the boundaries they came from. */
@@ -275,7 +296,7 @@ export interface CustomerAgingShape {
 export function foldCustomerAging(
   rows: readonly CustomerAgingSqlRow[],
   shape: CustomerAgingShape,
-): { buckets: CustomerAgingBucketDto[]; totalBaseMinor: string; openInvoiceCount: number } {
+): { buckets: CustomerAgingBucketDto[]; totalBaseMinor: string; openCounts: CustomerOpenDocumentCountsDto[] } {
   if (shape.labels.length !== shape.bucketDays.length + 1) {
     throw sellingRefusal('customer.aging_bucket_mapping_invalid');
   }
@@ -303,41 +324,74 @@ export function foldCustomerAging(
   });
 
   let totalBaseMinor = 0n;
-  // ── THE DOCUMENT-LEVEL COUNT, READ AND NOT COMPUTED (DR-29) ────────────
+  // ── THE PER-CURRENCY DOCUMENT COUNTERS, READ AND NOT COMPUTED (DR-39) ──
   //
-  // `null` until a row carries it, because no rows at all means no open
-  // invoices and that answer is `0` — a figure this function STATES rather
-  // than leaves to a default, so that "the customer has nothing open" and
-  // "the rows forgot to say" cannot arrive as the same number.
+  // Keyed by currency, because DR-39 makes both counters distinct at the level
+  // of the CUSTOMER AND THE CURRENCY. An empty map is the empty answer and it
+  // is a STATEMENT: no rows at all means no currency has an open document, and
+  // this function says so with `[]` rather than inventing a row of zeroes
+  // under the base currency — "the customer has nothing open" and "the rows
+  // forgot to say" must not arrive as the same answer.
   //
-  // Every row of one answer carries the SAME scalar. If two disagree the
+  // Every band row OF ONE CURRENCY carries the SAME pair. If two disagree the
   // answer is malformed, and the module's one refusal for "these aging rows
   // are not a valid answer" is the channel for it. Taking the first, the
   // largest or the last would be inventing a money-adjacent figure out of a
   // contradiction, and a count a merchant reads next to a total is not a
   // place to guess.
-  let openInvoiceCount: number | null = null;
+  //
+  // THE TWO ARE NEVER ADDED (DR-39 rule 5). A document at exactly zero is
+  // counted in neither, so their sum is not the number of open documents, and
+  // nothing in this module computes it.
+  const openCounts = new Map<string, CustomerOpenDocumentCountsDto>();
   for (const r of rows) {
-    if (!Number.isInteger(r.bucket_no) || r.bucket_no < 1 || r.bucket_no > buckets.length) {
+    // The ordinal first, because it is the guard that catches the FULL JOIN's
+    // counter-row orphan — no band, hence no `bucket_no` — before any band
+    // figure on that row is read.
+    const bucketNo = r.bucket_no;
+    if (bucketNo === null || !Number.isInteger(bucketNo) || bucketNo < 1 || bucketNo > buckets.length) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
-    if (!Number.isInteger(r.open_invoice_count) || r.open_invoice_count < 0) {
+    const debit = r.open_debit_count;
+    const credit = r.open_credit_count;
+    // And the band-row orphan, the other direction of the same impossibility:
+    // a band whose currency the counters do not know about. Refused, never
+    // read as zero — zero documents is a claim, and this would be the absence
+    // of one.
+    if (debit === null || credit === null) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    if (!Number.isInteger(r.open_debit_count) || debit < 0) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    if (!Number.isInteger(r.open_credit_count) || credit < 0) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    // And a counter row with no currency has no key, so it cannot be placed
+    // per currency at all; filing it under some other currency's name would
+    // be a guess about which merchant's figure it belongs to.
+    if (r.currency_code === null) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    const seen = openCounts.get(r.currency_code);
+    if (seen === undefined) {
+      openCounts.set(r.currency_code, { currency: r.currency_code, openDebitCount: debit, openCreditCount: credit });
+    } else if (seen.openDebitCount !== debit || seen.openCreditCount !== credit) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
-    if (openInvoiceCount === null) {
-      openInvoiceCount = r.open_invoice_count;
-    } else if (openInvoiceCount !== r.open_invoice_count) {
+    const baseMinor = r.base_minor;
+    const invoiceCount = r.invoice_count;
+    if (baseMinor === null || invoiceCount === null || !Number.isInteger(invoiceCount)) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
-    const bucket = buckets[r.bucket_no - 1];
+    const bucket = buckets[bucketNo - 1];
     if (bucket === undefined) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
-    bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(r.base_minor)).toString();
-    bucket.invoiceCount += r.invoice_count;
-    totalBaseMinor += BigInt(r.base_minor);
-    if (r.currency_code !== null && r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
+    bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(baseMinor)).toString();
+    bucket.invoiceCount += invoiceCount;
+    totalBaseMinor += BigInt(baseMinor);
+    if (r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
   }
 
-  return { buckets, totalBaseMinor: totalBaseMinor.toString(), openInvoiceCount: openInvoiceCount ?? 0 };
+  return {
+    buckets,
+    totalBaseMinor: totalBaseMinor.toString(),
+    // Ordered by currency so one answer is one answer: the map's insertion
+    // order is the row order, which is the database's, and a client diffing
+    // two reads should not see a reordering as a change.
+    openCounts: [...openCounts.values()].sort((a, b) => (a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : 0)),
+  };
 }
 
 @Injectable()
@@ -449,31 +503,47 @@ export class CustomerReadService {
     const labels = agingBucketLabels(q.bucketDays);
     const found = await this.db.scoped<CustomerAgingSqlRow & QueryResultRow>(
       this.scope(m),
-      // ONE statement, and `AS MATERIALIZED` is load-bearing (DR-29). The
-      // distinct open-invoice count is a document-level figure the aging
-      // routine cannot return — its shape is pinned and its body is installed
-      // with `CREATE OR REPLACE`, which cannot change a `RETURNS TABLE`
-      // (42P13) — so it is joined on here rather than fetched in a second
-      // round trip that would pay row-security setup twice for four bytes.
+      // ONE statement, and `AS MATERIALIZED` is load-bearing (DR-29, DR-39).
+      // The per-currency open-document counters are document-level figures the
+      // aging routine cannot return — its shape is pinned and its body is
+      // installed with `CREATE OR REPLACE`, which cannot change a
+      // `RETURNS TABLE` (42P13) — so they are joined on here rather than
+      // fetched in a second round trip that would pay row-security setup twice
+      // for two integers per currency.
       //
-      // Without `MATERIALIZED` a STABLE scalar in the target list may be
-      // evaluated once PER ROW, which would re-scan this customer's invoices
-      // once per band. With it, the customer's invoices are visited once by
-      // the aging routine and once by the count routine, and no more.
-      `WITH n AS MATERIALIZED (SELECT public.customer_ar_open_invoice_count($1::uuid, $2::uuid) AS open_invoice_count)
-       SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count,
-              n.open_invoice_count
-         FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a CROSS JOIN n
-        ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
+      // Without `MATERIALIZED` the STABLE set-returning call may be
+      // re-evaluated, which would re-scan this customer's invoices once per
+      // band. With it, the customer's invoices are visited once by the aging
+      // routine and once by the counts routine, and no more.
+      //
+      // AND THE JOIN IS `FULL`, DELIBERATELY. A `LEFT JOIN` from the bands
+      // onto the counters would silently lose a currency the counters know
+      // about and the bands do not; the reverse direction would lose the
+      // other. Both are impossible in a correct database — every non-zero
+      // open document lands in some band, and every banded currency has
+      // counters — and both are REPRESENTABLE in a row set. A `FULL JOIN`
+      // makes each orphan ARRIVE, with a null where its missing side would
+      // have been, and `foldCustomerAging` refuses it. A row this read cannot
+      // place is a defect, and the one thing it must never be is a `continue`.
+      `WITH c AS MATERIALIZED (
+         SELECT d.currency_code, d.open_debit_count, d.open_credit_count
+           FROM public.customer_ar_open_document_counts($1::uuid, $2::uuid) d)
+       SELECT a.bucket_no,
+              coalesce(a.currency_code, c.currency_code) AS currency_code,
+              a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count,
+              c.open_debit_count, c.open_credit_count
+         FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
+         FULL JOIN c ON c.currency_code = a.currency_code
+        ORDER BY a.bucket_no NULLS FIRST, coalesce(a.currency_code, c.currency_code) NULLS FIRST`,
       [m.businessId, customerId, q.asOf, q.bucketDays],
     );
 
     // The fold — and the 1-based → 0-based mapping — lives in
     // `foldCustomerAging` above, which is pure and is exercised without a
     // database. This method holds the query and the envelope only.
-    const { buckets, totalBaseMinor, openInvoiceCount } = foldCustomerAging(found.rows, { labels, bucketDays: q.bucketDays });
+    const { buckets, totalBaseMinor, openCounts } = foldCustomerAging(found.rows, { labels, bucketDays: q.bucketDays });
 
-    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor, openInvoiceCount };
+    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor, openCounts };
   }
 
   /**

@@ -215,23 +215,85 @@ export interface CustomerAgingBucketDto {
    *
    * **THESE COUNTS ARE NOT ADDITIVE ACROSS BUCKETS** (DR-29). Adding them up
    * does not give the number of open invoices, because the buckets do not
-   * partition the invoices: an invoice under an active instalment plan
-   * contributes to SEVERAL buckets — each scheduled instalment is banded at
-   * its OWN due date, and the amount the schedule does not declare is banded
-   * at the document's own age anchor. So the sum of `invoiceCount` over the
+   * partition the invoices:
+   * an invoice under an active instalment plan contributes to SEVERAL buckets
+   * — each scheduled instalment is banded at its OWN due date, and the amount
+   * the schedule does not declare is banded at the document's own age anchor.
+   * So the sum of `invoiceCount` over the
    * buckets is not the number of open invoices and may exceed it, and the
    * excess is not an error in either figure.
    *
    * Nor is the number recoverable from these counts by any other function of
    * them: two invoices each reaching two buckets, and four invoices each
-   * reaching one, produce the same four counts. The document reports the
-   * figure separately, as `openInvoiceCount`.
+   * reaching one, produce the same four counts. The document reports those
+   * figures separately, per currency, as `openDebitCount` and
+   * `openCreditCount` on `openCounts` (DR-39).
    *
    * What this count IS good for is the bucket itself — "three of my invoices
    * have money sitting in 61-90" is a true and useful sentence. What it is not
    * is a term in a total.
    */
   invoiceCount: number;
+}
+
+/**
+ * The open-document counters for ONE CURRENCY of one customer (DR-39,
+ * amending DR-29 and settling S-19).
+ *
+ * ── TWO COUNTERS, AND WHY THERE IS NOT ONE ───────────────────────────────
+ *
+ * A receivable report has two kinds of open document in it. One is money the
+ * customer owes; the other is money owed back to them — a credit note, or the
+ * credit balance an overpaid invoice carries (DR-23). They are not two values
+ * of one count, they are two facts, and a merchant acts on them differently:
+ * one is chased and the other is applied.
+ *
+ * **THE TWO COUNTERS MUST NEVER BE ADDED TOGETHER.** Not a style preference —
+ * the sum is a false figure that reads like a true one.
+ * **A DOCUMENT WHOSE BALANCE IS EXACTLY ZERO IS COUNTED IN NEITHER**, so
+ * their sum is not the number of documents this customer has open:
+ * it is the number whose balance is non-zero, and no label short enough to sit
+ * on a screen says that correctly. The zero-balance document is
+ * counted in neither, so the pair does not partition the open documents,
+ * and any name given to `debit + credit`
+ * would be a claim the number does not support. The figure DR-29 first shipped
+ * as `openInvoiceCount` was exactly that sum, under exactly that misreading,
+ * which is why DR-39 RETIRES it rather than keeping it alongside: a correct
+ * figure beside a tempting wrong one is how the wrong one gets read.
+ *
+ * ── ONE ROW PER CURRENCY, WHICH IS A READING OF THE RULING ───────────────
+ *
+ * DR-39 makes both counters distinct at the level of the CUSTOMER AND THE
+ * CURRENCY, and cites DR-33, which makes presence per currency. So there is
+ * one row here for every currency in which the customer has an open document,
+ * and NOT a pair of scalars aggregated over all of their currencies — a pair
+ * of all-currency scalars could not express a per-currency appearance at a net
+ * of zero at all. **This reading is the coordinator's and is overturnable by
+ * one word from the owner**; the correction is two lines, and it is recorded
+ * in `docs/decisions/2026-10-27-phase4-aging-decisions.md` rather than left
+ * in a reviewer's head.
+ */
+export interface CustomerOpenDocumentCountsDto {
+  /** The transaction currency these two counters are about. */
+  currency: string;
+  /**
+   * How many DISTINCT open documents in this currency whose
+   * balance is **greater than zero** — money the customer owes.
+   *
+   * A count, so a JSON number, and never `null`: an absent answer is not "no
+   * documents".
+   */
+  openDebitCount: number;
+  /**
+   * How many DISTINCT open documents in this currency whose
+   * balance is **less than zero** — money owed back to the customer. A credit
+   * note, and the credit balance an overpaid invoice carries (DR-23), are
+   * both counted here.
+   *
+   * A count of DOCUMENTS and therefore never negative; the SIGN lives in which
+   * counter the document was placed in, not in the counter's value.
+   */
+  openCreditCount: number;
 }
 
 /**
@@ -267,28 +329,36 @@ export interface CustomerAgingDto {
    */
   totalBaseMinor: string;
   /**
-   * How many DISTINCT open invoices this answer is about (DR-29).
+   * How many DISTINCT open documents this answer is about — **two counters,
+   * one row per currency** (DR-39, amending DR-29).
+   *
+   * Empty when the customer has no currency with an open document, which is
+   * the same case in which `buckets` are all empty and `totalBaseMinor` is
+   * `'0'`. `[]` is a STATEMENT and not a missing answer: there is no currency
+   * to name, and naming the base currency with two zeroes would assert that
+   * the customer holds a zero-count position in it, which is a different
+   * claim.
    *
    * Measured by `count(DISTINCT invoice_id)` over the SAME population the
    * buckets are built from — this customer's open invoices whose settlement
    * sum is non-zero — and **never derived from the buckets**: not as the sum
    * of `invoiceCount`, not as their maximum, and not as any other function of
    * them, because the buckets do not partition the invoices (see
-   * `CustomerAgingBucketDto.invoiceCount`). The server computes it in its own
-   * routine, so it is a second measurement of one population rather than a
-   * restatement of the first.
+   * `CustomerAgingBucketDto.invoiceCount`). The server computes them in their
+   * own routine, so they are a second measurement of one population rather
+   * than a restatement of the first.
    *
-   * It is therefore INVARIANT under the thing that makes the sum unreliable:
-   * the same open invoices report the same `openInvoiceCount` whether or not
-   * any of them carries an instalment plan, while the sum of the bucket counts
-   * changes.
+   * They are therefore INVARIANT under the thing that makes the bucket sum
+   * unreliable: the same open documents report the same counters whether or
+   * not any of them carries an instalment plan, while the sum of the bucket
+   * counts changes.
    *
-   * `0` when the customer has no open invoice with anything outstanding, which
-   * is the same case in which `buckets` are all empty and `totalBaseMinor` is
-   * `'0'`. A count, so a JSON number, and never `null`: an absent answer is
-   * not "no invoices".
+   * And `a currency whose open documents net to zero still appears` here,
+   * with both counters standing (DR-33) — a customer with one invoice of 4,000
+   * and one credit of 4,000 in the same currency contributes nothing to
+   * `totalBaseMinor` and still has two open documents.
    */
-  openInvoiceCount: number;
+  openCounts: CustomerOpenDocumentCountsDto[];
 }
 
 /**

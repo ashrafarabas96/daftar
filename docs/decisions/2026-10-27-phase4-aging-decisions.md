@@ -104,6 +104,14 @@ credit is not overdue debt.
 
 ## DR-29 — per-bucket invoice counts are not additive
 
+> **AMENDED BY DR-39 (owner, 2026-10-27), which also settles S-19.** The
+> NON-ADDITIVITY law below stands in full and unchanged. What DR-39 replaces is
+> the single document-level figure: `CustomerAgingDto.openInvoiceCount` and the
+> routine `customer_ar_open_invoice_count(UUID, UUID) RETURNS INTEGER` are
+> **RETIRED**, and in their place stand **two** per-currency counters. See the
+> DR-39 section below. Statements in this section that name the retired field or
+> the retired routine are marked superseded where they appear.
+
 **Decides.** The invoice count of a bucket is **not summable across buckets**,
 because one invoice may appear in more than one bucket (an invoice with a
 part-scheduled balance legitimately contributes to two bands). The contract must
@@ -122,16 +130,20 @@ prohibition: an invoice under an active instalment plan contributes to several
 buckets, because each scheduled instalment is banded at its own due date and the
 amount the schedule does not declare is banded at the document's own age anchor.
 So the sum is not the number of open invoices and may exceed it. The document
-gained `CustomerAgingDto.openInvoiceCount: number` — required, never `null`, `0`
-when nothing is open.
+gained a document-level figure of its own — **superseded by DR-39**, which
+replaced that one field with `CustomerAgingDto.openCounts`, a list of
+per-currency `{ currency, openDebitCount, openCreditCount }` rows.
 
 *Why a separate SQL routine and not a sixth column — this was measured, not
 preferred.* `customer_ar_aging`'s `RETURNS TABLE` is pinned by the owner's
 section 25 ruling, and the P4-S7 specification installs that routine's body with
 `CREATE OR REPLACE FUNCTION`, which cannot change a `RETURNS TABLE` list at all
 (PostgreSQL 42P13). Appending a column would therefore have made the
-specification's own apply fail. A sixth column was never available, so `0084`
-gained `customer_ar_open_invoice_count(UUID, UUID) RETURNS INTEGER`:
+specification's own apply fail. Extra columns were never available, so `0084` gained a counting routine of its
+own — **superseded by DR-39**, which replaced it with
+`customer_ar_open_document_counts(UUID, UUID) RETURNS TABLE (currency_code TEXT,
+open_debit_count INTEGER, open_credit_count INTEGER)`. What has not changed is
+the property this paragraph is about:
 `count(DISTINCT invoice_id)` over the same population the bands are built from
 — this customer's open invoices with a non-zero settlement sum, where `<> 0` and
 not `> 0` keeps an overpaid invoice's negative figure counted (DR-23). The
@@ -143,13 +155,14 @@ slice changes how an invoice is banded and not which invoices are open, so the
 count's answer is unchanged by it.
 
 *The cost, stated.* The aging read now reads a second relation. It is one round
-trip, not two: the scalar is joined on with `WITH n AS MATERIALIZED`, which also
-stops a `STABLE` scalar in the target list being evaluated once per band. Each
+trip, not two: the counters are joined on with `WITH c AS MATERIALIZED`, which
+also stops a `STABLE` call being re-evaluated once per band. Each
 body still visits `public.invoices` exactly once (R-104). **The aging endpoint's
 performance budget is the gating evidence for that cost and it is NOT_RUN.**
 
 *What a client may observe.* `GET /v1/customers/:id/receivable/aging` returns one
-new field. No existing field changed its value, its type or its meaning, and the
+new field — **superseded by DR-39**: it returns `openCounts` and does not return
+the single figure at all. No existing field changed its value, its type or its meaning, and the
 five-column shape of `customer_ar_aging` is now held by a positive test law so a
 later hand cannot take the cheaper-looking road.
 
@@ -385,3 +398,120 @@ why the kind arm is written as a **positive enumeration** (`= 'credit_note'`) ra
 `<> 'invoice'`: the negative form would sweep an unknown future debit kind in as a credit and zero its
 age, which is a debt leaving the report by omission — exactly what DR-13, DR-21 and DR-30 forbid. The
 opposite error merely labels a credit as overdue, which is visible and hides nothing.
+
+## DR-39 — two separate open-document counters, per currency
+
+**Owner, 2026-10-27. Amends DR-29 and settles S-19.**
+
+1. `open_debit_count` — open **debit** documents, balance **> 0**.
+2. `open_credit_count` — open **credit** documents, balance **< 0**, DR-23's
+   overpayment credit among them.
+3. **A document whose balance is exactly zero is counted in neither.**
+4. Both are **distinct** at the level of the **customer and the currency**, and both
+   are computed **independently of the buckets** (DR-29).
+5. **No field may combine the two into one number.**
+6. Required tests: a customer with a debit and a credit together; a **net of zero**
+   (consistent with DR-33); **one document spanning several buckets counted once**;
+   and a **negative control** that fails if a document is counted twice or a credit
+   is counted as a debit.
+
+**Decides.** That DR-29's single figure is **retired, not kept alongside.** It was
+exactly the sum rule 5 forbids, under a name that read like a document count: because
+a zero-balance document belongs to neither counter, `debit + credit` is not "how many
+documents are open" but "how many have a non-zero balance", which no short label states
+correctly. A correct figure beside a tempting wrong one is how the wrong one gets read.
+
+**Does not decide.** How a client should *present* the two counters; whether a screen
+shows both, one, or a per-currency breakdown at all. Nor anything about allocation —
+DR-27 governs that, and nothing here applies a credit to anything.
+
+**Implemented.**
+
+*The contract.* `CustomerOpenDocumentCountsDto { currency, openDebitCount,
+openCreditCount }` is new, and `CustomerAgingDto.openCounts` is a required list of
+those rows. Each counter documents its own **sign rule** and that **zero is in
+neither**; the pair documents in terms that it **must never be added together**, and
+why. `openInvoiceCount` is gone from the contract code; the prose that explains why it
+went is kept.
+
+*The SQL.* `0084` was edited **in place**, following the DR-13/DR-14 precedent:
+`0074`–`0086` are candidates and **`frozenThrough` stays at `0079`**.
+`customer_ar_open_document_counts` replaces the retired routine one-for-one, so the
+`0084-E(6)` configuration loop still examines **six** routines and its asserted count
+is unchanged. The split is made **in SQL by explicit sign predicates** —
+`count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor > 0)` and `< 0` —
+and **not** by dividing a `<> 0` count afterwards in the reader, because a sign
+convention implemented in TypeScript would be a second place where "which way is a
+receivable" lives, and two such places disagree only under the numbers nobody tested.
+The population subquery and the `<> 0` filter remain **character for character** the
+aging body's, so the two readers cannot come to disagree about which documents are
+open, and `<> 0` is the **one** place rule 3 is expressed. `GROUP BY o.currency_code`,
+one visit to `public.invoices` (R-104), nothing stored.
+
+*The reader.* The counters are joined on in **one** statement. The join is a
+**`FULL JOIN`**: a `LEFT JOIN` either way would silently lose a currency one side knows
+about and the other does not. Both orphans are impossible in a correct database and
+**representable** in a row set, so the full join makes each one *arrive*, with a null
+where its missing side would be, and `foldCustomerAging` **refuses** it through the
+module's one refusal channel. A row this read cannot place is a defect and never a
+`continue`. A row set that contradicts itself about a currency's pair, a negative or
+fractional counter, and a counter row with no currency are all the same class of
+defect and all refused.
+
+**THE "ONE ROW PER CURRENCY" READING IS THE COORDINATOR'S AND IS OVERTURNABLE BY ONE
+WORD FROM THE OWNER.** The ruling says "distinct at the level of the customer and the
+currency" and cites DR-33, which makes *presence* per currency — including at a net of
+zero, which a pair of all-currency scalars cannot express at all. The two neighbouring
+readers of record, `customer_ar_outstanding` and `customer_ar_aging`, already key their
+answers by `currency_code`, which is measured support for the same reading rather than
+inference from the citation alone. **If the owner meant two scalars over all of the
+customer's currencies, the correction is two lines:** drop `GROUP BY o.currency_code`
+from the routine and the `currency` key from the DTO row. It is recorded here, and not
+only in a reviewer's head, so that it can be overturned.
+
+*What a client may observe.* `GET /v1/customers/:id/receivable/aging` no longer returns
+`openInvoiceCount`; it returns `openCounts`. **This is a breaking change to that one
+field**, and it is deliberate: no interface consumes it yet (measured — the field name
+appears in no file under `apps/web`, `apps/admin` or `apps/android`), so the cost of
+removing it is nil now and would not be later. No other field changed its value, its
+type or its meaning, and `customer_ar_aging`'s five-column shape is still held by a
+positive test law.
+
+*Evidence.* Every law is over text, types or the pure fold. **The database claim — that
+the installed routine returns these numbers — is NOT_RUN**, as is everything under
+`tests/**`, whose harness needs PostgreSQL. The sign split lives in SQL, so "a credit
+document lands in the credit counter" is specifically among the NOT_RUN claims.
+
+## Card — strengthening the credit-allocation guards (DR-40)
+
+**After the seal. Not blocking. Owner: `daftar-finance`, double review.**
+
+**Why it exists.** The owner's probes of the DR-27 guards measured where those guards
+bite and where they are blind, and the finding is **that DR-27 is guarded — the error
+was in attributing the guard, not in its existence.** Every allocation probe zeroes the
+credit's contribution and so collapses the pinned `dr27_1` quadruple, `scheduleDate`
+included. What the probes also showed is that one named guard is weaker than it was
+described as being. **The numbers, as the owner measured them:**
+
+| Probe | Result | What it establishes |
+|---|---|---|
+| baseline | **244/244, EXIT 0** | the suite is green before any probe |
+| **P1** — "oldest first" allocation moving the text side only | **EXIT 1, 7 failures**: `dr13_8`, `dr23_4`, `dr27_1`, `dr27_2`, `dr27_3`, `dr27_4`, `dr27_5` | **a defective probe**: it broke conservation itself, so it did not separate the two laws |
+| **P1b** — allocation moving `txn` and `base` together, net preserved | **EXIT 1, 5 failures**: `dr13_8`, `dr27_1`, `dr27_3`, `dr27_4`, `dr27_5`; **`dr23_4` GREEN** | the conservation law is **blind** to an allocation that preserves the net. **`dr27_2` also GREEN** — and it is the case that was described as "the only law that sees it". Structural cause: `dr27_0` pins the neighbour in the **oldest** band and the credit is 400 days old, so its band **is that same band**, and absorption inside one band does not move that band's difference |
+| **P2** — band pinned to the oldest rather than taken from the document's age | **EXIT 1, 14 failures** including `dr27_2`, `dr27_3`, `dr27_4`, `dr27_5`; **`dr27_1` GREEN** | `dr27_1`'s pinned band *is* the oldest, so the pin coincides with the mutation |
+| **P4** — `OLD_DEBT.outstandingTxnMinor` `700_000n` → `1_000n` | **EXIT 1, exactly two failures**: `dr27_0`, `dr27_2` | the fixture's magnitudes are load-bearing in precisely two places |
+| **P3** | **indistinguishable, and proved analytically** | at an age of **400** days **every** boundary in `[90, 60, 30, 0]` is exceeded, so any rule that counts the exceeded ones — by order, by index, or by stopping at the first unexceeded — returns **5**. The permutation row is a **tautology for this input** |
+
+**What the card strengthens.**
+
+1. A fixture in which the neighbour sits **in a different band**, so that `dr27_2`
+   becomes capable of seeing absorption at all.
+2. A permutation row at an age that is **not past every boundary**, so the row stops
+   being a tautology.
+3. Three money gaps the reviewer named: a **minor unit either side of a boundary with a
+   credit of `1n`**; a **credit whose magnitude exceeds 2^53**; and **`HALF_EVEN`
+   rounding, which is not exercised at all** in that block, because the totality arm
+   emits `outstandingBaseMinor` verbatim with no conversion.
+
+**Not in scope.** Changing any DR-27 behaviour, any boundary, or any budget. This is a
+card about the strength of guards, not about the rules they guard.
