@@ -5435,43 +5435,48 @@ describe('DR-13-SPEC the termless receivable ages from its issue date in every a
     // this slice: ten money proofs asserted conservation, none of them
     // asserted PLACEMENT, and the titles did not say so.
     //
-    // WHAT NO TEST IN THIS SUITE MEASURES IS THE BODY'S BEHAVIOUR IN ONE
-    // STATE — and the state itself IS measured, on the model, which is why
-    // this heading says «the body's behaviour» and not «the state». An
-    // earlier draft of it read «what is not measured here, or anywhere in
-    // this suite», and that was the very sin the narrowing above indicts: a
-    // universal claim standing over a part. Named rather than left to be
-    // discovered again (card
-    // `.local-context/cards/OVERPAY_AGING_CARD_AR.md`, `OVERPAY-AGING`):
+    // WHAT NO TEST IN THIS SUITE MEASURED, WHEN THIS CASE WAS WRITTEN, WAS
+    // THE BODY'S BEHAVIOUR IN ONE STATE — and the state itself WAS measured,
+    // on the model, which is why this heading says «the body's behaviour»
+    // and not «the state». An earlier draft of it read «what is not measured
+    // here, or anywhere in this suite», and that was the very sin the
+    // narrowing above indicts: a universal claim standing over a part. The
+    // state was named rather than left to be discovered again, and the
+    // TRACKED record of it is `TECHNICAL_DEBT.md`, «Phase 4 money cards and
+    // decisions (DR-24)», card `OVERPAY-AGING`:
     //
     //   AN INVOICE UNDER AN ACTIVE PLAN WITH A NEGATIVE OUTSTANDING — an
     //   OVERPAYMENT. `installment_schedule_verify()` holds
     //   `down + Σ instalments = total` by strict equality, so the schedule
-    //   total always equals the invoice total; and the body's levels are
+    //   total always equals the invoice total; and the body's levels were
     //   `least(greatest(c, paid), total)`, so when `paid > total` EVERY level
-    //   collapses to `total`. Arm (a)'s consecutive differences are then all
-    //   zero and `declared_end = total` makes arm (b)'s residual zero, so the
-    //   invoice contributes NOTHING and the customer's credit balance leaves
+    //   collapsed to `total`. Arm (a)'s consecutive differences were then all
+    //   zero and `declared_end = total` made arm (b)'s residual zero, so the
+    //   invoice contributed NOTHING and the customer's credit balance left
     //   the report by omission rather than by payment.
     //
-    //   IT IS A DIVERGENCE BETWEEN THIS MODEL AND THE BODY, not a defect of
+    //   IT WAS A DIVERGENCE BETWEEN THIS MODEL AND THE BODY, not a defect of
     //   the model: `projectInvoice` carries a totality arm for `O <= 0n`
     //   (`phase4-s7-aging-reference-model.ts`) that emits the whole figure as
-    //   a residual, and the SQL body has no such arm. The MODEL side is
+    //   a residual, and the SQL body had no such arm. The MODEL side was
     //   already measured — `a negative outstanding is carried too, rather
     //   than clamped away` puts `-5_000n` on `PLANNED_INVOICE` under `PLAN`,
     //   whose `status` is `'active'`, and requires the contributions to total
-    //   `-5_000n`. So the model is right where the body is wrong, and what
-    //   this suite cannot see is the BODY.
+    //   `-5_000n`. So the model was right where the body was wrong.
     //
-    //   AND THAT TEST IS `OVERPAY-AGING`'s RED, ALREADY WRITTEN. The same
-    //   fixture asked of the INSTALLED function, expecting `-5_000n`, is the
-    //   divergence proved directly: that card needs no invented case, only a
-    //   database.
+    //   DR-23 (owner, 2026-10-27) RULED THE MODEL CORRECT AND CLOSED THE
+    //   DIVERGENCE: the body now carries the same arm, and the `DR-23`
+    //   describe block at the end of this file holds it — `dr23_1` to
+    //   `dr23_4` on the model's behaviour, `dr23_5` to `dr23_7` on the
+    //   body's TEXT, with `dr23_6` as the negative control. WHAT IS STILL
+    //   NOT MEASURED ANYWHERE is the INSTALLED routine answering `-5 000`
+    //   for this fixture: that needs PostgreSQL, it is NOT_RUN, and it is
+    //   owed by the seal run rather than implied by any law in this package.
     //
     //   The state is reachable with NO guard weakened: the invoice total is
-    //   immutable and a payment does not touch `installments`. It is PRIOR to
-    //   DR-13-SPEC, it is not repaired here, and it is not attributed here.
+    //   immutable and a payment does not touch `installments`. It was PRIOR
+    //   to DR-13-SPEC, and it is neither repaired nor attributed in THIS
+    //   case, whose own subject stays arm (c).
     const rows: readonly OpenInvoiceRow[] = [
       termlessRow(400, { invoiceId: 'a', outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n }),
       { ...termlessRow(400, { invoiceId: 'b' }), dueDate: daysBefore(31), outstandingTxnMinor: 7n, outstandingBaseMinor: 6n },
@@ -5511,5 +5516,500 @@ describe('DR-13-SPEC the termless receivable ages from its issue date in every a
     const shipped = sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'));
     expect(shipped).toMatch(/coalesce\(o\.due_date,\s*o\.issue_date\)/);
     expect(shipped).not.toMatch(/o\.due_date IS NOT NULL/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-23 (owner, 2026-10-27) — A CREDIT BALANCE NEVER LEAVES THE AGING REPORT.
+//
+// Card `OVERPAY-AGING`. The TRACKED record of it is this repository's own
+// `TECHNICAL_DEBT.md`, under «Phase 4 money cards and decisions (DR-24)» —
+// tracked, because a comment in a tracked file pointing at an untracked note
+// is a pointer nobody who clones this repository can follow, and that is
+// itself how a money defect goes quiet.
+//
+// THE DEFECT. An invoice under an ACTIVE installment plan whose outstanding is
+// NEGATIVE — an overpayment — contributed NOTHING to the aging report.
+// `installment_schedule_verify()` holds `down + SUM(instalments) = total` by
+// strict equality, so `schedule_total = total` always; the body's levels are
+// `least(greatest(c, paid), total)`, so when `paid > total` EVERY level
+// collapses to `total`. Arm (a)'s consecutive differences are then all zero
+// and `declared_end = total` zeroes arm (b)'s residual, so the customer's
+// credit left the report BY OMISSION rather than by payment and the bands
+// stopped totalling the authoritative outstanding. No guard has to be weakened
+// to reach the state: the invoice total is immutable and a payment does not
+// touch `installments` — total 1000, schedule 1000, paid 1200, so `O = -200`.
+//
+// THE DECISION. DR-23: a credit balance from an overpayment never leaves the
+// aging report; it is reported EXPLICITLY as a customer credit — a visible
+// negative value, never clamped and never folded into zero — and the bands
+// total NET receivables exactly. The reference model already behaved that way
+// (`phase4-s7-aging-reference-model.ts`, `if (O <= 0n || totalTxn <= 0n ||
+// totalBase <= 0n)`), so the owner ruled the MODEL correct and the SQL body
+// the deviant one. The body now carries the same arm.
+//
+// WHAT THESE LAWS CAN AND CANNOT SEE. There is no database in this package, so
+// nothing here EXECUTES the body. Two different subjects are measured instead
+// and they are not interchangeable: the MODEL's behaviour, which is executed;
+// and the body's TEXT, judged over `sqlCodeOnly` so that a sentence cannot
+// satisfy a law about code. The assertion that the INSTALLED routine returns
+// `-5 000` for this fixture needs PostgreSQL and is NOT_RUN — recorded as
+// owed in `TECHNICAL_DEBT.md`, not implied here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The overpaid planned invoice, built so every figure of the authoritative row
+ * agrees: `paid + O = total` and `paid_base + O_base = total_base`, with the
+ * same pair `PLAN`'s schedule adds up to (12 x 100 000 = 1 200 000). So the
+ * sum law is NOT broken here — this is an ordinary, well-formed receivable
+ * that has simply been paid 5 000 too much.
+ */
+const OVERPAID_PLANNED_INVOICE: OpenInvoiceRow = Object.freeze({
+  ...PLANNED_INVOICE,
+  paidTxnMinor: 1_205_000n,
+  paidBaseMinor: 1_019_201n,
+  outstandingTxnMinor: -5_000n,
+  outstandingBaseMinor: -4_200n,
+});
+
+describe('DR-23 an overpayment is reported as a customer credit, never clamped out of the report', () => {
+  it('dr23_1: the MODEL reports the credit, at the document date, with the schedule arms silent', () => {
+    // NON-VACUITY FIRST: the fixture really is a well-formed overpaid invoice
+    // under an ACTIVE plan whose schedule adds up to the invoice total, so
+    // nothing below is explained by a broken sum law or by a dormant plan.
+    expect(PLAN.status).toBe('active');
+    const scheduleSum = PLAN.downPaymentMinor + PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    const total = OVERPAID_PLANNED_INVOICE.paidTxnMinor + OVERPAID_PLANNED_INVOICE.outstandingTxnMinor;
+    expect(scheduleSum, 'the schedule must add up to the total, or this is proof 4 and not DR-23').toBe(total);
+    expect(OVERPAID_PLANNED_INVOICE.outstandingTxnMinor).toBeLessThan(0n);
+
+    const c = projectInvoice(OVERPAID_PLANNED_INVOICE, PLAN, AS_OF, STANDARD);
+    // ONE contribution, and it is the whole credit: the schedule arms emit
+    // nothing at all, which is what «the totality arm runs instead of them»
+    // means.
+    expect(c, 'NO SUBJECT — the model emitted nothing, so the figure below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('residual');
+    expect(only.txnMinor, 'a credit balance reported as zero is money leaving the report by omission').toBe(-5_000n);
+    expect(only.baseMinor).toBe(-4_200n);
+    // THE PLACEMENT, not only the figure: the document's own date governs, and
+    // for this fixture that is the stated `due_date`.
+    expect(only.scheduleDate).toBe(OVERPAID_PLANNED_INVOICE.dueDate);
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+    // CONSERVATION as an ABSOLUTE value against the authoritative figure, not
+    // as an identity between two sums computed the same way.
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_2: one minor unit on each side of zero, and the sign is the only difference', () => {
+    // MINUS ONE: degenerate, so the whole credit is reported at the document
+    // date.
+    const minusOne = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_200_001n, outstandingTxnMinor: -1n, outstandingBaseMinor: -1n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(minusOne).toHaveLength(1);
+    expect(sum(minusOne)).toBe(-1n);
+    // ZERO cannot occur in the body: `open_invoice` filters
+    // `outstanding_txn_minor <> 0`. The model emits nothing for it, which is
+    // the same answer reached by a different route.
+    const zero = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_200_000n, outstandingTxnMinor: 0n, outstandingBaseMinor: 0n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(zero).toHaveLength(0);
+    // PLUS ONE: NOT degenerate, so the schedule arms run — and the single
+    // minor unit still reaches a band rather than rounding away.
+    const plusOne = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_199_999n, outstandingTxnMinor: 1n, outstandingBaseMinor: 1n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(sum(plusOne)).toBe(1n);
+  });
+
+  it('dr23_3: the two companion disjuncts are not dead code — a non-positive TOTAL routes here too', () => {
+    // UNREACHABLE IN A SOUND DATABASE, AND ASSERTED ANYWAY, because this is
+    // the one input on which `supplier_ap_release(total_base, total_txn, ...)`
+    // has no meaning at all: `invoices.total_txn_minor` is `NOT NULL` and
+    // `>= 1`, so `paid + O <= 0` cannot be committed. Calling a state
+    // «impossible» is exactly how an arm that handles it correctly comes to
+    // look like dead code and gets deleted.
+    const zeroTotal = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: -10n, paidBaseMinor: -10n, outstandingTxnMinor: 10n, outstandingBaseMinor: 10n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(zeroTotal).toHaveLength(1);
+    expect(sum(zeroTotal), 'a zero total must still carry its figure, not divide by it').toBe(10n);
+  });
+
+  it('dr23_4: the bands total NET receivables EXACTLY on a mixed-sign portfolio, above 2^53 included', () => {
+    // THE PORTFOLIO `dr13_8` COULD NOT HAVE. That case passes `[]` for the
+    // plans and therefore measures arm (c) alone, and the credit balance it
+    // carries sits on an invoice with NO plan — the arm that was never broken.
+    // This one puts the credit under an ACTIVE plan, which is the state the
+    // body dropped, and keeps an ordinary planned invoice beside it so the
+    // identity below cannot be satisfied by every arm falling silent.
+    const huge = 9_007_199_254_740_993n; // 2^53 + 1: not representable as a double
+    expect(Number(huge) === Number(huge - 1n), 'the figure no longer exceeds 2^53; pick a larger one').toBe(true);
+    const credit: OpenInvoiceRow = { ...OVERPAID_PLANNED_INVOICE, invoiceId: 'inv-credit' };
+    const rows: readonly OpenInvoiceRow[] = [
+      credit, //            -5 000, under an ACTIVE plan
+      PLANNED_INVOICE, //  900 000, under an ACTIVE plan
+      PLAINLESS_INVOICE, // 250 000, no plan
+      termlessRow(91, { invoiceId: 'inv-huge', outstandingTxnMinor: huge, outstandingBaseMinor: huge - 1n }),
+    ];
+    const plans: readonly InstallmentPlan[] = [PLAN, { ...PLAN, invoiceId: credit.invoiceId }];
+    const buckets = projectCustomerAging(rows, plans, AS_OF, STANDARD);
+    // THE LITERAL, computed by hand and written down, so the law is not an
+    // identity between two sums derived the same way:
+    //   -5 000 + 900 000 + 250 000 + 9 007 199 254 740 993
+    const expected = 9_007_199_255_885_993n;
+    // AND THE SAME FOR THE CARRYING VALUE, by hand as well:
+    //   -4 200 + 761 251 + 211 251 + 9 007 199 254 740 992
+    // The base was conserved only in `dr23_1`, on a single document. A law
+    // that conserves the transaction figure and not the carrying value is
+    // half a conservation law, and the half it omits is the one that passes
+    // through `supplier_ap_release`'s rounding.
+    const expectedBase = 9_007_199_255_709_294n;
+    expect(
+      rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n),
+      'the fixture itself drifted away from the hand-computed figure',
+    ).toBe(expected);
+    expect(
+      rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n),
+      'the fixture itself drifted away from the hand-computed carrying figure',
+    ).toBe(expectedBase);
+    expect(
+      buckets.reduce((a, b) => a + b.txnMinor, 0n),
+      'the bands must total NET receivables EXACTLY (DR-23)',
+    ).toBe(expected);
+    expect(
+      buckets.reduce((a, b) => a + b.baseMinor, 0n),
+      'the bands must total the NET CARRYING value exactly too (DR-23, R-81)',
+    ).toBe(expectedBase);
+    // AND THE CREDIT IS STILL VISIBLE AS A CREDIT rather than absorbed into a
+    // larger positive band by accident: asked on its own, the same fixture
+    // under the same plan reports the whole negative figure.
+    expect(sum(projectInvoice(credit, { ...PLAN, invoiceId: credit.invoiceId }, AS_OF, STANDARD))).toBe(-5_000n);
+  });
+
+  it('dr23_5: the SQL BODY carries the totality arm, judged over CODE, and the schedule arms are gated on it', () => {
+    // TEXT, NOT BEHAVIOUR. `sqlCodeOnly` blanks comments and string literals,
+    // which is the trap `TL-P4-COORD-R46` ruled on: a `prosrc LIKE` cannot
+    // establish a property of code, because a comment is a string too.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch, 'the body has no totality arm, so an overpayment contributes nothing (DR-23)').toMatch(/\bdegenerate AS \(/);
+    // The arm's predicate, all three disjuncts, in CODE.
+    expect(sketch).toMatch(/oi\.outstanding_txn_minor <= 0/);
+    expect(sketch).toMatch(/oi\.total_txn_minor <= 0/);
+    expect(sketch).toMatch(/oi\.total_base_minor <= 0/);
+    // It is keyed on the INVOICE'S OWN FLAG — the same bit arm (c) reads — so
+    // the four arms partition the open invoices instead of overlapping.
+    expect(sketch).toMatch(/FROM open_invoice oi\s*\n\s*WHERE oi\.flagged/);
+    // THE GATE: the schedule arms all descend from `active_plan`, so one
+    // predicate there makes a degenerate invoice structurally unable to reach
+    // them.
+    expect(sketch, 'the schedule arms are not gated, so the levels still collapse to `total`').toMatch(
+      /NOT EXISTS \(SELECT 1 FROM degenerate d WHERE d\.invoice_id = v\.invoice_id\)/,
+    );
+    // ARM (d) EMITS THE AUTHORITATIVE PAIR and not a recomputation of it,
+    // exactly as arm (c) does and as the reference model does.
+    expect(sketch).toMatch(/g\.outstanding_txn_minor, g\.outstanding_base_minor\s*\n\s*FROM degenerate g/);
+
+    // ── THE ARM'S DATE, AND IT WAS ASSERTED BY NOTHING AT ALL ─────────────
+    //
+    // `coalesce(due_date, issue_date)` in this arm had no law over it,
+    // textual or behavioural: the one termless row in the suite is POSITIVE
+    // and has no plan, so it reaches arm (c) and never (d). Planting
+    // `oi.due_date` alone here tripped only the digest-freshness law — whose
+    // own documented remedy is «re-run the tool» — and regenerating the
+    // digest, which is what a developer would actually do, then gave a clean
+    // green with a TERMLESS CREDIT BALANCE PARKED IN BAND 1. Conservation
+    // held throughout, so both halves of DR-23 stayed true while DR-21's
+    // PLACEMENT rule was silently broken. That is the DR-13-SPEC defect class
+    // coming back as an unguarded surface inside the repair for it.
+    //
+    // ANCHORED, because `no_plan`'s SELECT list is byte-identical to this
+    // one and differs only in its `WHERE`: a bare `/coalesce\(oi\.due_date/`
+    // would be satisfied by the OTHER arm and would assert nothing about
+    // this one. The anchor runs date, authoritative pair, source and
+    // predicate in one match.
+    expect(sketch, "arm (d)'s bucket date is not `coalesce(due_date, issue_date)`, so a termless credit parks in band 1 (DR-21)").toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged\s*\n\s*AND \(oi\.outstanding_txn_minor <= 0/,
+    );
+    // AND A TOTAL LAW BESIDE THE ANCHORED ONE: the fallback stands in exactly
+    // THREE places — `residual` (b), `no_plan` (c) and `degenerate` (d) — so
+    // dropping it from ANY arm is a named failure and not a matter of which
+    // arm a pattern happened to find first.
+    expect(
+      (sketch.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length,
+      'the termless fallback is no longer in all three document-dated arms (DR-13, DR-21, DR-23)',
+    ).toBe(3);
+    // AND IT IS NOT THE RETIRED `NOT EXISTS` COMING BACK: that one was over
+    // `installment_plans`, read through the caller's row security, which
+    // answers «absent» and «invisible» alike. This one reads no relation.
+    expect(sketch).not.toMatch(/NOT EXISTS \(SELECT 1 FROM active_plan/);
+    expect(sketch).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installment_plans/);
+  });
+
+  it('dr23_6: that law FIRES when the arm is taken out, and prose does not satisfy it', () => {
+    // THE NEGATIVE CONTROL, on the REAL text rather than on a lookalike: take
+    // the gate out of `active_plan` and the law above must stop holding.
+    const gate = 'AND NOT EXISTS (SELECT 1 FROM degenerate d WHERE d.invoice_id = v.invoice_id)';
+    expect(SPEC, 'the gate changed spelling, so this control is measuring nothing').toContain(gate);
+    const ungated = sqlCodeOnly(projectionSketch(SPEC.replace(gate, '')));
+    expect(ungated).not.toMatch(/NOT EXISTS \(SELECT 1 FROM degenerate d/);
+    // ...and take the arm itself out.
+    const armless = sqlCodeOnly(projectionSketch(SPEC.replace('  degenerate AS (', '  degenerate_retired AS (')));
+    expect(armless).not.toMatch(/\bdegenerate AS \(/);
+    // PROSE IS NOT CODE: the same tokens living only in a comment satisfy
+    // nothing, which is what makes the laws above laws about the body.
+    expect(sqlCodeOnly('-- degenerate AS ( WHERE oi.outstanding_txn_minor <= 0\nSELECT 1;\n')).not.toMatch(/degenerate AS \(/);
+
+    // ── THE REVIEWER'S OWN MUTATION, REPRODUCED HERE ──────────────────────
+    //
+    // `oi.due_date` alone in place of the coalesce, IN ARM (d) and nowhere
+    // else — located by cutting the text at the CTE's own head, because the
+    // two arms' SELECT lists are identical and a blind `replace` would mutate
+    // `residual` instead and prove nothing about this arm.
+    //
+    // THE POINT OF REPRODUCING IT IS THE DIGEST. When the reviewer did this,
+    // the only law that fired was the digest-freshness ratchet, and
+    // regenerating the digest — the normal thing to do — made the suite
+    // green again with the placement rule broken. So the mutation is judged
+    // here by the laws of dr23_5, which no digest regeneration can satisfy.
+    const armHead = '  degenerate AS (';
+    const at = SPEC.indexOf(armHead);
+    expect(at, 'the arm head changed spelling, so this mutation is aimed at nothing').toBeGreaterThan(0);
+    const mutated = SPEC.slice(0, at) + SPEC.slice(at).replace('coalesce(oi.due_date, oi.issue_date) AS due_date', 'oi.due_date AS due_date');
+    expect(mutated, 'the mutation did not apply').not.toBe(SPEC);
+    const mutatedCode = sqlCodeOnly(projectionSketch(mutated));
+    // The anchored law fires...
+    expect(mutatedCode).not.toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged/,
+    );
+    // ...and so does the counting law, independently of the anchor.
+    expect((mutatedCode.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length).toBe(2);
+    // AND THE OTHER TWO ARMS ARE UNTOUCHED BY IT, so the two laws above are
+    // reporting arm (d) and not collateral damage.
+    expect(mutatedCode).toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE NOT oi\.flagged/,
+    );
+  });
+
+  it('dr23_7: `0084` needed no change, and that is a MEASUREMENT and not an assumption', () => {
+    // `0084`'s own `customer_ar_aging` has NO plan arm at all: it bands the
+    // authoritative `outstanding_txn_minor` of each open invoice directly and
+    // filters only `<> 0`, so a NEGATIVE outstanding was always carried.
+    // There is nothing to clamp because there are no levels. The whole defect
+    // lives in the body the SPECIFICATION installs over the same signature.
+    const shipped = sqlCodeOnly(shippedAgingBody());
+    expect(shipped, 'the shipped body has levels after all, so it may clamp a credit too').not.toMatch(/least\(greatest\(/);
+    expect(shipped).toMatch(/o\.outstanding_txn_minor <> 0/);
+    expect(shipped).toMatch(/o\.outstanding_txn_minor AS txn_minor/);
+    // POSITIVE CONTROL for the detector that has just reported an absence: it
+    // does see the level expression where the level expression really is.
+    expect(sqlCodeOnly(specAgingBody()), 'the detector is blind, so the absence above means nothing').toMatch(/least\(greatest\(/);
+  });
+
+  /**
+   * A TERMLESS invoice under an ACTIVE plan, overpaid. The schedule declares
+   * the whole 100 000, so the sum law is intact; `paid` is 105 000, so
+   * `O = -5 000` and the arm applies. The document states NO term, which is
+   * what makes the arm's DATE the subject rather than its figure.
+   */
+  const termlessCreditRow = (age: number): OpenInvoiceRow =>
+    termlessRow(age, {
+      invoiceId: 'inv-termless-credit',
+      paidTxnMinor: 105_000n,
+      paidBaseMinor: 88_703n,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    });
+  const TERMLESS_CREDIT_PLAN: InstallmentPlan = Object.freeze({
+    invoiceId: 'inv-termless-credit',
+    status: 'active' as const,
+    downPaymentMinor: 0n,
+    downPaymentDueDate: daysBefore(395),
+    installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 100_000n }],
+  });
+
+  it('dr23_8: a TERMLESS credit balance under an active plan ages from its ISSUE date, not band 1', () => {
+    // THE CASE THE ARM'S DATE HAD NO LAW OVER. Every other fixture in this
+    // block STATES a due date, and the one termless row in the whole suite is
+    // positive and planless, so it reaches arm (c). Nothing measured arm (d)
+    // on a document with no term — which is how `oi.due_date` alone survived
+    // a full green run in the reviewer's mutation with the credit parked in
+    // the not-due band.
+    const row = termlessCreditRow(400);
+    expect(row.dueDate, 'the subject states a term, so this measures the wrong document').toBeNull();
+    expect(TERMLESS_CREDIT_PLAN.status).toBe('active');
+    const scheduleSum = TERMLESS_CREDIT_PLAN.downPaymentMinor + TERMLESS_CREDIT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    expect(scheduleSum, 'the schedule must add up to the total, or this is proof 4 and not DR-23').toBe(row.paidTxnMinor + row.outstandingTxnMinor);
+
+    const c = projectInvoice(row, TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the band below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // THE ASSERTION THAT GOES RED ON THE MUTATION, and it is on the BAND:
+    // with `oi.due_date` alone the date is NULL, no threshold is exceeded and
+    // this is 1 — `not-due` — for a credit 400 days past the issue date.
+    expect(only.bucketNo, 'a termless credit reported as not-due is DR-21 broken while DR-23 still looks satisfied').toBe(OLDEST_STANDARD);
+    // ...and the date the projection SAYS it used is the issue date, so the
+    // figure and its stated date cannot disagree.
+    expect(only.scheduleDate).toBe(row.issueDate);
+    expect(only.txnMinor).toBe(-5_000n);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_9: every standard boundary for a CREDIT, on each side and ON it', () => {
+    // NO `dr23` CASE PLACED A CREDIT AT A BOUNDARY. `>` is strict, so 30, 60
+    // and 90 stay in the younger band; the figure is negative throughout, so
+    // this also measures that the band arithmetic does not treat the sign of
+    // the money as part of the date comparison.
+    for (const [age, band] of [
+      [0, 1],
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+    ] as const) {
+      const c = projectInvoice(termlessCreditRow(age), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+      expect(c, `age ${age}: exactly one contribution carries the whole credit`).toHaveLength(1);
+      expect((c[0] as AgingContribution).bucketNo, `a credit ${age} day(s) past its issue date`).toBe(band);
+      expect(sum(c), `age ${age}: conservation`).toBe(-5_000n);
+    }
+  });
+
+  it('dr23_10: a FUTURE issue date puts the credit in the not-due band, which is the other side of the same law', () => {
+    // THE POSITIVE CONTROL FOR dr23_8's band: band 1 is reachable, and it is
+    // reachable for the RIGHT reason — a document not yet issued. Without
+    // this, «band 5 and not band 1» could be satisfied by a projection that
+    // can only ever answer 5.
+    const c = projectInvoice(termlessCreditRow(-45), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect((c[0] as AgingContribution).bucketNo).toBe(1);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_11: the overpayment may EXCEED the invoice, and the credit is still the whole authoritative figure', () => {
+    // EVERY OTHER FIXTURE HERE IS −1 OR −5 000 AGAINST 1 200 000, so `|O|`
+    // never came near the invoice total and a body that clamped at `-total`
+    // would have passed all of them. Paid 3 200 000 on a 1 200 000 invoice:
+    // the credit is 2 000 000, which is 1.67x the document.
+    const big: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: 3_200_000n,
+      paidBaseMinor: 2_707_001n,
+      outstandingTxnMinor: -2_000_000n,
+      outstandingBaseMinor: -1_692_000n,
+    };
+    expect(big.paidTxnMinor + big.outstandingTxnMinor, 'the total must stay 1 200 000 or the fixture is a different document').toBe(1_200_000n);
+    const c = projectInvoice(big, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.txnMinor, 'the credit was clamped at the invoice total').toBe(-2_000_000n);
+    expect(only.baseMinor).toBe(-1_692_000n);
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+  });
+
+  it('dr23_12: a wholly NEGATIVE authoritative pair carries, rather than dividing by it', () => {
+    // UNREACHABLE IN A SOUND DATABASE, like `dr23_3`, and asserted for the
+    // same reason: this is the input on which the carrying-value law has no
+    // denominator. Paid −100 and outstanding −50, so the total is −150 and
+    // every one of the arm's three disjuncts is true at once.
+    const neg: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: -100n,
+      paidBaseMinor: -100n,
+      outstandingTxnMinor: -50n,
+      outstandingBaseMinor: -50n,
+    };
+    const c = projectInvoice(neg, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect(sum(c)).toBe(-50n);
+    expect((c[0] as AgingContribution).baseMinor).toBe(-50n);
+  });
+
+  it('dr23_13: RECORDED ASYMMETRY, NOT APPROVED BEHAVIOUR — a positive txn with a negative carrying amount breaks R-81, pinned so a silent change is caught', () => {
+    // THIS CASE BLESSES NOTHING. It pins today's answer because
+    // `TECHNICAL_DEBT.md` calls that answer «measured», and a money figure
+    // recorded as measured and reproducible by nothing is the defect class
+    // the register exists to prevent. Card `CARRY-CONSERVATION-R81` in that
+    // file carries the finding, its owner and its open reachability; this is
+    // only its guard. If the asymmetry is repaired, THIS CASE MUST BE
+    // REWRITTEN BY THE CARD THAT REPAIRS IT — it going red is the signal, not
+    // a regression.
+    //
+    // WHAT IT IS. The arm's three disjuncts are about the transaction figure
+    // and the two totals — `O <= 0`, `totalTxn <= 0`, `totalBase <= 0` — so a
+    // row whose TRANSACTION outstanding is positive while its CARRYING
+    // outstanding is negative is NOT degenerate and takes the schedule arms.
+    // There the carrying share is re-derived through
+    // `supplier_ap_release(total_base, total_txn, level, share)`, which is a
+    // law over a POSITIVE carrying window, and the figure it returns is `+8`
+    // against an authoritative `-10`: opposite in sign and different in
+    // magnitude.
+    //
+    // THE LAW THAT BREAKS IS THE ROW'S OWN. The routine's `COMMENT` in the
+    // specification asserts that the base shares «likewise total
+    // `outstanding_base_minor` EXACTLY» by the canonical cumulative
+    // carrying-value law (R-61, R-81). On this input they do not.
+    //
+    // IT IS NOT ATTRIBUTABLE TO `OVERPAY-AGING`. The reference model carries
+    // the SAME condition as the body, so there is no model/body divergence to
+    // choose between, and the behaviour predates the totality arm entirely.
+    // AND ITS REACHABILITY IS NOT_MEASURED: whether `invoice_outstanding` can
+    // produce that sign pairing at all is a question for a database.
+    const mixed: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      invoiceId: 'inv-mixed-sign',
+      paidTxnMinor: 1_199_990n,
+      paidBaseMinor: 1_015_011n,
+      outstandingTxnMinor: 10n,
+      outstandingBaseMinor: -10n,
+    };
+    // NON-VACUITY: the authoritative pair still recomposes the SAME document
+    // every other case in this block is about, so the only thing that has
+    // changed is the SIGN of the carrying outstanding.
+    expect(mixed.paidTxnMinor + mixed.outstandingTxnMinor).toBe(1_200_000n);
+    expect(mixed.paidBaseMinor + mixed.outstandingBaseMinor).toBe(1_015_001n);
+    expect(mixed.outstandingTxnMinor).toBeGreaterThan(0n);
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+
+    const c = projectInvoice(mixed, { ...PLAN, invoiceId: mixed.invoiceId }, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the figures below have nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // IT DID NOT TAKE ARM (d): the origin says so. If a future change adds
+    // `outstandingBaseMinor < 0` to the arm's condition, this is `residual`
+    // and the base below is `-10n`, and both assertions name it.
+    expect(only.origin, 'the row now reaches the totality arm — `CARRY-CONSERVATION-R81` may have been repaired; rewrite this case there').toBe('installment');
+    // THE TRANSACTION SIDE IS EXACT, as it is everywhere: integers only.
+    expect(only.txnMinor).toBe(10n);
+    // AND THE CARRYING SIDE IS NOT. `+8` against an authoritative `-10`.
+    expect(only.baseMinor, 'the re-derived carrying share moved; `TECHNICAL_DEBT.md` records +8 as measured, so one of the two is now wrong').toBe(8n);
+    // THE BREACH, STATED AS A BREACH: the bands do NOT total the
+    // authoritative carrying figure on this input. Asserted as an inequality
+    // on purpose — writing it as an equality against `8n` would record the
+    // wrong figure as the law.
+    expect(
+      c.reduce((a, x) => a + x.baseMinor, 0n),
+      'R-81 holds after all on this input, which would mean the register overstates the finding',
+    ).not.toBe(mixed.outstandingBaseMinor);
+    expect(c.reduce((a, x) => a + x.baseMinor, 0n)).toBe(8n);
+    // ...and the direction of the error is recorded, because a carrying share
+    // that reports a DEBIT where the authoritative figure is a CREDIT is the
+    // sign error, not a rounding one.
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+    expect(only.baseMinor).toBeGreaterThan(0n);
   });
 });
