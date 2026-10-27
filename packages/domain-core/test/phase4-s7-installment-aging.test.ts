@@ -5424,13 +5424,46 @@ describe('DR-13-SPEC the termless receivable ages from its issue date in every a
     expect(sum(big)).toBe(huge);
   });
 
-  it('dr13_8: no receivable leaves the aging report — the bands total the authoritative outstanding, termless or not', () => {
+  it('dr13_8: NO INVOICE WITHOUT AN ACTIVE PLAN leaves the aging report — the bands total its authoritative outstanding, termless or not', () => {
+    // THE TITLE IS NARROW ON PURPOSE, AND THE NARROWING IS THE POINT.
+    //
+    // This case passes `[]` for the plans, so the ONLY arm it measures is arm
+    // (c): the whole figure of an invoice with no active plan. Its first
+    // title claimed «no receivable leaves the aging report», which is a
+    // UNIVERSAL claim over all three arms, and a universal claim measured on
+    // one arm is exactly what let the termless defect live the whole life of
+    // this slice: ten money proofs asserted conservation, none of them
+    // asserted PLACEMENT, and the titles did not say so.
+    //
+    // WHAT IS NOT MEASURED HERE, OR ANYWHERE IN THIS SUITE, NAMED RATHER THAN
+    // LEFT TO BE DISCOVERED AGAIN (card `OVERPAY-AGING`):
+    //
+    //   AN INVOICE UNDER AN ACTIVE PLAN WITH A NEGATIVE OUTSTANDING — an
+    //   OVERPAYMENT. `installment_schedule_verify()` holds
+    //   `down + Σ instalments = total` by strict equality, so the schedule
+    //   total always equals the invoice total; and the body's levels are
+    //   `least(greatest(c, paid), total)`, so when `paid > total` EVERY level
+    //   collapses to `total`. Arm (a)'s consecutive differences are then all
+    //   zero and `declared_end = total` makes arm (b)'s residual zero, so the
+    //   invoice contributes NOTHING and the customer's credit balance leaves
+    //   the report by omission rather than by payment.
+    //
+    //   IT IS A DIVERGENCE BETWEEN THIS MODEL AND THE BODY, not a defect of
+    //   the model: `projectInvoice` carries a totality arm for `O <= 0n`
+    //   (`phase4-s7-aging-reference-model.ts`) that emits the whole figure as
+    //   a residual, and the SQL body has no such arm. So this suite cannot
+    //   see it at all — the model is right where the body is wrong.
+    //
+    //   The state is reachable with NO guard weakened: the invoice total is
+    //   immutable and a payment does not touch `installments`. It is PRIOR to
+    //   DR-13-SPEC, it is not repaired here, and it is not attributed here.
     const rows: readonly OpenInvoiceRow[] = [
       termlessRow(400, { invoiceId: 'a', outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n }),
       { ...termlessRow(400, { invoiceId: 'b' }), dueDate: daysBefore(31), outstandingTxnMinor: 7n, outstandingBaseMinor: 6n },
       termlessRow(0, { invoiceId: 'c', outstandingTxnMinor: -2_500n, outstandingBaseMinor: -2_113n }),
       termlessRow(91, { invoiceId: 'd', outstandingTxnMinor: 9_007_199_254_740_993n, outstandingBaseMinor: 9_007_199_254_740_992n }),
     ];
+    // `[]` PLANS: arm (c) only, which is what the narrowed title says.
     const buckets = projectCustomerAging(rows, [], AS_OF, STANDARD);
     const total = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
     expect(

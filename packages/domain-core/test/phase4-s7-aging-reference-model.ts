@@ -586,8 +586,27 @@ export function projectInvoice(
     })),
   ].sort((x, y) => epochDay(x.dueDate) - epochDay(y.dueDate) || x.seqNo - y.seqNo);
 
-  // A degenerate invoice (nothing outstanding, or a negative outstanding that
-  // no CHECK permits) carries wholly as residual. Totality before cleverness.
+  // A degenerate invoice — nothing outstanding, or a NEGATIVE outstanding —
+  // carries wholly as residual. Totality before cleverness.
+  //
+  // THE REASON RECORDED HERE USED TO SAY «a negative outstanding that no CHECK
+  // permits», AND THAT WAS NOT ACCURATE. A negative outstanding is an
+  // OVERPAYMENT and it is an ordinary fact of this estate, not a state the
+  // schema forbids: `outstanding_txn_minor` is computed by
+  // `invoice_outstanding` from the reducer set and carries no CHECK at all,
+  // `tests/golden-regression/.../12-overpayment-customer-credit.golden.test.ts`
+  // is a suite about exactly it, and `dr13_7` in the proof file asserts that a
+  // customer in credit must AGE rather than vanish. Calling the state
+  // impossible is how an arm that handles it correctly comes to look like
+  // defensive dead code and gets deleted.
+  //
+  // THE ARM STAYS, AND IT IS WHERE THIS MODEL AND THE SQL BODY DIVERGE
+  // (card `OVERPAY-AGING`). The body has NO such arm: with `paid > total`
+  // every level `least(greatest(c, paid), total)` collapses to `total`, so
+  // arm (a)'s differences are all zero and `declared_end = total` zeroes arm
+  // (b)'s residual, and the invoice contributes nothing. This model emits the
+  // whole figure instead, which is the correct behaviour — so the divergence
+  // is the body's, and it is PRIOR to and outside DR-13-SPEC.
   if (O <= 0n || totalTxn <= 0n || totalBase <= 0n) {
     if (O !== 0n) {
       out.push({
