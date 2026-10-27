@@ -199,9 +199,22 @@ describe('DR-28 — the reader that produces the figure says so in live SQL', ()
 
   it('no arm of the age expression can yield NULL — structurally, not by example', () => {
     const code = liveCode(READER);
-    // 1. The age is a plain subtraction, with no CASE and no NULLIF around it.
-    expect(/CASE[^\n]*AS\s+days_past_due/i.test(code)).toBe(false);
+    // 1. No arm of the expression is NULL, and nothing nullifies it.
+    //
+    //    This law used to read "there is no CASE around `days_past_due`",
+    //    which was the right ban for DR-28 alone: the defect it retired WAS a
+    //    CASE, and the replacement was a bare subtraction. DR-31 then forced a
+    //    CASE back in for a legitimate reason — a credit-bearing row reports a
+    //    literal `0` rather than an overdue age — so banning the KEYWORD would
+    //    now fail on correct code while still saying nothing about the value
+    //    that actually matters. The ban is therefore restated on the VALUE:
+    //    neither arm may be NULL, and the `ELSE` arm must be the DR-28
+    //    expression unchanged, so every figure DR-28 pinned is still produced
+    //    by the same arithmetic.
+    expect(/THEN\s+NULL/i.test(code)).toBe(false);
+    expect(/ELSE\s+NULL/i.test(code)).toBe(false);
     expect(/nullif[^\n]*AS\s+days_past_due/i.test(code)).toBe(false);
+    expect(/ELSE\s*\(\s*\$3::date\s*-\s*coalesce\(\s*o\.due_date\s*,\s*o\.issue_date\s*\)\s*\)\s*END\s+AS\s+days_past_due/i.test(code)).toBe(true);
     // 2. `coalesce` makes the right operand total — PROVIDED the fallback
     //    column is itself never null. That is a schema fact, so it is measured
     //    in the schema, not assumed: `invoices.issue_date` is `DATE NOT NULL`,
@@ -252,6 +265,11 @@ describe('DR-28 — the contract makes a null age unrepresentable', () => {
     settlementState: 'partial',
     daysPastDue: 400,
     hasExplicitDueDate: false,
+    // DR-31: every document also carries its own age, and says whether it is
+    // credit. This row is a DEBIT invoice, so `daysPastDue` above is the DR-28
+    // figure unchanged. The DR-31 laws live in `dr31-credit-age.test.ts`.
+    ageDays: 400,
+    isCredit: false,
   };
 
   const withTerms: CustomerOpenInvoiceDto = {
@@ -261,6 +279,10 @@ describe('DR-28 — the contract makes a null age unrepresentable', () => {
     dueDate: '2026-08-31',
     daysPastDue: 30,
     hasExplicitDueDate: true,
+    // As of `2026-09-30`: 30 days past the stated term, and 60 days old. The
+    // two figures DIFFER here, which is the point of DR-31 keeping them apart.
+    ageDays: 60,
+    isCredit: false,
   };
 
   it('a termless row carries a real age and says the due date was not stated', () => {

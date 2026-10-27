@@ -1,7 +1,13 @@
 # Phase 4 receivables-aging decisions — 2026-10-27
 
-Owner decisions DR-27, DR-28, DR-29 and DR-30, and the Phase 4 **seal scope**
-decision (option "ج").
+Owner decisions DR-27, DR-28, DR-29, DR-30, DR-31, DR-32 and DR-33, and the
+Phase 4 **seal scope** decision (option "ج").
+
+DR-27 to DR-31 are implemented in the Phase 4 lineage; **DR-32 is implemented
+inside Integrations Core after the seal** and **DR-33 in its own card before
+it** — both are recorded here on the day they were decided, because a decision
+that governs money and lives only in working notes does not travel with a clone
+(DR-24).
 
 This file is the TRACKED record (DR-24). `.local-context/` holds working notes
 and does not travel with a clone of this repository; these decisions govern code
@@ -31,7 +37,8 @@ A test must pin that bucketing does not move where the credit appears.
 **Does not decide.** How the merchant-initiated allocation is modelled — its
 command, its permission, its journal shape. That is `PAY-ALLOC`'s subject. It
 also does not decide whether a customer whose receivables net to exactly zero is
-PRESENT in a list at all: that is **S-16**, still open, because
+PRESENT in a list at all: that is **S-16**, since decided by **DR-33** below and
+left standing here as the question DR-27 raised but did not answer, because
 `customer_ar_outstanding` ends in `HAVING sum(...) <> 0` and returns no row for
 such a customer while `customer_ar_aging` carries no such `HAVING` and shows two
 offsetting bands. The totals agree; the presence does not.
@@ -88,6 +95,11 @@ unaffected except that termless invoices now show one.
 nor `invoice_count` (also DR-29), nor the wording a client shows for
 `hasExplicitDueDate` — only that the fact is available separately.
 
+**Raised S-21, and it is answered below.** DR-28's rule is stated for "an
+invoice that is DUE", and applying it to a credit-bearing row produced a
+positive overdue age where there had been `null`. **DR-31** settles that: a
+credit is not overdue debt.
+
 ---
 
 ## DR-29 — per-bucket invoice counts are not additive
@@ -121,6 +133,124 @@ it settles which band it lands in.
 
 ---
 
+## DR-31 — a credit is not overdue debt
+
+**Decides.** Every document on the open-document list carries
+**`age_days = as_of − the document's own date`**. **`days_past_due` is for DEBIT
+documents only**: a credit note — **and any credit balance**, such as an
+overpaid invoice (DR-23) — reports **`days_past_due = 0`** together with
+**`is_credit = true`**, and an interface renders such a row as
+**"رصيد دائن منذ X يومًا" / "a credit balance for X days"**, never as "متأخر" /
+"overdue". The type stays **`number` with no `NULL`**, consistent with DR-28,
+and **no total changes**: this decision changes what a date column reports, not
+what the customer owes.
+
+It answers **S-21**, which DR-28 raised and could not settle: after DR-28 a
+credit-bearing row began reporting a positive overdue age where it had reported
+`null`.
+
+**DR-28 and DR-31 do not collide.** DR-28 governs "an invoice that is DUE" and
+forbids `NULL` for it; a credit is not due *from* the customer, so DR-31 speaks
+about a different population rather than carving an exception. Operationally a
+debit row's `days_past_due` is produced by DR-28's expression unchanged, in the
+`ELSE` arm of the new `CASE`, and every case DR-28 pinned is re-asserted as a
+regression guard.
+
+**Two implementation facts the decision depends on, and they are measured, not
+assumed.**
+
+1. **"The document's own date" is `issue_date`, NOT DR-28's
+   `coalesce(due_date, issue_date)`.** DR-28's anchor answers "how late is this
+   debt", and lateness is measured against a term. `age_days` answers "how old
+   is this document", so it reads the date the document bears: a payment term is
+   not part of a document's age, and a credit note has no meaningful term.
+   Three consequences — `issue_date` is `DATE NOT NULL`, so the subtraction is
+   total and **nothing is substituted, so no direction of error has to be
+   signed**; the figure is what "a credit balance for X days" means; and the two
+   fields stay **independent**, because an age anchored on the due date would
+   equal `days_past_due` for every debit invoice with a term and invite a client
+   to derive one from the other.
+2. **`is_credit` is driven by the document's own KIND or the SIGN of its money,
+   never by the age.** The trap is explicit: a debit invoice due exactly on the
+   as-of date has `days_past_due = 0` and **is not a credit**. The kind arm is
+   enumerated **positively** (`document_kind = 'credit_note'`), not as "anything
+   that is not an invoice", because sweeping an unknown future *debit* kind in as
+   credit would force its overdue age to zero and stop a real debt reading as
+   overdue — a debt leaving the report by omission, the one failure
+   DR-13/DR-21/DR-30 forbid. The opposite mistake shows a credit labelled
+   overdue: visibly wrong, hiding nothing.
+
+**A stated limit.** `invoices_document_kind_ck` (`0075`) today CHECKs
+`document_kind = 'invoice'`, so **a `credit_note` row is not representable on
+the published schema**: the kind arm is forward-looking and becomes live when
+P4-S5 adds the kind. The arm that is live today is the **sign** arm — a credit
+balance on an otherwise debit document, which reaches the page because
+`customer_open_invoices_page` filters `outstanding_txn_minor <> 0`, not `> 0`.
+The rule is written now because the read surface already types the column as
+`'invoice' | 'credit_note'` and a client already branches on it.
+
+**Client-visible change.** `CustomerOpenInvoiceDto` gains `ageDays: number` and
+`isCredit: boolean`. A credit-bearing row's `daysPastDue` changes from a
+positive figure (post-DR-28) to `0`. No amount field changes.
+
+**Does not decide.** Anything at bucket level: the aging reader answers in
+bands and reports no per-document age, so DR-31 has no second site. Nor the
+exact wording a client shows, only that the fact is available separately. Nor
+`invoice_count` (DR-29) nor the appearance rule (DR-33). Nor whether a credit
+note should carry a `due_date` at all when P4-S5 introduces the kind.
+
+---
+
+## DR-32 — `units_per_day` is mandatory, and no limit means no send
+
+**Decides.** Option (b) for **S-14**: **`units_per_day` is mandatory alongside
+any other limit, per provider and per merchant.** The **absence of any limit is
+a refusal** — fail-closed, `quota_limits_missing` → **409** — and a
+platform-level row does not satisfy a merchant's. A **burst test** is required:
+consume the **day's** quota, then a further request **is refused by the agreed
+code, even though the month's quota remains**.
+
+**Where it is implemented.** **Inside Integrations Core, after the Phase 4
+seal.** It is recorded here now, and in the Integrations Core specification,
+precisely so that the decision does not live only in working notes (DR-24).
+Nothing in this branch implements it.
+
+**Does not decide.** The numeric limits themselves — a default value in
+production would burn the platform's money silently, so there is none. Nor the
+provider set, nor the shape of the usage counter.
+
+---
+
+## DR-33 — one appearance rule for both receivables readers
+
+**Decides.** Option (أ) for **S-16**, with the boundary stated exactly:
+
+- A customer appears **in BOTH readers** for **every currency in which they hold
+  any open document at all**, debit **or** credit — **even when the net is
+  zero**, carrying **`net_zero = true`**.
+- **No row for a currency in which there is no open document at all.** Presence
+  follows the existence of an open document, not the sign or size of a balance.
+- `customer_ar_outstanding` and `customer_ar_aging` are **unified on the same
+  appearance rule** — today they differ, which is the defect: the outstanding
+  reader ends with `HAVING sum(...) <> 0` and the aging reader has no such
+  clause, so a customer whose balances offset is present in one and absent from
+  the other.
+- **A test proves the customer/currency sets of the two readers match.**
+- An interface **may** later offer a "hide net zero" filter, **which must default
+  to off**.
+
+**Why it needs a decision at all.** No conservation law catches it: the sums
+agree either way. Only presence differs, and presence is what a merchant reads.
+
+**Does not decide.** Any figure. It is a presence rule, and every total stays
+what DR-23 and DR-30 make it. It also does not decide the filter's wording or
+placement, only its default.
+
+**Where it is implemented.** Within the Phase 4 lineage, before the seal, in its
+own card — test first, double review. Nothing in this branch implements it.
+
+---
+
 ## Seal scope — option "ج"
 
 **Decides.** Phase 4 is sealed at **S1–S4**. **S5–S9 are declared deferred** —
@@ -142,6 +272,6 @@ candidates and `frozenThrough` remains `0079`).
 
 | Item | Question | Why it is not settled by the above |
 |---|---|---|
-| **S-16** | Does a customer whose receivables net to zero appear in the receivables list? | A presence question, not a totals question. No conservation law catches it: the sums agree either way. |
+| ~~**S-16**~~ | ~~Does a customer whose receivables net to zero appear in the receivables list?~~ | **Decided by DR-33 above** (yes, in both readers, with `net_zero = true`). The implementation is a separate card; the question is closed. |
 | **S-20 / PAY-ALLOC** | The mechanics of a merchant-initiated credit allocation. | DR-27 defers it past the seal by name. |
 | **DR-13-MIG** | A database migrated only as far as `0083` still carries the pre-DR-13 aging guard in live code (`0075:809`, `0083:394`); `0084` is what repairs it. | Migrations are frozen as candidates by DR-03, so the condition is recorded rather than patched. |

@@ -268,10 +268,22 @@ export interface CustomerOpenInvoiceDto {
   /** Derived through `invoice_settlement_state(...)`; never `invoices.status`. */
   settlementState: InvoiceSettlementState;
   /**
-   * Whole days from the invoice's AGE ANCHOR to the supplied as-of date:
-   * `asOf - coalesce(dueDate, issueDate)` (DR-28), negative before the anchor
-   * and zero ON it. Never a fraction, never a clock reading: a civil date
-   * minus a civil date has no timezone.
+   * **For a DEBIT document:** whole days from its AGE ANCHOR to the supplied
+   * as-of date — `asOf - coalesce(dueDate, issueDate)` (DR-28), negative
+   * before the anchor and zero ON it. Never a fraction, never a clock
+   * reading: a civil date minus a civil date has no timezone.
+   *
+   * **For a CREDIT-bearing row, this is `0` (DR-31).** A credit note — and any
+   * credit balance, such as an overpaid invoice (DR-23) — is not overdue debt,
+   * so it has no overdue age. `isCredit` is `true` on exactly those rows and
+   * `ageDays` carries how long the credit has stood. An interface must render
+   * such a row as "رصيد دائن منذ X يومًا" / "a credit balance for X days",
+   * **never** as "متأخر" / "overdue". DR-28 and DR-31 do not collide: DR-28
+   * governs an invoice that is DUE, and a credit is not due from the customer.
+   *
+   * The zero is a literal, not a clamp: it is never negated and never the
+   * result of subtracting anything, so this field cannot be negative for a
+   * credit. And it is never `null` for anything, credit or debit.
    *
    * **NEVER `null`.** This field used to be `number | null`, with `null`
    * meaning "the invoice named no due date" — and that is exactly the defect
@@ -303,6 +315,50 @@ export interface CustomerOpenInvoiceDto {
    * for a missing term.
    */
   hasExplicitDueDate: boolean;
+  /**
+   * Whole days from **the document's own date** to the supplied as-of date:
+   * `asOf - issueDate`, for EVERY document kind, debit or credit (DR-31).
+   * Negative before that date, zero ON it.
+   *
+   * **Deliberately NOT the same expression as `daysPastDue`.** That field
+   * anchors on `coalesce(dueDate, issueDate)` because it answers "how late is
+   * this debt", and lateness is measured against a term. This one answers "how
+   * old is this document", so it reads the document's own date and nothing
+   * else: a payment term is not part of a document's age, and a credit note
+   * has no meaningful term at all.
+   *
+   * Three consequences, all intended:
+   *
+   * - **Nothing is substituted here, so no substitution has to be signed.**
+   *   `issueDate` is `DATE NOT NULL` on every row of every kind, so the
+   *   subtraction is total with no fallback; a `coalesce` would be dead code.
+   * - It is the figure a client renders for a credit as "a credit balance for
+   *   X days".
+   * - The two fields stay INDEPENDENT. Had this anchored on the due date, a
+   *   debit invoice with a stated term would satisfy `ageDays === daysPastDue`
+   *   and a client could derive either from the other — a derivation that
+   *   would silently break the first time a credit appeared.
+   */
+  ageDays: number;
+  /**
+   * `true` when this row carries CREDIT rather than debt (DR-31): the document
+   * is a credit note, or its outstanding figure is negative — an overpaid
+   * invoice holding a credit balance (DR-23).
+   *
+   * Driven by the document's own KIND or by the SIGN of its money, and by
+   * NOTHING ELSE. In particular it is **not** `daysPastDue === 0`: a debit
+   * invoice due exactly on the as-of date has `daysPastDue === 0` and
+   * `isCredit === false`. A client that infers one from the other will show a
+   * debt due today as a credit balance.
+   *
+   * The kind arm is enumerated POSITIVELY (`credit_note`), not as "anything
+   * that is not an invoice". That is the signed direction: sweeping an unknown
+   * future kind in as credit would force its `daysPastDue` to zero and stop a
+   * real debt reading as overdue, which is the one failure DR-13/DR-21/DR-30
+   * forbid. The opposite mistake shows a credit labelled overdue — visibly
+   * wrong, but it hides nothing.
+   */
+  isCredit: boolean;
 }
 
 /** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */

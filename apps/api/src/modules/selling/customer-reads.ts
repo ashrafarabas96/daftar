@@ -88,6 +88,46 @@ interface ContactRow extends QueryResultRow {
 const CUSTOMER_COLUMNS = `c.id, c.name, c.phone, c.email, c.notes, c.status, c.revision, c.created_at, c.updated_at,
          c.business_transaction_id, c.create_intent_sha256, c.last_intent_sha256`;
 
+/**
+ * THE ONE DEFINITION of "this row carries credit, not debt" (DR-31).
+ *
+ * It is interpolated into the open-invoices page twice — once as the `is_credit`
+ * column and once as the predicate of the `days_past_due` CASE — so the two can
+ * never drift apart. It is a compile-time constant of this module: no caller
+ * input reaches it, and the two parameters the page does take are still bound
+ * (`$1`…`$5`).
+ *
+ * TWO ARMS, AND THE CHOICE OF EACH IS SIGNED:
+ *
+ *  1. `document_kind = 'credit_note'` — the document's OWN KIND, enumerated
+ *     POSITIVELY. Not `<> 'invoice'`. The difference matters in the direction
+ *     that costs money: were an unknown future kind swept in as credit, its
+ *     `days_past_due` would be forced to zero and a genuine debt would stop
+ *     reading as overdue — a debt leaving the report by omission, which is the
+ *     one failure DR-13/DR-21/DR-30 exist to forbid. Naming a new DEBIT kind as
+ *     credit by accident is therefore unreachable; the opposite mistake (a new
+ *     CREDIT kind reading as debit until it is named here) shows a credit
+ *     labelled overdue, which is visibly wrong and hides nothing.
+ *
+ *     MEASURED LIMIT: `invoices_document_kind_ck` (`0075`) today CHECKs
+ *     `document_kind = 'invoice'`, so this arm is UNREACHABLE on the published
+ *     schema and becomes live the day P4-S5 adds the credit-note kind. It is
+ *     written now because the read surface already types the column as
+ *     `'invoice' | 'credit_note'` and a client already branches on it.
+ *
+ *  2. `outstanding_txn_minor < 0` — the SIGN of the money, which is live TODAY.
+ *     An overpaid invoice carries a credit balance (DR-23), and
+ *     `customer_open_invoices_page` filters on `outstanding_txn_minor <> 0`,
+ *     NOT `> 0` (measured in `0084`), so such a row reaches this page. This arm
+ *     is what makes the rule hold on the kind-agnostic property that actually
+ *     decides whether the merchant is owed or owes.
+ *
+ * It reads NO date. `is_credit` must never be derivable from `days_past_due`
+ * being zero: a debit invoice due exactly ON the as-of date has
+ * `days_past_due = 0` and is NOT a credit.
+ */
+const CREDIT_BEARING_SQL = `(i.document_kind = 'credit_note' OR o.outstanding_txn_minor < 0)`;
+
 /** One customer row, or null. Read through RLS as `daftar_app`, like every merchant read. */
 export async function findCustomer(db: Database, scope: { tenantId: string; businessId: string }, customerId: string): Promise<CustomerRow | null> {
   const found = await db.scoped<CustomerRow>(
@@ -426,6 +466,31 @@ export class CustomerReadService {
    * the page reader, so the single visit R-104/R-106 bought is intact and this
    * change needs no migration.
    *
+   * ── A CREDIT IS NOT OVERDUE DEBT (DR-31) ─────────────────────────────────
+   *
+   * DR-28 settled the anchor for a DEBIT document and raised the question it
+   * could not answer: after it, a credit-bearing row began reporting a POSITIVE
+   * `days_past_due` where it had reported `null`. DR-31 answers it, and the two
+   * decisions do not collide — DR-28 governs "an invoice that is DUE", and a
+   * credit is not due from the customer at all. So:
+   *
+   *  - `age_days = $3::date - o.issue_date` for EVERY document: the document's
+   *    OWN date, with no term in it and no fallback needed, because
+   *    `issue_date` is `DATE NOT NULL`. This is the figure a client renders as
+   *    "a credit balance for X days".
+   *  - `days_past_due` is for DEBIT documents only. For a credit it is forced
+   *    to a literal `0` — not negated, not clamped, not null — and `is_credit`
+   *    travels beside it so the interface says "credit balance", never
+   *    "overdue". A DEBIT row's figure is byte-for-byte the DR-28 expression,
+   *    in the `ELSE` arm, so every case DR-28 pinned still holds.
+   *  - `is_credit` comes from `CREDIT_BEARING_SQL` above — kind or sign, never
+   *    the age. See that constant for why each arm is written the way it is.
+   *
+   * NO AMOUNT MOVES. The three money columns are the same passthrough they
+   * were, `customer_open_invoices_page`'s `<> 0` filter is untouched, and no
+   * total anywhere is recomputed: DR-31 changes what a date column REPORTS, not
+   * what the customer owes.
+   *
    * ── WHY THIS ASKS `customer_open_invoices_page` (`0084`, R-105/R-106) ─────
    *
    * It used to ask for the page by driving `FROM invoices i`, joining
@@ -509,6 +574,8 @@ export class CustomerReadService {
         settlement_state: 'unpaid' | 'partial' | 'paid';
         days_past_due: number;
         has_explicit_due_date: boolean;
+        age_days: number;
+        is_credit: boolean;
       }
     >(
       this.scope(m),
@@ -519,7 +586,10 @@ export class CustomerReadService {
               o.outstanding_txn_minor::text AS outstanding_txn_minor,
               o.outstanding_base_minor::text AS outstanding_base_minor,
               invoice_settlement_state(i.business_id, i.id) AS settlement_state,
-              ($3::date - coalesce(o.due_date, o.issue_date)) AS days_past_due,
+              ($3::date - o.issue_date) AS age_days,
+              CASE WHEN ${CREDIT_BEARING_SQL} THEN 0
+                   ELSE ($3::date - coalesce(o.due_date, o.issue_date)) END AS days_past_due,
+              ${CREDIT_BEARING_SQL} AS is_credit,
               (o.due_date IS NOT NULL) AS has_explicit_due_date
          FROM customer_open_invoices_page($1, $2, NULL::date, $4::uuid, $5) o
          JOIN invoices i ON i.business_id = $1 AND i.id = o.invoice_id
@@ -540,6 +610,8 @@ export class CustomerReadService {
       settlementState: r.settlement_state,
       daysPastDue: r.days_past_due,
       hasExplicitDueDate: r.has_explicit_due_date,
+      ageDays: r.age_days,
+      isCredit: r.is_credit,
     }));
     return {
       customerId,
