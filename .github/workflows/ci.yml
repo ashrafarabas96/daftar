@@ -25,18 +25,24 @@ env:
 # own terms: a push that replaces a head makes the older run's result evidence
 # for a tree nobody will merge.
 #
-# The group key is the pull request number when there is one, and the ref
-# otherwise. That is what stops the DOUBLE RUN: a branch under `phase/**` with
-# an open pull request fires both the `push` and the `pull_request` trigger,
-# and without this the two race for the single runner. `github.ref` on a
-# `pull_request` event is `refs/pull/N/merge`, so keying on the PR number puts
-# both events of the same pull request in one group and the newer one cancels
-# the older.
+# The group key is the BRANCH NAME, reached by a different expression on each
+# event. That is what stops the DOUBLE RUN: a branch under `phase/**` with an
+# open pull request fires both the `push` and the `pull_request` trigger, and
+# without this the two race for the single runner. `github.head_ref` is set
+# only on `pull_request` and holds the source branch; it is empty on `push`,
+# where `github.ref_name` holds the same branch. Both events of one branch
+# therefore land in one group and the newer cancels the older.
+#
+# Keying on `github.event.pull_request.number || github.ref` does NOT do this,
+# and this comment used to claim that it did. On `push` there is no
+# `pull_request` context, so the key fell back to `refs/heads/<branch>` while
+# the `pull_request` event keyed on `N` -- two different groups, so the two
+# events never shared one and the race survived.
 #
 # `main` is deliberately NOT exempted: its runs are serialised the same way,
 # and the surviving run is always the newest head.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -92,9 +98,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -182,9 +206,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -525,9 +567,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -591,9 +651,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -670,9 +748,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
@@ -799,9 +895,27 @@ jobs:
             exit 0
           fi
           test -n "${GITHUB_WORKSPACE:-}"
-          case "$GITHUB_WORKSPACE" in
-            /|/home|/home/*/|"") echo "refusing to wipe $GITHUB_WORKSPACE"; exit 1 ;;
+          # Refuse anything shallow or home-like before deleting. The earlier
+          # patterns did not cover `/home/laptop` itself: `/home/*/` demands a
+          # trailing slash, so a workspace that WAS the runner user's home would
+          # have passed the guard and been wiped.
+          #
+          # `""` is listed and is reachable: stripping the trailing slash turns
+          # a workspace of `/` into the empty string, so without that arm `/`
+          # would fall through this case AND make the depth arithmetic error on
+          # an empty operand. Exercising the arms is what caught it.
+          ws=${GITHUB_WORKSPACE%/}
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
           esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
           mkdir -p "$GITHUB_WORKSPACE"
           before=$(find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 | wc -l)
           find "$GITHUB_WORKSPACE" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
