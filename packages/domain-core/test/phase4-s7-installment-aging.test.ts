@@ -5672,14 +5672,29 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     // identity between two sums derived the same way:
     //   -5 000 + 900 000 + 250 000 + 9 007 199 254 740 993
     const expected = 9_007_199_255_885_993n;
+    // AND THE SAME FOR THE CARRYING VALUE, by hand as well:
+    //   -4 200 + 761 251 + 211 251 + 9 007 199 254 740 992
+    // The base was conserved only in `dr23_1`, on a single document. A law
+    // that conserves the transaction figure and not the carrying value is
+    // half a conservation law, and the half it omits is the one that passes
+    // through `supplier_ap_release`'s rounding.
+    const expectedBase = 9_007_199_255_709_294n;
     expect(
       rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n),
       'the fixture itself drifted away from the hand-computed figure',
     ).toBe(expected);
     expect(
+      rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n),
+      'the fixture itself drifted away from the hand-computed carrying figure',
+    ).toBe(expectedBase);
+    expect(
       buckets.reduce((a, b) => a + b.txnMinor, 0n),
       'the bands must total NET receivables EXACTLY (DR-23)',
     ).toBe(expected);
+    expect(
+      buckets.reduce((a, b) => a + b.baseMinor, 0n),
+      'the bands must total the NET CARRYING value exactly too (DR-23, R-81)',
+    ).toBe(expectedBase);
     // AND THE CREDIT IS STILL VISIBLE AS A CREDIT rather than absorbed into a
     // larger positive band by accident: asked on its own, the same fixture
     // under the same plan reports the whole negative figure.
@@ -5708,6 +5723,36 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     // ARM (d) EMITS THE AUTHORITATIVE PAIR and not a recomputation of it,
     // exactly as arm (c) does and as the reference model does.
     expect(sketch).toMatch(/g\.outstanding_txn_minor, g\.outstanding_base_minor\s*\n\s*FROM degenerate g/);
+
+    // ── THE ARM'S DATE, AND IT WAS ASSERTED BY NOTHING AT ALL ─────────────
+    //
+    // `coalesce(due_date, issue_date)` in this arm had no law over it,
+    // textual or behavioural: the one termless row in the suite is POSITIVE
+    // and has no plan, so it reaches arm (c) and never (d). Planting
+    // `oi.due_date` alone here tripped only the digest-freshness law — whose
+    // own documented remedy is «re-run the tool» — and regenerating the
+    // digest, which is what a developer would actually do, then gave a clean
+    // green with a TERMLESS CREDIT BALANCE PARKED IN BAND 1. Conservation
+    // held throughout, so both halves of DR-23 stayed true while DR-21's
+    // PLACEMENT rule was silently broken. That is the DR-13-SPEC defect class
+    // coming back as an unguarded surface inside the repair for it.
+    //
+    // ANCHORED, because `no_plan`'s SELECT list is byte-identical to this
+    // one and differs only in its `WHERE`: a bare `/coalesce\(oi\.due_date/`
+    // would be satisfied by the OTHER arm and would assert nothing about
+    // this one. The anchor runs date, authoritative pair, source and
+    // predicate in one match.
+    expect(sketch, "arm (d)'s bucket date is not `coalesce(due_date, issue_date)`, so a termless credit parks in band 1 (DR-21)").toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged\s*\n\s*AND \(oi\.outstanding_txn_minor <= 0/,
+    );
+    // AND A TOTAL LAW BESIDE THE ANCHORED ONE: the fallback stands in exactly
+    // THREE places — `residual` (b), `no_plan` (c) and `degenerate` (d) — so
+    // dropping it from ANY arm is a named failure and not a matter of which
+    // arm a pattern happened to find first.
+    expect(
+      (sketch.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length,
+      'the termless fallback is no longer in all three document-dated arms (DR-13, DR-21, DR-23)',
+    ).toBe(3);
     // AND IT IS NOT THE RETIRED `NOT EXISTS` COMING BACK: that one was over
     // `installment_plans`, read through the caller's row security, which
     // answers «absent» and «invisible» alike. This one reads no relation.
@@ -5728,6 +5773,36 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     // PROSE IS NOT CODE: the same tokens living only in a comment satisfy
     // nothing, which is what makes the laws above laws about the body.
     expect(sqlCodeOnly('-- degenerate AS ( WHERE oi.outstanding_txn_minor <= 0\nSELECT 1;\n')).not.toMatch(/degenerate AS \(/);
+
+    // ── THE REVIEWER'S OWN MUTATION, REPRODUCED HERE ──────────────────────
+    //
+    // `oi.due_date` alone in place of the coalesce, IN ARM (d) and nowhere
+    // else — located by cutting the text at the CTE's own head, because the
+    // two arms' SELECT lists are identical and a blind `replace` would mutate
+    // `residual` instead and prove nothing about this arm.
+    //
+    // THE POINT OF REPRODUCING IT IS THE DIGEST. When the reviewer did this,
+    // the only law that fired was the digest-freshness ratchet, and
+    // regenerating the digest — the normal thing to do — made the suite
+    // green again with the placement rule broken. So the mutation is judged
+    // here by the laws of dr23_5, which no digest regeneration can satisfy.
+    const armHead = '  degenerate AS (';
+    const at = SPEC.indexOf(armHead);
+    expect(at, 'the arm head changed spelling, so this mutation is aimed at nothing').toBeGreaterThan(0);
+    const mutated = SPEC.slice(0, at) + SPEC.slice(at).replace('coalesce(oi.due_date, oi.issue_date) AS due_date', 'oi.due_date AS due_date');
+    expect(mutated, 'the mutation did not apply').not.toBe(SPEC);
+    const mutatedCode = sqlCodeOnly(projectionSketch(mutated));
+    // The anchored law fires...
+    expect(mutatedCode).not.toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged/,
+    );
+    // ...and so does the counting law, independently of the anchor.
+    expect((mutatedCode.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length).toBe(2);
+    // AND THE OTHER TWO ARMS ARE UNTOUCHED BY IT, so the two laws above are
+    // reporting arm (d) and not collateral damage.
+    expect(mutatedCode).toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE NOT oi\.flagged/,
+    );
   });
 
   it('dr23_7: `0084` needed no change, and that is a MEASUREMENT and not an assumption', () => {
@@ -5743,5 +5818,125 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     // POSITIVE CONTROL for the detector that has just reported an absence: it
     // does see the level expression where the level expression really is.
     expect(sqlCodeOnly(specAgingBody()), 'the detector is blind, so the absence above means nothing').toMatch(/least\(greatest\(/);
+  });
+
+  /**
+   * A TERMLESS invoice under an ACTIVE plan, overpaid. The schedule declares
+   * the whole 100 000, so the sum law is intact; `paid` is 105 000, so
+   * `O = -5 000` and the arm applies. The document states NO term, which is
+   * what makes the arm's DATE the subject rather than its figure.
+   */
+  const termlessCreditRow = (age: number): OpenInvoiceRow =>
+    termlessRow(age, {
+      invoiceId: 'inv-termless-credit',
+      paidTxnMinor: 105_000n,
+      paidBaseMinor: 88_703n,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    });
+  const TERMLESS_CREDIT_PLAN: InstallmentPlan = Object.freeze({
+    invoiceId: 'inv-termless-credit',
+    status: 'active' as const,
+    downPaymentMinor: 0n,
+    downPaymentDueDate: daysBefore(395),
+    installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 100_000n }],
+  });
+
+  it('dr23_8: a TERMLESS credit balance under an active plan ages from its ISSUE date, not band 1', () => {
+    // THE CASE THE ARM'S DATE HAD NO LAW OVER. Every other fixture in this
+    // block STATES a due date, and the one termless row in the whole suite is
+    // positive and planless, so it reaches arm (c). Nothing measured arm (d)
+    // on a document with no term — which is how `oi.due_date` alone survived
+    // a full green run in the reviewer's mutation with the credit parked in
+    // the not-due band.
+    const row = termlessCreditRow(400);
+    expect(row.dueDate, 'the subject states a term, so this measures the wrong document').toBeNull();
+    expect(TERMLESS_CREDIT_PLAN.status).toBe('active');
+    const scheduleSum = TERMLESS_CREDIT_PLAN.downPaymentMinor + TERMLESS_CREDIT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    expect(scheduleSum, 'the schedule must add up to the total, or this is proof 4 and not DR-23').toBe(row.paidTxnMinor + row.outstandingTxnMinor);
+
+    const c = projectInvoice(row, TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the band below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // THE ASSERTION THAT GOES RED ON THE MUTATION, and it is on the BAND:
+    // with `oi.due_date` alone the date is NULL, no threshold is exceeded and
+    // this is 1 — `not-due` — for a credit 400 days past the issue date.
+    expect(only.bucketNo, 'a termless credit reported as not-due is DR-21 broken while DR-23 still looks satisfied').toBe(OLDEST_STANDARD);
+    // ...and the date the projection SAYS it used is the issue date, so the
+    // figure and its stated date cannot disagree.
+    expect(only.scheduleDate).toBe(row.issueDate);
+    expect(only.txnMinor).toBe(-5_000n);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_9: every standard boundary for a CREDIT, on each side and ON it', () => {
+    // NO `dr23` CASE PLACED A CREDIT AT A BOUNDARY. `>` is strict, so 30, 60
+    // and 90 stay in the younger band; the figure is negative throughout, so
+    // this also measures that the band arithmetic does not treat the sign of
+    // the money as part of the date comparison.
+    for (const [age, band] of [
+      [0, 1],
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+    ] as const) {
+      const c = projectInvoice(termlessCreditRow(age), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+      expect(c, `age ${age}: exactly one contribution carries the whole credit`).toHaveLength(1);
+      expect((c[0] as AgingContribution).bucketNo, `a credit ${age} day(s) past its issue date`).toBe(band);
+      expect(sum(c), `age ${age}: conservation`).toBe(-5_000n);
+    }
+  });
+
+  it('dr23_10: a FUTURE issue date puts the credit in the not-due band, which is the other side of the same law', () => {
+    // THE POSITIVE CONTROL FOR dr23_8's band: band 1 is reachable, and it is
+    // reachable for the RIGHT reason — a document not yet issued. Without
+    // this, «band 5 and not band 1» could be satisfied by a projection that
+    // can only ever answer 5.
+    const c = projectInvoice(termlessCreditRow(-45), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect((c[0] as AgingContribution).bucketNo).toBe(1);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_11: the overpayment may EXCEED the invoice, and the credit is still the whole authoritative figure', () => {
+    // EVERY OTHER FIXTURE HERE IS −1 OR −5 000 AGAINST 1 200 000, so `|O|`
+    // never came near the invoice total and a body that clamped at `-total`
+    // would have passed all of them. Paid 3 200 000 on a 1 200 000 invoice:
+    // the credit is 2 000 000, which is 1.67x the document.
+    const big: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: 3_200_000n,
+      paidBaseMinor: 2_707_001n,
+      outstandingTxnMinor: -2_000_000n,
+      outstandingBaseMinor: -1_692_000n,
+    };
+    expect(big.paidTxnMinor + big.outstandingTxnMinor, 'the total must stay 1 200 000 or the fixture is a different document').toBe(1_200_000n);
+    const c = projectInvoice(big, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.txnMinor, 'the credit was clamped at the invoice total').toBe(-2_000_000n);
+    expect(only.baseMinor).toBe(-1_692_000n);
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+  });
+
+  it('dr23_12: a wholly NEGATIVE authoritative pair carries, rather than dividing by it', () => {
+    // UNREACHABLE IN A SOUND DATABASE, like `dr23_3`, and asserted for the
+    // same reason: this is the input on which the carrying-value law has no
+    // denominator. Paid −100 and outstanding −50, so the total is −150 and
+    // every one of the arm's three disjuncts is true at once.
+    const neg: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: -100n,
+      paidBaseMinor: -100n,
+      outstandingTxnMinor: -50n,
+      outstandingBaseMinor: -50n,
+    };
+    const c = projectInvoice(neg, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect(sum(c)).toBe(-50n);
+    expect((c[0] as AgingContribution).baseMinor).toBe(-50n);
   });
 });
