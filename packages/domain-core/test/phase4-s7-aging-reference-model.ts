@@ -136,14 +136,22 @@ export function epochDay(civil: string): number {
  * (`0084:708-710`): `1 + count(t in thresholds where (as_of - date) > t)`.
  *
  * Bucket 1 is therefore the not-yet-due bucket whenever every threshold is
- * >= 0, which `validateAgingBucketDays` already enforces (`invoice.ts:158`
- * requires each day in 1..MAX). A NULL date lands in bucket 1, which is the
- * shipped behaviour (`due_date IS NOT NULL AND ...`).
+ * >= 0, which `validateAgingBucketDays` already enforces.
+ *
+ * THE DATE IS NOT NULLABLE, AND THAT IS THE DR-13 REPAIR EXPRESSED IN THE TYPE
+ * (DR-13, DR-21). This function used to take `string | null` and answer bucket
+ * 1 for a NULL, mirroring the retired `due_date IS NOT NULL AND …` guard — so
+ * a receivable with no stated term exceeded no threshold however old it got
+ * and sat in the first band for ever. A nullable parameter here is what made
+ * that expressible, so the parameter is TOTAL now: every caller resolves its
+ * bucket date FIRST, through `termlessBucketDate` for the two arms that age at
+ * the document's own date, and the compiler refuses a caller that does not.
+ * A guard inside this function could only pick a band for a date nobody owns;
+ * refusing the input at the type is the stronger statement.
  */
-export type BucketFn = (asOf: string, date: string | null, thresholds: readonly number[]) => number;
+export type BucketFn = (asOf: string, date: string, thresholds: readonly number[]) => number;
 
-export function bucketOf(asOf: string, date: string | null, thresholds: readonly number[]): number {
-  if (date === null) return 1;
+export function bucketOf(asOf: string, date: string, thresholds: readonly number[]): number {
   const overdueDays = epochDay(asOf) - epochDay(date);
   return 1 + thresholds.filter((t) => overdueDays > t).length;
 }
@@ -161,6 +169,16 @@ export interface OpenInvoiceRow {
   readonly currencyCode: string;
   /** `invoices.due_date`; NULL is permitted by the shipped column. */
   readonly dueDate: string | null;
+  /**
+   * `invoices.issue_date`, read off the SAME authoritative row
+   * (`0084:593-596` appends it to `invoice_outstanding`, so this is NOT a
+   * second visit to `invoices`). It is `NOT NULL` on the shipped column and
+   * `invoices_due_date_ck` enforces `due_date >= issue_date`, which is what
+   * makes it a TOTAL substitute for a missing term and makes the substitution
+   * one-directional: it can only ever make a receivable MORE overdue than the
+   * absent date did, never less (DR-13, DR-21).
+   */
+  readonly issueDate: string;
   readonly outstandingTxnMinor: bigint;
   /**
    * `paid_txn_minor` from the SAME row of the SAME authoritative reader
@@ -178,6 +196,29 @@ export interface OpenInvoiceRow {
   readonly paidBaseMinor: bigint;
   /** `outstanding_base_minor` from the same authoritative row. */
   readonly outstandingBaseMinor: bigint;
+}
+
+/**
+ * THE DATE AN AMOUNT WITH NO STATED TERM AGES FROM (DR-13, DR-21).
+ *
+ * `coalesce(due_date, issue_date)`, and it is TOTAL: `invoices.issue_date` is
+ * `NOT NULL`, so this never returns a null. The direction of the substitution
+ * is SIGNED and it is the safe one — `invoices_due_date_ck` enforces
+ * `due_date >= issue_date`, so the substitute can only ever make a receivable
+ * MORE overdue than the absent date did, never less.
+ *
+ * It governs the TWO arms that age at the document's own date: the whole
+ * figure of an invoice with no active plan, and the RESIDUAL an installment
+ * schedule does not declare. It does NOT govern a scheduled instalment, which
+ * ages at its own `installments.due_date` and at nothing else: the two arms
+ * are deliberately not levelled.
+ */
+export function termlessBucketDate(row: OpenInvoiceRow, policy: ProjectionPolicy = CORRECT_POLICY): string | null {
+  if (row.dueDate !== null) return row.dueDate;
+  // THE DEFECT KNOB, and it is the retired rule itself: `none` reproduces the
+  // pre-DR-13 behaviour, where a termless receivable had no bucket date at all
+  // and the band arithmetic therefore counted zero thresholds for it.
+  return policy.termlessFallback === 'issue_date' ? row.issueDate : null;
 }
 
 /** One scheduled instalment: a date and an amount, and nothing derived. */
@@ -261,6 +302,16 @@ export interface ProjectionPolicy {
   readonly clampToRowAmount: boolean;
   /** Correct: 'schedule_date'. 'invoice_due_date' is the shipped defect. */
   readonly bucketBy: 'schedule_date' | 'invoice_due_date';
+  /**
+   * Correct: 'issue_date' — an amount with no stated term ages from the
+   * document's own issue date (DR-13, DR-21). 'none' is THE DEFECT THIS
+   * SPECIFICATION SHIPPED: no bucket date at all for a termless receivable,
+   * which the band arithmetic then counts zero thresholds for, so the whole
+   * figure sits in the first band however old it gets. Every money law in the
+   * suite holds IDENTICALLY under it — the totals never move, only the band —
+   * which is why nothing caught it for the life of the slice.
+   */
+  readonly termlessFallback: 'issue_date' | 'none';
   /** Correct: 'without_an_active_plan'. 'every_invoice' double-counts. */
   readonly planlessArm: 'without_an_active_plan' | 'every_invoice';
   /** Correct: true. False drops the residual and loses money. */
@@ -296,6 +347,7 @@ export interface ProjectionPolicy {
 export const CORRECT_POLICY: ProjectionPolicy = Object.freeze({
   clampToRowAmount: true,
   bucketBy: 'schedule_date' as const,
+  termlessFallback: 'issue_date' as const,
   planlessArm: 'without_an_active_plan' as const,
   carryResidual: true,
   outstandingSource: 'authoritative' as const,
@@ -322,6 +374,7 @@ export const POLICY_KNOBS: readonly {
 }[] = Object.freeze([
   Object.freeze({ knob: 'clampToRowAmount' as const, correct: true, defective: Object.freeze([false]) }),
   Object.freeze({ knob: 'bucketBy' as const, correct: 'schedule_date', defective: Object.freeze(['invoice_due_date']) }),
+  Object.freeze({ knob: 'termlessFallback' as const, correct: 'issue_date', defective: Object.freeze(['none']) }),
   Object.freeze({ knob: 'planlessArm' as const, correct: 'without_an_active_plan', defective: Object.freeze(['every_invoice']) }),
   Object.freeze({ knob: 'carryResidual' as const, correct: true, defective: Object.freeze([false]) }),
   Object.freeze({ knob: 'outstandingSource' as const, correct: 'authoritative', defective: Object.freeze(['plan_local']) }),
@@ -450,8 +503,9 @@ function maxBig(a: bigint, b: bigint): bigint {
  *
  * `residual` carries the money the schedule does not account for — a broken
  * `Σ instalments + down = invoice total` (`P4-AL-13`, `R-SAL-06`), or a
- * negative outstanding — and is bucketed by `invoices.due_date`, the only
- * date with any authority over an amount the schedule never declared. So the
+ * negative outstanding — and is bucketed by `coalesce(due_date, issue_date)`,
+ * the only date with any authority over an amount the schedule never declared
+ * (DR-13, DR-21). So the
  * buckets total the authoritative outstanding EVEN WHEN the sum law is
  * violated, instead of silently losing the difference.
  */
@@ -480,16 +534,24 @@ export function projectInvoice(
   const O = row.outstandingTxnMinor;
   const out: AgingContribution[] = [];
 
+  // THE WHOLE FIGURE AGES AT THE DOCUMENT'S OWN DATE, and that date is
+  // `coalesce(due_date, issue_date)` (DR-13, DR-21). The `null` arm below is
+  // reachable ONLY through the `termlessFallback: 'none'` knob and it is the
+  // retired behaviour itself: no bucket date, zero thresholds exceeded, the
+  // first band for ever.
+  const documentDate = termlessBucketDate(row, policy);
+  const bandOfDocument = documentDate === null ? 1 : bucket(asOf, documentDate, thresholds);
+
   if (planlessReached) {
     if (O !== 0n) {
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucket(asOf, row.dueDate, thresholds),
+        bucketNo: bandOfDocument,
         txnMinor: O,
         baseMinor: row.outstandingBaseMinor,
         origin: 'whole_invoice',
-        scheduleDate: row.dueDate,
+        scheduleDate: documentDate,
         seqNo: null,
       });
     }
@@ -524,18 +586,37 @@ export function projectInvoice(
     })),
   ].sort((x, y) => epochDay(x.dueDate) - epochDay(y.dueDate) || x.seqNo - y.seqNo);
 
-  // A degenerate invoice (nothing outstanding, or a negative outstanding that
-  // no CHECK permits) carries wholly as residual. Totality before cleverness.
+  // A degenerate invoice — nothing outstanding, or a NEGATIVE outstanding —
+  // carries wholly as residual. Totality before cleverness.
+  //
+  // THE REASON RECORDED HERE USED TO SAY «a negative outstanding that no CHECK
+  // permits», AND THAT WAS NOT ACCURATE. A negative outstanding is an
+  // OVERPAYMENT and it is an ordinary fact of this estate, not a state the
+  // schema forbids: `outstanding_txn_minor` is computed by
+  // `invoice_outstanding` from the reducer set and carries no CHECK at all,
+  // `tests/golden-regression/.../12-overpayment-customer-credit.golden.test.ts`
+  // is a suite about exactly it, and `dr13_7` in the proof file asserts that a
+  // customer in credit must AGE rather than vanish. Calling the state
+  // impossible is how an arm that handles it correctly comes to look like
+  // defensive dead code and gets deleted.
+  //
+  // THE ARM STAYS, AND IT IS WHERE THIS MODEL AND THE SQL BODY DIVERGE
+  // (card `OVERPAY-AGING`). The body has NO such arm: with `paid > total`
+  // every level `least(greatest(c, paid), total)` collapses to `total`, so
+  // arm (a)'s differences are all zero and `declared_end = total` zeroes arm
+  // (b)'s residual, and the invoice contributes nothing. This model emits the
+  // whole figure instead, which is the correct behaviour — so the divergence
+  // is the body's, and it is PRIOR to and outside DR-13-SPEC.
   if (O <= 0n || totalTxn <= 0n || totalBase <= 0n) {
     if (O !== 0n) {
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucket(asOf, row.dueDate, thresholds),
+        bucketNo: bandOfDocument,
         txnMinor: O,
         baseMinor: row.outstandingBaseMinor,
         origin: 'residual',
-        scheduleDate: row.dueDate,
+        scheduleDate: documentDate,
         seqNo: null,
       });
     }
@@ -598,11 +679,14 @@ export function projectInvoice(
     out.push({
       invoiceId: row.invoiceId,
       currencyCode: row.currencyCode,
-      bucketNo: bucket(asOf, policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate, thresholds),
+      // A SCHEDULED instalment ages at ITS OWN date and at nothing else
+      // (DR-21): the two arms are deliberately not levelled, so no fallback
+      // reaches here. `invoice_due_date` is the defect knob.
+      bucketNo: policy.bucketBy === 'schedule_date' ? bucket(asOf, r.dueDate, thresholds) : bandOfDocument,
       txnMinor: a.txn,
       baseMinor: a.base,
       origin: r.origin,
-      scheduleDate: policy.bucketBy === 'schedule_date' ? r.dueDate : row.dueDate,
+      scheduleDate: policy.bucketBy === 'schedule_date' ? r.dueDate : documentDate,
       seqNo: r.seqNo,
     });
   }
@@ -631,11 +715,15 @@ export function projectInvoice(
       out.push({
         invoiceId: row.invoiceId,
         currencyCode: row.currencyCode,
-        bucketNo: bucket(asOf, row.dueDate, thresholds),
+        // DR-21: the unscheduled remainder ages at the document's own date,
+        // and at the ISSUE date when the document states no term. It is the
+        // same decision as the no-plan arm, applied to the one other arm that
+        // ages at a date the schedule never gave it.
+        bucketNo: bandOfDocument,
         txnMinor: residualTxn,
         baseMinor: release(totalBase, totalTxn, declaredEnd, residualTxn),
         origin: 'residual',
-        scheduleDate: row.dueDate,
+        scheduleDate: documentDate,
         seqNo: null,
       });
     }

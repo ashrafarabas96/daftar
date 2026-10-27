@@ -213,8 +213,16 @@ beforeAll(async () => {
 
   // THE DUE DATE IS STATED ON THE SALE, and this is not a convenience.
   // `sellOnCredit` states none, and an invoice with NO due date comes back
-  // with `due_date IS NULL` — which `customer_ar_aging` reads as the
-  // not-yet-due band and which makes every aging figure here meaningless.
+  // with `due_date IS NULL`, which would make the ages in §A through §H
+  // relative to a date this document does not carry.
+  //
+  // AND THE REASON GIVEN HERE USED TO BE A DIFFERENT ONE, which has since been
+  // reversed (DR-13, DR-21; DR-13-SPEC). It read «which `customer_ar_aging`
+  // reads as the not-yet-due band» — true of the body this specification
+  // shipped, and the DEFECT: a termless receivable exceeded no threshold
+  // however old it got. A termless invoice now ages from its own issue date,
+  // which §I measures against the installed routine. A stated due date is
+  // kept here only so §A through §H are about ONE date they can name.
   // `sale.due_date_invalid` (`0078:636`) refuses a due date BEFORE the
   // document date, so equal to the document date is the earliest lawful one.
   const saleId = randomUUID();
@@ -855,10 +863,19 @@ describe('§F MODEL-TO-SQL EQUIVALENCE — the reference model and the routine a
     // oracle fed a fixture's idea of the invoice proves nothing about the
     // invoice. The money comes from the product's own reader of record.
     const o = (
-      await ownerPool().query<{ paid_txn: string; paid_base: string; out_txn: string; out_base: string; currency_code: string; due_date: string }>(
+      await ownerPool().query<{
+        paid_txn: string;
+        paid_base: string;
+        out_txn: string;
+        out_base: string;
+        currency_code: string;
+        due_date: string;
+        issue_date: string;
+      }>(
         `SELECT o.paid_txn_minor::text AS paid_txn, o.paid_base_minor::text AS paid_base,
                 o.outstanding_txn_minor::text AS out_txn, o.outstanding_base_minor::text AS out_base,
-                o.currency_code, to_char(o.due_date, 'YYYY-MM-DD') AS due_date
+                o.currency_code, to_char(o.due_date, 'YYYY-MM-DD') AS due_date,
+                to_char(o.issue_date, 'YYYY-MM-DD') AS issue_date
            FROM invoice_outstanding($1, ARRAY[$2::UUID]) o`,
         [w.shop.businessId, invoiceId],
       )
@@ -867,6 +884,10 @@ describe('§F MODEL-TO-SQL EQUIVALENCE — the reference model and the routine a
       invoiceId,
       currencyCode: o?.currency_code ?? '',
       dueDate: o?.due_date ?? null,
+      // OFF THE SAME CALL (DR-13, DR-21; R-104). `0084:593-596` returns
+      // `issue_date` beside `due_date`, so the oracle reads the fallback date
+      // from the product's own reader of record and not from a second query.
+      issueDate: o?.issue_date ?? '',
       paidTxnMinor: BigInt(o?.paid_txn ?? '0'),
       paidBaseMinor: BigInt(o?.paid_base ?? '0'),
       outstandingTxnMinor: BigInt(o?.out_txn ?? '0'),
@@ -1525,4 +1546,148 @@ describe('§H "ONCE PER CALL" — the claim that reached TL-P4-COORD-R31 out of 
       c.release();
     }
   }, 180_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §I DR-13 / DR-21 — THE TERMLESS RECEIVABLE, THROUGH THE INSTALLED ROUTINE.
+//
+// `0084:727` already ages an invoice with no stated term from its own issue
+// date (DR-13, owner 2026-10-26). THIS SPECIFICATION REPLACED THAT BODY UNDER
+// THE SAME SIGNATURE and did not carry the decision: its bucket date came from
+// `due_date` alone and its band arithmetic was guarded by
+// `bucket_date IS NOT NULL AND …`, so a receivable with no stated term
+// exceeded NO threshold however old it got and sat in the first band for ever
+// — debt leaving the aging report BY OMISSION rather than by payment.
+//
+// DR-21 (owner 2026-10-27) extends the decision to every arm: the whole figure
+// of an invoice with no active plan, AND the residual an installment schedule
+// does not declare, both age from `coalesce(due_date, issue_date)`; a SCHEDULED
+// instalment still ages from its own date.
+//
+// A SECOND CUSTOMER, DELIBERATELY. Every figure in §A through §H is measured
+// against one document, and adding an invoice to that subject would move every
+// total those sections assert. A proof that moves its own subject proves
+// nothing, so this section owns its customer and its invoice outright.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§I DR-13/DR-21 a termless receivable ages from its ISSUE date, through the installed routine', () => {
+  /** The standard bands DR-10 fixed: `not-due | 1-30 | 31-60 | 61-90 | over-90`. */
+  const STANDARD_DAYS = [0, 30, 60, 90];
+  let termlessCustomer = '';
+  let termlessInvoice = '';
+  let issueDate = '';
+  let termlessTotal = 0n;
+
+  async function agingOf(customer: string, asOfDate: string, days: readonly number[] = STANDARD_DAYS): Promise<readonly AgingRow[]> {
+    const r = await ownerPool().query<AgingRow>(`SELECT * FROM customer_ar_aging($1, $2, $3::DATE, $4::INTEGER[]) ORDER BY bucket_no`, [
+      w.shop.businessId,
+      customer,
+      asOfDate,
+      [...days],
+    ]);
+    return r.rows;
+  }
+
+  /** A civil date `n` days after this invoice's own issue date, computed BY POSTGRES. */
+  async function fromIssue(n: number): Promise<string> {
+    const r = await ownerPool().query<{ d: string }>(`SELECT to_char(($1::DATE + $2::INTEGER), 'YYYY-MM-DD') AS d`, [issueDate, n]);
+    return must(r.rows[0], `issue date + ${n}`).d;
+  }
+
+  beforeAll(async () => {
+    termlessCustomer = await newCustomer(w);
+    const saleId = randomUUID();
+    // NO DUE DATE. `0078:633` permits it — it only refuses a due date without a
+    // credit customer, and `0078:636` only refuses one BEFORE the document
+    // date — so a termless credit receivable is an ordinary document this
+    // product creates, which is what makes the defect reachable in the field.
+    const sale = await confirmSale(w.t, w.headers, {
+      saleId,
+      customerId: termlessCustomer,
+      warehouseId: w.shop.w1,
+      branchId: w.shop.branchX,
+      occurredOn: w.day,
+      dueDate: null,
+      lines: [{ productId: w.shop.piece.productId, quantity: '3' }],
+    });
+    expect(sale.status, `the termless credit sale commits: ${JSON.stringify(sale.body)}`).toBeLessThan(300);
+    const found = await ownerPool().query<{ invoice_id: string; status: string; due_date: string | null; issue_date: string }>(
+      `SELECT i.id::text AS invoice_id, i.status, to_char(i.due_date, 'YYYY-MM-DD') AS due_date,
+              to_char(i.issue_date, 'YYYY-MM-DD') AS issue_date
+         FROM sales s JOIN invoices i ON i.business_id = s.business_id AND i.sale_id = s.id
+        WHERE s.business_id = $1 AND s.id = $2`,
+      [w.shop.businessId, saleId],
+    );
+    const r = must(found.rows[0], `the termless sale ${saleId} and its invoice`);
+    termlessInvoice = r.invoice_id;
+    issueDate = r.issue_date;
+    expect(r.status).toBe('open');
+    // NON-VACUITY, BOTH HALVES: the document really states no term, and it
+    // really has an issue date to fall back to.
+    expect(r.due_date, 'the subject is not termless, so every figure below is about the wrong document').toBeNull();
+    expect(issueDate, 'invoices.issue_date is NOT NULL, so this must be a civil date').toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    termlessTotal = BigInt((await invoiceTotals(ownerPool(), w.shop.businessId, termlessInvoice)).totalTxnMinor);
+    expect(termlessTotal, 'NO SUBJECT — a zero receivable bands nothing').toBeGreaterThan(0n);
+  });
+
+  it('the whole figure is in the FIRST band on the issue day itself, and nowhere else', async () => {
+    const rows = await agingOf(termlessCustomer, await fromIssue(0));
+    expect(rows).toHaveLength(1);
+    // `>` is STRICT and the first threshold is 0, so nothing is overdue on the
+    // document's own date.
+    expect(rows[0]?.bucket_no).toBe(1);
+    expect(BigInt(rows[0]?.txn_minor ?? '0')).toBe(termlessTotal);
+  });
+
+  it('ONE DAY LATER it has left the not-due band — which the retired guard made impossible', async () => {
+    const rows = await agingOf(termlessCustomer, await fromIssue(1));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.bucket_no, 'a termless receivable that never leaves band 1 is debt leaving the report by omission').toBe(2);
+    expect(BigInt(rows[0]?.txn_minor ?? '0')).toBe(termlessTotal);
+  });
+
+  it('every standard boundary, on each side and ON it, measured against the installed routine', async () => {
+    // 30 and 60 and 90 are ON the boundary and stay in the younger band,
+    // because the comparison is strict.
+    for (const [age, band] of [
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+      [400, 5],
+    ] as const) {
+      const rows = await agingOf(termlessCustomer, await fromIssue(age));
+      expect(rows, `age ${age}: exactly one band carries the whole figure`).toHaveLength(1);
+      expect(rows[0]?.bucket_no, `a termless receivable ${age} day(s) past its issue date`).toBe(band);
+      // CONSERVATION at every age: the bands total the authoritative figure.
+      expect(
+        rows.reduce((a, x) => a + BigInt(x.txn_minor), 0n),
+        `age ${age}`,
+      ).toBe(termlessTotal);
+    }
+  });
+
+  it('the OLDEST band is reached 400 days on, and the figure is the authoritative one to the minor unit', async () => {
+    const rows = await agingOf(termlessCustomer, await fromIssue(400));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.bucket_no).toBe(STANDARD_DAYS.length + 1);
+    expect(BigInt(rows[0]?.txn_minor ?? '0')).toBe(termlessTotal);
+    // And the base carrying figure is present and non-zero, so the band is not
+    // carrying a transaction amount with no carrying value behind it.
+    expect(BigInt(rows[0]?.base_minor ?? '0')).toBeGreaterThan(0n);
+  });
+
+  // THE RESIDUAL ARM IS NOT MEASURED HERE, AND THAT IS DECLARED RATHER THAN
+  // QUIETLY OMITTED. A plan whose schedule declares LESS than the invoice
+  // total is exactly the state section 3 obligation (a) refuses at COMMIT, so
+  // the residual arm is not reachable through an ordinary write; reaching it
+  // means putting a trigger out of the way for the span of a transaction, and
+  // a card about a money rule is the wrong place to weaken a money guard —
+  // even temporarily, even with the restoration asserted. The residual arm's
+  // DR-21 placement is proved instead where it needs no such thing: the
+  // reference model, in `proof_13` and `dr13_2` of
+  // `packages/domain-core/test/phase4-s7-installment-aging.test.ts`, where the
+  // schedule can under-declare freely because no trigger governs a fixture.
+  // What is NOT proved against a real database is said so in the evidence.
 });

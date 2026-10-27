@@ -4518,7 +4518,12 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     -- is needed for them and why `0084:593-596`'s appended `currency_code` and
     -- `due_date` are read straight off it. The id set comes from
     -- `invoice_checked`, so the money read is downstream of the refusals.
-    SELECT o.invoice_id, o.currency_code, o.due_date, ic.flagged,
+    -- `issue_date` IS CARRIED HERE AND OFF THE SAME CALL (DR-13, DR-21).
+    -- `0084:593-596` appends `currency_code`, `due_date` AND `issue_date` to
+    -- `invoice_outstanding`, so the termless fallback below costs NO second
+    -- visit to `public.invoices` and R-104 holds unchanged: an extra COLUMN
+    -- off a call this projection already makes, never an extra join.
+    SELECT o.invoice_id, o.currency_code, o.due_date, o.issue_date, ic.flagged,
            o.paid_txn_minor, o.outstanding_txn_minor, o.outstanding_base_minor,
            (o.paid_txn_minor + o.outstanding_txn_minor)::BIGINT   AS total_txn_minor,
            (o.paid_base_minor + o.outstanding_base_minor)::BIGINT AS total_base_minor
@@ -4589,7 +4594,8 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     -- allocation did. `declared_end` equals `L(schedule_total)`, so the
     -- schedule's levels and this one partition `[paid, T]` with no gap and no
     -- overlap — proofs 3 and 4.
-    SELECT oi.invoice_id, oi.currency_code, oi.due_date,
+    SELECT oi.invoice_id, oi.currency_code,
+           coalesce(oi.due_date, oi.issue_date) AS due_date,
            oi.total_txn_minor, oi.total_base_minor,
            least(greatest(t.schedule_total, oi.paid_txn_minor), oi.total_txn_minor)::BIGINT AS declared_end
       FROM open_invoice oi
@@ -4612,7 +4618,8 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     -- relation whose invisibility is the defect, and `unflagged_plan` in
     -- `fact` already refuses the only state in which the two could differ
     -- in that direction.
-    SELECT oi.invoice_id, oi.currency_code, oi.due_date,
+    SELECT oi.invoice_id, oi.currency_code,
+           coalesce(oi.due_date, oi.issue_date) AS due_date,
            oi.outstanding_txn_minor, oi.outstanding_base_minor
       FROM open_invoice oi
      WHERE NOT oi.flagged
@@ -4630,17 +4637,21 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
                                       v.lvl_before, v.lvl_at - v.lvl_before) AS base_minor
       FROM levelled v
      UNION ALL
-    -- (b) THE RESIDUAL, bucketed at the invoice's own due date: an amount the
-    --     schedule does not declare has no scheduled date to be aged at, and
-    --     inventing one would be the design choosing a date.
+    -- (b) THE RESIDUAL, bucketed at the invoice's own term — and at its ISSUE
+    --     date when it states no term (DR-21). An amount the schedule does not
+    --     declare has no scheduled date to be aged at, and inventing one would
+    --     be the design choosing a date; falling back to the issue date is not
+    --     an invention, it is the decision DR-13 took for the invoice arm
+    --     applied to the one other arm that ages at the document's own date.
     SELECT r.invoice_id, r.currency_code, r.due_date,
            (r.total_txn_minor - r.declared_end)::BIGINT,
            public.supplier_ap_release(r.total_base_minor, r.total_txn_minor,
                                       r.declared_end, r.total_txn_minor - r.declared_end)
       FROM residual r
      UNION ALL
-    -- (c) THE INVOICES WITH NO ACTIVE PLAN: the whole figure at the invoice due
-    --     date, exactly as today, and the base is the AUTHORITATIVE
+    -- (c) THE INVOICES WITH NO ACTIVE PLAN: the whole figure at the invoice's
+    --     own term — and at its ISSUE date when it states none (DR-13), which
+    --     is exactly what `0084:727` does — and the base is the AUTHORITATIVE
     --     `outstanding_base_minor` rather than a recomputation of it. The three
     --     arms PARTITION the open invoices — (a) and (b) read only invoices in
     --     `active_plan`, (c) only those not in it — and an active plan with no
@@ -4660,9 +4671,24 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
            n.outstanding_txn_minor, n.outstanding_base_minor
       FROM no_plan n
   )
+  -- NO `bucket_date IS NOT NULL` GUARD (DR-13, DR-21). It used to stand here
+  -- and it was a MONEY DEFECT, not a safety check: a NULL bucket date exceeds
+  -- no threshold, counts zero of them, and parks the whole figure in band 1 —
+  -- `not-due` since DR-10 — however old the receivable gets. That is debt
+  -- leaving an aging report BY OMISSION rather than by payment, and `0084:727`
+  -- had already retired the same guard from the routine this file replaces.
+  --
+  -- `bucket_date` IS NOW TOTAL BY CONSTRUCTION and the guard is therefore not
+  -- merely unnecessary but wrong to keep: arm (a) takes
+  -- `installments.due_date` and `installment_plans.down_payment_due_date`,
+  -- both `DATE NOT NULL` (section 1, section 2); arms (b) and (c) take
+  -- `coalesce(due_date, issue_date)`, and `invoices.issue_date` is `NOT NULL`
+  -- while `invoices_due_date_ck` enforces `due_date >= issue_date`. So the
+  -- substitution is TOTAL and its direction is SIGNED: it can only ever make a
+  -- receivable MORE overdue than the absent date did, never less.
   SELECT (1 + (SELECT pg_catalog.count(*)
                  FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
-                WHERE c.bucket_date IS NOT NULL AND (p_as_of - c.bucket_date) > t.threshold))::INTEGER AS bucket_no,
+                WHERE (p_as_of - c.bucket_date) > t.threshold))::INTEGER AS bucket_no,
          c.currency_code,
          pg_catalog.sum(c.txn_minor)::BIGINT  AS txn_minor,
          pg_catalog.sum(c.base_minor)::BIGINT AS base_minor,
@@ -4676,7 +4702,7 @@ $fn$;
 REVOKE ALL ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) TO daftar_app, daftar_inventory_internal;
 COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
-  'P4-S1, replaced by P4-S4 (0083, 0084) and by P4-S7 (P4-AL-05, P4-AL-13): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. Since P4-S7 an invoice under an ACTIVE installment plan is aged ACROSS ITS SCHEDULE instead of at its single invoice due date. The schedule is ordered oldest-scheduled-date-first — a DECLARED POLICY and not a derivation, because nothing stored records which instalment a payment settled — and its PREFIX sums are turned into cumulative settlement levels anchored at the authoritative paid figure and clamped at the invoice total: L(c) = least(greatest(c, paid), total). Each row''s transaction share is the difference of two consecutive levels, so the shares are exact integers, no rounding is performed on the transaction side, there is no residue to distribute, and the shares total the authoritative outstanding by telescoping rather than by reconciliation. Each row''s base carrying share is the SAME difference taken through supplier_ap_release(total_base, total_txn, level, share), the canonical cumulative carrying-value law (R-61, R-81, 0067:683) consumed and never re-implemented, so the base shares likewise total outstanding_base_minor EXACTLY and no per-instalment FX conversion and no source_to_base_rate is read: a read creates no realized FX (TL S7 §21). An amount the schedule does not declare is a residual aged at the invoice''s own due date, by its own closed form and never as outstanding minus the allocations. An invoice may now appear in SEVERAL buckets, so invoice_count is count(DISTINCT invoice_id) and the sum of invoice_count over the buckets may exceed the number of open invoices. There is no materialised aging table (P4-AL-06), no stored installment balance, no installment journal and no new reducer: an instalment collection is an ordinary payment allocated to the invoice. The routine does not read the clock (P4-AL-30) and is not IMMUTABLE, because the label is not a guard. INVOKER, reads through the caller''s row security, writes nothing. IT REFUSES FIVE STATES AND NOT THREE SINCE TL-P4-COORD-R50, and the two new ones are the premises its own arithmetic names: installment.plan_active_unbounded when an invoice of this customer carries more than one readable active plan — the bound installment_plans_one_active_per_invoice_uq is supposed to hold and which, with the index present-but-unenforcing, let two ordinary concurrent plan creations make this reader serve the pre-installment figure byte-identical to the no-plan answer with no refusal at all — and installment.plan_fact_untrusted when one of the SEVEN triggers that maintain the fact and judge obligation (a) is missing or carries pg_trigger.tgenabled <> ''O''. The fourth is a COUNT over the caller''s own visible rows, because row security can only subtract rows so a count can only under-report and two visible active plans are never a blinded reading. The fifth is a pg_catalog read and it is NOT the retired visibility family TL-P4-COORD-R38 closed: pg_catalog carries no row security, no policy can subtract a pg_trigger row, and the number is the same for every caller — it asks whether the MECHANISM fires, not whether the ASKER can see rows. EXECUTE: daftar_app and daftar_inventory_internal; this body also requires EXECUTE on supplier_ap_release, which patch request PR-6 owes.';
+  'P4-S1, replaced by P4-S4 (0083, 0084) and by P4-S7 (P4-AL-05, P4-AL-13): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. Since P4-S7 an invoice under an ACTIVE installment plan is aged ACROSS ITS SCHEDULE instead of at its single invoice due date. The schedule is ordered oldest-scheduled-date-first — a DECLARED POLICY and not a derivation, because nothing stored records which instalment a payment settled — and its PREFIX sums are turned into cumulative settlement levels anchored at the authoritative paid figure and clamped at the invoice total: L(c) = least(greatest(c, paid), total). Each row''s transaction share is the difference of two consecutive levels, so the shares are exact integers, no rounding is performed on the transaction side, there is no residue to distribute, and the shares total the authoritative outstanding by telescoping rather than by reconciliation. Each row''s base carrying share is the SAME difference taken through supplier_ap_release(total_base, total_txn, level, share), the canonical cumulative carrying-value law (R-61, R-81, 0067:683) consumed and never re-implemented, so the base shares likewise total outstanding_base_minor EXACTLY and no per-instalment FX conversion and no source_to_base_rate is read: a read creates no realized FX (TL S7 §21). An amount the schedule does not declare is a residual aged at the invoice''s own due date — or at its ISSUE date when the invoice states no due date (DR-13, DR-21), exactly as the no-plan arm and as 0084:727 — by its own closed form and never as outstanding minus the allocations. NO ARM GUARDS ITS BUCKET DATE WITH IS NOT NULL: that guard counted zero thresholds and parked a termless receivable in the first band for ever, which is debt leaving the report by omission rather than by payment, and the bucket date is now total by construction because installments.due_date and down_payment_due_date are NOT NULL and invoices.issue_date is NOT NULL with invoices_due_date_ck enforcing due_date >= issue_date, so the substitution can only make a receivable MORE overdue and never less. A SCHEDULED instalment still ages at ITS OWN date and the two arms are not levelled. An invoice may now appear in SEVERAL buckets, so invoice_count is count(DISTINCT invoice_id) and the sum of invoice_count over the buckets may exceed the number of open invoices. There is no materialised aging table (P4-AL-06), no stored installment balance, no installment journal and no new reducer: an instalment collection is an ordinary payment allocated to the invoice. The routine does not read the clock (P4-AL-30) and is not IMMUTABLE, because the label is not a guard. INVOKER, reads through the caller''s row security, writes nothing. IT REFUSES FIVE STATES AND NOT THREE SINCE TL-P4-COORD-R50, and the two new ones are the premises its own arithmetic names: installment.plan_active_unbounded when an invoice of this customer carries more than one readable active plan — the bound installment_plans_one_active_per_invoice_uq is supposed to hold and which, with the index present-but-unenforcing, let two ordinary concurrent plan creations make this reader serve the pre-installment figure byte-identical to the no-plan answer with no refusal at all — and installment.plan_fact_untrusted when one of the SEVEN triggers that maintain the fact and judge obligation (a) is missing or carries pg_trigger.tgenabled <> ''O''. The fourth is a COUNT over the caller''s own visible rows, because row security can only subtract rows so a count can only under-report and two visible active plans are never a blinded reading. The fifth is a pg_catalog read and it is NOT the retired visibility family TL-P4-COORD-R38 closed: pg_catalog carries no row security, no policy can subtract a pg_trigger row, and the number is the same for every caller — it asks whether the MECHANISM fires, not whether the ASKER can see rows. EXECUTE: daftar_app and daftar_inventory_internal; this body also requires EXECUTE on supplier_ap_release, which patch request PR-6 owes.';
 
 -- `count(DISTINCT c.invoice_id)` and not `count(*)`: an invoice now makes
 -- several contributions, so `count(*)` would report a number of instalments
@@ -4785,7 +4811,7 @@ DECLARE
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
     ['public.installment_schedule_verify()',                      'c334ebf3b393ceb5d7c010e931c309cb42fb112e7a44a2e406f4f17e997700a3'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
-    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '67a3dc0b0bff28b65d4472bdda8c8856e7bc90009d4c9cb1d589c56c1df1eefc']];
+    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '1a438fb61aa0adbbfccad77cfa0f206159ed5c6ca4aabf4702cab8fd8a0c0b3c']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A
   -- second spelling of one list is a second definition of it, so these are
   -- the bare names and nothing else.

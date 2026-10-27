@@ -372,9 +372,14 @@ describe('§0 the measurement has a subject', () => {
 
   it('there is a real open credit invoice, it carries money, and its DUE DATE is really not null', () => {
     expect(invoiceId).toBeTruthy();
-    // `due_date IS NOT NULL` is a precondition of the SQL function's own
-    // threshold test. A null due date counts zero thresholds, lands in band 1,
-    // and would make this suite pass for the wrong reason.
+    // A STATED due date is a precondition of THIS SECTION, not of the
+    // function. The reason recorded here used to be «`due_date IS NOT NULL` is
+    // a precondition of the SQL function's own threshold test», and DR-13
+    // reversed that: `0084:727` resolves `coalesce(due_date, issue_date)`, so
+    // a termless invoice ages from its issue date and counts thresholds like
+    // any other — §F measures exactly that. What this section still needs is a
+    // document whose age it can state against ONE date the document carries,
+    // which is what the assertion below is for.
     expect(reportedDueDate, 'a null due date never exceeds a threshold, so the oldest band would be unreachable').not.toBeNull();
     expect(reportedDueDate).toBe(statedDueDate);
     expect(outstandingBaseMinor).not.toBeNull();

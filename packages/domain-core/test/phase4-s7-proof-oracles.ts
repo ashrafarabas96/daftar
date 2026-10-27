@@ -187,12 +187,15 @@ export function agingBands(thresholds: readonly number[]): readonly AgingBand[] 
  *
  * `asOf` is the caller's. No clock is read.
  */
-export function bucketIndexByBand(asOf: string, date: string | null, thresholds: readonly number[]): number {
+export function bucketIndexByBand(asOf: string, date: string, thresholds: readonly number[]): number {
   const bands = agingBands(thresholds);
-  // A NULL schedule date is money no date governs; the shipped routine's
-  // `due_date IS NOT NULL AND ...` puts it in the first band, and the law
-  // says the same: nothing about it is overdue.
-  if (date === null) return (bands[0] as AgingBand).bucketNo;
+  // THE DATE IS TOTAL (DR-13, DR-21). This oracle used to accept a null and
+  // answer «the first band», mirroring the retired
+  // `due_date IS NOT NULL AND …` guard — so an oracle derived to be
+  // INDEPENDENT of the implementation agreed with it on the one case where it
+  // was wrong, and the independence bought nothing there. Every caller now
+  // resolves `coalesce(due_date, issue_date)` before asking, and the type
+  // refuses a caller that does not.
   const overdue = civilDay(asOf) - civilDay(date);
   // Not yet due is not negatively overdue; it is not overdue, so it is the
   // first band. This is the law's own reading, and it is why the band table
@@ -208,8 +211,7 @@ export function bucketIndexByBand(asOf: string, date: string | null, thresholds:
  * against itself. Two independent derivations that agree are evidence the
  * oracle is right; one is an assertion.
  */
-export function bucketIndexByBinarySearch(asOf: string, date: string | null, thresholds: readonly number[]): number {
-  if (date === null) return 1;
+export function bucketIndexByBinarySearch(asOf: string, date: string, thresholds: readonly number[]): number {
   const aged = Math.max(0, civilDay(asOf) - civilDay(date));
   let lo = 0;
   let hi = thresholds.length;
@@ -231,13 +233,12 @@ export function bucketIndexByBinarySearch(asOf: string, date: string | null, thr
  * the test, which is what gives the mutants below their authority: a mutant
  * of a transcription proved equal to live code is a mutant of live code.
  */
-export function bucketOfAsShipped(asOf: string, date: string | null, thresholds: readonly number[]): number {
-  if (date === null) return 1;
+export function bucketOfAsShipped(asOf: string, date: string, thresholds: readonly number[]): number {
   const overdueDays = civilDay(asOf) - civilDay(date);
   return 1 + thresholds.filter((t) => overdueDays > t).length;
 }
 
-export type BucketFn = (asOf: string, date: string | null, thresholds: readonly number[]) => number;
+export type BucketFn = (asOf: string, date: string, thresholds: readonly number[]) => number;
 
 /**
  * THE PLANTED MUTATIONS OF LAW 2.
@@ -254,7 +255,6 @@ export const BUCKET_MUTANTS: readonly { readonly name: string; readonly fn: Buck
     // reported one band too old. 30 days overdue leaves '0-30'.
     name: 'boundary_inclusive',
     fn: ((asOf, date, ts) => {
-      if (date === null) return 1;
       const d = civilDay(asOf) - civilDay(date);
       return 1 + ts.filter((t) => d >= t).length;
     }) as BucketFn,
@@ -264,7 +264,6 @@ export const BUCKET_MUTANTS: readonly { readonly name: string; readonly fn: Buck
     // young, and the oldest band is never reported at all.
     name: 'zero_based_index',
     fn: ((asOf, date, ts) => {
-      if (date === null) return 1;
       const d = civilDay(asOf) - civilDay(date);
       return Math.max(1, ts.filter((t) => d > t).length);
     }) as BucketFn,
@@ -274,7 +273,6 @@ export const BUCKET_MUTANTS: readonly { readonly name: string; readonly fn: Buck
     // reports as current. The challenger's shape, reached arithmetically.
     name: 'reversed_sign',
     fn: ((asOf, date, ts) => {
-      if (date === null) return 1;
       const d = civilDay(date) - civilDay(asOf);
       return 1 + ts.filter((t) => d > t).length;
     }) as BucketFn,
@@ -284,7 +282,6 @@ export const BUCKET_MUTANTS: readonly { readonly name: string; readonly fn: Buck
     // into one band and everything over 30 days reports as band 2.
     name: 'first_threshold_only',
     fn: ((asOf, date, ts) => {
-      if (date === null) return 1;
       const d = civilDay(asOf) - civilDay(date);
       return d > (ts[0] as number) ? 2 : 1;
     }) as BucketFn,
@@ -294,7 +291,6 @@ export const BUCKET_MUTANTS: readonly { readonly name: string; readonly fn: Buck
     // every boundary moves and nothing else does.
     name: 'off_by_one_day',
     fn: ((asOf, date, ts) => {
-      if (date === null) return 1;
       const d = civilDay(asOf) - civilDay(date) - 1;
       return 1 + ts.filter((t) => d > t).length;
     }) as BucketFn,
