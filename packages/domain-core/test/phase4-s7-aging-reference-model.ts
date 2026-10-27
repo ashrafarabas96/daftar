@@ -600,13 +600,22 @@ export function projectInvoice(
   // impossible is how an arm that handles it correctly comes to look like
   // defensive dead code and gets deleted.
   //
-  // THE ARM STAYS, AND IT IS WHERE THIS MODEL AND THE SQL BODY DIVERGE
-  // (card `OVERPAY-AGING`). The body has NO such arm: with `paid > total`
-  // every level `least(greatest(c, paid), total)` collapses to `total`, so
-  // arm (a)'s differences are all zero and `declared_end = total` zeroes arm
-  // (b)'s residual, and the invoice contributes nothing. This model emits the
-  // whole figure instead, which is the correct behaviour — so the divergence
-  // is the body's, and it is PRIOR to and outside DR-13-SPEC.
+  // THE ARM STAYS, AND IT IS WHERE THIS MODEL AND THE SQL BODY ONCE DIVERGED
+  // (card `OVERPAY-AGING`; the tracked record is `TECHNICAL_DEBT.md`, «Phase
+  // 4 money cards and decisions (DR-24)»). The body had NO such arm: with
+  // `paid > total` every level `least(greatest(c, paid), total)` collapses to
+  // `total`, so arm (a)'s differences were all zero and `declared_end = total`
+  // zeroed arm (b)'s residual, and the invoice contributed nothing. This model
+  // emits the whole figure instead, which is the correct behaviour — so the
+  // divergence was the body's, and it was PRIOR to and outside DR-13-SPEC.
+  //
+  // DR-23 (owner, 2026-10-27) RULED THIS MODEL CORRECT AND THE BODY DEVIANT,
+  // and the body now carries the same arm as its `degenerate` CTE, gated at
+  // `active_plan` so the schedule arms cannot run for such an invoice. The
+  // rule it implements: a credit balance from an overpayment never leaves the
+  // aging report — it is reported explicitly as a negative figure at the
+  // document's own date, never clamped and never folded into zero, and the
+  // bands total NET receivables exactly.
   if (O <= 0n || totalTxn <= 0n || totalBase <= 0n) {
     if (O !== 0n) {
       out.push({

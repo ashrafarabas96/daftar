@@ -45,3 +45,41 @@
 ## Deferred decisions (not debt — see docs/DAFTAR_OPEN_DECISIONS.md)
 
 - OD-02 WhatsApp provider · OD-03 country tax rules · OD-04 payment gateways · OD-07 currency revaluation.
+
+## Phase 4 money cards and decisions (tracked record — DR-24)
+
+> **This section is not debt and nothing in it is accepted as debt.** The register above
+> forbids recording accounting, security or data-integrity defects, because those are fixed
+> immediately (Master §137) — and the first row below was fixed, not accepted. DR-24 (owner,
+> 2026-10-27) nevertheless requires every money card and every code-touching decision to have
+> a record in a **tracked** file inside the PR that carries it: `.local-context/` is notes
+> only, and a comment in tracked code pointing at an untracked note is a pointer nobody who
+> clones this repository can follow — which is itself how a money defect goes quiet. So this
+> is that tracked record: the card, the decision that settled it, what was changed, and what
+> is still unmeasured.
+>
+> **هذا القسم ليس دينًا تقنيًا.** هو السجل المتتبَّع الذي يفرضه DR-24 لبطاقات المال وقراراتها،
+> ويذكر صراحةً ما لم يُقَس بعد.
+
+| Card | Decision | What it was | Resolution | What is still NOT measured |
+|---|---|---|---|---|
+| `OVERPAY-AGING` | **DR-23** (owner, 2026-10-27): a credit balance arising from an overpayment never leaves the aging report — it appears **explicitly as a customer credit, a visible negative value**, never clamped and never folded into zero, and **the bands total net receivables exactly** | An invoice under an **active** installment plan with a **negative** outstanding (an overpayment) contributed **nothing** to `customer_ar_aging`. `installment_schedule_verify()` holds `down + Σ instalments = total` by strict equality, so `schedule_total = total` always; the body's levels are `least(greatest(c, paid), total)`, so when `paid > total` every level collapses to `total`. Arm (a)'s consecutive differences were then all zero and `declared_end = total` zeroed arm (b)'s residual — so the customer's credit left the report **by omission rather than by payment**, and the bands stopped totalling the authoritative outstanding. Reachable with **no guard weakened**: the invoice total is immutable and a payment does not touch `installments` (total 1000, schedule 1000, paid 1200 ⇒ `O = −200`) | **Fixed**, not registered. The deviant artefact was the **specification's** body (`infrastructure/database/specifications/p4s7-installment-aging.spec.sql`), which replaces `0084`'s `customer_ar_aging` under the same signature; `0084`'s own body has no plan arm, no levels and nothing to clamp, so it needed no change (measured by `dr23_7`). DR-23 ruled the **reference model** correct and the body deviant, so the body now carries the model's totality arm as its `degenerate` CTE — `oi.outstanding_txn_minor <= 0 OR oi.total_txn_minor <= 0 OR oi.total_base_minor <= 0` — gated at `active_plan` with a `NOT EXISTS` over that CTE, so the schedule arms are structurally unable to run for such an invoice, and arm (d) emits the **authoritative** pair at the document's own date `coalesce(due_date, issue_date)`. The four arms now partition the open invoices by two bits of the invoice's own row. The pinned body digest in the end-state block moved with it | **The INSTALLED routine's behaviour: NOT_RUN.** Nothing executes SQL without PostgreSQL, and every suite under `tests/**` loads it through an unconditional `ensurePostgres()`. The evidence today is the **model**, executed (`dr23_1`–`dr23_4`), and the body's **text**, judged over code with comments blanked (`dr23_5`–`dr23_7`, `dr23_6` the negative control). The live assertion owed is the same fixture asked of the installed function and expected to answer `−5 000`, plus the band total on a mixed-sign portfolio — owed by the seal run (DR-26), not implied here. The number of documents affected in any existing data is **UNKNOWN**: it needs a query for invoices with an active plan and a negative outstanding |
+| `DR-13-MIG` | DR-03 freezes `0080`–`0086` as candidates; `frozenThrough` stays `0079` | `0075:809` and `0083:394` still carry, in live code, `WHERE i.due_date IS NOT NULL AND (p_as_of - i.due_date) > t.threshold` — the guard DR-13 retired. The end state is sound because `0084` drops the routine and recreates it with `coalesce(due_date, issue_date)`, **but any database applied only as far as `0083` carries the money defect** | **Open.** Outside this card's ownership (migrations, frozen as candidates by DR-03). The condition is to be stated explicitly in the deployment document, or handled if `0080`–`0086` are unfrozen | Whether any environment is sitting at `0083` or below: **UNKNOWN** |
+| `DR-21-PRESENT` | Pending owner — it changes a figure the merchant reads | `apps/api/src/modules/selling/customer-reads.ts:488` is `CASE WHEN o.due_date IS NULL THEN NULL ELSE ($3::date - o.due_date) END AS days_past_due`, so a termless invoice shows in the `over-90` band of the aging report and as `—` on the open-invoice page. By DR-21 the debt **is** overdue and is measured from the issue date, so the page hides an age the report asserts | **Open.** Outside this card's ownership. Likely repair `$3::date - coalesce(o.due_date, o.issue_date)`, by owner decision | Not measured against a database |
+
+### Accounting questions this section raises and does not decide
+
+- **A net-zero customer is present in one reader and absent from the other.** `customer_ar_outstanding`
+  (`0084`) ends `HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0`, so a customer whose credits
+  exactly offset their debts returns **no row at all** from the receivable reader — while
+  `customer_ar_aging` has no such `HAVING` and still reports the offsetting bands, which now net to
+  zero rather than one of them vanishing. Both readers are internally consistent with DR-23 and with
+  each other's totals; what differs is **presence**. Whether a customer at net zero should disappear
+  from the receivable list while still appearing in the aging report is a presentation decision about
+  a figure the merchant reads, so it belongs to the owner and is **not** settled here. It is the same
+  family as `DR-21-PRESENT` and was measured, not inferred.
+- **A credit under a plan is aged by the DOCUMENT and not by the schedule.** The totality arm places
+  the whole credit in one band at `coalesce(due_date, issue_date)`, so an overpaid invoice with
+  future-dated instalments shows its credit against the document's age. This is the reference model's
+  behaviour and DR-23 adopts the model, so it is **decided** — recorded here only because it is an
+  unusual sight in an aging report and a reader may take it for a defect.

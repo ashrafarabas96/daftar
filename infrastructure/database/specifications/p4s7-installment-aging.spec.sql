@@ -4533,10 +4533,69 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
       JOIN invoice_checked ic ON ic.invoice_id = o.invoice_id
      WHERE o.outstanding_txn_minor <> 0
   ),
+  degenerate AS (
+    -- DR-23 (owner, 2026-10-27) — THE TOTALITY ARM, AND IT IS THE ARM THIS
+    -- BODY WAS MISSING. Card `OVERPAY-AGING`, recorded in the repository's own
+    -- `TECHNICAL_DEBT.md` under «Phase 4 money cards and decisions».
+    --
+    -- A CREDIT BALANCE FROM AN OVERPAYMENT NEVER LEAVES THE AGING REPORT. It
+    -- is reported explicitly, as a NEGATIVE figure at the document's own date
+    -- — never clamped, never folded into zero — and the bands total NET
+    -- receivables exactly.
+    --
+    -- WHAT WENT WRONG, in one line of algebra. `installment_schedule_verify()`
+    -- holds `down + SUM(instalments) = total` by STRICT equality (section 3
+    -- obligation (a)), so `schedule_total = total` always; and `levelled`
+    -- below is `least(greatest(c, paid), total)`, so when `paid > total` EVERY
+    -- level collapses to `total`. Arm (a)'s consecutive differences are then
+    -- all zero and `declared_end = total` makes arm (b)'s residual zero, so
+    -- the invoice contributed NOTHING: the customer's credit left the report
+    -- BY OMISSION rather than by payment, and the bands no longer totalled the
+    -- authoritative outstanding. The state needs NO guard weakened to reach —
+    -- the invoice total is immutable and a payment does not touch
+    -- `installments` — total 1000, schedule 1000, paid 1200, so `O = -200`.
+    --
+    -- THE REFERENCE MODEL ALREADY HELD THIS ARM, which is why DR-23 rules the
+    -- MODEL correct and this body the deviant one: `projectInvoice` in
+    -- `packages/domain-core/test/phase4-s7-aging-reference-model.ts` carries
+    -- `if (O <= 0n || totalTxn <= 0n || totalBase <= 0n)` and emits the whole
+    -- figure at the document date. So this is that arm TRANSLATED, not a new
+    -- policy, and the two companion disjuncts come with it rather than being
+    -- invented here: a non-positive total is the one input on which
+    -- `supplier_ap_release(total_base, total_txn, …)` has no meaning at all,
+    -- so routing it here is both the model's behaviour and the only safe
+    -- reading.
+    --
+    -- The base is the AUTHORITATIVE `outstanding_base_minor`, exactly as arm
+    -- (c) takes it and never a recomputation — the model emits
+    -- `row.outstandingBaseMinor` here for the same reason.
+    SELECT oi.invoice_id, oi.currency_code,
+           coalesce(oi.due_date, oi.issue_date) AS due_date,
+           oi.outstanding_txn_minor, oi.outstanding_base_minor
+      FROM open_invoice oi
+     WHERE oi.flagged
+       AND (oi.outstanding_txn_minor <= 0
+            OR oi.total_txn_minor <= 0
+            OR oi.total_base_minor <= 0)
+  ),
   active_plan AS (
+    -- THE SCHEDULE ARMS DO NOT RUN FOR A DEGENERATE INVOICE (DR-23). The gate
+    -- is HERE and not on arms (a) and (b) deliberately: `sched`, `prefixed`,
+    -- `levelled` and `residual` all descend from this CTE, so ONE predicate at
+    -- the root makes it STRUCTURALLY impossible for such an invoice to reach
+    -- either arm, instead of two filters that must be kept in step with each
+    -- other for ever.
+    --
+    -- AND THIS `NOT EXISTS` IS NOT THE ONE SECTION 2c RETIRED. That one was
+    -- over `installment_plans` and asked what THIS CALLER CAN SEE, which under
+    -- row security answers «absent» and «invisible» identically. This one is
+    -- over `degenerate`, a CTE of this projection computed from
+    -- `open_invoice`: it reads no relation, so it has no visibility to be
+    -- wrong about.
     SELECT v.id, v.invoice_id, v.down_payment_minor, v.down_payment_due_date
       FROM visible_plan v
      WHERE v.invoice_id IN (SELECT oi.invoice_id FROM open_invoice oi)
+       AND NOT EXISTS (SELECT 1 FROM degenerate d WHERE d.invoice_id = v.invoice_id)
   ),
   sched AS (
     -- The down payment is schedule row 0, dated by its OWN column. It is not
@@ -4652,11 +4711,15 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     -- (c) THE INVOICES WITH NO ACTIVE PLAN: the whole figure at the invoice's
     --     own term — and at its ISSUE date when it states none (DR-13), which
     --     is exactly what `0084:727` does — and the base is the AUTHORITATIVE
-    --     `outstanding_base_minor` rather than a recomputation of it. The three
-    --     arms PARTITION the open invoices — (a) and (b) read only invoices in
-    --     `active_plan`, (c) only those not in it — and an active plan with no
-    --     `installments` rows is served by (a) and (b), which the reference
-    --     model agrees with and section 3(b) makes unreachable.
+    --     `outstanding_base_minor` rather than a recomputation of it. The FOUR
+    --     arms PARTITION the open invoices, and the partition is by TWO bits
+    --     of the invoice's own row: `NOT flagged` is served by (c); `flagged`
+    --     AND degenerate by (d); `flagged` AND not degenerate by (a) and (b)
+    --     together, since `active_plan` excludes the degenerate ones. No
+    --     invoice reaches two arms and none reaches none, which is what keeps
+    --     the sum law an identity over the authoritative figure. An active plan
+    --     with no `installments` rows is served by (a) and (b), which the
+    --     reference model agrees with and section 3(b) makes unreachable.
     --
     --     AND ITS PREMISE IS NO LONGER ASSERTED, BECAUSE IT IS NO LONGER A
     --     PREMISE (section 2c, section 6a; `TL-P4-COORD-R38`). `no_plan` is
@@ -4670,6 +4733,16 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
     SELECT n.invoice_id, n.currency_code, n.due_date,
            n.outstanding_txn_minor, n.outstanding_base_minor
       FROM no_plan n
+     UNION ALL
+    -- (d) THE DEGENERATE INVOICES UNDER AN ACTIVE PLAN (DR-23): the whole
+    --     AUTHORITATIVE figure at the document's own date — and for an
+    --     OVERPAYMENT that figure is NEGATIVE and is reported as the customer
+    --     credit it is, rather than collapsing to zero through the levels.
+    --     `degenerate` above carries the algebra, the reachability and the
+    --     reason the reference model is the authority on this arm.
+    SELECT g.invoice_id, g.currency_code, g.due_date,
+           g.outstanding_txn_minor, g.outstanding_base_minor
+      FROM degenerate g
   )
   -- NO `bucket_date IS NOT NULL` GUARD (DR-13, DR-21). It used to stand here
   -- and it was a MONEY DEFECT, not a safety check: a NULL bucket date exceeds
@@ -4811,7 +4884,7 @@ DECLARE
     ['public.installment_plan_active_exclusive()',                '972604870115f80909906ebf4a184d2de56f3c3568c91d0a7b66d288778515c2'],
     ['public.installment_schedule_verify()',                      'c334ebf3b393ceb5d7c010e931c309cb42fb112e7a44a2e406f4f17e997700a3'],
     ['public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
-    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '1a438fb61aa0adbbfccad77cfa0f206159ed5c6ca4aabf4702cab8fd8a0c0b3c']];
+    ['public.customer_ar_aging(uuid,uuid,date,integer[])',        '54fa1e27f19047e4d1a8732108bee3bde8ff7e46b39bf41980360301d94b7fa7']];
   -- The six routine NAMES of the list above, for part 6c's overload law. A
   -- second spelling of one list is a second definition of it, so these are
   -- the bare names and nothing else.
