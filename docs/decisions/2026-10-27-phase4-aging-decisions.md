@@ -471,16 +471,67 @@ only in a reviewer's head, so that it can be overturned.
 
 *What a client may observe.* `GET /v1/customers/:id/receivable/aging` no longer returns
 `openInvoiceCount`; it returns `openCounts`. **This is a breaking change to that one
-field**, and it is deliberate: no interface consumes it yet (measured — the field name
+field**, and the owner accepted it on 2026-10-27 as acceptable before the first
+release. It is deliberate: no interface consumes it yet (measured — the field name
 appears in no file under `apps/web`, `apps/admin` or `apps/android`), so the cost of
 removing it is nil now and would not be later. No other field changed its value, its
 type or its meaning, and `customer_ar_aging`'s five-column shape is still held by a
 positive test law.
 
+*What holds that measurement honest.* The "no interface consumes it" claim is a claim of
+ABSENCE, and an absence measured by a sweep is worth exactly as much as the sweep. So
+`dr39_20` is recorded here as its guard, and its job is stated precisely rather than
+flatteringly: **it does not guard the breaking change — it guards the sweep.** It is the
+ANTI-VACUITY law, and it requires the walk to have found real code files in all three
+app trees (`web`, `admin`, `android`), because a path typo that scanned nothing would
+otherwise satisfy every absence law in this file for ever. The absence itself is held by
+the sweep; `dr39_20` is why the sweep's silence means something.
+
 *Evidence.* Every law is over text, types or the pure fold. **The database claim — that
 the installed routine returns these numbers — is NOT_RUN**, as is everything under
 `tests/**`, whose harness needs PostgreSQL. The sign split lives in SQL, so "a credit
 document lands in the credit counter" is specifically among the NOT_RUN claims.
+
+## DR-41 — the aging budget, decided before it is measured
+
+**Owner's pre-authorisation, 2026-10-27, recorded before the number exists.**
+
+DR-39 made the aging read answer with two counters as well as the bands, and the
+endpoint carries a performance budget. The owner settled what happens if that budget is
+exceeded **before** the measurement, which is the only time such a rule can be set
+honestly:
+
+1. **Raising the limit is forbidden.** A budget that moves to accommodate a change stops
+   being evidence of anything.
+2. **Optimise inside the card first:** compute both counters **in the same visit as the
+   aging body** — one CTE, R-104 — take `EXPLAIN ANALYZE` **before and after**, and use
+   **only the indexes that already exist**.
+3. **No new index migration without telling the owner.**
+4. If the overrun survives the optimisation: **one line** with `p50` and `p95` before and
+   after, and the options.
+
+**Where this stands today, measured.** The budget is **NOT_RUN** — it needs PostgreSQL,
+and everything under `tests/**` does. So nothing is over the limit yet; what follows is
+the shape of the work, written down now so the path is known rather than improvised
+under a red result.
+
+The reader already issues **ONE statement**: a `WITH c AS MATERIALIZED (…)` over
+`customer_ar_open_document_counts`, `FULL JOIN`ed to `customer_ar_aging` on
+`currency_code`. So there is one round trip, but **two routine calls**, and each scans
+`invoice_outstanding` on its own. Folding them into a single scan is the optimisation
+point 2 names — and it meets a measured wall:
+
+* `customer_ar_aging`'s `RETURNS TABLE` **cannot gain a column**. The S7 specification
+  installs the body with `CREATE OR REPLACE FUNCTION`, which refuses a changed return
+  type (`42P13`), and three standing assertions pin the five columns literally.
+* Re-deriving the bands in the reader to share one CTE would move a money routine out of
+  a migration and into application SQL, which this project forbids outright.
+
+⇒ **The in-scope optimisation is therefore a single statement over a shared CTE of
+`invoice_outstanding`, not a widened aging routine** — and if that still cannot reach one
+scan, that is the structural fact the owner's line in point 4 must carry, together with
+the numbers. **This is stated as the known constraint, not as a prediction of the
+result.**
 
 ## Card — strengthening the credit-allocation guards (DR-40)
 
