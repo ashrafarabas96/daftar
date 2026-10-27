@@ -5861,7 +5861,18 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     // THE ASSERTION THAT GOES RED ON THE MUTATION, and it is on the BAND:
     // with `oi.due_date` alone the date is NULL, no threshold is exceeded and
     // this is 1 — `not-due` — for a credit 400 days past the issue date.
-    expect(only.bucketNo, 'a termless credit reported as not-due is DR-21 broken while DR-23 still looks satisfied').toBe(OLDEST_STANDARD);
+    //
+    // THE RULE IN FORCE IS DR-30, which settled S-17: the governing principle
+    // is that no amount leaves the aging report except by payment, an amount
+    // ages from `coalesce(due_date, issue_date)` (DR-13, DR-21) and a
+    // scheduled instalment ages from its own due date. A credit balance is
+    // not exempt from that placement. The failure message names the DECISION
+    // rather than declaring a rule broken, because which rule is in force is
+    // what a reader hitting this line needs to know.
+    expect(
+      only.bucketNo,
+      'DR-30 governs this band: a termless amount ages from `coalesce(due_date, issue_date)` (DR-13, DR-21) and a credit balance is not exempt, so this credit belongs in the oldest band and not in `not-due`. Reported as not-due it would still look DR-23-satisfied on the total while the age is lost. If you believe DR-30 has changed, settle that in the decision record and rewrite this case there — do not relax it here.',
+    ).toBe(OLDEST_STANDARD);
     // ...and the date the projection SAYS it used is the issue date, so the
     // figure and its stated date cannot disagree.
     expect(only.scheduleDate).toBe(row.issueDate);
@@ -5885,7 +5896,14 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     ] as const) {
       const c = projectInvoice(termlessCreditRow(age), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
       expect(c, `age ${age}: exactly one contribution carries the whole credit`).toHaveLength(1);
-      expect((c[0] as AgingContribution).bucketNo, `a credit ${age} day(s) past its issue date`).toBe(band);
+      // THE RULE IN FORCE IS DR-30 here too: the age is taken from
+      // `coalesce(due_date, issue_date)` (DR-13, DR-21) for a credit as for a
+      // debt, and the thresholds are strict `>`, so 30, 60 and 90 stay in the
+      // younger band. The message names the decision, not a broken rule.
+      expect(
+        (c[0] as AgingContribution).bucketNo,
+        `DR-30 governs this band: a credit ${age} day(s) past its issue date is placed by that age — from \`coalesce(due_date, issue_date)\` per DR-13 and DR-21 — with the 30/60/90 thresholds strict, so band ${band} is the one in force. If you believe DR-30 has changed, settle that in the decision record and rewrite this case there — do not relax it here.`,
+      ).toBe(band);
       expect(sum(c), `age ${age}: conservation`).toBe(-5_000n);
     }
   });
