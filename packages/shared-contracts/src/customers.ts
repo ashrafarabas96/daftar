@@ -267,8 +267,104 @@ export interface CustomerOpenInvoiceDto {
   outstandingBaseMinor: string;
   /** Derived through `invoice_settlement_state(...)`; never `invoices.status`. */
   settlementState: InvoiceSettlementState;
-  /** Whole days from `dueDate` to the supplied as-of date; negative before it, null with no due date. */
-  daysPastDue: number | null;
+  /**
+   * **For a DEBIT document:** whole days from its AGE ANCHOR to the supplied
+   * as-of date — `asOf - coalesce(dueDate, issueDate)` (DR-28), negative
+   * before the anchor and zero ON it. Never a fraction, never a clock
+   * reading: a civil date minus a civil date has no timezone.
+   *
+   * **For a CREDIT-bearing row, this is `0` (DR-31).** A credit note — and any
+   * credit balance, such as an overpaid invoice (DR-23) — is not overdue debt,
+   * so it has no overdue age. `isCredit` is `true` on exactly those rows and
+   * `ageDays` carries the age of the DOCUMENT the credit sits on. An interface
+   * must render such a row as "رصيد دائن على فاتورة عمرها X يومًا" /
+   * "a credit balance on an invoice X days old", and **never** as "متأخر" /
+   * "overdue". Nor in the superseded form that names the CREDIT's own age
+   * instead of the invoice's: this field does not measure the credit's age, and
+   * for an overpaid invoice that form overstates it. DR-35 forbids it, and
+   * `dr35_2`/`dr35_2b` hold the ban over the whole tree, which is why the
+   * banned wording is not quoted here. DR-28 and DR-31 do not collide: DR-28
+   * governs an invoice that is DUE, and a credit is not due from the customer.
+   *
+   * The zero is a literal, not a clamp: it is never negated and never the
+   * result of subtracting anything, so this field cannot be negative for a
+   * credit. And it is never `null` for anything, credit or debit.
+   *
+   * **NEVER `null`.** This field used to be `number | null`, with `null`
+   * meaning "the invoice named no due date" — and that is exactly the defect
+   * DR-28 closes. Under DR-13 and DR-21 a termless invoice is due from its
+   * ISSUE date and the aging report bands it accordingly, so a `null` here
+   * showed the merchant a dash on the open-invoices page for a debt the
+   * report was already placing in the over-90 band. The page hid the age the
+   * report asserted, and the merchant acts on the page.
+   *
+   * The fallback can only move a figure in ONE direction — `issueDate` is
+   * `DATE NOT NULL` and `invoices_due_date_ck` requires
+   * `dueDate IS NULL OR dueDate >= issueDate` — so substituting the issue
+   * date never reports an invoice as LESS overdue than it is. That is the
+   * safe direction for a receivable: the error, if any, is toward noticing a
+   * debt, never toward losing one.
+   *
+   * "No stated due date" is a DISPLAY fact and travels in
+   * `hasExplicitDueDate`, which is a separate field precisely so that it can
+   * never be confused with an age of zero or a negative age.
+   */
+  daysPastDue: number;
+  /**
+   * `true` when the invoice states its own due date, `false` when it named
+   * none and the age above is therefore anchored on `issueDate` (DR-28).
+   *
+   * This is what a client renders as "بلا أجل محدد" / "no stated due date".
+   * It is `dueDate !== null` and NOTHING else: it is not inferred from
+   * `daysPastDue`, so a legitimately zero or negative age is never mistaken
+   * for a missing term.
+   */
+  hasExplicitDueDate: boolean;
+  /**
+   * Whole days from **the document's own date** to the supplied as-of date:
+   * `asOf - issueDate`, for EVERY document kind, debit or credit (DR-31).
+   * Negative before that date, zero ON it.
+   *
+   * **Deliberately NOT the same expression as `daysPastDue`.** That field
+   * anchors on `coalesce(dueDate, issueDate)` because it answers "how late is
+   * this debt", and lateness is measured against a term. This one answers "how
+   * old is this document", so it reads the document's own date and nothing
+   * else: a payment term is not part of a document's age, and a credit note
+   * has no meaningful term at all.
+   *
+   * Three consequences, all intended:
+   *
+   * - **Nothing is substituted here, so no substitution has to be signed.**
+   *   `issueDate` is `DATE NOT NULL` on every row of every kind, so the
+   *   subtraction is total with no fallback; a `coalesce` would be dead code.
+   * - It is the figure a client renders for a credit as
+   *   "a credit balance on an invoice X days old" — the DOCUMENT's age and
+   *   not the credit's, which is why the wording names the invoice (DR-35).
+   * - The two fields stay INDEPENDENT. Had this anchored on the due date, a
+   *   debit invoice with a stated term would satisfy `ageDays === daysPastDue`
+   *   and a client could derive either from the other — a derivation that
+   *   would silently break the first time a credit appeared.
+   */
+  ageDays: number;
+  /**
+   * `true` when this row carries CREDIT rather than debt (DR-31): the document
+   * is a credit note, or its outstanding figure is negative — an overpaid
+   * invoice holding a credit balance (DR-23).
+   *
+   * Driven by the document's own KIND or by the SIGN of its money, and by
+   * NOTHING ELSE. In particular it is **not** `daysPastDue === 0`: a debit
+   * invoice due exactly on the as-of date has `daysPastDue === 0` and
+   * `isCredit === false`. A client that infers one from the other will show a
+   * debt due today as a credit balance.
+   *
+   * The kind arm is enumerated POSITIVELY (`credit_note`), not as "anything
+   * that is not an invoice". That is the signed direction: sweeping an unknown
+   * future kind in as credit would force its `daysPastDue` to zero and stop a
+   * real debt reading as overdue, which is the one failure DR-13/DR-21/DR-30
+   * forbid. The opposite mistake shows a credit labelled overdue — visibly
+   * wrong, but it hides nothing.
+   */
+  isCredit: boolean;
 }
 
 /** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */

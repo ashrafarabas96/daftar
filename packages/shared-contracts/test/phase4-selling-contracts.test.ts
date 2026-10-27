@@ -181,6 +181,17 @@ describe('numbering reports what was committed, not a counter (P4-AL-31)', () =>
       outstandingBaseMinor: '1250',
       settlementState: 'partial',
       daysPastDue: 30,
+      // DR-28: the age is never null, and "no stated due date" is its own
+      // field rather than a null age. The boundary and consistency laws for
+      // both live in `dr28-days-past-due.test.ts`.
+      hasExplicitDueDate: true,
+      // DR-31: every document also carries its own age — `asOf - issueDate`,
+      // which is NOT the overdue anchor — and says whether it is credit. A
+      // credit reports `daysPastDue: 0` with `isCredit: true`; this row is a
+      // DEBIT invoice, so the figure above is DR-28's unchanged. The laws live
+      // in `dr31-credit-age.test.ts`.
+      ageDays: 60,
+      isCredit: false,
     };
     expect(open.settlementState).toBe('partial');
     expect(Object.keys(open)).not.toContain('status');
