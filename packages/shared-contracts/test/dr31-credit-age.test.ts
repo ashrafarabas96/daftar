@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { CustomerOpenInvoiceDto } from '../src';
@@ -9,7 +9,8 @@ import type { CustomerOpenInvoiceDto } from '../src';
  * Every document carries `age_days = as_of - the document's own date`.
  * `days_past_due` is for DEBIT documents only: a credit note, and ANY credit
  * balance, reports `days_past_due = 0` with `is_credit = true`, and the
- * interface says "a credit balance for X days" rather than "overdue". The type
+ * interface says "a credit balance on an invoice X days old" rather than
+ * "overdue" (DR-35 settled that wording; `dr35_*` below holds it). The type
  * stays `number` with no `NULL` (DR-28), and no total changes.
  *
  * ── WHY "THE DOCUMENT'S OWN DATE" IS `issue_date`, NOT DR-28's ANCHOR ─────
@@ -21,8 +22,10 @@ import type { CustomerOpenInvoiceDto } from '../src';
  * stylistic:
  *
  *  1. A payment term is not part of a document's age, and a credit note has no
- *     meaningful term at all. "A credit balance for X days" means X days since
- *     the credit arose.
+ *     meaningful term at all. And because the figure is the DOCUMENT's age,
+ *     the approved wording names the invoice: "a credit balance on an invoice X days old"
+ *     (DR-35). The superseded form claimed X days since the credit AROSE,
+ *     which is not what this field measures.
  *  2. `issue_date` is `DATE NOT NULL` on every row of every kind (`0075`), so
  *     the subtraction is TOTAL with no fallback. Nothing is substituted, so
  *     there is no direction of error to sign — which is strictly safer than a
@@ -124,13 +127,7 @@ function isCreditBearing(documentKind: string, outstandingTxnMinor: bigint): boo
 }
 
 /** DR-28 for a debit document; DR-31's literal zero for a credit. */
-function daysPastDue(
-  asOf: string,
-  issueDate: string,
-  dueDate: string | null,
-  documentKind: string,
-  outstandingTxnMinor: bigint,
-): number {
+function daysPastDue(asOf: string, issueDate: string, dueDate: string | null, documentKind: string, outstandingTxnMinor: bigint): number {
   if (isCreditBearing(documentKind, outstandingTxnMinor)) return 0;
   return epochDay(asOf) - epochDay(dueDate ?? issueDate);
 }
@@ -606,5 +603,142 @@ describe('DR-31 — the contract carries both facts, and neither can be null', (
     // nullable flag would let a client read "unknown" as "not a credit".
     const illegal: CustomerOpenInvoiceDto = { ...dueToday, isCredit: null };
     expect(illegal).toBeTruthy();
+  });
+});
+
+/**
+ * ── DR-35: THE WORDING IS PART OF THE DECISION, SO THE BUILD HOLDS IT ──────
+ *
+ * DR-31 was implemented before DR-35 settled how a credit row reads, and the
+ * contract comment, the reader's comment, this file's own header and the
+ * decisions record all went on prescribing the superseded form. Nothing
+ * failed, because a prescription written in prose is enforced by whoever
+ * happens to reread it. That is the gap these cases close.
+ *
+ * The approved form names the INVOICE, because `ageDays` measures the
+ * DOCUMENT's age and not the credit's: for an overpaid invoice the credit
+ * arose on the day of the overpayment, which is later than the invoice's own
+ * date, so the superseded form OVERSTATES the credit's age by construction.
+ * The forbidden form is therefore not a style preference; it is a claim the
+ * number does not support.
+ *
+ * ── WHY A SENTINEL AND NOT A PROXIMITY WINDOW ──────────────────────────────
+ *
+ * A ban has to be writable, so the forbidden strings cannot simply be absent.
+ * The first form of this law allowed an occurrence that sat within three lines
+ * of a banning word, and it was MEASURED to launder two of the five sites in
+ * this very tree: the contract's prescription stood two lines from a `never`
+ * that banned something else entirely, so the window swallowed it. A marker
+ * that need only be NEARBY is satisfied by coincidence.
+ *
+ * So the law is a sentinel on the occurrence's OWN LINE. It cannot be met by
+ * accident, it cannot be met by a neighbour, and writing a ban costs one
+ * deliberate token.
+ *
+ * ── AND A SECOND HALF, BECAUSE A LINE LAW MISSES A WRAPPED PHRASE ──────────
+ *
+ * The line law was MEASURED to miss two sites of this tree where the phrase
+ * had wrapped across a comment break, which is the ordinary fate of any
+ * sentence in a wrapped comment. So each file is also read with its comment
+ * leaders and line breaks collapsed, and in that reading the phrase may appear
+ * only in a file that states the ban at all.
+ *
+ * STATED LIMIT, not a claim of completeness: a file that both states the ban
+ * and wraps a prescription across a line break passes both halves. Two files
+ * in the tree state the ban — the decisions record and this one — so the hole
+ * is two files wide and it is written down here rather than discovered later.
+ * Closing it needs a parser, which this law is not.
+ */
+describe('DR-35 the approved wording, enforced by the build rather than by memory', () => {
+  const REQUIRED_AR = 'رصيد دائن على فاتورة عمرها X يومًا';
+  const REQUIRED_EN = 'a credit balance on an invoice X days old';
+  const FORBIDDEN = ['رصيد دائن منذ X يومًا', 'a credit balance for X days'] as const; // DR-35-FORBIDDEN-FORM
+  /** The one token that makes an occurrence lawful, and only on its own line. */
+  const SENTINEL = ['DR', '35', 'FORBIDDEN', 'FORM'].join('-');
+
+  const ROOT = join(__dirname, '..', '..', '..');
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'graphify-out', '.next', '.turbo', 'release']);
+  const TEXT_EXT = ['.ts', '.tsx', '.js', '.jsx', '.md', '.sql', '.json', '.kt', '.yml', '.yaml', '.html', '.txt'];
+
+  /** Every text file of the tree, so a prescription cannot hide in a corner nobody listed. */
+  function textFiles(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) textFiles(join(dir, e.name), out);
+      } else if (TEXT_EXT.some((x) => e.name.endsWith(x))) {
+        out.push(join(dir, e.name));
+      }
+    }
+    return out;
+  }
+
+  /** An occurrence is lawful only if its OWN line carries the sentinel. */
+  function unlawfulOccurrences(text: string): string[] {
+    return text
+      .split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => FORBIDDEN.some((f) => line.includes(f)) && !line.includes(SENTINEL))
+      .map(({ line, n }) => `${n}: ${line.trim()}`);
+  }
+
+  /**
+   * The same text with comment leaders and line breaks collapsed, so a phrase
+   * that wrapped is read as the phrase it is.
+   */
+  function flattened(text: string): string {
+    const LEADER = /^[ \t]*(?:[*]+|[/]{2,}|#+)?[ \t]*/;
+    return text
+      .split('\n')
+      .map((line) => line.replace(LEADER, ''))
+      .join(' ');
+  }
+
+  it('dr35_1: the approved form is the one the contract and the reader prescribe', () => {
+    const contract = readFileSync(join(ROOT, 'packages', 'shared-contracts', 'src', 'customers.ts'), 'utf8');
+    const reader = readFileSync(join(ROOT, 'apps', 'api', 'src', 'modules', 'selling', 'customer-reads.ts'), 'utf8');
+    expect(contract, 'the contract must prescribe the Arabic form DR-35 approved').toContain(REQUIRED_AR);
+    expect(contract, 'and its English counterpart').toContain(REQUIRED_EN);
+    expect(reader, 'the reader comment prescribes the same form, so the two cannot drift').toContain(REQUIRED_EN);
+  });
+
+  it('dr35_2: nowhere in the tree does the forbidden form stand on a line that is not banning it', () => {
+    const offenders: string[] = [];
+    for (const file of textFiles(ROOT)) {
+      const bad = unlawfulOccurrences(readFileSync(file, 'utf8'));
+      if (bad.length > 0) offenders.push(`${file.slice(ROOT.length + 1)}\n    ${bad.join('\n    ')}`);
+    }
+    expect(
+      offenders,
+      `DR-35 forbids these forms in any language. Each line below carries one without the sentinel that marks a ban:\n  ${offenders.join('\n  ')}`,
+    ).toEqual([]);
+  });
+
+  it('dr35_2b: nor does it appear WRAPPED across a comment break in a file that never states the ban', () => {
+    const offenders: string[] = [];
+    for (const file of textFiles(ROOT)) {
+      const raw = readFileSync(file, 'utf8');
+      if (raw.includes(SENTINEL)) continue;
+      const hits = FORBIDDEN.filter((f) => flattened(raw).includes(f));
+      if (hits.length > 0) offenders.push(`${file.slice(ROOT.length + 1)} :: ${hits.join(' | ')}`);
+    }
+    expect(offenders, `a wrapped prescription is still a prescription:\n  ${offenders.join('\n  ')}`).toEqual([]);
+  });
+
+  it('dr35_3: THE POSITIVE CONTROL — the same predicates reject a prescription, so neither case above is vacuous', () => {
+    const prescription = ' * An interface renders such a row as "a credit balance for X days".'; // DR-35-FORBIDDEN-FORM
+    expect(unlawfulOccurrences(prescription), 'a prescription with no sentinel must be caught').toHaveLength(1);
+
+    expect(unlawfulOccurrences(`${prescription} // ${SENTINEL}`), 'and a ban must be writable, or the law could not be stated').toEqual([]);
+
+    const laundered = ['**never** as "overdue"', '', prescription].join('\n');
+    expect(
+      unlawfulOccurrences(laundered),
+      'the case the proximity window passed and this law must not: a banning word two lines away bans something else',
+    ).toHaveLength(1);
+
+    // AND THE WRAPPED CASE, which the line law alone was MEASURED to miss.
+    const wrapped = ['   * - the figure a client renders for a credit as "a credit balance for', '   *   X days".'].join('\n'); // DR-35-FORBIDDEN-FORM
+    expect(unlawfulOccurrences(wrapped), 'the line law cannot see a wrapped phrase — this is exactly why dr35_2b exists').toEqual([]);
+    expect(flattened(wrapped), 'and flattening restores the phrase, so dr35_2b does see it').toContain(FORBIDDEN[1]);
   });
 });

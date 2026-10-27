@@ -477,7 +477,9 @@ export class CustomerReadService {
    *  - `age_days = $3::date - o.issue_date` for EVERY document: the document's
    *    OWN date, with no term in it and no fallback needed, because
    *    `issue_date` is `DATE NOT NULL`. This is the figure a client renders as
-   *    "a credit balance for X days".
+   *    "a credit balance on an invoice X days old" (DR-35: the
+   *    wording names the INVOICE, because the number is the document's age
+   *    and not the credit's).
    *  - `days_past_due` is for DEBIT documents only. For a credit it is forced
    *    to a literal `0` — not negated, not clamped, not null — and `is_credit`
    *    travels beside it so the interface says "credit balance", never

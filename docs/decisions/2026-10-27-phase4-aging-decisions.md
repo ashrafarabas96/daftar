@@ -140,8 +140,9 @@ it settles which band it lands in.
 documents only**: a credit note — **and any credit balance**, such as an
 overpaid invoice (DR-23) — reports **`days_past_due = 0`** together with
 **`is_credit = true`**, and an interface renders such a row as
-**"رصيد دائن منذ X يومًا" / "a credit balance for X days"**, never as "متأخر" /
-"overdue". The type stays **`number` with no `NULL`**, consistent with DR-28,
+**"رصيد دائن على فاتورة عمرها X يومًا" / "a credit balance on an invoice X days old"**,
+never as "متأخر" / "overdue". *(The wording in this paragraph is DR-35's, which
+superseded the form first written here; DR-35 below says why.)* The type stays **`number` with no `NULL`**, consistent with DR-28,
 and **no total changes**: this decision changes what a date column reports, not
 what the customer owes.
 
@@ -166,7 +167,8 @@ assumed.**
    not part of a document's age, and a credit note has no meaningful term.
    Three consequences — `issue_date` is `DATE NOT NULL`, so the subtraction is
    total and **nothing is substituted, so no direction of error has to be
-   signed**; the figure is what "a credit balance for X days" means; and the two
+   signed**; the figure is the DOCUMENT's age, which is why DR-35's wording
+   names the invoice and not the credit; and the two
    fields stay **independent**, because an age anchored on the due date would
    equal `days_past_due` for every debit invoice with a term and invite a client
    to derive one from the other.
@@ -291,7 +293,7 @@ decision, not a presentation detail:
 
 - **Required**, in Arabic, English and Turkish: **"a credit balance on an invoice X days old"**
   (`رصيد دائن على فاتورة عمرها X يومًا`).
-- **Forbidden**: **"a credit balance for X days"** (`رصيد دائن منذ X يومًا`), in any language. It
+- **Forbidden**: **"a credit balance for X days"** (`رصيد دائن منذ X يومًا`), in any language. <!-- DR-35-FORBIDDEN-FORM: this line STATES the ban; the guard dr35_2 allows the strings only on a line carrying this marker --> It
   states the credit's age, which this field does not measure, and for an overpaid invoice it
   **overstates** it.
 

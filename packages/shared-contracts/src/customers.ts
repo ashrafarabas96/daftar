@@ -276,9 +276,14 @@ export interface CustomerOpenInvoiceDto {
    * **For a CREDIT-bearing row, this is `0` (DR-31).** A credit note — and any
    * credit balance, such as an overpaid invoice (DR-23) — is not overdue debt,
    * so it has no overdue age. `isCredit` is `true` on exactly those rows and
-   * `ageDays` carries how long the credit has stood. An interface must render
-   * such a row as "رصيد دائن منذ X يومًا" / "a credit balance for X days",
-   * **never** as "متأخر" / "overdue". DR-28 and DR-31 do not collide: DR-28
+   * `ageDays` carries the age of the DOCUMENT the credit sits on. An interface
+   * must render such a row as "رصيد دائن على فاتورة عمرها X يومًا" /
+   * "a credit balance on an invoice X days old", and **never** as "متأخر" /
+   * "overdue". Nor in the superseded form that names the CREDIT's own age
+   * instead of the invoice's: this field does not measure the credit's age, and
+   * for an overpaid invoice that form overstates it. DR-35 forbids it, and
+   * `dr35_2`/`dr35_2b` hold the ban over the whole tree, which is why the
+   * banned wording is not quoted here. DR-28 and DR-31 do not collide: DR-28
    * governs an invoice that is DUE, and a credit is not due from the customer.
    *
    * The zero is a literal, not a clamp: it is never negated and never the
@@ -332,8 +337,9 @@ export interface CustomerOpenInvoiceDto {
    * - **Nothing is substituted here, so no substitution has to be signed.**
    *   `issueDate` is `DATE NOT NULL` on every row of every kind, so the
    *   subtraction is total with no fallback; a `coalesce` would be dead code.
-   * - It is the figure a client renders for a credit as "a credit balance for
-   *   X days".
+   * - It is the figure a client renders for a credit as
+   *   "a credit balance on an invoice X days old" — the DOCUMENT's age and
+   *   not the credit's, which is why the wording names the invoice (DR-35).
    * - The two fields stay INDEPENDENT. Had this anchored on the due date, a
    *   debit invoice with a stated term would satisfy `ageDays === daysPastDue`
    *   and a client could derive either from the other — a derivation that
