@@ -157,6 +157,23 @@ export interface SuiteEntry {
    * number is raised by the slice that measures the growth.
    */
   readonly cases?: number;
+  /**
+   * TITLES THAT MUST STILL BE THERE, matched against the same `testTitles`
+   * output the floor is counted from.
+   *
+   * A floor protects the COUNT, and a count cannot tell deletion from
+   * SUBSTITUTION: gut every `expect(` in a money case, rename its title to
+   * `the module loads`, and the count is unchanged and the row stays green.
+   * On an instalment and aging suite that is how «the first day», «the due
+   * date itself» and «the parts sum to the whole» leave the estate in silence.
+   * So the boundary claims are pinned BY NAME, on the pattern of
+   * `S4_EVIDENCE_STEPS` in `scripts/phase4-s4-gate.ts`: renaming or removing
+   * one is a FAIL that says which claim went.
+   *
+   * It pins the CLAIM, never the whole suite: a title not listed here is free
+   * to change, and a listed one is a promise the slice made out loud.
+   */
+  readonly titles?: readonly string[];
 }
 
 export interface CommandEntry {
@@ -197,6 +214,8 @@ const GOLDEN_DIR = 'tests/golden-regression/phase4';
 const GUARD_SUITE_DIR = 'tests/guards';
 /** P4-AL-63/P4-AL-68: the browser step partition and its red proofs. It lives inside `GUARD_SUITE_DIR`, so the directory row above already runs it; this constant exists so the red proofs can name the file that carries them. */
 const BROWSER_STEP_OWNERSHIP = `${GUARD_SUITE_DIR}/phase4-browser-step-ownership.test.ts`;
+/** The planted-defect proofs for this gate's own roster protections: the case floor, the pinned money titles, and the deference to another slice's basename rule. */
+const ROSTER_PROOFS = `${GUARD_SUITE_DIR}/p4s1-roster-floor-and-deference.test.ts`;
 
 /**
  * Every P4-S1 suite, by id. Exact: nothing is discovered, and every `p4-*`
@@ -284,10 +303,61 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // to a scratch database built from the real migrations, so what they measure
   // is the specification against a real parser. The case floors below were
   // measured from the tree by this gate's own `testTitles`.
-  { id: 'S7-SPEC-01', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-aging-db.test.ts', cases: 11 },
-  { id: 'S7-SPEC-02', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-aging-live.test.ts', cases: 31 },
-  { id: 'S7-SPEC-03', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-concurrency-db.test.ts', cases: 33 },
-  { id: 'S7-SPEC-04', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-fact-db.test.ts', cases: 118 },
+  //
+  // The floors are EQUAL to the counts measured today, so today they are an
+  // equality in effect and only become floors as the suites grow. What a count
+  // cannot see at all is SUBSTITUTION, so each row also pins its MONEY
+  // BOUNDARY CLAIMS by name: the oldest band carrying only the fallen-due half
+  // (defect C-1), the not-yet-due half in no overdue band, conservation in both
+  // the transaction and the base currency, aging taken from the passed `asOf`
+  // and not from a clock, the per-bucket currency, the columns agreeing at four
+  // horizons, the arm that can still FAIL, the five-column return shape, and
+  // the no-plan invoice aged at its own due date.
+  {
+    id: 'S7-SPEC-01',
+    area: 'phase4-s7-spec',
+    runner: 'root',
+    file: 'tests/integration/phase4-s7-installment-aging-db.test.ts',
+    cases: 11,
+    titles: ['`customer_ar_aging` KEPT its five-column return shape — `CREATE OR REPLACE` proves it, since 42P13 is the alternative'],
+  },
+  {
+    id: 'S7-SPEC-02',
+    area: 'phase4-s7-spec',
+    runner: 'root',
+    file: 'tests/integration/phase4-s7-installment-aging-live.test.ts',
+    cases: 31,
+    titles: [
+      'THE DEFECT, from the predecessor itself: the WHOLE outstanding sat in the oldest band',
+      'THE REPAIR, through the routine: only the FALLEN-DUE half is in the oldest band',
+      'the NOT-YET-DUE half is in the not-yet-due band and in no overdue band',
+      "EVERY BUCKET CARRIES THE INVOICE'S OWN CURRENCY, and the routine relabels nothing",
+      'CONSERVATION, through the routine: the buckets sum to the authoritative outstanding',
+      '§10.5 BASE CONSERVATION: the base bands sum EXACTLY to the authoritative outstanding BASE',
+      '§10.5 THE AGING COMES FROM THE PASSED asOf AND NOT FROM A CLOCK — measured by MOVING it, and read from the catalogue',
+      'EVERY COLUMN OF EVERY BUCKET AGREES, at four horizons, base_minor included',
+      'AND THE EQUIVALENCE CAN FAIL — the defect the slice exists to fix makes it disagree',
+    ],
+  },
+  {
+    id: 'S7-SPEC-03',
+    area: 'phase4-s7-spec',
+    runner: 'root',
+    file: 'tests/integration/phase4-s7-installment-concurrency-db.test.ts',
+    cases: 33,
+    titles: ['G3 the base bands sum to the outstanding BASE and each band is the canonical cumulative release, with base <> txn'],
+  },
+  {
+    id: 'S7-SPEC-04',
+    area: 'phase4-s7-spec',
+    runner: 'root',
+    file: 'tests/integration/phase4-s7-installment-fact-db.test.ts',
+    cases: 118,
+    titles: [
+      'a no-plan invoice is aged at its own due date, exactly as before this slice',
+      'and the aging then spreads the figure ACROSS the schedule instead of one band',
+    ],
+  },
 ];
 
 /** The permanent core, run as commands after the predecessor gate. */
@@ -401,6 +471,29 @@ export const RED_PROOFS: readonly (RedProof | Pending)[] = [
     defect:
       'a Phase 4 route is mounted and no cross-tenant golden names it — the route nobody remembered to enumerate is the one route with no cross-tenant case',
     proof: `${GUARD_SUITE_DIR}/phase4-cross-tenant-enumeration-guard.test.ts::a ninth route the golden does not mention is a finding, and the finding names it`,
+  },
+  {
+    id: 'RP-FLOOR-CASES',
+    defect:
+      'a rostered suite loses a case, or a row records a floor of one or zero, or a floor is put on a directory row whose membership is not fixed — and the roster, which names only the file, stays green',
+    proof: `${ROSTER_PROOFS}::RED: a floor ABOVE the measured case count is reported`,
+  },
+  {
+    id: 'RP-FLOOR-SUBST',
+    defect:
+      'a money boundary case of an instalment or aging suite is gutted and RENAMED — the oldest band, the not-yet-due half, conservation, the asOf clock — so the case COUNT does not move and the floor sees nothing',
+    proof: `${ROSTER_PROOFS}::RED: a pinned money claim RENAMED`,
+  },
+  {
+    id: 'RP-ROSTER-DEFER',
+    defect:
+      'the foreign basename rule this scan defers to is NARROWED while the old expression survives as a comment, so a text search is satisfied and the suites that rule used to discover are run by nothing',
+    proof: `${ROSTER_PROOFS}::RED: the foreign rule NARROWED while the old text survives as a COMMENT`,
+  },
+  {
+    id: 'RP-ROSTER-SLICED',
+    defect: 'a Phase 4 suite is named `p4sN-` rather than `p4-`, so the roster scan cannot see it and no slice gate lists or executes it',
+    proof: `${ROSTER_PROOFS}::a p4sN- suite no other roster owns must be listed here`,
   },
 ];
 
@@ -870,20 +963,37 @@ const PHASE4_SUITE_SLICED = /^(?:p4|phase4)s\d+-.*\.test\.ts$/;
  * old rule did not already catch, which is why the deference can never hide
  * anything that was visible before.
  *
- * `literal` is the rule's SOURCE TEXT in the owning script. It is asserted to
- * still be there on every run: a copied rule is a second truth, and the moment
- * the owner edits theirs this deference is void and must be read again by a
- * human rather than drifting silently. That is the defect class this card was
- * opened for, applied to the fix itself.
+ * `literal` is the rule's SOURCE TEXT in the owning script, and it is asserted
+ * on every run against THE LIVE DECLARATION of `constName` — never against the
+ * file as a whole. A free `includes` was the first version of this check and it
+ * was a hole wide enough to drive the whole defect back through: narrow the live
+ * `const S4_BASENAME` to `/^(?:customer-s4-)/`, leave the old expression behind
+ * as a COMMENT, and a text search is satisfied while twenty-four `p4s4-` suites
+ * — money paths among them — are discovered by no roster and run by nothing,
+ * with both gates green. So the prose is stripped first and the match must be
+ * the assignment itself. A copied rule is a second truth; the moment its owner
+ * edits theirs this deference is void and says so by name.
  */
-const FOREIGN_SLICE_ROSTERS: readonly { slice: string; script: string; literal: string; rule: RegExp }[] = [
+const FOREIGN_SLICE_ROSTERS: readonly { slice: string; script: string; constName: string; literal: string; rule: RegExp }[] = [
   {
     slice: 'P4-S4',
     script: 'scripts/phase4-s4-gate.ts',
+    constName: 'S4_BASENAME',
     literal: '/^(?:p4s4-|customer-s4-|phase4-customer-)/',
     rule: /^(?:p4s4-|customer-s4-|phase4-customer-)/,
   },
 ];
+
+/** The same list, exported so the planted-defect proof can perform the attack on the real entry rather than on a copy of it. */
+export const FOREIGN_SLICE_ROSTERS_FOR_PROOF = FOREIGN_SLICE_ROSTERS;
+
+/** The declaration this gate demands: `const <name> = <literal>;`, in code and not in prose. */
+export function liveDeclaration(constName: string, literal: string): RegExp {
+  // Every regex metacharacter, so the rule's own `/^(?:…)/` is matched as TEXT. A
+  // forward slash is not one and needs no escape here.
+  const quoted = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(String.raw`(?:^|\n)[ \t]*(?:export[ \t]+)?const[ \t]+` + quoted(constName) + String.raw`\b[^=\n]*=[ \t]*` + quoted(literal) + `[ \t]*;`);
+}
 
 /** A Phase 4 suite basename this gate's roster must list: everything the old rule caught, plus the sliced spelling no other roster owns. */
 export function unrosteredElsewhere(base: string): boolean {
@@ -900,28 +1010,40 @@ export function foreignRosterProblems(root: string): string[] {
       problems.push(`${r.script} is gone, so the ${r.slice} basename rule this scan defers to cannot be verified — the deference is void`);
       continue;
     }
-    if (!read(root, r.script).includes(r.literal))
-      problems.push(`${r.script} no longer contains the ${r.slice} basename rule ${r.literal} that this scan defers to — the rosters have diverged`);
+    if (!liveDeclaration(r.constName, r.literal).test(stripTsProse(read(root, r.script))))
+      problems.push(
+        `${r.script} no longer DECLARES \`const ${r.constName} = ${r.literal};\` in code — the ${r.slice} basename rule this scan defers to has changed (a copy of it left in a comment is not the rule), so the deference is void and both rosters must be read again`,
+      );
   }
   return problems;
 }
 
-/** A row that declares a case floor is held to it, by this gate's own instrument. */
-function caseFloorProblems(root: string, entries: readonly SuiteEntry[]): string[] {
+/** A row that declares a case floor is held to it, and a row that pins titles still has every one of them — by this gate's own instrument. */
+export function caseFloorProblems(root: string, entries: readonly SuiteEntry[]): string[] {
   const problems: string[] = [];
   for (const e of entries) {
-    if (e.cases === undefined) continue;
+    if (e.cases === undefined && e.titles === undefined) continue;
     if (e.directory === true) {
-      problems.push(`${e.id} declares a case floor on a DIRECTORY row — a floor belongs to a file, and the directory's membership is not fixed`);
+      problems.push(`${e.id} declares a case floor or pinned titles on a DIRECTORY row — both belong to a file, and the directory's membership is not fixed`);
       continue;
     }
-    if (!(e.cases > 1)) {
+    if (e.cases !== undefined && !(e.cases > 1)) {
       problems.push(`${e.id} declares a case floor of ${e.cases}, and a floor of one or less bounds nothing`);
       continue;
     }
+    if (e.titles !== undefined && e.titles.length === 0) {
+      problems.push(`${e.id} declares an EMPTY pinned-title list, which judges nothing — a row that pins no claim must not carry the field`);
+      continue;
+    }
     if (!has(root, e.file)) continue;
-    const found = testTitles(stripTsProse(read(root, e.file))).length;
-    if (found < e.cases) problems.push(`${e.id} ${e.file} holds ${found} executable case(s) and its recorded floor is ${e.cases}`);
+    const titles = testTitles(stripTsProse(read(root, e.file)));
+    if (e.cases !== undefined && titles.length < e.cases)
+      problems.push(`${e.id} ${e.file} holds ${titles.length} executable case(s) and its recorded floor is ${e.cases}`);
+    for (const pinned of e.titles ?? [])
+      if (!titles.includes(pinned))
+        problems.push(
+          `${e.id} ${e.file} no longer has the pinned case "${pinned}" — the count alone cannot tell a renamed or gutted money claim from a present one, so a pinned title that is gone is the finding`,
+        );
   }
   return problems;
 }
@@ -2261,7 +2383,7 @@ export const CHECKS: readonly Check[] = [
     area: 'suites',
     needs: 'live',
     run: suiteProblems,
-    ok: `every listed suite exists and skips nothing; every p4-* suite and every ${GOLDEN_DIR} file is listed; every ${GUARD_SUITE_DIR} proof is one this gate executes`,
+    ok: `every listed suite exists and skips nothing; every p4-* and p4sN-* suite no other slice roster owns, and every ${GOLDEN_DIR} file, is listed; every declared case floor and pinned title holds; the foreign roster rules this scan defers to are still DECLARED where they were read; every ${GUARD_SUITE_DIR} proof is one this gate executes`,
   },
   {
     id: 'commands',
