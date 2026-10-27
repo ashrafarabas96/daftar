@@ -183,6 +183,24 @@ export interface CustomerAgingSqlRow {
   txn_minor: string | null;
   base_minor: string;
   invoice_count: number;
+  /**
+   * HOW MANY DISTINCT OPEN INVOICES THE WHOLE ANSWER IS ABOUT (DR-29) — a
+   * DOCUMENT-LEVEL figure repeated on every row, because a `RETURNS TABLE` has
+   * nowhere else to put one.
+   *
+   * It does NOT come from `customer_ar_aging`. That routine's return shape is
+   * pinned by the owner's section 25 ruling, and the P4-S7 specification
+   * installs its body with `CREATE OR REPLACE FUNCTION`, which cannot change a
+   * `RETURNS TABLE` list at all (42P13) — so a sixth column was never
+   * available. It comes from `customer_ar_open_invoice_count`, joined on in the
+   * same statement, which measures `count(DISTINCT invoice_id)` over the same
+   * population the bands are built from.
+   *
+   * It is NOT the sum of `invoice_count`, and it is not any function of the
+   * per-band counts: since P4-S7 one invoice is aged across its instalment
+   * schedule, so it reaches several bands and that sum counts it once per band.
+   */
+  open_invoice_count: number;
 }
 
 /** The bucket SHAPE a fold folds into: the labels and the boundaries they came from. */
@@ -257,7 +275,7 @@ export interface CustomerAgingShape {
 export function foldCustomerAging(
   rows: readonly CustomerAgingSqlRow[],
   shape: CustomerAgingShape,
-): { buckets: CustomerAgingBucketDto[]; totalBaseMinor: string } {
+): { buckets: CustomerAgingBucketDto[]; totalBaseMinor: string; openInvoiceCount: number } {
   if (shape.labels.length !== shape.bucketDays.length + 1) {
     throw sellingRefusal('customer.aging_bucket_mapping_invalid');
   }
@@ -285,8 +303,30 @@ export function foldCustomerAging(
   });
 
   let totalBaseMinor = 0n;
+  // ── THE DOCUMENT-LEVEL COUNT, READ AND NOT COMPUTED (DR-29) ────────────
+  //
+  // `null` until a row carries it, because no rows at all means no open
+  // invoices and that answer is `0` — a figure this function STATES rather
+  // than leaves to a default, so that "the customer has nothing open" and
+  // "the rows forgot to say" cannot arrive as the same number.
+  //
+  // Every row of one answer carries the SAME scalar. If two disagree the
+  // answer is malformed, and the module's one refusal for "these aging rows
+  // are not a valid answer" is the channel for it. Taking the first, the
+  // largest or the last would be inventing a money-adjacent figure out of a
+  // contradiction, and a count a merchant reads next to a total is not a
+  // place to guess.
+  let openInvoiceCount: number | null = null;
   for (const r of rows) {
     if (!Number.isInteger(r.bucket_no) || r.bucket_no < 1 || r.bucket_no > buckets.length) {
+      throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    }
+    if (!Number.isInteger(r.open_invoice_count) || r.open_invoice_count < 0) {
+      throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    }
+    if (openInvoiceCount === null) {
+      openInvoiceCount = r.open_invoice_count;
+    } else if (openInvoiceCount !== r.open_invoice_count) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
     const bucket = buckets[r.bucket_no - 1];
@@ -297,7 +337,7 @@ export function foldCustomerAging(
     if (r.currency_code !== null && r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
   }
 
-  return { buckets, totalBaseMinor: totalBaseMinor.toString() };
+  return { buckets, totalBaseMinor: totalBaseMinor.toString(), openInvoiceCount: openInvoiceCount ?? 0 };
 }
 
 @Injectable()
@@ -409,8 +449,21 @@ export class CustomerReadService {
     const labels = agingBucketLabels(q.bucketDays);
     const found = await this.db.scoped<CustomerAgingSqlRow & QueryResultRow>(
       this.scope(m),
-      `SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count
-         FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a
+      // ONE statement, and `AS MATERIALIZED` is load-bearing (DR-29). The
+      // distinct open-invoice count is a document-level figure the aging
+      // routine cannot return — its shape is pinned and its body is installed
+      // with `CREATE OR REPLACE`, which cannot change a `RETURNS TABLE`
+      // (42P13) — so it is joined on here rather than fetched in a second
+      // round trip that would pay row-security setup twice for four bytes.
+      //
+      // Without `MATERIALIZED` a STABLE scalar in the target list may be
+      // evaluated once PER ROW, which would re-scan this customer's invoices
+      // once per band. With it, the customer's invoices are visited once by
+      // the aging routine and once by the count routine, and no more.
+      `WITH n AS MATERIALIZED (SELECT public.customer_ar_open_invoice_count($1::uuid, $2::uuid) AS open_invoice_count)
+       SELECT a.bucket_no, a.currency_code, a.txn_minor::text AS txn_minor, a.base_minor::text AS base_minor, a.invoice_count,
+              n.open_invoice_count
+         FROM customer_ar_aging($1::uuid, $2::uuid, $3::date, $4::integer[]) a CROSS JOIN n
         ORDER BY a.bucket_no, a.currency_code NULLS FIRST`,
       [m.businessId, customerId, q.asOf, q.bucketDays],
     );
@@ -418,9 +471,9 @@ export class CustomerReadService {
     // The fold — and the 1-based → 0-based mapping — lives in
     // `foldCustomerAging` above, which is pure and is exercised without a
     // database. This method holds the query and the envelope only.
-    const { buckets, totalBaseMinor } = foldCustomerAging(found.rows, { labels, bucketDays: q.bucketDays });
+    const { buckets, totalBaseMinor, openInvoiceCount } = foldCustomerAging(found.rows, { labels, bucketDays: q.bucketDays });
 
-    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor };
+    return { customerId, asOf: q.asOf, baseCurrency, bucketDays: [...q.bucketDays], buckets, totalBaseMinor, openInvoiceCount };
   }
 
   /**

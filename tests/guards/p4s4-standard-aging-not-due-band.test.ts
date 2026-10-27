@@ -62,12 +62,21 @@ const STANDARD = [...STANDARD_AGING_BUCKET_DAYS];
 const LABELS = agingBucketLabels(STANDARD);
 const SHAPE: CustomerAgingShape = { labels: LABELS, bucketDays: STANDARD };
 
+/**
+ * `open_invoice_count` is the DOCUMENT-level distinct count DR-29 added, and
+ * the value below is deliberately NEITHER the sum of the per-band counts NOR
+ * any one of them: since P4-S7 an invoice is aged across its instalment
+ * schedule, so it reaches several bands and the sum counts it once per band.
+ * Every row of one answer carries the SAME scalar, because `foldCustomerAging`
+ * refuses a row set that disagrees with itself about a figure the whole
+ * document is supposed to state once.
+ */
 const row = (bucketNo: number, baseMinor: string, invoices = 1): CustomerAgingSqlRow => ({
   bucket_no: bucketNo,
   currency_code: 'SAR',
   txn_minor: baseMinor,
   base_minor: baseMinor,
-  invoice_count: invoices,
+  invoice_count: invoices, open_invoice_count: 7,
 });
 
 /**

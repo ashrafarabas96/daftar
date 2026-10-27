@@ -743,6 +743,62 @@ COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
   'P4-S1, replaced by P4-S4 (0083, then 0084; P4-AL-05): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. There is no materialised aging table (P4-AL-06) and the routine does not read the clock (P4-AL-30). Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice; since 0084 it takes the currency and the due date off that call rather than joining invoices back onto it, so it visits invoices exactly once. The buckets, the thresholds and the answer are unchanged.';
 
 -- ─────────────────────────────────────────────────────────────────────────
+-- 6b. HOW MANY OPEN INVOICES THIS CUSTOMER HAS (DR-29).
+--
+--     A DOCUMENT-LEVEL FIGURE THE BUCKETS CANNOT PRODUCE. `customer_ar_aging`
+--     counts DISTINCT invoices WITHIN a band, and since P4-S7 one invoice is
+--     aged ACROSS ITS SCHEDULE, so it reaches several bands and the sum of
+--     those counts counts it once per band. That sum is not the number of open
+--     invoices and may exceed it. Neither is the number any other function of
+--     the per-band counts: two invoices each reaching two bands, and four
+--     invoices each reaching one, give the same four counts. So it is
+--     MEASURED, here, once, over the whole set.
+--
+--     WHY A SEPARATE ROUTINE AND NOT A SIXTH COLUMN OF `customer_ar_aging`.
+--     Not a preference - a sixth column was never available. The owner's
+--     section 25 ruling pins that return shape, and the P4-S7 specification
+--     installs its body with `CREATE OR REPLACE FUNCTION`, which cannot change
+--     a `RETURNS TABLE` list at all (42P13). Appending a column here would have
+--     made that specification's own apply fail, so the figure has to come from
+--     somewhere else - and a routine of its own is the somewhere that keeps the
+--     count INDEPENDENTLY computed rather than folded out of the bands.
+--
+--     THE SAME POPULATION, STATED THE SAME WAY. The subquery over
+--     `public.invoices` and the non-zero filter are character for character the
+--     ones section 6's aging body uses, so the two readers cannot come to
+--     disagree about WHICH invoices are open. `<> 0` and not `> 0`: an
+--     overpayment leaves a NEGATIVE outstanding and that invoice is still open
+--     and still counted (DR-23). `count(DISTINCT o.invoice_id)` and not
+--     `count(*)` because the honesty of the figure must not rest on the
+--     set-based reader happening to return one row per invoice.
+--
+--     ONE VISIT TO `public.invoices` (R-104), in its own body, exactly as its
+--     two siblings. It is a SECOND relation for the caller to read and that
+--     cost is deliberate and declared: the alternative was the 42P13 failure
+--     above. The read surface pays for it once per aging answer and not once
+--     per band - see the `MATERIALIZED` note in `customer-reads.ts`.
+--
+--     IT STORES NOTHING. No count column, no cached total and no new relation:
+--     an aggregation at the moment it is asked, which is what P4-AL-05 and
+--     P4-AL-06 require of every derived figure.
+-- ─────────────────────────────────────────────────────────────────────────
+CREATE FUNCTION customer_ar_open_invoice_count(p_business_id UUID, p_customer_id UUID)
+RETURNS INTEGER
+LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+  SELECT pg_catalog.count(DISTINCT o.invoice_id)::INTEGER
+    FROM public.invoice_outstanding(
+           p_business_id,
+           (SELECT pg_catalog.array_agg(x.id)
+              FROM public.invoices x
+             WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
+   WHERE o.outstanding_txn_minor <> 0;
+$fn$;
+REVOKE ALL ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) TO daftar_app, daftar_inventory_internal;
+COMMENT ON FUNCTION customer_ar_open_invoice_count(UUID, UUID) IS
+  'P4-S4 (0084; DR-29): how many DISTINCT open invoices of this customer still have something outstanding. A DOCUMENT-LEVEL figure the aging buckets cannot produce, because since P4-S7 one invoice is aged across its instalment schedule and so reaches several buckets, which makes the sum of customer_ar_aging''s per-bucket invoice_count larger than the number of open invoices and makes it no function of them at all. It is NOT a sixth column of customer_ar_aging: that return shape is pinned by the owner''s section 25 ruling and the P4-S7 specification installs the body with CREATE OR REPLACE FUNCTION, which cannot change a RETURNS TABLE list (42P13), so appending one would have broken that apply. The population is character for character the one the aging body uses - this customer''s open invoices with a non-zero settlement sum, where <> 0 and not > 0 keeps an overpaid invoice''s negative figure counted (DR-23) - and the count is count(DISTINCT invoice_id) so the answer does not rest on the set-based reader happening to return one row per invoice. ONE visit to invoices (R-104). Stores nothing: no count column, no cached total, no new relation (P4-AL-05, P4-AL-06). Its answer is UNCHANGED by P4-S7, because that slice changes how an invoice is BANDED and not which invoices are open, which is why the specification does not replace it. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal.';
+
+-- ─────────────────────────────────────────────────────────────────────────
 -- 7. THE OPEN-INVOICE PAGE READER (R-105, R-106).
 --
 --    The first `p_limit` invoices of this customer that still have something
@@ -1112,12 +1168,12 @@ BEGIN
   END IF;
 
   -- 0084-E(6). And the accepted configuration stated ABSOLUTELY, over all
-  -- FOUR routines including the new page reader — a capture compared against
+  -- SIX routines, the new page reader and DR-29's open-invoice count among them — a capture compared against
   -- itself proves nothing if the configuration was already wrong before this
   -- file ran, and the page reader has no capture at all because it did not
   -- exist. STABLE, invoker's rights, the pinned `search_path`, EXECUTE for
   -- exactly the two accepted roles, and NOTHING for PUBLIC. The subject count
-  -- is asserted: four were looked for and four must have been examined.
+  -- is asserted: six were looked for and six must have been examined.
   v_seen := 0;
   FOR v_name IN
     SELECT f.sig
@@ -1125,6 +1181,7 @@ BEGIN
             UNION ALL SELECT 'public.invoice_outstanding(UUID, UUID[])'
             UNION ALL SELECT 'public.customer_ar_outstanding(UUID, UUID)'
             UNION ALL SELECT 'public.customer_ar_aging(UUID, UUID, DATE, INTEGER[])'
+            UNION ALL SELECT 'public.customer_ar_open_invoice_count(UUID, UUID)'
             UNION ALL SELECT 'public.customer_open_invoices_page(UUID, UUID, DATE, UUID, INTEGER)') f
   LOOP
     IF to_regprocedure(v_name) IS NULL THEN
@@ -1149,8 +1206,8 @@ BEGIN
       RAISE EXCEPTION 'selling.migration_end_state_invalid: PUBLIC holds a privilege on %', v_name USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
-  IF v_seen <> 5 THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0084-E(6) examined % routines and not 5', v_seen USING ERRCODE = 'P0001';
+  IF v_seen <> 6 THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0084-E(6) examined % routines and not 6', v_seen USING ERRCODE = 'P0001';
   END IF;
 
   -- 0084-E(7). `invoice_settlement_state`'S OWN TEXT IS BYTE-IDENTICAL — and

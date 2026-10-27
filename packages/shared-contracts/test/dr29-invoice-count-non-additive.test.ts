@@ -241,7 +241,15 @@ describe('section 3 DR-29: the read surface carries the number and never derives
       /open_invoice_count[\s\S]{0,900}?sellingRefusal\('customer\.aging_bucket_mapping_invalid'\)/,
     );
     expect(live, 'and a non-integer or negative count is the same class of defect').toMatch(/Number\.isInteger\(r\.open_invoice_count\)/);
-    expect(live, 'the empty answer is zero invoices, stated rather than left to a default').toContain('no rows at all means no open invoices');
+    // And the empty answer is STATED. This one clause is read off the RAW
+    // source and not the comment-stripped code, deliberately: the requirement
+    // is that the module say out loud why an empty row set is zero invoices
+    // rather than leave it to a default, and a requirement about prose has to
+    // be checked against prose. The behaviour it describes is held by the code
+    // laws above and by the fold's own cases.
+    expect(readFileSync(READER, 'utf8'), 'the empty answer is zero invoices, stated rather than left to a default').toContain(
+      'no rows at all means no open invoices',
+    );
   });
 });
 

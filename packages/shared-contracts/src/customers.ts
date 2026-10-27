@@ -209,7 +209,28 @@ export interface CustomerAgingBucketDto {
   toDays: number | null;
   baseMinor: string;
   byCurrency: CustomerCurrencyAmountDto[];
-  /** How many open invoices fall in the bucket. A count, so a JSON number. */
+  /**
+   * How many DISTINCT open invoices contribute to this bucket. A count, so a
+   * JSON number.
+   *
+   * **THESE COUNTS ARE NOT ADDITIVE ACROSS BUCKETS** (DR-29). Adding them up
+   * does not give the number of open invoices, because the buckets do not
+   * partition the invoices: an invoice under an active instalment plan
+   * contributes to SEVERAL buckets — each scheduled instalment is banded at
+   * its OWN due date, and the amount the schedule does not declare is banded
+   * at the document's own age anchor. So the sum of `invoiceCount` over the
+   * buckets is not the number of open invoices and may exceed it, and the
+   * excess is not an error in either figure.
+   *
+   * Nor is the number recoverable from these counts by any other function of
+   * them: two invoices each reaching two buckets, and four invoices each
+   * reaching one, produce the same four counts. The document reports the
+   * figure separately, as `openInvoiceCount`.
+   *
+   * What this count IS good for is the bucket itself — "three of my invoices
+   * have money sitting in 61-90" is a true and useful sentence. What it is not
+   * is a term in a total.
+   */
   invoiceCount: number;
 }
 
@@ -245,6 +266,29 @@ export interface CustomerAgingDto {
    * sum of the buckets AFTER the not-due one.
    */
   totalBaseMinor: string;
+  /**
+   * How many DISTINCT open invoices this answer is about (DR-29).
+   *
+   * Measured by `count(DISTINCT invoice_id)` over the SAME population the
+   * buckets are built from — this customer's open invoices whose settlement
+   * sum is non-zero — and **never derived from the buckets**: not as the sum
+   * of `invoiceCount`, not as their maximum, and not as any other function of
+   * them, because the buckets do not partition the invoices (see
+   * `CustomerAgingBucketDto.invoiceCount`). The server computes it in its own
+   * routine, so it is a second measurement of one population rather than a
+   * restatement of the first.
+   *
+   * It is therefore INVARIANT under the thing that makes the sum unreliable:
+   * the same open invoices report the same `openInvoiceCount` whether or not
+   * any of them carries an instalment plan, while the sum of the bucket counts
+   * changes.
+   *
+   * `0` when the customer has no open invoice with anything outstanding, which
+   * is the same case in which `buckets` are all empty and `totalBaseMinor` is
+   * `'0'`. A count, so a JSON number, and never `null`: an absent answer is
+   * not "no invoices".
+   */
+  openInvoiceCount: number;
 }
 
 /**

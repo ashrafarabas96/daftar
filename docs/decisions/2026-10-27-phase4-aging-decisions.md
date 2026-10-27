@@ -114,6 +114,59 @@ of the buckets. **Any interface that adds the counts up is forbidden.**
 **Does not decide.** Whether a client should display per-bucket counts at all,
 or only the distinct total.
 
+**Implemented, and what the implementation had to decide.**
+
+*The contract.* `CustomerAgingBucketDto.invoiceCount` now states that the counts
+are **NOT ADDITIVE ACROSS BUCKETS**, and states the reason rather than only the
+prohibition: an invoice under an active instalment plan contributes to several
+buckets, because each scheduled instalment is banded at its own due date and the
+amount the schedule does not declare is banded at the document's own age anchor.
+So the sum is not the number of open invoices and may exceed it. The document
+gained `CustomerAgingDto.openInvoiceCount: number` — required, never `null`, `0`
+when nothing is open.
+
+*Why a separate SQL routine and not a sixth column — this was measured, not
+preferred.* `customer_ar_aging`'s `RETURNS TABLE` is pinned by the owner's
+section 25 ruling, and the P4-S7 specification installs that routine's body with
+`CREATE OR REPLACE FUNCTION`, which cannot change a `RETURNS TABLE` list at all
+(PostgreSQL 42P13). Appending a column would therefore have made the
+specification's own apply fail. A sixth column was never available, so `0084`
+gained `customer_ar_open_invoice_count(UUID, UUID) RETURNS INTEGER`:
+`count(DISTINCT invoice_id)` over the same population the bands are built from
+— this customer's open invoices with a non-zero settlement sum, where `<> 0` and
+not `> 0` keeps an overpaid invoice's negative figure counted (DR-23). The
+population subquery is character for character the aging body's, so the two
+readers cannot come to disagree about which invoices are open. `0084` was edited
+**in place**, following DR-13/DR-14: `0074`–`0086` are candidates and
+`frozenThrough` stays at `0079`. The P4-S7 specification is **not touched**: the
+slice changes how an invoice is banded and not which invoices are open, so the
+count's answer is unchanged by it.
+
+*The cost, stated.* The aging read now reads a second relation. It is one round
+trip, not two: the scalar is joined on with `WITH n AS MATERIALIZED`, which also
+stops a `STABLE` scalar in the target list being evaluated once per band. Each
+body still visits `public.invoices` exactly once (R-104). **The aging endpoint's
+performance budget is the gating evidence for that cost and it is NOT_RUN.**
+
+*What a client may observe.* `GET /v1/customers/:id/receivable/aging` returns one
+new field. No existing field changed its value, its type or its meaning, and the
+five-column shape of `customer_ar_aging` is now held by a positive test law so a
+later hand cannot take the cheaper-looking road.
+
+*A declared limit, with its proof.* In the **installed** `0084` body the
+per-bucket `invoice_count` is `count(*)`, and it equals the distinct count only
+because `invoice_outstanding` returns exactly one row per invoice — which that
+routine enforces itself, refusing when its row count differs from the distinct
+ids asked about. The P4-S7 specification already writes it as
+`count(DISTINCT c.invoice_id)`, which is the body that ships with the slice, so
+the equality stops being incidental there. The installed body was deliberately
+left byte-identical rather than improved inside this card.
+
+*Equality is permitted.* The test law is "not necessarily equal", never "never
+equal": a portfolio with no instalment plan has every invoice in one band, and
+there the sum and the distinct count agree. That is exactly what makes summing a
+dangerous habit rather than an obvious bug.
+
 ---
 
 ## DR-30 — the governing principle for an unanchored amount

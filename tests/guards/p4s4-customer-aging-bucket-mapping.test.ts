@@ -75,12 +75,21 @@ const OLDEST_BUCKET_NO = BUCKET_DAYS.length + 1;
  * the EUR rows: a base total that accidentally equalled a txn total would make
  * "multi-currency rows do not alter the base total" unfalsifiable.
  */
+/**
+ * `open_invoice_count` is the DOCUMENT-level distinct count DR-29 added, and
+ * the value below is deliberately NEITHER the sum of the per-band counts NOR
+ * any one of them: since P4-S7 an invoice is aged across its instalment
+ * schedule, so it reaches several bands and the sum counts it once per band.
+ * Every row of one answer carries the SAME scalar, because `foldCustomerAging`
+ * refuses a row set that disagrees with itself about a figure the whole
+ * document is supposed to state once.
+ */
 const ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
-  { bucket_no: 1, currency_code: 'USD', txn_minor: '1000', base_minor: '1000', invoice_count: 2 },
-  { bucket_no: 2, currency_code: 'USD', txn_minor: '2000', base_minor: '2000', invoice_count: 1 },
-  { bucket_no: 3, currency_code: 'EUR', txn_minor: '3000', base_minor: '3300', invoice_count: 3 },
-  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'EUR', txn_minor: '5000', base_minor: '5500', invoice_count: 5 },
-  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'USD', txn_minor: '4000', base_minor: '4000', invoice_count: 4 },
+  { bucket_no: 1, currency_code: 'USD', txn_minor: '1000', base_minor: '1000', invoice_count: 2, open_invoice_count: 7 },
+  { bucket_no: 2, currency_code: 'USD', txn_minor: '2000', base_minor: '2000', invoice_count: 1, open_invoice_count: 7 },
+  { bucket_no: 3, currency_code: 'EUR', txn_minor: '3000', base_minor: '3300', invoice_count: 3, open_invoice_count: 7 },
+  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'EUR', txn_minor: '5000', base_minor: '5500', invoice_count: 5, open_invoice_count: 7 },
+  { bucket_no: OLDEST_BUCKET_NO, currency_code: 'USD', txn_minor: '4000', base_minor: '4000', invoice_count: 4, open_invoice_count: 7 },
 ]);
 
 /** Σ `base_minor` over a row set — the ORACLE, summed from the input and never from the fold. */
@@ -313,7 +322,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 9
   it('CASE 9 — `bucket_no = 0` is REFUSED as an internal invariant failure, not skipped', () => {
-    const impossible: CustomerAgingSqlRow[] = [{ bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1 }];
+    const impossible: CustomerAgingSqlRow[] = [{ bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1, open_invoice_count: 7 }];
     // Non-vacuity: the row carries money, so a silent skip would really lose it.
     expect(sumBase(impossible)).toBe(700n);
     let thrown: unknown;
@@ -338,7 +347,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 10
   it('CASE 10 — a `bucket_no` GREATER than the labels length is REFUSED', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: LABELS.length + 1, currency_code: 'USD', txn_minor: '900', base_minor: '900', invoice_count: 1 };
+    const row: CustomerAgingSqlRow = { bucket_no: LABELS.length + 1, currency_code: 'USD', txn_minor: '900', base_minor: '900', invoice_count: 1, open_invoice_count: 7 };
     expect(row.bucket_no).toBe(5); // non-vacuity: it really is past the end
     expect(sumBase([row])).toBe(900n); // and it really carries money
     let thrown: unknown;
@@ -390,7 +399,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     // (b) EVERY legal ordinal places its row, one band and no other. A sweep,
     //     so a future shape change cannot quietly reopen the end of the range.
     for (let bucketNo = 1; bucketNo <= LABELS.length; bucketNo += 1) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1, open_invoice_count: 7 }];
       const folded = foldCustomerAging(one, SHAPE);
       expect(BigInt(folded.totalBaseMinor), `band ${bucketNo} lost its row`).toBe(11n);
       const landedIndexes = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
@@ -404,7 +413,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     const impossibleOrdinals = [-1, 0, 0.5, 1.5, LABELS.length + 1, LABELS.length + 2, Number.NaN, Number.POSITIVE_INFINITY];
     expect(impossibleOrdinals.length).toBeGreaterThan(0);
     for (const bucketNo of impossibleOrdinals) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_invoice_count: 7 }];
       let refused = false;
       let total: string | null = null;
       try {
@@ -423,7 +432,7 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
   // 13 — CHAL-4. `foldCustomerAging` is EXPORTED, so the shape is an input and
   // not an internal fact, and a malformed one used to reach the DTO.
   it('CASE 13 — a `labels` length that is not `bucketDays.length + 1` is REFUSED, and no DTO carries `fromDays: NaN`', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: 1, currency_code: 'USD', txn_minor: '55', base_minor: '55', invoice_count: 1 };
+    const row: CustomerAgingSqlRow = { bucket_no: 1, currency_code: 'USD', txn_minor: '55', base_minor: '55', invoice_count: 1, open_invoice_count: 7 };
 
     // ONE TOO LONG. This is the NaN path: band index 4 read `bucketDays[3]`,
     // which is `undefined`, and `undefined + 1` is `NaN` — a money DTO with a
@@ -501,14 +510,14 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
       expect(labels.length, where).toBe(days.length + 1);
 
       // The oldest legal ordinal lands, in the LAST band.
-      const atBound = foldCustomerAging([{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1 }], shape);
+      const atBound = foldCustomerAging([{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_invoice_count: 7 }], shape);
       expect(atBound.totalBaseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.baseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.toDays, where).toBeNull();
 
       // One past it refuses — and 0 does too, at every shape.
       for (const bad of [0, labels.length + 1]) {
-        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1 }];
+        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_invoice_count: 7 }];
         expect(() => foldCustomerAging(one, shape), `${where}, bucket_no ${bad}`).toThrow(AppError);
       }
     }
@@ -522,7 +531,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
 
       // Every legal ordinal lands in exactly one band, at `bucket_no - 1`.
       for (let bucketNo = 1; bucketNo <= labels.length; bucketNo += 1) {
-        const folded = foldCustomerAging([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1 }], shape);
+        const folded = foldCustomerAging([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_invoice_count: 7 }], shape);
         expect(BigInt(folded.totalBaseMinor), `${where}, band ${bucketNo} lost its row`).toBe(9n);
         const landed = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
         expect(landed, `${where}, band ${bucketNo}`).toEqual([bucketNo - 1]);
@@ -531,7 +540,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
       // Every illegal ordinal refuses. Derived from the shape, so the sweep
       // widens with it rather than staying about three boundaries.
       for (const bad of [-1, 0, 0.5, labels.length + 1, labels.length + 2, Number.NaN, Number.POSITIVE_INFINITY]) {
-        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1 }];
+        const one = [{ bucket_no: bad, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_invoice_count: 7 }];
         let refused = false;
         try {
           foldCustomerAging(one, shape);
@@ -551,7 +560,7 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
         currency_code: 'USD',
         txn_minor: String((i + 1) * 100),
         base_minor: String((i + 1) * 100),
-        invoice_count: i + 1,
+        invoice_count: i + 1, open_invoice_count: 7,
       }));
       const where = `${days.length} boundaries`;
       // Non-vacuity: a row per band, and real money in each.
@@ -645,7 +654,7 @@ describe('§B the OLD `buckets[r.bucket_no]` implementation goes RED under these
 
   it('RED 5 — CASES 9, 10 and 12 fail against the planted old implementation: an impossible ordinal is swallowed in silence', () => {
     for (const bucketNo of [0, LABELS.length + 1]) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1 }];
+      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_invoice_count: 7 }];
       expect(sumBase(one)).toBe(13n); // non-vacuity: there is money on the row
       // The new fold refuses…
       expect(() => foldCustomerAging(one, SHAPE)).toThrow(AppError);
