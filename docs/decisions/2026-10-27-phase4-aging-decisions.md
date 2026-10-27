@@ -275,3 +275,58 @@ candidates and `frozenThrough` remains `0079`).
 | ~~**S-16**~~ | ~~Does a customer whose receivables net to zero appear in the receivables list?~~ | **Decided by DR-33 above** (yes, in both readers, with `net_zero = true`). The implementation is a separate card; the question is closed. |
 | **S-20 / PAY-ALLOC** | The mechanics of a merchant-initiated credit allocation. | DR-27 defers it past the seal by name. |
 | **DR-13-MIG** | A database migrated only as far as `0083` still carries the pre-DR-13 aging guard in live code (`0075:809`, `0083:394`); `0084` is what repairs it. | Migrations are frozen as candidates by DR-03, so the condition is recorded rather than patched. |
+
+## DR-35, DR-36, DR-37 — what the new fields oblige, and who owes it
+
+### DR-35 — the credit's age is the document's age, and the wording must say so
+
+`age_days` is `as_of − issue_date`, the age of the **document**. For a credit that arose from an
+**overpayment**, that is deliberately **not** the age of the credit itself: the credit came into being
+on the date of the overpayment, which this reader does not carry. Deriving the credit's own age needs
+a payment-date path that Phase 4's scope freeze forbids adding, so it is a tracked card for after the
+seal.
+
+Because the number means the document's age and not the credit's, the wording is part of the
+decision, not a presentation detail:
+
+- **Required**, in Arabic, English and Turkish: **"a credit balance on an invoice X days old"**
+  (`رصيد دائن على فاتورة عمرها X يومًا`).
+- **Forbidden**: **"a credit balance for X days"** (`رصيد دائن منذ X يومًا`), in any language. It
+  states the credit's age, which this field does not measure, and for an overpaid invoice it
+  **overstates** it.
+
+**Binding condition on any future pull request.** Measured on this head: `daysPastDue`, `ageDays` and
+`isCredit` are consumed by **no** interface — zero matches across `apps/web`, `apps/admin` and
+`apps/android`, and no locale string mentions "overdue" — so no merchant sees a wrong label today, and
+this obligation is **not** a seal blocker. It is instead owed by whichever pull request first renders
+any of those three fields. **That pull request must:**
+
+1. apply the DR-35 wording in **all three languages**, and not the forbidden form;
+2. add a **display test** asserting the rendered string in each of the three languages; and
+3. pass a **`daftar-finance` review**, because the label is an accounting statement about a
+   merchant's money, not copy.
+
+A pull request that renders these fields without all three is incomplete by this decision.
+
+### DR-36 — `is_credit` is a per-document flag, and a bucket's value is net
+
+`is_credit` lives on the **document** only. It is deliberately **not** put on a bucket, because a
+bucket may contain both debit and credit documents, which would leave a bucket-level flag undefined.
+
+**Contract statement, explicitly:** a bucket **may combine debit and credit documents, and its value
+is the net of them.** The sign is carried by the amount itself — a bucket whose total is negative is
+valid output (DR-27), and the bands still total the authoritative outstanding exactly (DR-23).
+
+### DR-37 — extending `document_kind` is gated
+
+A `credit_note` row is **not representable today**: `invoices_document_kind_ck` (`0075:250`) restricts
+`document_kind` to `'invoice'`. The credit arm that is live today is therefore the **sign** arm (an
+overpayment, DR-23), not the kind arm, which is forward-looking and comes alive with P4-S5. So this is
+a tracked card for after the seal, and **not** a blocker.
+
+**Its condition:** any future widening of `document_kind` must pass a **`daftar-finance` review** and
+must carry a test proving that **a new debit kind does not have its overdue figure zeroed**. This is
+why the kind arm is written as a **positive enumeration** (`= 'credit_note'`) rather than
+`<> 'invoice'`: the negative form would sweep an unknown future debit kind in as a credit and zero its
+age, which is a debt leaving the report by omission — exactly what DR-13, DR-21 and DR-30 forbid. The
+opposite error merely labels a credit as overdue, which is visible and hides nothing.
