@@ -181,6 +181,10 @@ describe('numbering reports what was committed, not a counter (P4-AL-31)', () =>
       outstandingBaseMinor: '1250',
       settlementState: 'partial',
       daysPastDue: 30,
+      // DR-28: the age is never null, and "no stated due date" is its own
+      // field rather than a null age. The boundary and consistency laws for
+      // both live in `dr28-days-past-due.test.ts`.
+      hasExplicitDueDate: true,
     };
     expect(open.settlementState).toBe('partial');
     expect(Object.keys(open)).not.toContain('status');

@@ -267,8 +267,42 @@ export interface CustomerOpenInvoiceDto {
   outstandingBaseMinor: string;
   /** Derived through `invoice_settlement_state(...)`; never `invoices.status`. */
   settlementState: InvoiceSettlementState;
-  /** Whole days from `dueDate` to the supplied as-of date; negative before it, null with no due date. */
-  daysPastDue: number | null;
+  /**
+   * Whole days from the invoice's AGE ANCHOR to the supplied as-of date:
+   * `asOf - coalesce(dueDate, issueDate)` (DR-28), negative before the anchor
+   * and zero ON it. Never a fraction, never a clock reading: a civil date
+   * minus a civil date has no timezone.
+   *
+   * **NEVER `null`.** This field used to be `number | null`, with `null`
+   * meaning "the invoice named no due date" — and that is exactly the defect
+   * DR-28 closes. Under DR-13 and DR-21 a termless invoice is due from its
+   * ISSUE date and the aging report bands it accordingly, so a `null` here
+   * showed the merchant a dash on the open-invoices page for a debt the
+   * report was already placing in the over-90 band. The page hid the age the
+   * report asserted, and the merchant acts on the page.
+   *
+   * The fallback can only move a figure in ONE direction — `issueDate` is
+   * `DATE NOT NULL` and `invoices_due_date_ck` requires
+   * `dueDate IS NULL OR dueDate >= issueDate` — so substituting the issue
+   * date never reports an invoice as LESS overdue than it is. That is the
+   * safe direction for a receivable: the error, if any, is toward noticing a
+   * debt, never toward losing one.
+   *
+   * "No stated due date" is a DISPLAY fact and travels in
+   * `hasExplicitDueDate`, which is a separate field precisely so that it can
+   * never be confused with an age of zero or a negative age.
+   */
+  daysPastDue: number;
+  /**
+   * `true` when the invoice states its own due date, `false` when it named
+   * none and the age above is therefore anchored on `issueDate` (DR-28).
+   *
+   * This is what a client renders as "بلا أجل محدد" / "no stated due date".
+   * It is `dueDate !== null` and NOTHING else: it is not inferred from
+   * `daysPastDue`, so a legitimately zero or negative age is never mistaken
+   * for a missing term.
+   */
+  hasExplicitDueDate: boolean;
 }
 
 /** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */

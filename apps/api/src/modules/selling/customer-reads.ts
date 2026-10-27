@@ -389,9 +389,42 @@ export class CustomerReadService {
    * first, for the picker `OD-P4-03` requires.
    *
    * `outstanding` and `settlementState` are the SQL functions' answers, not this
-   * module's. `daysPastDue` is measured from the invoice's own due date to the
+   * module's. `daysPastDue` is measured from the invoice's AGE ANCHOR to the
    * supplied as-of date, in the database, so one date arithmetic serves the read
    * and the aging.
+   *
+   * ── THE AGE ANCHOR IS `coalesce(due_date, issue_date)` (DR-28) ───────────
+   *
+   * It used to be the due date alone, with a `CASE` that returned NULL when the
+   * invoice named none. That was a MONEY DEFECT, not a display nicety. Under
+   * DR-13 and DR-21 a termless invoice is due from its ISSUE date, and
+   * `customer_ar_aging` (`0084`) bands it on exactly that fallback — so the
+   * same termless invoice came back from the aging report in the over-90
+   * band and from THIS page with no age at all. The page hid the age the
+   * report asserted, and the merchant acts on the page.
+   *
+   * So both readers now anchor on the same expression, and `NULL` is
+   * UNREACHABLE here rather than merely unlikely: `invoices.issue_date` is
+   * `DATE NOT NULL` (`0075`) and `customer_open_invoices_page` RETURNS it, so
+   * neither arm of the `coalesce` can be null and the subtraction has no null
+   * operand. The row type above says `number`, not `number | null`, and the
+   * contract field is `number` too, so a null would not typecheck through the
+   * mapping even if SQL produced one.
+   *
+   * The substitution is SIGNED. `invoices_due_date_ck` enforces
+   * `due_date IS NULL OR due_date >= issue_date`, so falling back to the issue
+   * date can only ever report an invoice as the same age or OLDER, never
+   * younger. For a receivable that is the safe direction: the error, if any, is
+   * toward noticing a debt rather than toward losing one.
+   *
+   * "No stated due date" is still shown to the merchant, but as a SEPARATE
+   * field — `has_explicit_due_date`, which is `o.due_date IS NOT NULL` and
+   * nothing else. It is deliberately NOT derived from the age: an age of zero
+   * (the as-of date IS the anchor) and a negative age (before it) are ordinary
+   * and must never be read as a missing term. And no NEW column is read for it
+   * and no join is added — `due_date` and `issue_date` both already come off
+   * the page reader, so the single visit R-104/R-106 bought is intact and this
+   * change needs no migration.
    *
    * ── WHY THIS ASKS `customer_open_invoices_page` (`0084`, R-105/R-106) ─────
    *
@@ -474,7 +507,8 @@ export class CustomerReadService {
         outstanding_txn_minor: string;
         outstanding_base_minor: string;
         settlement_state: 'unpaid' | 'partial' | 'paid';
-        days_past_due: number | null;
+        days_past_due: number;
+        has_explicit_due_date: boolean;
       }
     >(
       this.scope(m),
@@ -485,7 +519,8 @@ export class CustomerReadService {
               o.outstanding_txn_minor::text AS outstanding_txn_minor,
               o.outstanding_base_minor::text AS outstanding_base_minor,
               invoice_settlement_state(i.business_id, i.id) AS settlement_state,
-              CASE WHEN o.due_date IS NULL THEN NULL ELSE ($3::date - o.due_date) END AS days_past_due
+              ($3::date - coalesce(o.due_date, o.issue_date)) AS days_past_due,
+              (o.due_date IS NOT NULL) AS has_explicit_due_date
          FROM customer_open_invoices_page($1, $2, NULL::date, $4::uuid, $5) o
          JOIN invoices i ON i.business_id = $1 AND i.id = o.invoice_id
         ORDER BY o.issue_date, o.invoice_id`,
@@ -504,6 +539,7 @@ export class CustomerReadService {
       outstandingBaseMinor: r.outstanding_base_minor,
       settlementState: r.settlement_state,
       daysPastDue: r.days_past_due,
+      hasExplicitDueDate: r.has_explicit_due_date,
     }));
     return {
       customerId,
