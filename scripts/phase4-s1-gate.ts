@@ -141,6 +141,22 @@ export interface SuiteEntry {
    * that is empty or that holds a file the runner would not pick up.
    */
   readonly directory?: true;
+  /**
+   * A FLOOR on the suite's executable case count, measured from the tree by
+   * this gate's own instrument (`testTitles` after prose stripping, which
+   * already drops `.skip`, `.todo` and `.only`).
+   *
+   * A roster row without one protects the FILE and nothing in it: a block
+   * emptied to a single trivial case keeps its path, keeps its name, and keeps
+   * the row green. That is the same divergence this gate's disk scan exists to
+   * refuse, one level down — the registry and what it registers drift apart.
+   * So a row that carries a floor is held to it, and a floor must be ABOVE ONE,
+   * because a floor of one is no floor at all.
+   *
+   * It is a floor, never an equality: a suite that grows stays green, and the
+   * number is raised by the slice that measures the growth.
+   */
+  readonly cases?: number;
 }
 
 export interface CommandEntry {
@@ -247,6 +263,31 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // above reads out of the SQL, asserted against the catalogue the migrations
   // actually built, so a defect the text parser cannot see is still caught.
   { id: 'G-19', area: 'golden', runner: 'root', file: `${GOLDEN_DIR}/04-schema-lint.golden.test.ts` },
+  // ── THE FOUR P4-S7 INSTALLMENT SPECIFICATION SUITES ────────────────────
+  //
+  // These are not P4-S1's work. They are on disk, they match the Phase 4
+  // basename rule, and NO SLICE GATE RUNS THEM: the P4-S7 slice gate is not
+  // built in this tree (`docs/PHASE_4_EXECUTION_PLAN.md` declares S5…S8 and
+  // only s1…s4 exist), and the P4-S4 roster's own rule
+  // (`scripts/phase4-s4-gate.ts`, `/^(?:p4s4-|customer-s4-|phase4-customer-)/`)
+  // does not reach a `phase4-s7-` basename. So until they were listed here the
+  // registry and the disk had diverged — four suites about INSTALMENTS, which
+  // is money, written, committed and executed by nothing.
+  //
+  // They are rostered rather than deferred because the rule this gate enforces
+  // admits no third state: a Phase 4 suite on disk is listed and run, or the
+  // gate is red. A `pending` row would keep it red for ever, and narrowing the
+  // scan to hide them is the one move this gate exists to forbid.
+  //
+  // Their subject is IN THIS TREE and is not the absent `installments` module:
+  // each applies `infrastructure/database/specifications/p4s7-installment-aging.spec.sql`
+  // to a scratch database built from the real migrations, so what they measure
+  // is the specification against a real parser. The case floors below were
+  // measured from the tree by this gate's own `testTitles`.
+  { id: 'S7-SPEC-01', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-aging-db.test.ts', cases: 11 },
+  { id: 'S7-SPEC-02', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-aging-live.test.ts', cases: 31 },
+  { id: 'S7-SPEC-03', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-concurrency-db.test.ts', cases: 33 },
+  { id: 'S7-SPEC-04', area: 'phase4-s7-spec', runner: 'root', file: 'tests/integration/phase4-s7-installment-fact-db.test.ts', cases: 118 },
 ];
 
 /** The permanent core, run as commands after the predecessor gate. */
@@ -804,7 +845,88 @@ export function guardSuiteProblems(root: string): string[] {
   return problems;
 }
 
-/** The listed suites exist and do not skip; every `p4-*` suite and every Phase 4 golden on disk is listed; ids are unique. */
+/**
+ * THE BASENAME THIS SCAN READ UNTIL NOW. Kept exactly, and consulted first, so
+ * that nothing the scan reported before can stop being reported: this widening
+ * is provably additive.
+ */
+const PHASE4_SUITE_UNSLICED = /^(?:p4|phase4)-.*\.test\.ts$/;
+/**
+ * The same family written with the SLICE in the basename — `p4s7-…`,
+ * `phase4s7-…`. The old rule required a dash straight after `p4`, so
+ * `tests/guards/p4s7-installment-filter-contract.test.ts` was a Phase 4 suite
+ * this scan could not see. Inside `tests/guards` the directory row (GD-01) runs
+ * it anyway; in the directories this scan reads there is no such safety net, so
+ * a `p4sN-` suite there would have been executed by nothing at all.
+ */
+const PHASE4_SUITE_SLICED = /^(?:p4|phase4)s\d+-.*\.test\.ts$/;
+
+/**
+ * The OTHER slices' rosters, and the basename rule each one owns. A suite whose
+ * basename a foreign roster claims is registered THERE, with that roster's own
+ * floors and ratchets, and demanding a second registration here would either
+ * duplicate another slice's matrix inside this gate or push a slice to narrow
+ * its own rule to get green. So this gate defers — and only for basenames the
+ * old rule did not already catch, which is why the deference can never hide
+ * anything that was visible before.
+ *
+ * `literal` is the rule's SOURCE TEXT in the owning script. It is asserted to
+ * still be there on every run: a copied rule is a second truth, and the moment
+ * the owner edits theirs this deference is void and must be read again by a
+ * human rather than drifting silently. That is the defect class this card was
+ * opened for, applied to the fix itself.
+ */
+const FOREIGN_SLICE_ROSTERS: readonly { slice: string; script: string; literal: string; rule: RegExp }[] = [
+  {
+    slice: 'P4-S4',
+    script: 'scripts/phase4-s4-gate.ts',
+    literal: '/^(?:p4s4-|customer-s4-|phase4-customer-)/',
+    rule: /^(?:p4s4-|customer-s4-|phase4-customer-)/,
+  },
+];
+
+/** A Phase 4 suite basename this gate's roster must list: everything the old rule caught, plus the sliced spelling no other roster owns. */
+export function unrosteredElsewhere(base: string): boolean {
+  if (PHASE4_SUITE_UNSLICED.test(base)) return true;
+  if (!PHASE4_SUITE_SLICED.test(base)) return false;
+  return !FOREIGN_SLICE_ROSTERS.some((r) => r.rule.test(base));
+}
+
+/** Every foreign roster this gate defers to still exists and still carries the rule that was copied from it. */
+export function foreignRosterProblems(root: string): string[] {
+  const problems: string[] = [];
+  for (const r of FOREIGN_SLICE_ROSTERS) {
+    if (!has(root, r.script)) {
+      problems.push(`${r.script} is gone, so the ${r.slice} basename rule this scan defers to cannot be verified — the deference is void`);
+      continue;
+    }
+    if (!read(root, r.script).includes(r.literal))
+      problems.push(`${r.script} no longer contains the ${r.slice} basename rule ${r.literal} that this scan defers to — the rosters have diverged`);
+  }
+  return problems;
+}
+
+/** A row that declares a case floor is held to it, by this gate's own instrument. */
+function caseFloorProblems(root: string, entries: readonly SuiteEntry[]): string[] {
+  const problems: string[] = [];
+  for (const e of entries) {
+    if (e.cases === undefined) continue;
+    if (e.directory === true) {
+      problems.push(`${e.id} declares a case floor on a DIRECTORY row — a floor belongs to a file, and the directory's membership is not fixed`);
+      continue;
+    }
+    if (!(e.cases > 1)) {
+      problems.push(`${e.id} declares a case floor of ${e.cases}, and a floor of one or less bounds nothing`);
+      continue;
+    }
+    if (!has(root, e.file)) continue;
+    const found = testTitles(stripTsProse(read(root, e.file))).length;
+    if (found < e.cases) problems.push(`${e.id} ${e.file} holds ${found} executable case(s) and its recorded floor is ${e.cases}`);
+  }
+  return problems;
+}
+
+/** The listed suites exist and do not skip; every Phase 4 suite and golden on disk is listed; declared case floors hold; ids are unique. */
 export function suiteProblems(root: string): string[] {
   const problems: string[] = [];
   const ids = new Set<string>();
@@ -824,12 +946,14 @@ export function suiteProblems(root: string): string[] {
       if (hit) problems.push(`${e.id} ${file} contains ${hit[0]} — no Phase 4 suite skips`);
     }
   }
+  problems.push(...caseFloorProblems(root, files));
   problems.push(...guardSuiteProblems(root));
+  problems.push(...foreignRosterProblems(root));
   const listed = new Set(files.map((e) => e.file));
   for (const dir of ['tests/integration', 'tests/security', 'tests/performance']) {
     if (!has(root, dir)) continue;
     for (const f of readdirSync(join(root, dir)).sort())
-      if (/^(?:p4|phase4)-.*\.test\.ts$/.test(f) && !listed.has(`${dir}/${f}`)) problems.push(`${dir}/${f} is a Phase 4 suite no S1_SUITES entry lists`);
+      if (unrosteredElsewhere(f) && !listed.has(`${dir}/${f}`)) problems.push(`${dir}/${f} is a Phase 4 suite no S1_SUITES entry lists`);
   }
   if (has(root, GOLDEN_DIR))
     for (const f of readdirSync(join(root, GOLDEN_DIR)).sort())
