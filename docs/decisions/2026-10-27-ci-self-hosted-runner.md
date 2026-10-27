@@ -38,15 +38,20 @@ though the substance -- nothing removed, nothing weakened -- was correct.
 | 6 | **YAML was not validated by a parser** — neither `js-yaml` nor PyYAML is installed locally. The evidence that the file parses is GitHub's own execution of it. | not measured |
 | 7 | **Inserting a first step into six jobs is unverified against the Phase 4 gate.** `scripts/phase4-s4-gate.ts` reads this workflow and asserts step ordering, and it does not exist on `main` (`git cat-file -e` on this head returns 128). This must be checked when the Phase 4 gate is wired into CI, not here. | NOT_RUN |
 | 8 | **The guard allows a three-component path.** `depth >= 3` is the floor, so a parent directory that happens to sit three levels down is permitted. In the real runner the dangerous parents (`/home`, `/root`, `/`) are all caught by name or by the floor, but the floor is a heuristic and not a proof. | accepted, stated |
+| 9 | **The guard creates the directory before validating it.** `mkdir -p` runs on the raw value so that the path can be resolved, which means directories can be created under a path the guard then refuses. Creating a directory is not destructive and the value is set by the runner, so the ordering is safe, but it is an effect on an unvalidated path and is recorded rather than hidden. | accepted, stated |
+| 10 | **Keeping the double run has a cost nobody had written down.** On one job slot, every push to a `phase/**` branch with an open pull request now means two `backend` runs of about ninety minutes each, in series. That is the price of E-1's exact-SHA evidence, and it is the right trade, but it is a real throughput cost and should be revisited if the queue becomes the bottleneck. | accepted, stated |
 
-## Two defects found by independent review of this change and fixed in it
+## Defects found by independent review of this change and fixed in it
 
 - The `concurrency` comment claimed that keying on `github.event.pull_request.number || github.ref`
   put the `push` and `pull_request` events of one branch in a single group. It did not: on `push`
   there is no `pull_request` context, so the key fell back to `refs/heads/<branch>` while the
-  `pull_request` event keyed on the number — two groups, and the race survived. The key is now
-  `github.head_ref || github.ref_name`, which is the branch name on both events, so the stated
-  intent now holds.
+  `pull_request` event keyed on the number — two groups. A first fix made the key the branch name on
+  both events so that the claim came true; **a second review then showed that making it come true was
+  itself the defect**, because it let a pull-request event cancel the exact-SHA `push` run. The
+  shipped key and the reasoning are in "The concurrency key" below. This bullet described an
+  intermediate state, and a third review was right to treat a stale claim in a tracked record as
+  blocking even though no code was wrong.
 - The workspace-purge guard was narrower than it claimed. `/home/*/` demands a trailing slash, so a
   workspace equal to the runner user's home (`/home/laptop`) would have passed the guard and been
   deleted. The guard now refuses system paths, the user's home itself, and any path less than three
@@ -84,3 +89,8 @@ cancel each other, and superseding happens only within one event kind for one re
 are keyed on their number rather than the branch, which also keeps two pull requests opened from a
 single head branch against different bases in separate groups -- something the branch-name key had
 collapsed into one.
+
+The cost is stated in follow-up 10: two serial `backend` runs per push on a single job slot. The
+earlier comment called that "racing for the single runner" and treated it as the problem to solve.
+It is not a race -- the slot serialises either way -- it is a throughput cost, and it buys the only
+evidence E-1 accepts.

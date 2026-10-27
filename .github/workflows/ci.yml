@@ -114,8 +114,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
@@ -228,8 +231,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
@@ -595,8 +601,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
@@ -685,8 +694,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
@@ -788,8 +800,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
@@ -941,8 +956,11 @@ jobs:
           # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
           # repeated slashes, resolves `..` and symlinks, and returns an
           # absolute path with no trailing slash (except for `/` itself). The
-          # directory is created first because creating one is not destructive,
-          # and a `cd` that fails leaves `ws` empty, which the `""` arm refuses.
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
           mkdir -p "$GITHUB_WORKSPACE"
           ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
           case "$ws" in
