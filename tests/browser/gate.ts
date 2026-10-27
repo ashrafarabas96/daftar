@@ -54,13 +54,14 @@ import {
   TOUCH_MIN_PX,
   VIEWPORTS,
   comboTag,
+  pacingDisabled,
   portsFromEnv,
   type Locale,
   type Viewport,
 } from './config';
 import { runFlows } from './flows';
 import { catalogFacts, type IssueKind } from './invariants';
-import { RouteBudgets, SlidingBudget } from './pacer';
+import { RouteBudgets, RouteCoverage, SlidingBudget } from './pacer';
 import { PLANTS, Run, type Plant, type StepRecord } from './run-context';
 import { seedLocale, type LocaleSeed } from './seed';
 import { ROOT, startStack } from './stack';
@@ -144,6 +145,7 @@ async function main(): Promise<void> {
   );
   const stack = await startStack(ports, pgDir, join(o.out, 'logs'));
   const records: StepRecord[] = [];
+  const coverage = new RouteCoverage();
   let seedMs = 0;
   let exitCode = 1;
   try {
@@ -159,17 +161,24 @@ async function main(): Promise<void> {
 
     const dicts = { ar: loadCatalog('ar'), en: loadCatalog('en'), tr: loadCatalog('tr') };
     const facts = catalogFacts(dicts);
+    // The negative control removes the WAITING, never the interception: the
+    // coverage counts below stay exact, so a control run still proves the
+    // pacer sits in the path while proving the API refuses without it.
+    const off = pacingDisabled();
+    if (off) console.log('BROWSER_GATE_NO_PACING=1: pacing is OFF — this run is the negative control and is expected to meet the API limiter');
+    const unpaced = Number.MAX_SAFE_INTEGER;
     const shared = {
-      refresh: new SlidingBudget('refresh', REFRESH_BUDGET, AUTH_WINDOW_MS),
-      login: new SlidingBudget('login', LOGIN_BUDGET, AUTH_WINDOW_MS),
-      route: new RouteBudgets(ROUTE_BUDGET, ROUTE_WINDOW_MS),
+      refresh: new SlidingBudget('refresh', off ? unpaced : REFRESH_BUDGET, AUTH_WINDOW_MS),
+      login: new SlidingBudget('login', off ? unpaced : LOGIN_BUDGET, AUTH_WINDOW_MS),
+      route: new RouteBudgets(off ? unpaced : ROUTE_BUDGET, ROUTE_WINDOW_MS),
+      coverage,
     };
     const browser = await chromium.launch();
     try {
       await pool(o.locales, o.workers, async (locale) => {
         const seed = seeds.get(locale);
         if (seed === undefined) throw new Error(`no seed for ${locale}`);
-        const budgets = { ...shared, loginPerAccount: new SlidingBudget(`login:${locale}`, LOGIN_PER_ACCOUNT_BUDGET, AUTH_WINDOW_MS) };
+        const budgets = { ...shared, loginPerAccount: new SlidingBudget(`login:${locale}`, off ? unpaced : LOGIN_PER_ACCOUNT_BUDGET, AUTH_WINDOW_MS) };
         for (const viewport of o.viewports) {
           const run = new Run({
             browser,
@@ -201,7 +210,10 @@ async function main(): Promise<void> {
     } finally {
       await browser.close();
     }
-    exitCode = verdict(o, records);
+    const table = coverage.table();
+    console.log('proxied requests per route — seen = paced + answered locally:');
+    for (const r of table.slice(0, 12)) console.log(`  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`);
+    exitCode = verdict(o, records, coverage);
   } finally {
     await stack.stop();
     const wallMs = Date.now() - started;
@@ -219,6 +231,7 @@ async function main(): Promise<void> {
           steps: records.length,
           screenshots: records.reduce((n, s) => n + s.shots.length, 0),
           issues: records.reduce((n, s) => n + s.issues.length, 0),
+          routeCoverage: coverage.table(),
           records,
         },
         null,
@@ -231,11 +244,19 @@ async function main(): Promise<void> {
 }
 
 /** 0 when the run is clean; with planted defects, 0 only when every planted kind was reported in every run. */
-function verdict(o: Options, records: readonly StepRecord[]): number {
+function verdict(o: Options, records: readonly StepRecord[], coverage: RouteCoverage): number {
   const byRun = new Map<string, StepRecord[]>();
   for (const r of records) {
     const key = `${r.locale}-${r.width}`;
     byRun.set(key, [...(byRun.get(key) ?? []), r]);
+  }
+  // A route where the counts disagree names a request that reached the API
+  // without a budget. It fails the gate on its own: a green run whose pacing
+  // was only partly in the path is a run whose green cannot be trusted next
+  // time the machine gets faster.
+  const gaps = coverage.unpaced();
+  if (gaps.length > 0) {
+    for (const g of gaps) console.log(`FAIL unpaced: ${g.route} — ${g.unpaced} request(s) reached the API without passing the gate's budget`);
   }
   if (o.plants.length === 0) {
     const bad = records.filter((r) => r.issues.length > 0);
@@ -248,10 +269,13 @@ function verdict(o: Options, records: readonly StepRecord[]): number {
       console.log(`FAIL only ${byRun.size} of ${expectedRuns} runs reported`);
       return 1;
     }
+    const clean = bad.length === 0 && gaps.length === 0;
     console.log(
-      bad.length === 0 ? `BROWSER GATE PASS: ${records.length} steps in ${byRun.size} runs, 0 issues` : `BROWSER GATE FAIL: ${bad.length} step(s) with issues`,
+      clean
+        ? `BROWSER GATE PASS: ${records.length} steps in ${byRun.size} runs, 0 issues, every proxied request paced`
+        : `BROWSER GATE FAIL: ${bad.length} step(s) with issues, ${gaps.length} route(s) with unpaced requests`,
     );
-    return bad.length === 0 ? 0 : 1;
+    return clean ? 0 : 1;
   }
   // Red proof: each planted defect must be caught in each run, by the rule meant for it.
   const want: Readonly<Record<Plant, (locale: Locale) => IssueKind>> = {
@@ -270,7 +294,7 @@ function verdict(o: Options, records: readonly StepRecord[]): number {
     console.log(`  ${run}: ${row.join(' ')}`);
   }
   console.log(missed === 0 ? 'every planted defect was reported in every run: the gate goes red on them' : `${missed} planted defect(s) went UNREPORTED`);
-  return missed === 0 ? 0 : 1;
+  return missed === 0 && gaps.length === 0 ? 0 : 1;
 }
 
 main().catch((error: unknown) => {

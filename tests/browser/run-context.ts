@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright-core';
 import { TOUCH_MIN_PX, comboTag, type Locale, type Viewport } from './config';
 import { inspect, type CatalogFacts, type Issue, type IssueKind } from './invariants';
-import type { RouteBudgets, SlidingBudget } from './pacer';
+import type { RouteBudgets, RouteCoverage, SlidingBudget } from './pacer';
 import { NAMES, type LocaleNames, type LocaleSeed } from './seed';
 
 export type Plant = 'overflow' | 'raw-key' | 'console-error' | 'missing-string';
@@ -37,6 +37,8 @@ export interface Budgets {
   readonly loginPerAccount: SlidingBudget;
   /** Every request a page sends through the BFF proxy, per API route. */
   readonly route: RouteBudgets;
+  /** The three counts that prove `route` is in front of every one of them. */
+  readonly coverage: RouteCoverage;
 }
 
 export interface RunOptions {
@@ -141,12 +143,22 @@ export class Run {
       (url) => url.href.startsWith(`${base}/api/proxy/`),
       async (route) => {
         const request = route.request();
-        await this.o.budgets.route.take(request.method(), new URL(request.url()).pathname);
+        const { pathname } = new URL(request.url());
+        this.o.budgets.coverage.paced(request.method(), pathname);
+        await this.o.budgets.route.take(request.method(), pathname);
         await route.fallback();
       },
     );
     const page = await this.context.newPage();
     page.setDefaultTimeout(20_000);
+    // Counted BEFORE anything can intercept: `request` fires for every request
+    // the page makes, so a proxied request missing from the paced count below
+    // reached the API without a budget.
+    page.on('request', (r) => {
+      const url = r.url();
+      if (!url.startsWith(`${base}/api/proxy/`)) return;
+      this.o.budgets.coverage.seen(r.method(), new URL(url).pathname);
+    });
     page.on('console', (m) => {
       const text = m.text();
       if (/CSP-VIOLATION|Content Security Policy/i.test(text)) this.record('csp', text);
@@ -220,6 +232,16 @@ export class Run {
 
   fail(kind: IssueKind, detail: string): void {
     this.record(kind, detail);
+  }
+
+  /**
+   * A step answered this request itself, so it never reached the API and owes
+   * it nothing. Declared here rather than inferred, because the alternative —
+   * letting the coverage check tolerate a shortfall — is exactly the leniency
+   * that would let a genuinely unpaced request pass as a deliberate one.
+   */
+  answeredLocally(method: string, url: string): void {
+    this.o.budgets.coverage.fulfilled(method, new URL(url).pathname);
   }
 
   /** A full document load spends one refresh; wait for the budget first. */
