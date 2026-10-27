@@ -5939,4 +5939,77 @@ describe('DR-23 an overpayment is reported as a customer credit, never clamped o
     expect(sum(c)).toBe(-50n);
     expect((c[0] as AgingContribution).baseMinor).toBe(-50n);
   });
+
+  it('dr23_13: RECORDED ASYMMETRY, NOT APPROVED BEHAVIOUR — a positive txn with a negative carrying amount breaks R-81, pinned so a silent change is caught', () => {
+    // THIS CASE BLESSES NOTHING. It pins today's answer because
+    // `TECHNICAL_DEBT.md` calls that answer «measured», and a money figure
+    // recorded as measured and reproducible by nothing is the defect class
+    // the register exists to prevent. Card `CARRY-CONSERVATION-R81` in that
+    // file carries the finding, its owner and its open reachability; this is
+    // only its guard. If the asymmetry is repaired, THIS CASE MUST BE
+    // REWRITTEN BY THE CARD THAT REPAIRS IT — it going red is the signal, not
+    // a regression.
+    //
+    // WHAT IT IS. The arm's three disjuncts are about the transaction figure
+    // and the two totals — `O <= 0`, `totalTxn <= 0`, `totalBase <= 0` — so a
+    // row whose TRANSACTION outstanding is positive while its CARRYING
+    // outstanding is negative is NOT degenerate and takes the schedule arms.
+    // There the carrying share is re-derived through
+    // `supplier_ap_release(total_base, total_txn, level, share)`, which is a
+    // law over a POSITIVE carrying window, and the figure it returns is `+8`
+    // against an authoritative `-10`: opposite in sign and different in
+    // magnitude.
+    //
+    // THE LAW THAT BREAKS IS THE ROW'S OWN. The routine's `COMMENT` in the
+    // specification asserts that the base shares «likewise total
+    // `outstanding_base_minor` EXACTLY» by the canonical cumulative
+    // carrying-value law (R-61, R-81). On this input they do not.
+    //
+    // IT IS NOT ATTRIBUTABLE TO `OVERPAY-AGING`. The reference model carries
+    // the SAME condition as the body, so there is no model/body divergence to
+    // choose between, and the behaviour predates the totality arm entirely.
+    // AND ITS REACHABILITY IS NOT_MEASURED: whether `invoice_outstanding` can
+    // produce that sign pairing at all is a question for a database.
+    const mixed: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      invoiceId: 'inv-mixed-sign',
+      paidTxnMinor: 1_199_990n,
+      paidBaseMinor: 1_015_011n,
+      outstandingTxnMinor: 10n,
+      outstandingBaseMinor: -10n,
+    };
+    // NON-VACUITY: the authoritative pair still recomposes the SAME document
+    // every other case in this block is about, so the only thing that has
+    // changed is the SIGN of the carrying outstanding.
+    expect(mixed.paidTxnMinor + mixed.outstandingTxnMinor).toBe(1_200_000n);
+    expect(mixed.paidBaseMinor + mixed.outstandingBaseMinor).toBe(1_015_001n);
+    expect(mixed.outstandingTxnMinor).toBeGreaterThan(0n);
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+
+    const c = projectInvoice(mixed, { ...PLAN, invoiceId: mixed.invoiceId }, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the figures below have nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // IT DID NOT TAKE ARM (d): the origin says so. If a future change adds
+    // `outstandingBaseMinor < 0` to the arm's condition, this is `residual`
+    // and the base below is `-10n`, and both assertions name it.
+    expect(only.origin, 'the row now reaches the totality arm — `CARRY-CONSERVATION-R81` may have been repaired; rewrite this case there').toBe('installment');
+    // THE TRANSACTION SIDE IS EXACT, as it is everywhere: integers only.
+    expect(only.txnMinor).toBe(10n);
+    // AND THE CARRYING SIDE IS NOT. `+8` against an authoritative `-10`.
+    expect(only.baseMinor, 'the re-derived carrying share moved; `TECHNICAL_DEBT.md` records +8 as measured, so one of the two is now wrong').toBe(8n);
+    // THE BREACH, STATED AS A BREACH: the bands do NOT total the
+    // authoritative carrying figure on this input. Asserted as an inequality
+    // on purpose — writing it as an equality against `8n` would record the
+    // wrong figure as the law.
+    expect(
+      c.reduce((a, x) => a + x.baseMinor, 0n),
+      'R-81 holds after all on this input, which would mean the register overstates the finding',
+    ).not.toBe(mixed.outstandingBaseMinor);
+    expect(c.reduce((a, x) => a + x.baseMinor, 0n)).toBe(8n);
+    // ...and the direction of the error is recorded, because a carrying share
+    // that reports a DEBIT where the authoritative figure is a CREDIT is the
+    // sign error, not a rounding one.
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+    expect(only.baseMinor).toBeGreaterThan(0n);
+  });
 });
