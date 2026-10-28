@@ -26,9 +26,22 @@ Nothing else needed changing, and that is a property of the file rather than
 luck: every self-hosted-specific step is already guarded at runtime by
 `runner.environment`, not by the job label. On a hosted runner the
 work-folder purge skips itself, and the Chromium install takes the
-`--with-deps` arm that needs passwordless sudo. The step count is unchanged at
-53, so `requiredCiProblems` — which checks step order, not step content — is
-untouched.
+`--with-deps` arm that needs passwordless sudo.
+
+The workflow guard in `scripts/phase4-s4-gate.ts` is unaffected **by
+construction, not by a count**. Its reader enters step mode only on a `steps:`
+key and never reads `runs-on` at all, and every step line in this diff is
+byte-identical — the whole diff is six `runs-on:` lines. Two corrections to an
+earlier draft of this paragraph, both measured: `requiredCiProblems` pins step
+**content** as well as order (the gate step's `run:` must equal its command
+exactly and its `name:` must equal the expected name, so a renamed gate step
+fails it), and that script does not exist on this branch at all — it lives on
+the Phase 4 lineage, where this file will eventually be read. Nothing here
+licenses renaming or re-wording a gate step.
+
+The marker count is also unchanged by every way of counting it: 53 `- name:`,
+13 `- uses:` and 4 unnamed `- run:` — 70 in total, identical before and after.
+Saying "53 steps" would be wrong; 53 is the named-step count.
 
 **No gate, assertion, threshold, timeout or `--max-warnings 0` is altered by
 this card.**
