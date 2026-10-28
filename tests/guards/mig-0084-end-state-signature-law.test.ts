@@ -29,11 +29,22 @@ import { describe, expect, it } from 'vitest';
  * rows, the newest `0083_phase4_ar_outstanding_set_based.sql`, and `0085` and
  * `0086` had never been applied by anybody.
  *
- * The eighth column was appended by the DR-13-SPEC card, which updated the
- * SIBLING assertion for `customer_open_invoices_page` — that one does carry
- * `issue_date date` — and did not update E(1). So this was a HALF-FINISHED
- * EDIT, not a misreading of the contract, and it is OLDER THAN THE CARD that
- * fixes it.
+ * PROVENANCE, MEASURED, AND IT CORRECTS THE ACCOUNT THIS CARD WAS GIVEN. The
+ * eighth column was appended by `f8a9ed46` — the DR-13/DR-14/C-1 Q-1 commit —
+ * which changed `0084` by +20/−3 and touched ZERO `IS DISTINCT FROM 'TABLE('
+ * literals, here or anywhere. The card's corroboration was that the sibling
+ * assertion for `customer_open_invoices_page` «was updated» and does carry
+ * `issue_date date`; `git log -S` says otherwise. That literal has carried
+ * `issue_date date` since the original authoring commit `168675b3`, because
+ * that routine's second result column always was `issue_date`. It was never
+ * updated — it was BORN right.
+ *
+ * The conclusion survives on a different and stronger footing: the commit that
+ * moved a signature updated NEITHER of the two literals that pin it. The
+ * second is in `0085`, whose PRE-condition still demanded «0084's seven-column
+ * form» and was last touched by its own authoring commit `f2b7d7ae`. So this
+ * is a HALF-FINISHED EDIT, it is OLDER THAN THE CARD that fixes it, and it had
+ * two instances rather than one.
  *
  * ── WHY A LAW AND NOT JUST THE CORRECTED STRING ──────────────────────────
  *
@@ -51,10 +62,14 @@ import { describe, expect, it } from 'vitest';
  * real database for a reason no text can see. The live claim is a live run's
  * to make.
  *
- * It also does not read `0085`, `0086` or any other migration. Their end-state
- * and PRE-condition literals are their own files' business, and a second
- * instance of this same class was found in `0085` and reported rather than
- * fixed here.
+ * AND IT GUARDS ONE FILE. It does not read `0085`, `0086` or any other
+ * migration, so THE SECOND INSTANCE OF THIS VERY CLASS IS NOT GUARDED BY IT:
+ * `0085`'s PRE-condition carried the same stale seven-column literal, was
+ * found by migrating from zero after `0084` was repaired, and was corrected in
+ * a commit of its own. Nothing here would have caught it, and nothing here
+ * would catch a third. A law over every candidate migration's signature
+ * literals — end-state AND pre-condition — is a separate card, and it is named
+ * so it is not mistaken for covered.
  */
 
 const REPO_ROOT = join(__dirname, '..', '..');

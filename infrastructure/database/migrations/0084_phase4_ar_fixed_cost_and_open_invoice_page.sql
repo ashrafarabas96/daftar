@@ -1064,7 +1064,7 @@ DECLARE
   v_name TEXT;
   v_seen INTEGER;
 BEGIN
-  -- 0084-E(1). THE ONE DEFINITION IS IN THE LIVE CATALOGUE, with the two
+  -- 0084-E(1). THE ONE DEFINITION IS IN THE LIVE CATALOGUE, with the three
   -- columns APPENDED, and it still reads both reducers, the invoice, its
   -- sale's settlement mode and nothing cached. The signature is checked
   -- against the coordinator-fixed one EXACTLY: a definition that dropped
@@ -1074,8 +1074,8 @@ BEGIN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding is not in the catalogue' USING ERRCODE = 'P0001';
   END IF;
   IF pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])'))
-     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date)' THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding does not carry the two appended columns in the fixed order (found %)',
+     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date, issue_date date)' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding does not carry the three appended columns in the fixed order (found %)',
       pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])')) USING ERRCODE = 'P0001';
   END IF;
   v_def := pg_get_functiondef(to_regprocedure('public.invoice_outstanding(UUID, UUID[])'));
