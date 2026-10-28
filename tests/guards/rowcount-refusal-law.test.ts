@@ -1035,6 +1035,51 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // caught. Scoping is used only where a probe matches inside the
       // resolved file and therefore has to be — which the positive control
       // below asserts row by row, and which is how this distinction was found.
+      // ─── BY NAME, NOT BY SIGNATURE ─────────────────────────────────────
+      //
+      // These three rows are the ones that matter, and the rows below them
+      // are now message-providers rather than coverage. Six rounds of review
+      // each enumerated one more SPELLING of a statement and the unenumerated
+      // rest carried the next kill; round seven measured nine legal spellings
+      // of one in-place replacement of this signature — `IN p_business_id`,
+      // `"public".invoice_outstanding`, `UUID[] DEFAULT NULL`, `UUID ARRAY`,
+      // `pg_catalog.uuid[]`, `UUID[5]`, a comment inside the parameter list —
+      // of which SEVEN left all eighteen laws green, one of them replacing the
+      // wrapper that production calls. That reviewer stood up a PostgreSQL
+      // 16 cluster and confirmed each spelling is accepted and that the stub
+      // body wins, so these are legal SQL and not word games.
+      //
+      // Enumerating spellings is the feature pin again. Matching the NAME and
+      // stopping at the first `(` or `;` has no spelling remainder: whatever
+      // types, modes, defaults, quoting or case a later migration writes, the
+      // name is still the name. It fails CLOSED — anything that creates,
+      // drops or alters a routine called `invoice_outstanding` after the file
+      // these laws read is reported, and the slice that legitimately replaces
+      // this routine comes back here and re-pins the digests, which is the
+      // review it owes anyway.
+      //
+      // Measured clean on the tree: the CREATE probe matches `0075`, `0080`,
+      // `0081`, `0083` and `0084` and nothing after them; the DROP probe only
+      // `0084`, which drops the array form itself; the ALTER probe nothing at
+      // all, which is why it alone is unscoped.
+      {
+        name: 'either form, by CREATING it under any signature spelling after the file these laws read',
+        re: /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        plant: 'CREATE OR REPLACE FUNCTION "public".invoice_outstanding(IN p_business_id pg_catalog.uuid, IN p_invoice_ids uuid ARRAY)',
+        afterResolved: true,
+      },
+      {
+        name: 'either form, by DROPPING it under any signature spelling after the file these laws read',
+        re: /DROP\s+(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        plant: 'DROP FUNCTION IF EXISTS "public"."invoice_outstanding"(p_business_id uuid, p_invoice_ids uuid ARRAY) CASCADE;',
+        afterResolved: true,
+      },
+      {
+        name: 'either form, by ALTERING it under any signature spelling',
+        re: /ALTER\s+(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        plant: 'ALTER ROUTINE "public"."invoice_outstanding"(p_business_id uuid, p_invoice_ids uuid ARRAY) SECURITY DEFINER;',
+      },
+
       // ATTRIBUTES, as a later `ALTER` can leave them. These are the rows no
       // digest of this file's text can replace: `ALTER FUNCTION … SECURITY
       // DEFINER;` in a later migration leaves `0084` byte-identical, so every
@@ -1046,12 +1091,12 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // pinned, and `ALTER … SECURITY DEFINER` keeps the `SET` from the CREATE.
       {
         name: "the routine's INVOKER reads, by altering it later",
-        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*SECURITY\s+DEFINER/i,
+        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\([^)]*\)[^;]*SECURITY\s+DEFINER/i,
         plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) SECURITY DEFINER;',
       },
       {
         name: "the routine's pinned search_path, by altering it later",
-        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
+        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
         plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) RESET search_path;',
       },
       // THE ARRAY SIGNATURE'S OWN REDEFINITION, which no row covered either —
@@ -1088,7 +1133,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // row cannot.
       {
         name: 'the scalar wrapper, by dropping it',
-        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\)/i,
+        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\(\s*(?:\w+\s+)?UUID\s*,\s*(?:\w+\s+)?UUID\s*\)/i,
         plant: 'DROP FUNCTION IF EXISTS public.invoice_outstanding(UUID, UUID);',
       },
       // THE SCALAR WRAPPER, which `rc_1b` reads only inside the resolved file.
@@ -1109,7 +1154,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // fires on the subject it is meant to protect.
       {
         name: 'the routine, by dropping it after the file these laws read',
-        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\[\s*\]\s*\)/i,
+        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\(\s*(?:\w+\s+)?UUID\s*,\s*(?:\w+\s+)?UUID\s*\[\s*\]\s*\)/i,
         plant: 'DROP FUNCTION IF EXISTS public.invoice_outstanding(UUID, UUID[]);',
         afterResolved: true,
       },
@@ -1117,7 +1162,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
     // or a clean scan below means nothing at all.
     for (const u of undo) {
-      expect(new RegExp(u.re.source, 'i').test(u.plant), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
+      expect(new RegExp(u.re.source, u.re.flags).test(u.plant), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
     }
 
     const files = migrationFiles();
@@ -1130,7 +1175,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     const resolvedSql = sqlLiveCode(join(MIGRATIONS, resolved));
     for (const u of undo.filter((x) => x.afterResolved)) {
       expect(
-        new RegExp(u.re.source, 'i').test(resolvedSql),
+        new RegExp(u.re.source, u.re.flags).test(resolvedSql),
         `the probe for ${u.name} does not match inside ${resolved}, so scoping it after that file proves nothing — either the scoping is unnecessary or the probe is wrong`,
       ).toBe(true);
     }
@@ -1140,7 +1185,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       const sql = sqlLiveCode(join(MIGRATIONS, f));
       for (const u of undo) {
         if (u.afterResolved && f <= resolved) continue;
-        if (new RegExp(u.re.source, 'i').test(sql)) found.push(`${f} undoes ${u.name}`);
+        if (new RegExp(u.re.source, u.re.flags).test(sql)) found.push(`${f} undoes ${u.name}`);
       }
     }
     // DECLARED LIMIT: a legitimate later slice may need to drop and re-add one
@@ -1169,7 +1214,7 @@ describe('section 5: which of these is a detector and which is a preventer, as a
         expect(pin.bound, `${pin.law} is a ${pin.role}; it bounds nothing`).toBeUndefined();
       }
     }
-    const declared = [...source.matchAll(/it\('(rc_\d+b?):/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
+    const declared = [...source.matchAll(/it\('(rc_\d+)[a-z]?:/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
     // The scan has to find the laws, or the emptiness check below is
     // vacuously satisfied by a broken pattern. This is the positive control
     // for a probe whose output is consumed as a set difference.
