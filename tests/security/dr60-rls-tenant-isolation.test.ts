@@ -2,11 +2,17 @@
  * DR-60 — THE EIGHT READ POLICIES `0086` REWROTE, PROVED TO STILL ISOLATE ONE
  * MERCHANT FROM ANOTHER, ON A LIVE DATABASE WITH TWO TENANTS IN IT.
  *
- * `0086_phase4_rls_quals_once_per_query.sql` is the first migration in this
- * project's history to have altered row-security policies on relations that
- * carry money, and — because every Phase 4 branch shipped a `ci.yml` with no
- * runnable runner on it — it had never been applied to a real cluster until
- * the migration-signature card ran `0000 → latest` by hand. Its own end-state
+ * `0086_phase4_rls_quals_once_per_query.sql` rewrote eight read quals on four
+ * relations that carry money. It is NOT the first migration in this project
+ * to have altered a row-security policy, and an earlier draft of this file
+ * said it was. Measured with a lexer over every migration: `0045` alters 3
+ * policies, `0052` — the journal's own RLS PERFORMANCE migration, the same
+ * class of change for the same reason — alters 6, `0067` and `0070` and
+ * `0077` alter 1 each, and `0086` alters 8. What IS true, and is what makes
+ * this file worth writing, is narrower: every Phase 4 branch ships a `ci.yml`
+ * with no runnable runner on it, so this project has no recorded run in which
+ * `0086` was installed on a live cluster until the migration-signature card
+ * ran `0000 → latest` by hand. Its own end-state
  * block reads the new quals back out of the catalogue, and
  * `p4s4-rls-quals-once-per-query.test.ts` proves the rewrite moved no answer.
  * Neither of those is this file's subject.
@@ -442,15 +448,45 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
   }, 180_000);
 
   it('DELETE is held by NO runtime principal on any of the four relations — the boundary there is a missing grant, not a qual', async () => {
-    const d = await ownerPool().query<{ table_name: string; grantee: string }>(
-      `SELECT table_name, grantee FROM information_schema.role_table_grants
-        WHERE table_schema = 'public' AND table_name = ANY($1::text[]) AND privilege_type = 'DELETE' AND grantee <> 'postgres'
-       UNION ALL
-       SELECT table_name, grantee FROM information_schema.role_column_grants
-        WHERE table_schema = 'public' AND table_name = ANY($1::text[]) AND privilege_type = 'DELETE' AND grantee <> 'postgres'`,
-      [[...RELATIONS]],
+    // ONE arm, not two. An earlier draft also queried `role_column_grants`
+    // for `DELETE`, which looks thorough and is empty BY CONSTRUCTION:
+    // PostgreSQL has no column-level DELETE privilege, so that arm could
+    // never have returned a row and contributed nothing but the appearance
+    // of coverage. The table-level view is the whole of the question.
+    //
+    // THE OWNER EXCLUSION IS AN ASSUMPTION, AND IT IS NAMED. `postgres` owns
+    // these relations in this fixture, so it holds DELETE implicitly and is
+    // excluded. A managed deployment hands ownership to `daftar_migrator`
+    // (the migration-portability pattern), and there this case would FAIL —
+    // loudly, naming `daftar_migrator`, which is the safe direction for an
+    // assumption to break in. If that day comes, the fix is to exclude the
+    // measured OWNER rather than a hard-coded name.
+    const owner = await ownerPool().query<{ relowner: string }>(
+      `SELECT pg_get_userbyid(relowner) AS relowner FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname = 'invoices'`,
     );
-    expect(d.rows, 'some runtime principal holds DELETE on a Phase 4 money relation').toEqual([]);
+    expect(owner.rows[0]?.relowner, 'the relations are no longer owned by the role this case excludes').toBe('postgres');
+
+    const deleteGrants = async (excludeOwner: boolean): Promise<{ table_name: string; grantee: string }[]> =>
+      (
+        await ownerPool().query<{ table_name: string; grantee: string }>(
+          `SELECT table_name, grantee FROM information_schema.role_table_grants
+            WHERE table_schema = 'public' AND table_name = ANY($1::text[]) AND privilege_type = 'DELETE'
+              AND ($2::bool IS FALSE OR grantee <> 'postgres')
+            ORDER BY 1, 2`,
+          [[...RELATIONS], excludeOwner],
+        )
+      ).rows;
+
+    // POSITIVE CONTROL FIRST: without the owner exclusion the very same probe
+    // DOES find DELETE grants. Without this, "no rows" is equally well
+    // explained by a misspelled privilege name or a view that never matches.
+    const withOwner = await deleteGrants(false);
+    expect(withOwner.length, 'the probe finds no DELETE grant at all, so its emptiness below proves nothing about grants').toBeGreaterThan(0);
+    expect([...new Set(withOwner.map((r) => r.grantee))], 'the probe found a DELETE holder other than the owner, which the next assertion then denies').toEqual(
+      ['postgres'],
+    );
+
+    expect(await deleteGrants(true), 'some runtime principal holds DELETE on a Phase 4 money relation').toEqual([]);
   }, 60_000);
 
   // ── 5. THE MONEY READERS, UNDER A TENANT SCOPE ──────────────────────────
@@ -459,10 +495,21 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
     // owner's row security — which here is a superuser that bypasses RLS
     // altogether — and then every assertion below would be about the
     // p_business_id argument rather than about the tenant boundary.
+    //
+    // AND THE SET IS PINNED BY NAME, not counted. An earlier draft asserted
+    // `rows.length > 0` over three named routines, which passes when ONE of
+    // the three is present — so a reader that had been dropped, renamed, or
+    // re-created as SECURITY DEFINER under another name would have left this
+    // case green while its title claimed all of them were INVOKER.
+    const MONEY_READERS = ['customer_ar_aging', 'customer_ar_open_document_counts', 'invoice_outstanding'] as const;
     const sec = await ownerPool().query<{ proname: string; prosecdef: boolean }>(
-      `SELECT proname, prosecdef FROM pg_proc WHERE proname IN ('customer_ar_aging', 'customer_ar_open_document_counts', 'invoice_outstanding')`,
+      `SELECT DISTINCT proname, prosecdef FROM pg_proc WHERE proname = ANY($1::text[]) ORDER BY 1`,
+      [[...MONEY_READERS]],
     );
-    expect(sec.rows.length, 'the money readers are not present at all').toBeGreaterThan(0);
+    expect(
+      sec.rows.map((r) => r.proname),
+      'the set of money readers present is not the set this case claims to be speaking about',
+    ).toEqual([...MONEY_READERS].sort());
     for (const r of sec.rows) expect(r.prosecdef, `${r.proname} is SECURITY DEFINER, so it does not read through the caller's row security`).toBe(false);
 
     interface AgingRow {
