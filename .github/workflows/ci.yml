@@ -60,12 +60,20 @@ jobs:
   # -------------------------------------------------------------------------
   workspaces:
     # CI-RUNNER-01 (DR-17), SECOND ROUND. This job was meant to stay on
-    # GitHub's machines as one of the light ones. It cannot: every
-    # GitHub-hosted job in this repository is refused before a runner is ever
-    # assigned, and the API annotation says why, verbatim —
+    # GitHub's machines as one of the light ones, and in 2026-10 it could not:
+    # while the repository was PRIVATE and the account carried a payment block,
+    # every GitHub-hosted job was refused before a runner was ever assigned,
+    # and the API annotation said why, verbatim —
     #
     #   "The job was not started because recent account payments have failed
     #    or your spending limit needs to be increased."
+    #
+    # None of that holds now. The repository is public, GitHub-hosted minutes
+    # are unmetered, and this job runs on `ubuntu-latest` — so do not read the
+    # paragraph above as a reason to bring a self-hosted runner back. On a
+    # public repository that is the one thing this workflow's decision record
+    # forbids outright, because a fork's pull request would execute untrusted
+    # code on the machine.
     #
     # Measured on run 40419719684: `workspaces` failed 3 seconds in with
     # `runner_name: ""` and zero steps, and because every other job declares
