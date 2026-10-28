@@ -411,6 +411,82 @@ function ifConditions(region: string): { at: number; cond: string }[] {
 // better gone than left for someone to reach for again.
 
 /**
+ * Statements, with EVERY comment form removed — for the routine probes alone.
+ *
+ * Not a widening of `sqlLiveCode`, and deliberately separate from it: that
+ * helper strips only FULL-LINE `--` comments, because the `COMMENT ON` bodies
+ * these migrations are full of contain two dashes inside single quotes and a
+ * greedier strip would delete live code after one. `rc_11` depends on that
+ * caution. The probes below ask only «does this statement create, drop or
+ * alter a routine called `invoice_outstanding`», a question no `COMMENT ON`
+ * body can answer, so here the greedy strip is safe and necessary.
+ *
+ * MEASURED NECESSITY. Round eight broke the previous, adjacency-based probes
+ * with a blocking character between the keyword and the name:
+ *   CREATE OR REPLACE FUNCTION /* supersedes §5 (R-100) *\/ public.invoice_outstanding(…)
+ *   DROP FUNCTION /* retire the array form (R-100) *\/ IF EXISTS public.invoice_outstanding(…)
+ *   CREATE OR REPLACE FUNCTION -- replaces the array form (R-100)
+ *   public.invoice_outstanding(…)
+ * Each left all eighteen laws green while replacing or removing the one
+ * definition of the settlement sum, verified legal on a PostgreSQL 16.15
+ * cluster where the replacement body won. A control with a block comment
+ * carrying NEITHER `(` nor `;` was red, which is what isolated the cause: the
+ * old `[^(;]*?` could not cross a parenthesis, and `(R-100)` has one.
+ *
+ * And the worst case needed no comment at all — a multi-target drop, where the
+ * FIRST target's parenthesis blocked the probe:
+ *   DROP FUNCTION IF EXISTS public.other(UUID), public.invoice_outstanding(UUID, UUID[]);
+ * That is ordinary SQL, not a contrivance, which is why the answer is to stop
+ * reasoning about adjacency and ask the question per statement.
+ */
+function undoScanText(sql: string): string {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+}
+
+function routineScanStatements(sql: string): string[] {
+  return undoScanText(sql).split(';');
+}
+
+/** The last dotted segment of a possibly-qualified, possibly-quoted identifier. */
+function bareName(ident: string): string {
+  const last = ident.split('.').pop() ?? '';
+  return last.replace(/"/g, '').toLowerCase();
+}
+
+/**
+ * Does any statement CREATE a routine whose own name is `invoice_outstanding`?
+ *
+ * The NAME BEING CREATED, parsed, and not mere containment — this is the one
+ * place where containment would cry wolf, and that is measured, not feared:
+ * SEVEN statements in `0075`, `0083` and `0084` create `customer_ar_outstanding`,
+ * `customer_ar_aging` and `customer_ar_open_document_counts`, each of which
+ * READS `invoice_outstanding` in its body. A later slice adding another such
+ * reader is ordinary work — DR-29 added the third one — and a guard that
+ * reddens on it would be switched off within a week. `rc_13` asserts that
+ * negative control directly.
+ */
+function createsRoutineNamed(sql: string, routine: string): boolean {
+  for (const statement of routineScanStatements(sql)) {
+    const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+([\w".]+)/i.exec(statement);
+    if (m?.[1] !== undefined && bareName(m[1]) === routine) return true;
+  }
+  return false;
+}
+
+/**
+ * Does any statement of `verb` NAME this routine anywhere in itself?
+ *
+ * Containment is safe for `DROP` and `ALTER` and only for them: neither
+ * carries a routine body, so the only identifiers in such a statement are its
+ * targets. That is what lets one probe cover a multi-target drop, a quoted
+ * name, argument names in the signature, and any type spelling at once.
+ */
+function statementTouchesRoutine(sql: string, verb: RegExp, routine: string): boolean {
+  const named = new RegExp(`\\b${routine}\\b`, 'i');
+  return routineScanStatements(sql).some((statement) => verb.test(statement) && named.test(statement));
+}
+
+/**
  * Prose with its comment scaffolding removed, flattened to one line.
  *
  * MEASURED NECESSITY. The sentence this file is required to state —
@@ -977,7 +1053,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // green against it. `RENAME CONSTRAINT` is here for the same reason: a
     // renamed constraint is a dropped one as far as `rc_11`'s text pin is
     // concerned.
-    const undo: { name: string; re: RegExp; plant: string; afterResolved?: true }[] = [
+    const undo: { name: string; re: RegExp; plant: string; afterResolved?: true; scan?: (sql: string) => boolean }[] = [
       {
         name: 'the invoices primary key',
         re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_pkey"?/i,
@@ -1052,7 +1128,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // Enumerating spellings is the feature pin again. Matching the NAME and
       // stopping at the first `(` or `;` has no spelling remainder: whatever
       // types, modes, defaults, quoting or case a later migration writes, the
-      // name is still the name. It fails CLOSED — anything that creates,
+      // name is still the name. Anything that creates,
       // drops or alters a routine called `invoice_outstanding` after the file
       // these laws read is reported, and the slice that legitimately replaces
       // this routine comes back here and re-pins the digests, which is the
@@ -1064,19 +1140,22 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // all, which is why it alone is unscoped.
       {
         name: 'either form, by CREATING it under any signature spelling after the file these laws read',
-        re: /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        re: /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)/i,
+        scan: (sql) => createsRoutineNamed(sql, 'invoice_outstanding'),
         plant: 'CREATE OR REPLACE FUNCTION "public".invoice_outstanding(IN p_business_id pg_catalog.uuid, IN p_invoice_ids uuid ARRAY)',
         afterResolved: true,
       },
       {
         name: 'either form, by DROPPING it under any signature spelling after the file these laws read',
-        re: /DROP\s+(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        re: /DROP\s+(?:FUNCTION|ROUTINE)/i,
+        scan: (sql) => statementTouchesRoutine(sql, /^\s*DROP\s+(?:FUNCTION|ROUTINE)\b/i, 'invoice_outstanding'),
         plant: 'DROP FUNCTION IF EXISTS "public"."invoice_outstanding"(p_business_id uuid, p_invoice_ids uuid ARRAY) CASCADE;',
         afterResolved: true,
       },
       {
         name: 'either form, by ALTERING it under any signature spelling',
-        re: /ALTER\s+(?:FUNCTION|ROUTINE)\b[^(;]*?\binvoice_outstanding\b/i,
+        re: /ALTER\s+(?:FUNCTION|ROUTINE)/i,
+        scan: (sql) => statementTouchesRoutine(sql, /^\s*ALTER\s+(?:FUNCTION|ROUTINE)\b/i, 'invoice_outstanding'),
         plant: 'ALTER ROUTINE "public"."invoice_outstanding"(p_business_id uuid, p_invoice_ids uuid ARRAY) SECURITY DEFINER;',
       },
 
@@ -1159,11 +1238,49 @@ describe('section 4: the count cannot fall short except for an id that names no 
         afterResolved: true,
       },
     ];
+    // EVERY row reads comment-stripped text, not only the name-level ones.
+    // Measured: the same blocking character voided the CONSTRAINT rows just as
+    // it voided the routine rows —
+    //   ALTER TABLE invoices DROP CONSTRAINT /* retire (R-100) */ invoices_sale_fk;
+    //   ALTER TABLE invoices ALTER COLUMN /* nullable (R-100) */ sale_id DROP NOT NULL;
+    // were both green while a probe named exactly that act. Stripping once,
+    // here, closes the class instead of its two instances. One named helper so
+    // the controls and the scan cannot drift apart — two call sites that must
+    // agree are two call sites that will not.
+    const hitsIn = (u: (typeof undo)[number], sql: string) => (u.scan ? u.scan(sql) : new RegExp(u.re.source, u.re.flags).test(undoScanText(sql)));
+
     // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
     // or a clean scan below means nothing at all.
     for (const u of undo) {
-      expect(new RegExp(u.re.source, u.re.flags).test(u.plant), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
+      expect(hitsIn(u, u.plant), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
     }
+
+    // THE NEGATIVE CONTROL FOR THE CREATE PROBE, which is the one that could
+    // cry wolf. Containment would have fired on seven statements in `0075`,
+    // `0083` and `0084` that create `customer_ar_outstanding`,
+    // `customer_ar_aging` and `customer_ar_open_document_counts` — readers
+    // whose BODIES call `invoice_outstanding`, which is ordinary work; DR-29
+    // added the third. The probe parses the name being CREATED instead, and
+    // this asserts that distinction rather than trusting it.
+    const reader = [
+      'CREATE OR REPLACE FUNCTION public.customer_ar_rollup(p_business_id UUID)',
+      'RETURNS TABLE (total BIGINT) LANGUAGE sql STABLE AS $fn$',
+      '  SELECT sum(o.outstanding_txn_minor) FROM public.invoice_outstanding(p_business_id, ARRAY[]::UUID[]) o;',
+      '$fn$;',
+    ].join('\n');
+    expect(
+      createsRoutineNamed(reader, 'invoice_outstanding'),
+      'the CREATE probe fires on a routine that merely READS this one — it would be switched off within a week',
+    ).toBe(false);
+    expect(
+      createsRoutineNamed(reader, 'customer_ar_rollup'),
+      'and the same probe must still see the routine that statement does create, or it is simply blind',
+    ).toBe(true);
+    // And a comment mentioning the routine is not a redefinition of it.
+    expect(
+      createsRoutineNamed('-- CREATE FUNCTION invoice_outstanding(a UUID, b UUID[]) was replaced in 0084\n', 'invoice_outstanding'),
+      'a commented-out statement must not count as one',
+    ).toBe(false);
 
     const files = migrationFiles();
     expect(files.length, 'the migration scan found no files, so the clean result below is a broken path and not a measurement').toBeGreaterThan(10);
@@ -1175,7 +1292,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     const resolvedSql = sqlLiveCode(join(MIGRATIONS, resolved));
     for (const u of undo.filter((x) => x.afterResolved)) {
       expect(
-        new RegExp(u.re.source, u.re.flags).test(resolvedSql),
+        hitsIn(u, resolvedSql),
         `the probe for ${u.name} does not match inside ${resolved}, so scoping it after that file proves nothing — either the scoping is unnecessary or the probe is wrong`,
       ).toBe(true);
     }
@@ -1185,7 +1302,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       const sql = sqlLiveCode(join(MIGRATIONS, f));
       for (const u of undo) {
         if (u.afterResolved && f <= resolved) continue;
-        if (new RegExp(u.re.source, u.re.flags).test(sql)) found.push(`${f} undoes ${u.name}`);
+        if (hitsIn(u, sql)) found.push(`${f} undoes ${u.name}`);
       }
     }
     // DECLARED LIMIT: a legitimate later slice may need to drop and re-add one
