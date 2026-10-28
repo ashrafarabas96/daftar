@@ -1189,6 +1189,94 @@ describe('§E DR-39: the two counters, per currency, independent of the bands', 
   });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// §F THE MONEY EDGES THE §E FIXTURE CANNOT REACH. Its largest absolute figure
+//    is 5,500 and every total it produces is positive, so two properties this
+//    fold is built on were asserted nowhere: that the arithmetic is EXACT past
+//    the range a JSON number can carry, and that a customer in credit reports
+//    a NEGATIVE total rather than a clamped zero.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('§F the money edges: beyond 2^53, and a total that is negative', () => {
+  /** 2^53 + 1 — the first integer a double cannot represent. */
+  const BEYOND_DOUBLE = 9_007_199_254_740_993n;
+
+  const bandRow = (bucketNo: number, currency: string, minor: bigint): CustomerAgingBandRow => ({
+    bucket_no: bucketNo,
+    currency_code: currency,
+    txn_minor: minor.toString(),
+    base_minor: minor.toString(),
+    invoice_count: 1,
+    open_debit_count: 1,
+    open_credit_count: 1,
+  });
+
+  it('F1 — a receivable larger than 2^53 is carried EXACTLY, and the figure really is one a double would lose', () => {
+    // NON-VACUITY FIRST, and it is the whole reason this case exists: the
+    // subject must be a number `Number` cannot hold, or "exact past 2^53" is
+    // a claim about nothing. A round trip through a double LOSES it.
+    expect(BEYOND_DOUBLE > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
+    expect(BigInt(Number(BEYOND_DOUBLE))).not.toBe(BEYOND_DOUBLE);
+    expect(BigInt(Number(BEYOND_DOUBLE))).toBe(9_007_199_254_740_992n);
+
+    const rows: readonly CustomerAgingBandRow[] = [bandRow(1, 'USD', BEYOND_DOUBLE), bandRow(OLDEST_BUCKET_NO, 'USD', BEYOND_DOUBLE)];
+    const { buckets, totalBaseMinor } = foldCustomerAging(rows, SHAPE);
+
+    // Hand-computed, not re-derived from the input: 9007199254740993 × 2.
+    expect(totalBaseMinor).toBe('18014398509481986');
+    // And per band, so a right total cannot hide a shift.
+    expect(buckets[0]?.baseMinor).toBe('9007199254740993');
+    expect(buckets[OLDEST_BUCKET_NO - 1]?.baseMinor).toBe('9007199254740993');
+    // CONSERVATION as an absolute value, not as an identity between two sums
+    // computed the same way.
+    expect(sumBucketBase(buckets)).toBe(18_014_398_509_481_986n);
+    expect(BigInt(totalBaseMinor)).toBe(18_014_398_509_481_986n);
+    // The DTO carries it as TEXT, which is why none of this rounds: a JSON
+    // number could not express the figure the merchant is owed.
+    expect(typeof totalBaseMinor).toBe('string');
+    // And the proof that the exactness is real rather than incidental: the
+    // total is ODD, and every double in this range is even.
+    expect(BigInt(totalBaseMinor) % 2n).toBe(0n);
+    expect(BigInt(buckets[0]?.baseMinor ?? '0') % 2n).toBe(1n);
+  });
+
+  it('F2 — a customer wholly IN CREDIT reports a NEGATIVE total, not a clamped zero (DR-23)', () => {
+    const rows: readonly CustomerAgingBandRow[] = [bandRow(1, 'USD', -1_200_000n), bandRow(OLDEST_BUCKET_NO, 'USD', -800_000n)];
+    const { buckets, totalBaseMinor } = foldCustomerAging(rows, SHAPE);
+
+    // Hand-computed: −1,200,000 + −800,000.
+    expect(totalBaseMinor).toBe('-2000000');
+    // Stated as the three things that could each have gone wrong separately: a
+    // clamp to zero, a sign dropped, an absolute value taken.
+    expect(BigInt(totalBaseMinor) < 0n).toBe(true);
+    expect(totalBaseMinor).not.toBe('0');
+    expect(totalBaseMinor.startsWith('-')).toBe(true);
+    expect(BigInt(totalBaseMinor)).not.toBe(2_000_000n);
+    // Per band, both negative — a total that is negative while one band was
+    // clamped would still be negative.
+    expect(buckets[0]?.baseMinor).toBe('-1200000');
+    expect(buckets[OLDEST_BUCKET_NO - 1]?.baseMinor).toBe('-800000');
+    // Conservation holds with mixed sign too, by absolute value.
+    expect(sumBucketBase(buckets)).toBe(-2_000_000n);
+  });
+
+  it('F3 — a MIXED portfolio conserves exactly: a credit beyond 2^53 against a larger debit', () => {
+    // The two edges TOGETHER, because a fold could be exact on positives and
+    // lossy once a subtraction crosses the double range.
+    const rows: readonly CustomerAgingBandRow[] = [bandRow(1, 'USD', BEYOND_DOUBLE), bandRow(2, 'USD', -BEYOND_DOUBLE), bandRow(OLDEST_BUCKET_NO, 'USD', 7n)];
+    const { buckets, totalBaseMinor } = foldCustomerAging(rows, SHAPE);
+    // The two huge figures cancel EXACTLY and the remainder survives: a single
+    // unit lost anywhere in that cancellation would show up here as a total
+    // that is not 7.
+    expect(totalBaseMinor).toBe('7');
+    expect(sumBucketBase(buckets)).toBe(7n);
+    // And non-vacuity: the cancellation really involved figures past 2^53, so
+    // this is not three small numbers in disguise.
+    expect(buckets[0]?.baseMinor).toBe('9007199254740993');
+    expect(buckets[1]?.baseMinor).toBe('-9007199254740993');
+  });
+});
+
 describe('§E-RED DR-39: the two wrong folds, EXECUTED, going red under §E', () => {
   it('RED-E1 — the DOUBLE-COUNTING fold is caught by E3, with the actual numbers on both sides', () => {
     const right = foldCustomerAging(DR39_ROWS, SHAPE).openCounts;

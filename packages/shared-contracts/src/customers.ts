@@ -272,6 +272,26 @@ export interface CustomerAgingBucketDto {
  * one word from the owner**; the correction is two lines, and it is recorded
  * in `docs/decisions/2026-10-27-phase4-aging-decisions.md` rather than left
  * in a reviewer's head.
+ *
+ * ── ⚠ AND THE SIBLING READER DOES NOT AGREE ABOUT PRESENCE, YET ──────────
+ *
+ * Per-currency presence at a net of zero is what this document promises, and
+ * `GET /v1/customers/:customerId/receivable` DOES NOT KEEP IT. That endpoint
+ * reads `customer_ar_outstanding`, which ends in `HAVING sum(...) <> 0`, so a
+ * currency whose debits and credits cancel returns NO ROW there — while this
+ * aging document shows that same currency with both counters standing and two
+ * bands that cancel.
+ *
+ * So one customer, one moment, two endpoints: the currency is absent from the
+ * receivable summary and present in the aging report. NEITHER figure is
+ * wrong — they answer different questions — but a client that lists currencies
+ * from one and reads counters from the other will find a currency it has no
+ * row for, and that is worth knowing before it is discovered in a merchant's
+ * browser.
+ *
+ * This is stated and NOT resolved here: reconciling the two is DR-33's own
+ * card, and changing the `HAVING` is a change to a figure a merchant reads,
+ * which is the owner's call and not a contract comment's.
  */
 export interface CustomerOpenDocumentCountsDto {
   /** The transaction currency these two counters are about. */

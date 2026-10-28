@@ -783,8 +783,22 @@ COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
 --     lives, and the two places disagree only under the numbers nobody tested.
 --
 --     A DOCUMENT-LEVEL FIGURE THE BUCKETS CANNOT PRODUCE, which is DR-29 and
---     still holds. `customer_ar_aging` counts DISTINCT invoices WITHIN a band,
---     and since P4-S7 one invoice is aged ACROSS ITS SCHEDULE, so it reaches
+--     still holds. `customer_ar_aging` counts ROWS within a band —
+--     `count(*)`, section 6 — and that equals the number of distinct invoices
+--     in the band ONLY BECAUSE `invoice_outstanding` returns one row per
+--     invoice and asserts it. The per-band figure is therefore correct today
+--     by resting on a property of another routine, not by measuring
+--     distinctness itself: were `invoice_outstanding` ever to return two rows
+--     for one invoice, the band count would inflate.
+--
+--     THE ROUTINE BELOW DELIBERATELY DOES NOT REST ON THAT PROPERTY. It
+--     counts `count(DISTINCT o.invoice_id)` precisely so that the honesty of
+--     a document-level figure a merchant reads does not depend on the
+--     set-based reader happening to behave. The two are not inconsistent: the
+--     band count is a per-band sum where a repeated row would be a defect
+--     caught upstream, while the document count is the figure itself.
+--
+--     And since P4-S7 one invoice is aged ACROSS ITS SCHEDULE, so it reaches
 --     several bands and the sum of those counts counts it once per band. That
 --     sum is not the number of open documents and may exceed it. Neither is
 --     the number any other function of the per-band counts: two invoices each

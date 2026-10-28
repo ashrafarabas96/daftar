@@ -305,6 +305,14 @@ function bandRowOrRefuse(row: CustomerAgingSqlRow, rowIndex: number): CustomerAg
   // moved here with the check when the seven were gathered into one
   // boundary; `dr39-open-document-counts.test.ts` (dr39_17) pins it to this
   // module, not to a particular line of it.
+  //
+  // UNREACHABLE FROM `aging()`, AND KEPT ANYWAY. That reader selects
+  // `coalesce(a.currency_code, c.currency_code)`, which is null only when BOTH
+  // sides are, and a row with neither side does not exist — so this arm cannot
+  // fire for the one caller in this module today. It is defence in depth for
+  // the other callers the exported fold invites, and it would be the first
+  // thing to matter if that `coalesce` were ever dropped. Read the arm as
+  // "this cannot happen and is refused regardless", not as a live branch.
   const currencyCode = row.currency_code;
   if (currencyCode === null) throw agingRowRefusal(rowIndex, 'currency_code');
   const txnMinor = row.txn_minor;
@@ -527,9 +535,15 @@ export function foldCustomerAging(
   return {
     buckets,
     totalBaseMinor: totalBaseMinor.toString(),
-    // Ordered by currency so one answer is one answer: the map's insertion
-    // order is the row order, which is the database's, and a client diffing
-    // two reads should not see a reordering as a change.
+    // SORTED by currency, so one answer is one answer: a client diffing two
+    // reads must not see a reordering as a change.
+    //
+    // The sort is what guarantees that, and the previous wording said the
+    // opposite — that insertion order "is the row order, which is the
+    // database's". Insertion order here IS the row order, but row order is
+    // only as stable as the reader's `ORDER BY`, and resting a client-visible
+    // sequence on it would make the guarantee the planner's to keep. The sort
+    // is the guarantee; insertion order is merely what it replaces.
     openCounts: [...openCounts.values()].sort((a, b) => (a.currency < b.currency ? -1 : a.currency > b.currency ? 1 : 0)),
   };
 }
@@ -643,7 +657,9 @@ export class CustomerReadService {
     const labels = agingBucketLabels(q.bucketDays);
     const found = await this.db.scoped<CustomerAgingSqlRow & QueryResultRow>(
       this.scope(m),
-      // ONE statement, and `AS MATERIALIZED` is load-bearing (DR-29, DR-39).
+      // ONE statement, and `AS MATERIALIZED` is DEFENSIVE here rather than
+      // load-bearing — the honest description, since nothing in this tree has
+      // measured it doing anything (DR-29, DR-39).
       // The per-currency open-document counters are document-level figures the
       // aging routine cannot return — its shape is pinned and its body is
       // installed with `CREATE OR REPLACE`, which cannot change a
@@ -651,10 +667,21 @@ export class CustomerReadService {
       // fetched in a second round trip that would pay row-security setup twice
       // for two integers per currency.
       //
-      // Without `MATERIALIZED` the STABLE set-returning call may be
+      // Without `MATERIALIZED` a STABLE set-returning call MAY be
       // re-evaluated, which would re-scan this customer's invoices once per
-      // band. With it, the customer's invoices are visited once by the aging
-      // routine and once by the counts routine, and no more.
+      // band. Two reasons to expect it changes nothing as the query stands:
+      // `c` is referenced ONCE, and PostgreSQL 12+ inlines a single-reference
+      // CTE by default, so the keyword mostly forbids an inlining that would
+      // not have duplicated the scan anyway; and on the `FULL JOIN` side the
+      // function scan appears once in the plan regardless. So it is kept as a
+      // guard against a later edit that references `c` twice, NOT as a
+      // measured optimisation — ONLY `EXPLAIN (ANALYZE)` on a real database
+      // settles what the planner does, and that is NOT RUN.
+      //
+      // What IS certain from the text: the customer's invoices are visited by
+      // the aging routine and again by the counts routine. Two settlement
+      // computations over one population is the cost DR-39 chose, and the
+      // aging endpoint's performance budget has not been re-measured since.
       //
       // AND THE JOIN IS `FULL`, DELIBERATELY. A `LEFT JOIN` from the bands
       // onto the counters would silently lose a currency the counters know
