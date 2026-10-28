@@ -42,15 +42,32 @@ import { describe, expect, it } from 'vitest';
  *        report — and `0084`'s own text calls that out.
  *
  *   NO LOSS — the returned count can never fall SHORT for any reason other
- *   than an id that names no invoice this caller can see. That needs the inner
- *   join to be TOTAL:
+ *   than an id that names no invoice this caller can see. Three things:
  *     5. `invoices.sale_id UUID NOT NULL` together with the VALIDATED
  *        composite edge `invoices_sale_fk (business_id, sale_id) REFERENCES
- *        sales (business_id, id)`. `0080` asserts that edge is `convalidated`
- *        at migration time, and its refusal message says why in so many
- *        words: otherwise «the join below could lose a row».
+ *        sales (business_id, id)`, which is what makes the inner join total.
+ *        `0080` asserts that edge is `convalidated` at migration time, and its
+ *        refusal message says why in so many words: otherwise «the join below
+ *        could lose a row».
+ *     6. The driving predicate selects on `business_id` and the id array and
+ *        on NOTHING ELSE. A further conjunct drops a document the merchant can
+ *        see, and the routine then answers «does not exist in this business»
+ *        about the merchant's own draft or cash sale.
+ *     7. NOT GUARDED HERE, AND DECLARED FOR THAT REASON: visibility of the
+ *        `sales` row must follow visibility of the `invoices` row, or the
+ *        inner join is total in the tables and lossy in the slice this caller
+ *        can see. It holds today, and by construction rather than by luck —
+ *        the two `SELECT` policies are textually identical, the composite edge
+ *        forces `s.business_id = i.business_id`, and both tenant edges point
+ *        at `businesses (tenant_id, id)`, so `tenant_id` is determined by
+ *        `business_id` and the two policy evaluations coincide. No law below
+ *        reads any of that. `0086` is a CANDIDATE migration that already
+ *        rewrites those policies on both tables, so a later one touching
+ *        `sales` alone would break this with every law here green. A guard
+ *        over row-security policy equality is a separate card; it is named
+ *        here so it is not mistaken for covered.
  *
- * Both halves are load-bearing, and only together do they make
+ * All three halves are load-bearing, and only together do they make
  * `v_found < v_asked` MEAN «some id named no invoice this caller can see».
  * Remove the comparison alone and no sum changes; what is lost is the report.
  * **THE REFUSAL DOES NOT PREVENT DUPLICATION.** It would catch duplication if
@@ -78,6 +95,21 @@ import { describe, expect, it } from 'vitest';
  * narrowing was never declared. MEASURED: deleting `invoices_sale_fk`, and
  * separately making `sale_id` nullable, both left the suite GREEN at 11/11.
  * `rc_11` closes that.
+ *
+ * A SECOND review round then found four more of the same kind, every one of
+ * them GREEN at 15/15, and they are recorded beside their laws: a DEAD copy of
+ * the blessed comparison satisfying a positional check while an `ELSE` arm
+ * inverted the refusal (`rc_4b`); a longer `GROUP BY` key multiplying the
+ * driving row so a fully paid invoice reappeared on the customer's
+ * receivables at its full value (`rc_6`); an extra `WHERE` conjunct refusing a
+ * visible document as missing (`rc_6b`); `v_asked` pinned at zero by a
+ * `WHERE false` in a subquery whose link to it was never asserted (`rc_4b`);
+ * and the honesty assertion itself passing with its sentence deleted, because
+ * it searched the whole file for a string this file declares (`rc_10`).
+ *
+ * The pattern across all three rounds is one thing: each round pinned one more
+ * FEATURE of a sequence and the unpinned remainder carried the kill. That is
+ * why `rc_4b` is now a whole-shape pin and not a feature test.
  *
  * ── WHY THE FILE IS NOT NAMED `p4…` ──────────────────────────────────────
  *
@@ -240,21 +272,13 @@ function ifConditions(region: string): { at: number; cond: string }[] {
   return [...region.matchAll(/\bIF\s+([\s\S]*?)\s+THEN\b/gi)].map((m) => ({ at: m.index ?? -1, cond: collapse(m[1] ?? '') }));
 }
 
-/**
- * The condition that IMMEDIATELY governs the raise: the last `IF … THEN` that
- * opens before it.
- *
- * Positional and not nth, so that deleting the inner `IF` entirely — which
- * leaves the raise governed by the OUTER condition and therefore reachable on
- * any request with a repeated id — is caught by the same law rather than
- * needing its own.
- */
-function governingCondition(region: string): string {
-  const raise = region.indexOf('RAISE EXCEPTION');
-  if (raise === -1) return '';
-  const before = ifConditions(region).filter((c) => c.at !== -1 && c.at < raise);
-  return before[before.length - 1]?.cond ?? '';
-}
+// A `governingCondition` helper stood here, resolving the condition that
+// governs the raise as the last `IF … THEN` opened before it. It is DELETED
+// rather than kept unused, because it was the second round's hole: positional
+// resolution is blind to block structure, so a DEAD copy of the blessed
+// condition satisfied it while an `ELSE` arm inverted the refusal. `rc_4b`
+// pins the tail whole instead, and a helper that cannot express the claim is
+// better gone than left for someone to reach for again.
 
 /**
  * Prose with its comment scaffolding removed, flattened to one line.
@@ -305,6 +329,20 @@ const THIS_FILE = join(__dirname, 'rowcount-refusal-law.test.ts');
 /** The sentence this file is required to state, in one piece. */
 const REQUIRED_DENIAL = 'THE REFUSAL DOES NOT PREVENT DUPLICATION.';
 
+/**
+ * This file's opening comment block, and nothing after it.
+ *
+ * `rc_10` has to read the HEADER rather than the source, because the sentence
+ * it requires is also a string constant declared below — so a search of the
+ * whole file is satisfied by the declaration and passes with the header
+ * deleted. Measured: it did.
+ */
+function fileHeader(): string {
+  const src = readFileSync(THIS_FILE, 'utf8');
+  const end = src.indexOf('const REPO_ROOT');
+  return end === -1 ? '' : src.slice(0, end);
+}
+
 type Role = 'detector' | 'preventer';
 /** Which direction a preventer bounds the returned count in. */
 type Bound = 'above' | 'below' | 'both';
@@ -338,9 +376,16 @@ const PINS: readonly Pin[] = [
   { law: 'rc_2', role: 'detector', subject: 'the array-form body', token: 'GET DIAGNOSTICS v_found = ROW_COUNT' },
   { law: 'rc_3', role: 'detector', subject: 'the array-form body', token: "RAISE EXCEPTION 'invoice.not_found … P0001" },
   { law: 'rc_4', role: 'detector', subject: 'the array-form body', token: 'every IF governing the refusal reads v_found' },
-  { law: 'rc_4b', role: 'detector', subject: 'the refusal region of the array-form body', token: 'the governing comparison is v_found <> v_asked' },
+  { law: 'rc_4b', role: 'detector', subject: 'the refusal region of the array-form body', token: 'the whole refusal tail, pinned as one statement sequence' },
   { law: 'rc_5', role: 'detector', subject: 'the refusal region of the array-form body', token: 'count(*) INTO v_asked over DISTINCT unnest(p_invoice_ids)' },
-  { law: 'rc_6', role: 'preventer', bound: 'above', subject: 'the reducer subquery of the array-form body', token: 'GROUP BY d.invoice_id' },
+  { law: 'rc_6', role: 'preventer', bound: 'above', subject: 'the reducer subquery of the array-form body', token: 'GROUP BY d.invoice_id and nothing else' },
+  {
+    law: 'rc_6b',
+    role: 'preventer',
+    bound: 'below',
+    subject: 'the driving predicate of the array-form body',
+    token: 'WHERE business_id and the id array alone',
+  },
   { law: 'rc_7', role: 'preventer', bound: 'above', subject: `CREATE TABLE invoices in ${INVOICES_MIGRATION}`, token: 'PRIMARY KEY (business_id, id)' },
   { law: 'rc_8', role: 'preventer', bound: 'above', subject: `CREATE TABLE sales in ${SALES_MIGRATION}`, token: 'PRIMARY KEY (business_id, id)' },
   {
@@ -433,35 +478,49 @@ describe('section 2: the detector lives in the array-form body, and this is the 
     ).toEqual([]);
   });
 
-  it('rc_4b: the comparison that governs the raise is v_found against v_asked, and its DIRECTION is the point', () => {
-    // THE LAW THAT CATCHES WEAKENING RATHER THAN DELETION, and it exists
-    // because the version of this file without it was GREEN at 11/11 against
-    // three separate kills of the refusal. `rc_4`'s quantifier is over the
-    // variable NAME; a name survives every one of them.
+  it('rc_4b: the whole refusal tail is pinned as ONE statement sequence, because every looser form was evaded', () => {
+    // THIS LAW IS A WHOLE-SHAPE PIN, AND IT GOT THERE BY LOSING TWICE.
     //
-    // Why the direction and not the spelling. The four no-inflation
-    // constraints give `v_found <= v_asked` on every path that reaches here —
-    // `0084`'s own comment states the chain, `ROW_COUNT <= distinct <=
-    // cardinality`. So:
-    //   `>`  or `>=`      — never true. The refusal becomes UNREACHABLE and an
-    //                       id naming an invisible invoice returns a short
-    //                       result set in silence. MEASURED green before this.
-    //   `<=`, `IS NOT NULL`, or an unconditional raise inside the outer branch
-    //                     — true when the counts AGREE, so a request with a
-    //                       repeated id is REFUSED. Also measured green.
-    //   `<>` or `<`       — true exactly when the count fell short, which with
-    //                       the no-loss half means an id named no invoice this
-    //                       caller can see. Both are correct and `<>` ships.
-    // So the allowlist is a claim about meaning, and a later editor may move
-    // between the two correct forms without touching this law.
-    const region = refusalRegion(body());
+    // Round one quantified over WHICH VARIABLE the governing comparison reads.
+    // `IF v_found > v_asked` stayed green and made the refusal unreachable;
+    // `<=` and `IS NOT NULL` stayed green and made it refuse a repeated id.
+    //
+    // Round two quantified over the OPERATOR, resolving the governing
+    // condition positionally as the last `IF` opened before the raise. That is
+    // blind to block structure, so a DEAD copy of the blessed condition
+    // satisfied it. Both of these were MEASURED green at 15/15:
+    //   IF v_found <> v_asked THEN NULL; ELSE RAISE …; END IF;
+    //   IF v_found <> v_asked THEN NULL; END IF; RAISE …;
+    // The first inverts the refusal — a repeated id is rejected AND a missing
+    // id passes in silence. The second raises unconditionally.
+    // And a third, `rc_5`'s half: the distinct subquery and the assignment to
+    // `v_asked` were asserted as two independent fragments, never as one
+    // statement, so `… AS x(id) WHERE false) k;` stayed green with `v_asked`
+    // pinned at zero — losing the refusal in exactly the case it exists for.
+    //
+    // THE LESSON, and why the shape is pinned whole. Each round pinned one
+    // more feature of a ten-line sequence and each time the unpinned
+    // remainder carried a kill. The remainder is the defect, not the feature,
+    // and the only way to have no remainder is to pin the sequence. This is
+    // also why the file no longer accepts `<` beside `<>`: `<` is correct only
+    // while the no-inflation half holds, and a law whose correctness is
+    // conditional on another law is the regress again.
+    //
+    // DECLARED COST, and it is the right one for ten lines that decide a money
+    // refusal: ANY edit to this tail reddens this law. That is intended —
+    // changing it means changing this pin deliberately and re-running the red
+    // proofs below it, which for a cross-tenant refusal is the review that
+    // should happen anyway. The operator alternation is kept tolerant because
+    // `!=` is PostgreSQL's own synonym for `<>` and nothing turns on which is
+    // written.
+    const region = collapse(refusalRegion(body()));
     expect(region, 'the refusal region is empty, so this law had no subject').not.toBe('');
-    const governing = governingCondition(region);
-    expect(governing, 'no IF opens before the raise — it is unconditional inside the region, which refuses valid requests').not.toBe('');
     expect(
-      governing,
-      `the comparison governing the raise is \`${governing}\`. It must be \`v_found <> v_asked\` or \`v_found < v_asked\`: an ordering the other way is never true and kills the refusal silently, and anything weaker fires on a repeated id`,
-    ).toMatch(/^v_found\s*(?:<>|!=|<)\s*v_asked$/);
+      region,
+      `the refusal tail does not match its pinned shape. It reads:\n  ${region}\nEvery looser form of this law was evaded by an edit that left the refusal unreachable or firing on a valid request, so the sequence is pinned whole`,
+    ).toMatch(
+      /^GET DIAGNOSTICS v_found = ROW_COUNT; IF v_found <> coalesce\(pg_catalog\.cardinality\(p_invoice_ids\), 0\) THEN SELECT pg_catalog\.count\(\*\) INTO v_asked FROM \(SELECT DISTINCT x\.id FROM pg_catalog\.unnest\(p_invoice_ids\) AS x\(id\)\) k; IF v_found (?:<>|!=) v_asked THEN RAISE EXCEPTION 'invoice\.not_found[^']*' USING ERRCODE = 'P0001'; END IF; END IF; END; \$fn\$;$/,
+    );
   });
 
   it('rc_5: the count compared against is the DISTINCT ids asked about, so a repeated id is not a refusal', () => {
@@ -484,16 +543,53 @@ describe('section 2: the detector lives in the array-form body, and this is the 
 
 // ── Section 3. NO INFLATION: the count cannot exceed the ids asked about ─
 
-describe('section 3: the count cannot exceed the distinct ids asked about, and these are the four reasons', () => {
-  it('rc_6: the reducer subquery groups by invoice, so the LEFT JOIN onto it cannot multiply', () => {
+describe('section 3: the count cannot exceed the distinct ids asked about, and these are the reasons', () => {
+  it('rc_6: the reducer groups by invoice and by NOTHING ELSE, so the LEFT JOIN onto it cannot multiply', () => {
     const body = signatureBody(lastDefining(ARRAY_FORM).sql, ARRAY_FORM);
     const collapsed = collapse(body);
-    expect(collapsed, 'the reducer must be joined as a grouped subquery aliased r').toMatch(
-      /LEFT JOIN \([\s\S]*?GROUP BY d\.invoice_id[\s\S]*?\) r ON r\.invoice_id = i\.id/,
+    // THE GROUP KEY IS PINNED EXACTLY, and the earlier form that merely
+    // CONTAINED `GROUP BY d.invoice_id` was the worst hole an independent
+    // review found in this file. MEASURED green at 15/15:
+    // `GROUP BY d.invoice_id, d.amount`. One extra column and `r` holds a row
+    // per ALLOCATION, so the LEFT JOIN multiplies the driving row: an invoice
+    // of 1,000 with allocations of 300 and 700 returns TWO rows, outstanding
+    // 700 and 300. `customer_ar_outstanding` sums them to 1,000, so a FULLY
+    // PAID invoice reappears on the customer's receivables at its full value,
+    // `HAVING sum <> 0` does not hide it, and conservation breaks —
+    // paid 1,000 + outstanding 1,000 against a total of 1,000.
+    // It was silent, too: `v_found` exceeds `v_asked`, which the refusal
+    // reports only because its operator is `<>` and not `<`. That is the
+    // other half of why `rc_4b` no longer accepts `<`.
+    expect(collapsed, 'the group key must be d.invoice_id alone — an extra column makes r a row per reducer and the LEFT JOIN multiplies').toMatch(
+      /GROUP BY d\.invoice_id \) r ON r\.invoice_id = i\.id/,
     );
     expect(collapsed, 'and the two reducer relations must both be inside it, or the group is over the wrong set').toMatch(
       /payment_allocations[\s\S]*?UNION ALL[\s\S]*?customer_credit_applications[\s\S]*?GROUP BY d\.invoice_id/,
     );
+  });
+
+  it('rc_6b: the driving predicate selects on business and id and on NOTHING ELSE', () => {
+    // The route into the no-loss half that the first two rounds of this file
+    // did not read at all: `WHERE`. MEASURED green at 15/15, both of them:
+    //   … AND i.status = 'open'
+    //   … AND s.settlement_mode <> 'cash'
+    // Either one drops a document the merchant can SEE out of the result set,
+    // so `v_found` falls short of `v_asked` and the routine answers
+    // «the invoice does not exist in this business» about the merchant's own
+    // draft, or their own cash sale. And it is not a contrived edit: both
+    // predicates already exist as `CASE` arms a few lines above, where they
+    // decide that such a document reports ZEROS rather than being dropped.
+    // Moving them into `WHERE` looks like tidying to anyone who has not read
+    // the refusal.
+    const collapsed = collapse(signatureBody(lastDefining(ARRAY_FORM).sql, ARRAY_FORM));
+    expect(collapsed, 'the driving WHERE must select on business_id and the id array alone, or a visible document is refused as missing').toContain(
+      'WHERE i.business_id = p_business_id AND i.id = ANY(p_invoice_ids);',
+    );
+    // And the status and settlement arms must still be where they belong — in
+    // the projection, reporting zeros. A positive control for the claim above:
+    // if these had moved, the law would be forbidding something absent.
+    expect(collapsed, 'a non-open document must report zeros in the projection, not vanish from it').toMatch(/CASE WHEN i\.status <> 'open'/);
+    expect(collapsed, 'and a cash-settled one likewise').toMatch(/WHEN s\.settlement_mode = 'cash'/);
   });
 
   it('rc_7: invoices is keyed on (business_id, id), asserted INSIDE its own CREATE TABLE block', () => {
@@ -589,34 +685,69 @@ describe('section 4: the count cannot fall short except for an id that names no 
     expect(collapse(validation), `${VALIDATION_MIGRATION} must assert the edge is convalidated`).toMatch(/conname = 'invoices_sale_fk'[^;]*c\.convalidated/);
   });
 
-  it('rc_13: no migration later than the ones read here drops or invalidates any of the five', () => {
+  it('rc_13: no migration anywhere in the chain drops, renames or invalidates any of the pinned constraints', () => {
     // The asymmetry an independent review named: the ROUTINE is resolved by
     // «last definition wins», but the TABLES are read from pinned revision
     // numbers. `0075` and `0077` are below `frozenThrough`, so their own text
     // cannot change — but a LATER candidate migration can `ALTER TABLE … DROP
     // CONSTRAINT`, and `rc_7`, `rc_8` and `rc_11` would stay green reading
     // text that no longer describes the database.
-    const undo: { name: string; re: RegExp }[] = [
-      { name: 'the invoices primary key', re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?invoices_pkey/i },
-      { name: 'the sales primary key', re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?sales_pkey/i },
-      { name: 'the composite edge to sales', re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?invoices_sale_fk/i },
-      { name: "invoices.sale_id's NOT NULL", re: /ALTER COLUMN\s+sale_id\s+DROP NOT NULL/i },
+    // Each probe CARRIES its own planted statement, rather than the two being
+    // two lists paired by index. The paired form was here first and it failed
+    // honestly on the next edit: adding two probes without adding their plants
+    // left `plants[i]` undefined and the positive control said so by name. The
+    // structure that cannot drift is the structure where there is nothing to
+    // keep in step.
+    //
+    // The constraint names are matched with the optional double quotes
+    // PostgreSQL accepts, because `DROP CONSTRAINT "invoices_sale_fk"` is the
+    // same statement and an independent review measured the unquoted-only form
+    // green against it. `RENAME CONSTRAINT` is here for the same reason: a
+    // renamed constraint is a dropped one as far as `rc_11`'s text pin is
+    // concerned.
+    const undo: { name: string; re: RegExp; plant: string }[] = [
+      {
+        name: 'the invoices primary key',
+        re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_pkey"?/i,
+        plant: 'ALTER TABLE invoices DROP CONSTRAINT invoices_pkey;',
+      },
+      { name: 'the sales primary key', re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?sales_pkey"?/i, plant: 'ALTER TABLE sales DROP CONSTRAINT "sales_pkey";' },
+      {
+        name: 'the composite edge to sales',
+        re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_sale_fk"?/i,
+        plant: 'ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_sale_fk;',
+      },
+      {
+        name: 'the edge, by renaming it',
+        re: /RENAME CONSTRAINT\s+"?invoices_sale_fk"?/i,
+        plant: 'ALTER TABLE invoices RENAME CONSTRAINT invoices_sale_fk TO invoices_sale_fk_old;',
+      },
+      {
+        name: "invoices.sale_id's NOT NULL",
+        re: /ALTER COLUMN\s+"?sale_id"?\s+DROP NOT NULL/i,
+        plant: 'ALTER TABLE invoices ALTER COLUMN sale_id DROP NOT NULL;',
+      },
+      // The one a reviewer called the most dangerous, and rightly: `0075` is
+      // below `frozenThrough`, so its text keeps describing a NOT NULL column
+      // truthfully while the database no longer has the column at all.
+      {
+        name: 'invoices.sale_id itself',
+        re: /ALTER TABLE\s+(?:public\.)?invoices\s+DROP COLUMN\s+(?:IF EXISTS\s+)?"?sale_id"?/i,
+        plant: 'ALTER TABLE public.invoices DROP COLUMN IF EXISTS sale_id;',
+      },
       // Anchored, for the reason `rc_11` records: the unanchored form fired on
       // `0077`'s own refusal message, «invoices_sale_fk would not validate».
-      { name: 'the edge validation', re: /ADD CONSTRAINT\s+invoices_sale_fk[^;]{0,200}?\bNOT VALID\b/i },
+      {
+        name: 'the edge validation',
+        re: /ADD CONSTRAINT\s+invoices_sale_fk[^;]{0,200}?\bNOT VALID\b/i,
+        plant: 'ALTER TABLE invoices ADD CONSTRAINT invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales (business_id, id) NOT VALID;',
+      },
     ];
-    // POSITIVE CONTROL FIRST: each probe must match a planted statement, or a
-    // clean scan below means nothing at all.
-    const plants = [
-      'ALTER TABLE invoices DROP CONSTRAINT invoices_pkey;',
-      'ALTER TABLE sales DROP CONSTRAINT sales_pkey;',
-      'ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_sale_fk;',
-      'ALTER TABLE invoices ALTER COLUMN sale_id DROP NOT NULL;',
-      'ALTER TABLE invoices ADD CONSTRAINT invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales (business_id, id) NOT VALID;',
-    ];
-    undo.forEach((u, i) => {
-      expect(new RegExp(u.re.source, 'i').test(plants[i] ?? ''), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
-    });
+    // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
+    // or a clean scan below means nothing at all.
+    for (const u of undo) {
+      expect(new RegExp(u.re.source, 'i').test(u.plant), `the probe for ${u.name} cannot find its own planted statement`).toBe(true);
+    }
 
     const files = migrationFiles();
     expect(files.length, 'the migration scan found no files, so the clean result below is a broken path and not a measurement').toBeGreaterThan(10);
@@ -667,21 +798,45 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     expect(roleOf('rc_4'), 'the variable the comparison names is part of the detector').toBe('detector');
     expect(roleOf('rc_4b'), 'and so is the comparison itself').toBe('detector');
     expect(roleOf('rc_5'), 'and the count it is compared against').toBe('detector');
-    for (const law of ['rc_6', 'rc_7', 'rc_8', 'rc_11', 'rc_12', 'rc_13']) {
+    for (const law of ['rc_6', 'rc_6b', 'rc_7', 'rc_8', 'rc_11', 'rc_12', 'rc_13']) {
       expect(roleOf(law), `${law} makes a wrong count unrepresentable, which is a different role`).toBe('preventer');
     }
 
     // BOTH DIRECTIONS must be covered. This is the assertion whose absence let
     // the first version of this file claim a two-sided property from
     // one-sided support.
-    const bounds = new Set(PINS.filter((p) => p.role === 'preventer').flatMap((p) => (p.bound === 'both' ? ['above', 'below'] : [p.bound])));
-    expect([...bounds].sort(), 'the preventers must bound the count in BOTH directions, or the claim is one-sided').toEqual(['above', 'below']);
+    //
+    // Counted over pins that bound a direction EXPLICITLY, and not over
+    // `'both'`. The earlier form folded `'both'` into each side, and a
+    // reviewer measured the consequence: relabelling `rc_11` — then the only
+    // `'below'` pin — left this check satisfied by `rc_13`'s `'both'` alone.
+    // A coverage check that one meta-pin can satisfy is not a coverage check.
+    for (const direction of ['above', 'below'] as const) {
+      const explicit = PINS.filter((p) => p.role === 'preventer' && p.bound === direction);
+      expect(explicit.length, `no preventer bounds the count from ${direction} explicitly, so that half of the claim rests on nothing`).toBeGreaterThan(0);
+    }
+
+    // AND EACH BOUND IS PINNED INDIVIDUALLY, not just covered collectively.
+    // Measured, and it is why this block exists: with coverage alone,
+    // relabelling `rc_11` from `'below'` to `'above'` stayed GREEN at 16/16,
+    // because `rc_6b` also bounds below and the coverage check was satisfied
+    // without it. A table that may hold a wrong entry as long as some other
+    // entry is right is a table that can lie about which constraint does what
+    // — and «which constraint does what» is the whole subject of this file.
+    const boundOf = (law: string) => PINS.find((p) => p.law === law)?.bound;
+    expect(boundOf('rc_6'), 'the group key bounds the count from ABOVE: extra key columns multiply rows').toBe('above');
+    expect(boundOf('rc_6b'), 'the driving predicate bounds from BELOW: an extra conjunct drops a visible row').toBe('below');
+    expect(boundOf('rc_7'), 'the invoices key bounds from above').toBe('above');
+    expect(boundOf('rc_8'), 'the sales key bounds from above').toBe('above');
+    expect(boundOf('rc_11'), 'join totality bounds from BELOW: a lost row makes the count fall short').toBe('below');
+    expect(boundOf('rc_12'), 'an invoker read bounds from above: a definer read sees more rows, not fewer').toBe('above');
+    expect(boundOf('rc_13'), 'the no-undo scan protects pins on both sides').toBe('both');
 
     // Counts are MEASURED and pinned deliberately, so that a dropped pin is
     // distinguishable from a renamed one. A new pin must move the number on
     // purpose.
     expect(PINS.filter((p) => p.role === 'detector')).toHaveLength(5);
-    expect(PINS.filter((p) => p.role === 'preventer')).toHaveLength(6);
+    expect(PINS.filter((p) => p.role === 'preventer')).toHaveLength(7);
     const detectorTokens = new Set(PINS.filter((p) => p.role === 'detector').map((p) => p.token));
     expect(
       PINS.filter((p) => p.role === 'preventer').filter((p) => detectorTokens.has(p.token)),
@@ -718,13 +873,25 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     expect(overstates(readFileSync(join(MIGRATIONS, file), 'utf8')), `${file} credits the refusal with making duplication impossible`).toBe(false);
     expect(sql, 'and the body must still be the one this law read').toMatch(/ROW_COUNT/);
 
+    // THE HEADER, AND ONLY THE HEADER.
+    //
+    // This slice is not tidiness, it is the whole assertion. The earlier form
+    // scanned the WHOLE SOURCE for `REQUIRED_DENIAL` — and `REQUIRED_DENIAL`
+    // is a string constant DECLARED in this file, so its own declaration
+    // satisfied the search. MEASURED by an independent review: deleting the
+    // sentence from the header left this law GREEN. A tautology, on the one
+    // assertion that holds this file to its own honesty, five screens after
+    // the probe's docstring warns about «a probe with a hole shaped like
+    // itself».
+    const header = flattenProse(fileHeader());
+    expect(header, 'the header slice is empty, so the assertion below would be vacuous again').not.toBe('');
+    expect(header, 'the header slice must not reach the constants, or it can be satisfied by a declaration').not.toContain('const REQUIRED_DENIAL');
+    expect(header, 'the header must say out loud that the refusal does not prevent duplication').toContain(REQUIRED_DENIAL);
+
     // DECLARED LIMIT: this pins the WORDING of the claim, not its truth. What
-    // makes the claim true is the ten constraint laws above, in both
-    // directions, and what makes the detector a detector is that removing it
-    // changes no number. Neither of those is checkable from text, and both are
-    // stated in this file's header rather than left implicit.
-    expect(flattenProse(readFileSync(THIS_FILE, 'utf8')), 'the header must say out loud that the refusal does not prevent duplication').toContain(
-      REQUIRED_DENIAL,
-    );
+    // makes the claim true is the constraint laws above, in both directions,
+    // and what makes the detector a detector is that removing it changes no
+    // number. Neither is checkable from text, and both are stated in the
+    // header rather than left implicit.
   });
 });
