@@ -238,7 +238,7 @@ DECLARE
   v_seen INTEGER;
 BEGIN
   -- (1) THE HEAD IS `0084`'s. The ONE definition is in the catalogue with
-  --     `0084`'s SEVEN-column shape, which is what makes this file a
+  --     `0084`'s EIGHT-column shape, which is what makes this file a
   --     correction on top of `0084` and not of anything earlier. The array
   --     form is the function this file's single call goes to; if its shape is
   --     not the one `0084` fixed, the column this file reads by name
@@ -248,8 +248,8 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
   IF pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])'))
-     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date)' THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: the live set-based invoice_outstanding is not 0084''s seven-column form (found %), so 0085 is not applying on the 0084 head',
+     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date, issue_date date)' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: the live set-based invoice_outstanding is not 0084''s eight-column form (found %), so 0085 is not applying on the 0084 head',
       pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])')) USING ERRCODE = 'P0001';
   END IF;
   -- And it is still the reader of record, not something that merely answers
