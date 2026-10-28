@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -42,7 +43,7 @@ import { describe, expect, it } from 'vitest';
  *        report — and `0084`'s own text calls that out.
  *
  *   NO LOSS — the returned count can never fall SHORT for any reason other
- *   than an id that names no invoice this caller can see. Three things:
+ *   than an id that names no invoice this caller can see. Four things:
  *     5. `invoices.sale_id UUID NOT NULL` together with the VALIDATED
  *        composite edge `invoices_sale_fk (business_id, sale_id) REFERENCES
  *        sales (business_id, id)`, which is what makes the inner join total.
@@ -50,9 +51,16 @@ import { describe, expect, it } from 'vitest';
  *        refusal message says why in so many words: otherwise «the join below
  *        could lose a row».
  *     6. The driving predicate selects on `business_id` and the id array and
- *        on NOTHING ELSE. A further conjunct drops a document the merchant can
- *        see, and the routine then answers «does not exist in this business»
- *        about the merchant's own draft or cash sale.
+ *        on NOTHING ELSE — and so does the `JOIN … ON` arm. A further conjunct
+ *        in either place drops a document the merchant can see, and the
+ *        routine then answers «does not exist in this business» about the
+ *        merchant's own draft or cash sale.
+ *     6b. The reducer join is a `LEFT` join. Narrowed to an inner join, every
+ *        invoice with no payment allocation and no credit application falls
+ *        out, and the merchant's own unpaid invoice comes back as missing.
+ *        Named here because a review measured it green, and because `rc_6`'s
+ *        `bound` said `above` while this is a bound from BELOW on the same
+ *        subject. Both are now carried by the body digest.
  *     7. NOT GUARDED HERE, AND DECLARED FOR THAT REASON: visibility of the
  *        `sales` row must follow visibility of the `invoices` row, or the
  *        inner join is total in the tables and lossy in the slice this caller
@@ -67,7 +75,7 @@ import { describe, expect, it } from 'vitest';
  *        over row-security policy equality is a separate card; it is named
  *        here so it is not mistaken for covered.
  *
- * All three halves are load-bearing, and only together do they make
+ * All of these are load-bearing, and only together do they make
  * `v_found < v_asked` MEAN «some id named no invoice this caller can see».
  * Remove the comparison alone and no sum changes; what is lost is the report.
  * **THE REFUSAL DOES NOT PREVENT DUPLICATION.** It would catch duplication if
@@ -154,7 +162,8 @@ const VALIDATION_MIGRATION = '0080_phase4_cash_invoice_no_receivable.sql';
  * name matches twenty-one lines across the Phase 4 migrations, and the wrapper
  * is written BEFORE the array form on purpose (`0084` §4's comment, R-100).
  */
-const ARRAY_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_ids\s+UUID\[\]\s*\)/g;
+const ARRAY_FORM =
+  /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_ids\s+UUID\s*\[\s*\]\s*\)/g;
 
 /** Whitespace collapsed, so a claim is about the text and not about indentation. */
 function collapse(s: string): string {
@@ -234,6 +243,63 @@ function routineHeader(body: string): string {
   const at = body.indexOf('AS $fn$');
   return at === -1 ? '' : body.slice(0, at);
 }
+
+/**
+ * The characters between the `$fn$` quotes, with comments stripped and
+ * whitespace collapsed.
+ *
+ * Normalised and not raw, deliberately: reindenting the body or rewording a
+ * comment inside it is not a money change and should not redden a money law,
+ * while every change to the CODE does. Comments are stripped rather than kept
+ * for the DR-13 reason — a rule left in a comment is not the rule.
+ */
+function normalisedBody(body: string): string {
+  const open = body.indexOf('$fn$');
+  if (open === -1) return '';
+  const close = body.indexOf('$fn$', open + 4);
+  if (close === -1) return '';
+  return collapse(
+    body
+      .slice(open + 4, close)
+      .split('\n')
+      .filter((line) => !/^\s*--/.test(line))
+      .join('\n'),
+  );
+}
+
+/**
+ * THE WHOLE BODY, PINNED BY DIGEST. Measured from the tree, not chosen.
+ *
+ * This is where three rounds of review end up, and the house already knew the
+ * answer: `scripts/guards/p4s7-body-digests.ts` pins whole routine bodies by
+ * `sha256`, and its own docstring states the lesson these rounds rediscovered
+ * — «a digest list that covers some of the routines is worse than none: the
+ * uncovered one can be replaced by a conforming stub.» MEASURED: that guard
+ * covers the four installment triggers and `customer_ar_aging` and mentions
+ * `invoice_outstanding` ZERO times, so nothing was pinning this body.
+ *
+ * Why a digest rather than one more feature. Rounds one and two each pinned
+ * one more feature of the refusal tail; round three then found four kills
+ * OUTSIDE the tail — a later migration redefining the routine under a
+ * schema-qualified name, a conjunct appended to the `JOIN … ON` arm,
+ * a `RETURN QUERY … WHERE false` inserted just above the `GET DIAGNOSTICS`
+ * that counts its rows, and `LEFT JOIN` narrowed to `JOIN` so every invoice
+ * with no payment allocation drops out. All four were GREEN. A digest has no
+ * remainder to move into, and that is the only honest version of the claim the
+ * previous commit message overstated.
+ *
+ * DECLARED COST, and it is larger than the tail-only pin's: ANY change to this
+ * body's code reddens this law, INCLUDING the extension `0084`'s own comment
+ * anticipates — «Replaced by the slice that adds a reducer relation, which
+ * appends one UNION ALL branch.» That slice must come back here, re-pin the
+ * digest and re-run the red proofs. For the one definition of the settlement
+ * sum, in a candidate migration, that is the double review the governance
+ * requires anyway; and it is exactly how the neighbouring digest guard already
+ * behaves.
+ */
+const PINNED_BODY_SHA256 = '300725d4696a75cb38c71c817aa697368ddcf0b6c8bf7db9a1cd9a5f8da84ce7';
+/** Its normalised length, so a digest mismatch can say whether the body grew or shrank. */
+const PINNED_BODY_CHARS = 1885;
 
 /**
  * One table's `CREATE TABLE` block, from its header to the `);` in column one
@@ -339,11 +405,18 @@ const REQUIRED_DENIAL = 'THE REFUSAL DOES NOT PREVENT DUPLICATION.';
  */
 function fileHeader(): string {
   const src = readFileSync(THIS_FILE, 'utf8');
-  const end = src.indexOf('const REPO_ROOT');
-  return end === -1 ? '' : src.slice(0, end);
+  // THE FIRST BLOCK COMMENT, and nothing else. Slicing at `const REPO_ROOT`
+  // was the previous attempt and a review walked through it: declare
+  // `const DENIAL_TEXT = '…';` ABOVE that line and the slice contains the
+  // sentence again, so the honesty law passes with the prose deleted. The
+  // first `*/` is a boundary nothing can be declared inside.
+  const open = src.indexOf('/**');
+  if (open === -1) return '';
+  const close = src.indexOf('*/', open);
+  return close === -1 ? '' : src.slice(open, close + 2);
 }
 
-type Role = 'detector' | 'preventer';
+type Role = 'detector' | 'preventer' | 'backstop';
 /** Which direction a preventer bounds the returned count in. */
 type Bound = 'above' | 'below' | 'both';
 
@@ -373,12 +446,25 @@ interface Pin {
  * nobody can check the coverage of.
  */
 const PINS: readonly Pin[] = [
+  // The backstop. It pins no single constraint — it pins the whole body, so
+  // every other entry below is a CONSEQUENCE of it. They are kept for their
+  // failure messages: a digest mismatch says the body moved, and they say
+  // which part. Counted as its own role rather than squeezed into the other
+  // two, because calling a body digest a `detector` or a `preventer` would be
+  // the kind of imprecision this table exists to prevent.
+  { law: 'rc_4c', role: 'backstop', subject: 'the whole array-form body', token: 'sha256 of the normalised body' },
   { law: 'rc_2', role: 'detector', subject: 'the array-form body', token: 'GET DIAGNOSTICS v_found = ROW_COUNT' },
   { law: 'rc_3', role: 'detector', subject: 'the array-form body', token: "RAISE EXCEPTION 'invoice.not_found … P0001" },
   { law: 'rc_4', role: 'detector', subject: 'the array-form body', token: 'every IF governing the refusal reads v_found' },
   { law: 'rc_4b', role: 'detector', subject: 'the refusal region of the array-form body', token: 'the whole refusal tail, pinned as one statement sequence' },
   { law: 'rc_5', role: 'detector', subject: 'the refusal region of the array-form body', token: 'count(*) INTO v_asked over DISTINCT unnest(p_invoice_ids)' },
-  { law: 'rc_6', role: 'preventer', bound: 'above', subject: 'the reducer subquery of the array-form body', token: 'GROUP BY d.invoice_id and nothing else' },
+  {
+    law: 'rc_6',
+    role: 'preventer',
+    bound: 'both',
+    subject: 'the reducer subquery of the array-form body',
+    token: 'GROUP BY d.invoice_id, and LEFT, and nothing else',
+  },
   {
     law: 'rc_6b',
     role: 'preventer',
@@ -498,21 +584,33 @@ describe('section 2: the detector lives in the array-form body, and this is the 
     // statement, so `… AS x(id) WHERE false) k;` stayed green with `v_asked`
     // pinned at zero — losing the refusal in exactly the case it exists for.
     //
-    // THE LESSON, and why the shape is pinned whole. Each round pinned one
-    // more feature of a ten-line sequence and each time the unpinned
-    // remainder carried a kill. The remainder is the defect, not the feature,
-    // and the only way to have no remainder is to pin the sequence. This is
-    // also why the file no longer accepts `<` beside `<>`: `<` is correct only
-    // while the no-inflation half holds, and a law whose correctness is
-    // conditional on another law is the regress again.
+    // Round three then showed that pinning the TAIL was still a feature pin,
+    // because the tail is not the routine. Four more kills, all GREEN at
+    // 16/16, all OUTSIDE the pinned region:
+    //   — a later migration redefining the routine as
+    //     `CREATE FUNCTION public.invoice_outstanding(…)`, which the resolver's
+    //     unqualified pattern did not see, so all sixteen laws went on reading
+    //     `0084`'s superseded body;
+    //   — `AND s.settlement_mode <> 'cash'` appended to the `JOIN … ON` arm,
+    //     which drops a visible document and refuses it as missing;
+    //   — `RETURN QUERY SELECT … WHERE false;` inserted immediately above the
+    //     `GET DIAGNOSTICS` that counts its rows, so `v_found` is zero and
+    //     every non-empty call raises;
+    //   — `LEFT JOIN (` narrowed to `JOIN (`, so every invoice with no payment
+    //     allocation and no credit application falls out of the result and the
+    //     merchant's own unpaid invoice comes back «does not exist».
     //
-    // DECLARED COST, and it is the right one for ten lines that decide a money
-    // refusal: ANY edit to this tail reddens this law. That is intended —
-    // changing it means changing this pin deliberately and re-running the red
-    // proofs below it, which for a cross-tenant refusal is the review that
-    // should happen anyway. The operator alternation is kept tolerant because
-    // `!=` is PostgreSQL's own synonym for `<>` and nothing turns on which is
-    // written.
+    // THE LESSON, and it is the honest version of what the previous commit
+    // message overstated. Pinning the tail did not remove the remainder; it
+    // MOVED it. Each round pinned one more feature and the unpinned rest
+    // carried the next kill. What has no remainder is a digest of the whole
+    // body — which is what `PINNED_BODY_SHA256` is, and what the neighbouring
+    // `p4s7-body-digests` guard already does for five other routines.
+    //
+    // This law is now the READABLE half of that pin: it keeps the tail's shape
+    // so that a mismatch says WHAT changed rather than only that something
+    // did. `rc_4c` is the half that cannot be evaded. Both are kept on purpose
+    // — the digest is the law, this is the error message.
     const region = collapse(refusalRegion(body()));
     expect(region, 'the refusal region is empty, so this law had no subject').not.toBe('');
     expect(
@@ -521,6 +619,29 @@ describe('section 2: the detector lives in the array-form body, and this is the 
     ).toMatch(
       /^GET DIAGNOSTICS v_found = ROW_COUNT; IF v_found <> coalesce\(pg_catalog\.cardinality\(p_invoice_ids\), 0\) THEN SELECT pg_catalog\.count\(\*\) INTO v_asked FROM \(SELECT DISTINCT x\.id FROM pg_catalog\.unnest\(p_invoice_ids\) AS x\(id\)\) k; IF v_found (?:<>|!=) v_asked THEN RAISE EXCEPTION 'invoice\.not_found[^']*' USING ERRCODE = 'P0001'; END IF; END IF; END; \$fn\$;$/,
     );
+  });
+
+  it('rc_4c: the WHOLE body is pinned by digest, so there is no unpinned remainder to move the kill into', () => {
+    // The law with no remainder. Everything `rc_2` through `rc_6b` assert is a
+    // consequence of this one; they exist for their failure messages, and this
+    // exists because three rounds of review proved that readable feature pins
+    // always leave somewhere to hide.
+    const normalised = normalisedBody(body());
+    expect(normalised, 'the body did not slice between its $fn$ quotes, so the digest below would be of an empty string').not.toBe('');
+    expect(normalised.length, 'the normalised body is too short to be this routine — the slice is wrong, not the routine').toBeGreaterThan(800);
+
+    const digest = createHash('sha256').update(normalised, 'utf8').digest('hex');
+    expect(
+      digest,
+      `the body of invoice_outstanding(UUID, UUID[]) CHANGED. Normalised length ${normalised.length} against the pinned ${PINNED_BODY_CHARS}.\n` +
+        `This is the one definition of the settlement sum, so the change is a money change: re-read it, re-pin the digest here, and re-run this file's red proofs.\n` +
+        `Comments and indentation inside the body are stripped before hashing, so this did not fire for a reformatting.`,
+    ).toBe(PINNED_BODY_SHA256);
+    // The length is pinned beside the digest for the same reason the
+    // neighbouring guard pins it: a digest tells you something moved, a length
+    // tells you whether the body grew or shrank, and the two together make a
+    // failure diagnosable rather than merely alarming.
+    expect(normalised.length, 'the normalised length must match the pinned one').toBe(PINNED_BODY_CHARS);
   });
 
   it('rc_5: the count compared against is the DISTINCT ids asked about, so a repeated id is not a refusal', () => {
@@ -705,7 +826,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // green against it. `RENAME CONSTRAINT` is here for the same reason: a
     // renamed constraint is a dropped one as far as `rc_11`'s text pin is
     // concerned.
-    const undo: { name: string; re: RegExp; plant: string }[] = [
+    const undo: { name: string; re: RegExp; plant: string; afterResolved?: true }[] = [
       {
         name: 'the invoices primary key',
         re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_pkey"?/i,
@@ -742,6 +863,26 @@ describe('section 4: the count cannot fall short except for an id that names no 
         re: /ADD CONSTRAINT\s+invoices_sale_fk[^;]{0,200}?\bNOT VALID\b/i,
         plant: 'ALTER TABLE invoices ADD CONSTRAINT invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales (business_id, id) NOT VALID;',
       },
+      // THE ROUTINE ITSELF, which this law did not look at and should have.
+      // A review measured the consequence: a later migration that writes
+      // `DROP FUNCTION public.invoice_outstanding(UUID, UUID[]);` and then
+      // re-creates it WITHOUT the refusal left every law here green, because
+      // the resolver did not recognise the schema-qualified name and went on
+      // reading `0084`. The resolver now accepts the qualification; this row
+      // is the other half, because a redefinition ANYWHERE after the resolved
+      // file is a change to the subject of all sixteen laws, whether the
+      // resolver follows it or not.
+      // Scoped to migrations AFTER the resolved file, and that scoping is not
+      // a convenience: `0084` itself drops this signature three lines above
+      // re-creating it — it has to, because the return type changed and
+      // `CREATE OR REPLACE` cannot change a return type. An unscoped probe
+      // fires on the subject it is meant to protect.
+      {
+        name: 'the routine, by dropping it after the file these laws read',
+        re: /DROP FUNCTION\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\[\s*\]\s*\)/i,
+        plant: 'DROP FUNCTION IF EXISTS public.invoice_outstanding(UUID, UUID[]);',
+        afterResolved: true,
+      },
     ];
     // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
     // or a clean scan below means nothing at all.
@@ -751,10 +892,26 @@ describe('section 4: the count cannot fall short except for an id that names no 
 
     const files = migrationFiles();
     expect(files.length, 'the migration scan found no files, so the clean result below is a broken path and not a measurement').toBeGreaterThan(10);
+    const resolved = lastDefining(ARRAY_FORM).file;
+    expect(resolved, 'the resolved file is unknown, so the after-resolved scoping below has no reference point').not.toBe('');
+    // Positive control for the SCOPING, not just for the probes: the
+    // after-resolved rows must have something to be scoped away from, or the
+    // scoping is untested and an unscoped probe would look identical.
+    const resolvedSql = sqlLiveCode(join(MIGRATIONS, resolved));
+    for (const u of undo.filter((x) => x.afterResolved)) {
+      expect(
+        new RegExp(u.re.source, 'i').test(resolvedSql),
+        `the probe for ${u.name} does not match inside ${resolved}, so scoping it after that file proves nothing — either the scoping is unnecessary or the probe is wrong`,
+      ).toBe(true);
+    }
+
     const found: string[] = [];
     for (const f of files) {
       const sql = sqlLiveCode(join(MIGRATIONS, f));
-      for (const u of undo) if (new RegExp(u.re.source, 'i').test(sql)) found.push(`${f} undoes ${u.name}`);
+      for (const u of undo) {
+        if (u.afterResolved && f <= resolved) continue;
+        if (new RegExp(u.re.source, 'i').test(sql)) found.push(`${f} undoes ${u.name}`);
+      }
     }
     // DECLARED LIMIT: a legitimate later slice may need to drop and re-add one
     // of these in one migration. That is exactly the change that should be
@@ -773,13 +930,13 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     // A pin with no law is a claim; a law with no pin is a role nobody stated.
     for (const pin of PINS) {
       expect(source, `PINS names ${pin.law} but this file declares no such law`).toMatch(new RegExp(`it\\('${pin.law}:`));
-      expect(['detector', 'preventer'], `${pin.law} carries a role outside the vocabulary`).toContain(pin.role);
+      expect(['detector', 'preventer', 'backstop'], `${pin.law} carries a role outside the vocabulary`).toContain(pin.role);
       // A preventer that cannot say which direction it bounds is how three
       // constraints came to be called sufficient for a claim needing five.
       if (pin.role === 'preventer') {
         expect(['above', 'below', 'both'], `${pin.law} is a preventer but states no bound`).toContain(pin.bound);
       } else {
-        expect(pin.bound, `${pin.law} is a detector; it bounds nothing`).toBeUndefined();
+        expect(pin.bound, `${pin.law} is a ${pin.role}; it bounds nothing`).toBeUndefined();
       }
     }
     const declared = [...source.matchAll(/it\('(rc_\d+b?):/g)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
@@ -824,7 +981,7 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     // entry is right is a table that can lie about which constraint does what
     // — and «which constraint does what» is the whole subject of this file.
     const boundOf = (law: string) => PINS.find((p) => p.law === law)?.bound;
-    expect(boundOf('rc_6'), 'the group key bounds the count from ABOVE: extra key columns multiply rows').toBe('above');
+    expect(boundOf('rc_6'), 'the reducer bounds BOTH ways: extra key columns multiply rows, and losing LEFT drops rows').toBe('both');
     expect(boundOf('rc_6b'), 'the driving predicate bounds from BELOW: an extra conjunct drops a visible row').toBe('below');
     expect(boundOf('rc_7'), 'the invoices key bounds from above').toBe('above');
     expect(boundOf('rc_8'), 'the sales key bounds from above').toBe('above');
@@ -837,6 +994,14 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     // purpose.
     expect(PINS.filter((p) => p.role === 'detector')).toHaveLength(5);
     expect(PINS.filter((p) => p.role === 'preventer')).toHaveLength(7);
+    // Exactly one backstop, and it is the body digest. More than one would
+    // mean two things claim to have no remainder, and then neither does.
+    const backstops = PINS.filter((p) => p.role === 'backstop');
+    expect(
+      backstops.map((p) => p.law),
+      'there must be exactly one backstop and it must be the body digest',
+    ).toEqual(['rc_4c']);
+    expect(backstops[0]?.bound, 'the backstop bounds nothing; it pins the body').toBeUndefined();
     const detectorTokens = new Set(PINS.filter((p) => p.role === 'detector').map((p) => p.token));
     expect(
       PINS.filter((p) => p.role === 'preventer').filter((p) => detectorTokens.has(p.token)),
@@ -883,10 +1048,19 @@ describe('section 5: which of these is a detector and which is a preventer, as a
     // assertion that holds this file to its own honesty, five screens after
     // the probe's docstring warns about «a probe with a hole shaped like
     // itself».
-    const header = flattenProse(fileHeader());
-    expect(header, 'the header slice is empty, so the assertion below would be vacuous again').not.toBe('');
-    expect(header, 'the header slice must not reach the constants, or it can be satisfied by a declaration').not.toContain('const REQUIRED_DENIAL');
-    expect(header, 'the header must say out loud that the refusal does not prevent duplication').toContain(REQUIRED_DENIAL);
+    // The STRUCTURE of the slice is asserted on the raw text and its CONTENT
+    // on the flattened text, because `flattenProse` removes the ` * `
+    // scaffolding and with it the closing `*/` — asserting both on the
+    // flattened string is how the first attempt at this failed.
+    const raw = fileHeader();
+    expect(raw, 'the header slice is empty, so the assertion below would be vacuous again').not.toBe('');
+    // The slice must be a COMMENT and must stop there. `const` cannot occur
+    // inside it, so no declaration can satisfy the assertion that follows —
+    // which is the hole the previous, line-based slice still had.
+    expect(raw.startsWith('/**'), 'the header slice must begin at the opening of a block comment').toBe(true);
+    expect(raw.endsWith('*/'), 'and must end at its close, so nothing declared below is inside it').toBe(true);
+    expect(raw, 'the header slice must contain no declaration at all').not.toMatch(/\bconst\s+\w+\s*=/);
+    expect(flattenProse(raw), 'the header must say out loud that the refusal does not prevent duplication').toContain(REQUIRED_DENIAL);
 
     // DECLARED LIMIT: this pins the WORDING of the claim, not its truth. What
     // makes the claim true is the constraint laws above, in both directions,
