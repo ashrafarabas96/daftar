@@ -302,6 +302,30 @@ const PINNED_BODY_SHA256 = '300725d4696a75cb38c71c817aa697368ddcf0b6c8bf7db9a1cd
 const PINNED_BODY_CHARS = 1885;
 
 /**
+ * THE DECLARATION, pinned the same way and for the same reason.
+ *
+ * The body digest was round three's answer and round four found its remainder:
+ * `normalisedBody` slices BETWEEN the `$fn$` quotes, so the routine's header —
+ * its `RETURNS TABLE` column list and its attributes — was outside the number.
+ * MEASURED green at 17/17, each one on its own:
+ *   — `paid_txn_minor` and `outstanding_txn_minor` swapped in `RETURNS TABLE`.
+ *     Two columns of the same type, so nothing else complains, and every
+ *     consumer reads BY NAME: a fully paid invoice then reports its full value
+ *     as outstanding and an unpaid one reports zero. This is the same silent
+ *     inversion as the `GROUP BY` hole, one line higher up.
+ *   — `due_date` and `issue_date` swapped, so DR-13's
+ *     `coalesce(o.due_date, o.issue_date)` ages every document by the wrong
+ *     date.
+ *   — `STABLE` weakened to `VOLATILE`.
+ * So the pin is over the declaration as well as the body. Taken together they
+ * are the whole `CREATE … $fn$;` statement, and THAT is the thing with no
+ * remainder — not the body, which is what the previous commit claimed.
+ */
+const PINNED_HEADER_SHA256 = '889b888328b293de908eae6050a39193d3e50fa982a4345a12eade635ec9371a';
+/** Its normalised length. */
+const PINNED_HEADER_CHARS = 339;
+
+/**
  * One table's `CREATE TABLE` block, from its header to the `);` in column one
  * that closes it.
  *
@@ -446,13 +470,18 @@ interface Pin {
  * nobody can check the coverage of.
  */
 const PINS: readonly Pin[] = [
-  // The backstop. It pins no single constraint — it pins the whole body, so
-  // every other entry below is a CONSEQUENCE of it. They are kept for their
-  // failure messages: a digest mismatch says the body moved, and they say
-  // which part. Counted as its own role rather than squeezed into the other
-  // two, because calling a body digest a `detector` or a `preventer` would be
-  // the kind of imprecision this table exists to prevent.
-  { law: 'rc_4c', role: 'backstop', subject: 'the whole array-form body', token: 'sha256 of the normalised body' },
+  // The backstop. It pins no single constraint — it pins the whole
+  // declaration, header and body, so MOST of the entries below are
+  // consequences of it. Not all, and the earlier wording «every other entry
+  // below is a CONSEQUENCE of it» was measured false: `rc_12` reddens where
+  // the digests are blind, because attributes can be changed by a later
+  // `ALTER` that leaves this file byte-identical, and `rc_7`, `rc_8`, `rc_11`
+  // and `rc_13` read other files entirely. The consequences are kept for
+  // their failure messages: a digest mismatch says the declaration moved, and
+  // they say which part. Counted as its own role rather than squeezed into
+  // the other two, because calling a digest a `detector` or a `preventer`
+  // would be the kind of imprecision this table exists to prevent.
+  { law: 'rc_4c', role: 'backstop', subject: 'the whole array-form declaration', token: 'sha256 of the normalised header and body' },
   { law: 'rc_2', role: 'detector', subject: 'the array-form body', token: 'GET DIAGNOSTICS v_found = ROW_COUNT' },
   { law: 'rc_3', role: 'detector', subject: 'the array-form body', token: "RAISE EXCEPTION 'invoice.not_found … P0001" },
   { law: 'rc_4', role: 'detector', subject: 'the array-form body', token: 'every IF governing the refusal reads v_found' },
@@ -523,6 +552,15 @@ describe('section 1: the subject is resolved by signature, from the last migrati
       /ROW_COUNT/,
     );
     expect(arrayBody, 'and the array form is where the refusal lives').toMatch(/ROW_COUNT/);
+    // AND THE WRAPPER MUST DELEGATE. Round four measured why: re-creating the
+    // scalar form in a later migration with its own inline query — no call to
+    // the array form, no refusal — left the suite GREEN at 17/17, and the
+    // scalar form is the one three production readers call, by
+    // `JOIN LATERAL invoice_outstanding(i.business_id, i.id)`. Its refusal is
+    // entirely BORROWED from this delegation, so the delegation is the law.
+    expect(collapse(scalarBody), 'the scalar wrapper must delegate to the array form — its refusal is borrowed, not its own').toMatch(
+      /FROM public\.invoice_outstanding\(p_business_id, ARRAY\[p_invoice_id\]\)/,
+    );
   });
 });
 
@@ -621,11 +659,29 @@ describe('section 2: the detector lives in the array-form body, and this is the 
     );
   });
 
-  it('rc_4c: the WHOLE body is pinned by digest, so there is no unpinned remainder to move the kill into', () => {
-    // The law with no remainder. Everything `rc_2` through `rc_6b` assert is a
-    // consequence of this one; they exist for their failure messages, and this
-    // exists because three rounds of review proved that readable feature pins
-    // always leave somewhere to hide.
+  it('rc_4c: the WHOLE declaration is pinned by digest — header and body, so there is no remainder left to move the kill into', () => {
+    // The law with no remainder, now over the whole `CREATE … $fn$;` and not
+    // only the part between the dollar quotes. Most of what `rc_2` through
+    // `rc_6b` assert is a consequence of this; they exist for their failure
+    // messages. `rc_12` is NOT a consequence of it — it reads attributes as
+    // a later `ALTER` can leave them, which no digest of this file's text can
+    // see — and `rc_7`, `rc_8`, `rc_11` and `rc_13` read other files entirely.
+    //
+    // THE HEADER FIRST, because it is the remainder round four found.
+    const header = collapse(routineHeader(body()));
+    expect(header, 'the routine header did not slice, so the digest below would be of an empty string').not.toBe('');
+    expect(header.startsWith('CREATE'), 'the header slice must start at the CREATE, or it is not the declaration').toBe(true);
+    const headerDigest = createHash('sha256').update(header, 'utf8').digest('hex');
+    expect(
+      headerDigest,
+      `the DECLARATION of invoice_outstanding(UUID, UUID[]) changed. Normalised length ${header.length} against the pinned ${PINNED_HEADER_CHARS}.
+` +
+        `It reads: ${header}
+` +
+        `This covers the RETURNS TABLE column list and the routine's attributes. Two columns of the same type swapped here invert paid and outstanding for every consumer that reads by name, and nothing else in the tree complains.`,
+    ).toBe(PINNED_HEADER_SHA256);
+    expect(header.length, 'the normalised header length must match the pinned one').toBe(PINNED_HEADER_CHARS);
+
     const normalised = normalisedBody(body());
     expect(normalised, 'the body did not slice between its $fn$ quotes, so the digest below would be of an empty string').not.toBe('');
     expect(normalised.length, 'the normalised body is too short to be this routine — the slice is wrong, not the routine').toBeGreaterThan(800);
@@ -684,6 +740,13 @@ describe('section 3: the count cannot exceed the distinct ids asked about, and t
     expect(collapsed, 'the group key must be d.invoice_id alone — an extra column makes r a row per reducer and the LEFT JOIN multiplies').toMatch(
       /GROUP BY d\.invoice_id \) r ON r\.invoice_id = i\.id/,
     );
+    // The `LEFT`, asserted here and not only carried by the digest. A review
+    // measured that this law's `token` and its `bound: 'both'` both CLAIMED
+    // the `LEFT` while no matcher here read it — the word appeared only in a
+    // failure message. Narrowed to an inner join, every invoice with no
+    // reducer row drops out and the merchant's own unpaid invoice comes back
+    // as missing: a bound from BELOW, on this law's own subject.
+    expect(collapsed, 'the reducer join must be a LEFT join, or an invoice with no allocation and no credit falls out of the result').toContain('LEFT JOIN (');
     expect(collapsed, 'and the two reducer relations must both be inside it, or the group is over the wrong set').toMatch(
       /payment_allocations[\s\S]*?UNION ALL[\s\S]*?customer_credit_applications[\s\S]*?GROUP BY d\.invoice_id/,
     );
@@ -872,6 +935,42 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // is the other half, because a redefinition ANYWHERE after the resolved
       // file is a change to the subject of all sixteen laws, whether the
       // resolver follows it or not.
+      // These two are UNSCOPED, unlike the rows below: measured, `ALTER
+      // FUNCTION … invoice_outstanding` occurs ZERO times in all 87
+      // migrations, so every file can be scanned and nothing legitimate is
+      // caught. Scoping is used only where a probe matches inside the
+      // resolved file and therefore has to be — which the positive control
+      // below asserts row by row, and which is how this distinction was found.
+      // ATTRIBUTES, as a later `ALTER` can leave them. These are the rows no
+      // digest of this file's text can replace: `ALTER FUNCTION … SECURITY
+      // DEFINER;` in a later migration leaves `0084` byte-identical, so every
+      // digest here still matches, while the installed routine crosses the
+      // caller's row security — `v_found` rises to meet `v_asked`, the report
+      // falls silent, and the routine hands back another business's settlement
+      // figures. MEASURED green before this row, and `definer-search-path.ts`
+      // does not catch it either: it permits a definer whose `search_path` is
+      // pinned, and `ALTER … SECURITY DEFINER` keeps the `SET` from the CREATE.
+      {
+        name: "the routine's INVOKER reads, by altering it later",
+        re: /ALTER FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*SECURITY\s+DEFINER/i,
+        plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) SECURITY DEFINER;',
+      },
+      {
+        name: "the routine's pinned search_path, by altering it later",
+        re: /ALTER FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
+        plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) RESET search_path;',
+      },
+      // THE SCALAR WRAPPER, which `rc_1b` reads only inside the resolved file.
+      // `CREATE OR REPLACE` with the same argument names is legal and needs no
+      // `DROP`, so a later migration can give the wrapper its own inline query
+      // and drop the delegation that lends it its refusal — and the wrapper is
+      // the form three production readers call. MEASURED green before this row.
+      {
+        name: 'the scalar wrapper, by redefining it after the file these laws read',
+        re: /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_id\s+UUID\s*\)/i,
+        plant: 'CREATE OR REPLACE FUNCTION public.invoice_outstanding(p_business_id UUID, p_invoice_id UUID)',
+        afterResolved: true,
+      },
       // Scoped to migrations AFTER the resolved file, and that scoping is not
       // a convenience: `0084` itself drops this signature three lines above
       // re-creating it — it has to, because the return type changed and
