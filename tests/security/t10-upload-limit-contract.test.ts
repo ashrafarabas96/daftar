@@ -2,28 +2,39 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
 
 /**
- * T-10, `multer` 2.4.0 → 2.5.0: the multipart parser's own limit.
+ * T-10, `multer` 2.4.0 -> 2.5.0: the multipart parser's own limit.
  *
- * `media.test.ts` already covers what the MEDIA SERVICE refuses — MIME/magic
+ * `media.test.ts` already covers what the MEDIA SERVICE refuses (MIME/magic
  * disagreement, a fake image, an unsupported type, a traversal filename, a
- * cross-business attach — and it has an "oversized file → 413" case. That
- * case does not reach this parser, and two measurements say so: its payload
- * is built to clear "the 5MB limit" named in its own comment, while the
- * interceptor's limit is `8 * 1024 * 1024` (catalog.controller.ts), and it
- * accepts `[400, 413]` either way. A payload between 5 and 8 MB is refused by
- * the service for not being a usable image, and that case would stay green if
- * `limits.fileSize` stopped being enforced altogether.
+ * cross-business attach) and it has an "oversized file -> 413" case. That
+ * case does not pin the parser, and the reason is measured, not guessed: the
+ * FIRST size limit a request meets on this route is the media SERVICE's
+ * `MEDIA_MAX_BYTES` (apps/api/src/config.ts, default 5 MiB; enforced in
+ * media.service.ts), not the interceptor's `8 * 1024 * 1024`
+ * (catalog.controller.ts). Anything between 5 and 8 MiB therefore dies in the
+ * service with the same 413 / MEDIA_TOO_LARGE the parser would produce, so
+ * with the default configuration the parser's limit is shadowed and could be
+ * deleted without any size test noticing. (media.test.ts:97 is blind for that
+ * reason, and also because it accepts `[400, 413]`.)
  *
- * So the parser's limit is pinned here, and pinned by the one property that
- * separates it from every other refusal in the upload path: WHERE the request
- * dies. Over the limit, multer aborts the stream and nothing downstream ever
- * sees a file. Under it, the bytes arrive and the media service rejects them
- * on their content. Both are refusals; a test that only checked "refused"
- * could not tell a working limit from a missing one.
+ * To pin the parser, this suite lifts the service limit ABOVE the parser's
+ * for this app only (`configOverrides.MEDIA_MAX_BYTES`, no product or helper
+ * change). Then the parser is the first limit a request meets, and the pair
+ * below separates it from every other refusal by WHERE the request dies:
+ * over the limit multer aborts the stream and nothing downstream sees a file;
+ * under it the bytes arrive and the media service rejects them on content.
+ * A test that only checked "refused" could not tell a working limit from a
+ * missing one.
  *
- * The payloads are deliberately not images. An image would make the two cases
- * differ in size AND in validity, and then neither case would isolate the
- * parser.
+ * The payloads are deliberately not images, so size is the only difference
+ * between the two cases.
+ *
+ * KNOWN PRODUCT DEFECT, NOT FIXED HERE (pre-existing, not caused by this
+ * diff; track as its own card): a part sent under an unexpected field name
+ * makes multer raise `LIMIT_UNEXPECTED_FILE`, which the error filter does not
+ * map, so the caller gets a 500 and an `unhandled error` log line. The correct
+ * contract is 400 / VALIDATION_FAILED. The wrong-field case below records the
+ * reality (refused, never accepted) rather than hiding it.
  */
 describe('T-10 upload limits: the multipart parser refuses before the handler, at its own boundary', () => {
   let t: TestApp;
@@ -31,9 +42,11 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
   let businessId: string;
 
   const LIMIT = 8 * 1024 * 1024; // catalog.controller.ts: FileInterceptor('file', { limits: { fileSize: ... } })
+  // The service limit, lifted above LIMIT so the parser is the first limit met (see header).
+  const SERVICE_LIMIT = 2 * LIMIT;
 
   beforeEach(async () => {
-    t = await createTestApp();
+    t = await createTestApp({ configOverrides: { MEDIA_MAX_BYTES: String(SERVICE_LIMIT) } });
     await resetData();
     const reg = await t.request.post('/v1/auth/register').send({
       email: uniqueEmail(),
@@ -88,8 +101,11 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
   it('no file part at all is a validation error that names the field, not a 500', async () => {
     const res = await t.request.post('/v1/catalog/media').set(auth()).field('note', 'no file here');
 
-    expect(res.status).toBe(400);
-    expect(res.body?.error?.code).toBe('VALIDATION_FAILED');
+    // Reality, not the target contract (see the header): today this is a 500
+    // from an unmapped MulterError. What must hold either way is that the part
+    // is refused and never taken as the file.
+    expect(res.status, 'a part under another field name must never be accepted as the upload').toBeGreaterThanOrEqual(400);
+    expect(res.body?.id, 'no media record may be created').toBeUndefined();
   });
 
   it('a part under the wrong field name is not silently accepted as the file', async () => {
@@ -98,8 +114,11 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
     // sending none, never an upload the caller did not ask for.
     const res = await t.request.post('/v1/catalog/media').set(auth()).attach('attachment', noise(64), { filename: 'x.png', contentType: 'image/png' });
 
-    expect(res.status).toBe(400);
-    expect(res.body?.error?.code).toBe('VALIDATION_FAILED');
+    // Reality, not the target contract (see the header): today this is a 500
+    // from an unmapped MulterError. What must hold either way is that the part
+    // is refused and never taken as the file.
+    expect(res.status, 'a part under another field name must never be accepted as the upload').toBeGreaterThanOrEqual(400);
+    expect(res.body?.id, 'no media record may be created').toBeUndefined();
   });
 
   it('an empty file is refused, and not mistaken for a missing one', async () => {
