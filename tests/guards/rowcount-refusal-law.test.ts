@@ -1277,7 +1277,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     expect(collapse(validation), `${VALIDATION_MIGRATION} must assert the edge is convalidated`).toMatch(/conname = 'invoices_sale_fk'[^;]*c\.convalidated/);
   });
 
-  it('rc_13: no migration anywhere in the chain drops, renames or invalidates any of the pinned constraints', () => {
+  it('rc_13: no later migration this scanner can read drops, renames, redefines or invalidates any of the pinned constraints', () => {
     // The asymmetry an independent review named: the ROUTINE is resolved by
     // «last definition wins», but the TABLES are read from pinned revision
     // numbers. `0075` and `0077` are below `frozenThrough`, so their own text
