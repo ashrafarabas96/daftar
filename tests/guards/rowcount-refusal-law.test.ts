@@ -162,7 +162,8 @@ const VALIDATION_MIGRATION = '0080_phase4_cash_invoice_no_receivable.sql';
  * name matches twenty-one lines across the Phase 4 migrations, and the wrapper
  * is written BEFORE the array form on purpose (`0084` §4's comment, R-100).
  */
-const ARRAY_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\[\s*\]\s*\)/g;
+const ARRAY_FORM =
+  /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\[\s*\]\s*\)/gi;
 
 /**
  * The SCALAR signature — the `(UUID, UUID)` wrapper.
@@ -175,7 +176,8 @@ const ARRAY_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)
  * `p_invoice_ids`, leaving every digest here measuring a body the database no
  * longer had. Measured: exactly one `CREATE` of each signature in `0084`.
  */
-const SCALAR_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\)/g;
+const SCALAR_FORM =
+  /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\)/gi;
 
 /** Whitespace collapsed, so a claim is about the text and not about indentation. */
 function collapse(s: string): string {
@@ -226,7 +228,7 @@ function lastDefining(re: RegExp): { file: string; sql: string } {
   let found = { file: '', sql: '' };
   for (const file of migrationFiles()) {
     const sql = sqlLiveCode(join(MIGRATIONS, file));
-    if (new RegExp(re.source).test(sql)) found = { file, sql };
+    if (new RegExp(re.source, re.flags).test(sql)) found = { file, sql };
   }
   return found;
 }
@@ -243,7 +245,10 @@ function lastDefining(re: RegExp): { file: string; sql: string } {
  * vacuous pass.
  */
 function signatureBody(sql: string, re: RegExp): string {
-  const all = [...sql.matchAll(new RegExp(re.source, 'g'))];
+  // `re.flags` and not a hard-coded `'g'`: dropping the pattern's own flags
+  // is how the resolver came to be case-sensitive about a case-insensitive
+  // language. `matchAll` requires `g`, which both patterns carry.
+  const all = [...sql.matchAll(new RegExp(re.source, re.flags))];
   const last = all[all.length - 1];
   if (last?.index === undefined) return '';
   const end = sql.indexOf('$fn$;', last.index);
@@ -508,10 +513,14 @@ const PINS: readonly Pin[] = [
   // The backstop. It pins no single constraint — it pins the whole
   // declaration, header and body, so MOST of the entries below are
   // consequences of it. Not all, and the earlier wording «every other entry
-  // below is a CONSEQUENCE of it» was measured false: `rc_12` reddens where
-  // the digests are blind, because attributes can be changed by a later
-  // `ALTER` that leaves this file byte-identical, and `rc_7`, `rc_8`, `rc_11`
-  // and `rc_13` read other files entirely. The consequences are kept for
+  // below is a CONSEQUENCE of it» was measured false, but so was this
+  // paragraph's first correction of it: `rc_12` IS a consequence — planting
+  // `SECURITY DEFINER` in `0084`'s header reddens `rc_4c` and `rc_12`
+  // together. What sees a LATER `ALTER` is `rc_13`, whose rows read other
+  // files, as do `rc_7`, `rc_8` and `rc_11`. Those four are the exceptions.
+  // Recorded rather than quietly rewritten because the wrong version invited
+  // a reader to delete `rc_13`'s routine rows as duplicates of a law that
+  // cannot see what they see. The consequences are kept for
   // their failure messages: a digest mismatch says the declaration moved, and
   // they say which part. Counted as its own role rather than squeezed into
   // the other two, because calling a digest a `detector` or a `preventer`
@@ -729,9 +738,13 @@ describe('section 2: the detector lives in the array-form body, and this is the 
     );
   });
 
-  it('rc_4c: the WHOLE declaration is pinned by digest — header and body, so there is no remainder left to move the kill into', () => {
-    // The law with no remainder, now over the whole `CREATE … $fn$;` and not
-    // only the part between the dollar quotes. Most of what `rc_2` through
+  it('rc_4c: the WHOLE declaration is pinned by digest — header and body, so nothing inside the RESOLVED declaration is left unpinned', () => {
+    // The law with no remainder INSIDE the declaration it resolves, now over
+    // the whole `CREATE … $fn$;` and not only the part between the dollar
+    // quotes. The qualifier is load-bearing and was added after a review
+    // measured the obvious gap in the stronger claim: a digest says nothing
+    // about a LATER migration replacing the routine, so resolution is its own
+    // remainder and `rc_13`'s routine rows are what cover it — not this law. Most of what `rc_2` through
     // `rc_6b` and `rc_12` assert is a consequence of this; they exist for
     // their failure messages. `rc_7`, `rc_8`, `rc_11` and `rc_13` are NOT
     // consequences — they read other files. `rc_12` IS one, and the previous
@@ -1040,6 +1053,28 @@ describe('section 4: the count cannot fall short except for an id that names no 
         name: "the routine's pinned search_path, by altering it later",
         re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
         plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) RESET search_path;',
+      },
+      // THE ARRAY SIGNATURE'S OWN REDEFINITION, which no row covered either —
+      // and it is the overload that matters most. The thin wrapper had this
+      // row; the ONE DEFINITION OF THE SETTLEMENT SUM did not. A later
+      // `CREATE OR REPLACE` needs no `DROP` when the return type and the
+      // parameter names are unchanged, so nothing here saw it, and the
+      // resolver's own flags made it worse: measured, the SAME replacement
+      // written `uuid`/`uuid[]` instead of `UUID`/`UUID[]` left all eighteen
+      // laws green while an upper-case spelling of it reddened fourteen. SQL
+      // is case-insensitive and lower-case `uuid` already ships in `0032`,
+      // `0033` and `0038`, so that is a house style and not a contrivance.
+      {
+        name: 'the set-based form, by redefining it after the file these laws read',
+        re: /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\[\s*\]\s*\)/i,
+        plant: 'CREATE OR REPLACE FUNCTION public.invoice_outstanding(p_business_id uuid, p_invoice_ids uuid[])',
+        afterResolved: true,
+      },
+      // And renaming it away, which leaves no `DROP` and no `CREATE` to find.
+      {
+        name: 'either form, by renaming it out from under these laws',
+        re: /ALTER\s+(?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?"?invoice_outstanding"?\s*\([^)]*\)\s+RENAME\s+TO/i,
+        plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) RENAME TO invoice_outstanding_v1;',
       },
       // THE SCALAR SIGNATURE'S OWN DROP, which no row covered: the drop row
       // below names `(UUID, UUID[])` only. Round five's route in was exactly
