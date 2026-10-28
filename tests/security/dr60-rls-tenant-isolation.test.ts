@@ -489,6 +489,195 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
     expect(await deleteGrants(true), 'some runtime principal holds DELETE on a Phase 4 money relation').toEqual([]);
   }, 60_000);
 
+  // ── 4b. DR-61 — THE GRANT-PINNING LAW ───────────────────────────────────
+  /**
+   * DR-61 §1 — THE WRITE SURFACE OF THE FOUR MONEY RELATIONS, PINNED.
+   *
+   * WHY THIS EXISTS. Everything the case above proves about `UPDATE` and
+   * `DELETE` for the merchant runtime principal rests on a privilege that is
+   * NOT GRANTED. That is a real boundary and it is the one in force today,
+   * but it is a boundary made of an absence: the day any slice grants a write
+   * on one of these four, every one of those proofs evaporates in silence and
+   * the only thing left between two merchants on the write path is
+   * `business_isolation_update` and `business_isolation_delete` — two quals
+   * `0086` did not touch and which NO suite in this tree has ever executed
+   * against a live cluster. So the absence is pinned here, and the pin says
+   * out loud what has to happen before it may be relaxed.
+   *
+   * WHO IS AN "APPLICATION ROLE", DERIVED FROM THE CATALOGUE AND NOT LISTED.
+   * Every role whose name matches `daftar\_%`, plus `PUBLIC` — minus, PER
+   * RELATION, that relation's MEASURED OWNER. There is no hand-written list
+   * of principals anywhere in this case, so a role created tomorrow is in
+   * scope the moment it is created, without an edit here.
+   *
+   *   — `PUBLIC` is in scope because a grant to it reaches every one of them
+   *     at once, which is the worst shape this law could miss.
+   *   — THE OWNER IS EXCLUDED BECAUSE IT CANNOT BE REVOKED. An owner holds
+   *     its relation by owning it; `REVOKE` from an owner is undone by the
+   *     next `GRANT` the owner makes to itself, and `relacl` materialises the
+   *     owner's full set the moment any grant is made at all. Here the owner
+   *     is `postgres` (measured below). A managed deployment hands ownership
+   *     to `daftar_migrator` (the migration-portability pattern), and because
+   *     the exclusion is the MEASURED owner and not a hard-coded name, this
+   *     case follows it there instead of turning red for a reason that is not
+   *     a defect — which is the fix the DELETE case above asks for in prose.
+   *     What the exclusion does NOT say is that the owner is unreachable from
+   *     a merchant request; that is a question about connection strings, and
+   *     it is not this case's subject.
+   *
+   * WHAT IS SWEPT, EXACTLY. `UPDATE`, `DELETE` and `TRUNCATE` at TABLE level,
+   * and `UPDATE` at COLUMN level. Not `DELETE` or `TRUNCATE` at column level:
+   * PostgreSQL HAS NO column-level `DELETE` or `TRUNCATE` privilege, so a
+   * probe for one is empty by construction and would buy the appearance of
+   * coverage and nothing else. The table-level view is the whole of the
+   * question for those two. Read from `pg_class.relacl` and
+   * `pg_attribute.attacl` through `aclexplode`, NOT from
+   * `information_schema.role_table_grants`: that view shows only grants whose
+   * grantor or grantee is a CURRENTLY ENABLED role, so it can return nothing
+   * for a reason that has nothing to do with grants — a silent green.
+   *
+   * THE TWO ASSERTIONS, AND WHY THEY ARE NOT THE SAME ONE.
+   *
+   *   (a) NO CREDENTIALED PRINCIPAL HOLDS ANY OF THE THREE — a plain zero,
+   *       with nothing pinned and nothing to maintain. "Credentialed" is
+   *       `rolcanlogin`, read from `pg_roles`: a role a connection can arrive
+   *       as. Today that is eight roles and the measured answer is zero, so
+   *       this assertion needs no floor at all.
+   *   (b) THE WHOLE WRITE SURFACE EQUALS WHAT WAS MEASURED — set equality
+   *       against `PINNED_WRITE_SURFACE` below, which covers the NOLOGIN
+   *       internal principals too.
+   *
+   * WHY (b) IS A PIN AND NOT AN EXCLUSION. `daftar_inventory_internal` — the
+   * one principal that already holds a write here — could have been excluded
+   * from the definition of "application role" instead, and the case would be
+   * shorter and weaker: it would then be blind to the ONLY principal in the
+   * cluster that can write to these relations at all, which is precisely the
+   * thing worth watching. So it is pinned. `GRANT UPDATE (amount_minor) ON
+   * invoices TO daftar_inventory_internal` turns this red and names it.
+   *
+   * AND THE PIN IS NOT AN EXCEPTION LIST. Nothing is appended to it to make a
+   * new grant pass. It is an exact set, measured on a live cluster, and the
+   * failure message names the precondition that has to be met before anyone
+   * edits it. Editing it is the deliberate act of a card that has first
+   * proved the write quals; it is not the quiet maintenance an exception list
+   * invites.
+   */
+  const WRITE_PRIVILEGES = ['UPDATE', 'DELETE', 'TRUNCATE'] as const;
+
+  /**
+   * The entire write surface of the four, as measured on a live PostgreSQL
+   * 16.15 cluster carrying migrations `0000 … 0086` (87 applied).
+   *
+   * Every entry is a COLUMN-level `UPDATE` held by `daftar_inventory_internal`
+   * — `NOLOGIN NOINHERIT`, reachable only by `SET ROLE`, which is what the
+   * inventory routines do. No table-level `UPDATE`, no `DELETE` and no
+   * `TRUNCATE` is held by any application role, at any level, anywhere.
+   */
+  const PINNED_WRITE_SURFACE: readonly string[] = [
+    'invoices|daftar_inventory_internal|UPDATE|status',
+    'sales|daftar_inventory_internal|UPDATE|binding_source_id',
+    'sales|daftar_inventory_internal|UPDATE|business_transaction_id',
+    'sales|daftar_inventory_internal|UPDATE|confirmed_at',
+    'sales|daftar_inventory_internal|UPDATE|confirmed_by',
+    'sales|daftar_inventory_internal|UPDATE|status',
+    'sales|daftar_inventory_internal|UPDATE|void_intent_sha256',
+    'sales|daftar_inventory_internal|UPDATE|voided_at',
+    'sales|daftar_inventory_internal|UPDATE|voided_by',
+  ];
+
+  /** What has to be true before any entry above may be added to. */
+  const PRECONDITION =
+    'DR-61: before ANY write grant is added to one of these four relations, ' +
+    '`business_isolation_update` and `business_isolation_delete` MUST first be proved, live, on a cluster ' +
+    'with two populated tenants in it — neither qual has ever been executed in this project. ' +
+    'Until then the write boundary here is a missing grant, and this case is what holds it. ' +
+    'Do not edit the pinned set to make this pass.';
+
+  it('DR-61 — no application role holds UPDATE, DELETE or TRUNCATE on the four money relations beyond the pinned, measured surface', async () => {
+    interface Grant {
+      rel: string;
+      grantee: string;
+      priv: string;
+      col: string | null;
+    }
+    // Every grant of EVERY privilege, so the positive control below can show
+    // the probe finds things before the write filter is applied to it.
+    const all = (
+      await ownerPool().query<Grant>(
+        `WITH tbl AS (
+           SELECT c.relname::text AS rel, a.grantee AS g, a.privilege_type::text AS priv, NULL::text AS col
+             FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+            WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY($1::text[])
+         ), colg AS (
+           SELECT c.relname::text AS rel, a.grantee AS g, a.privilege_type::text AS priv, att.attname::text AS col
+             FROM pg_class c
+             JOIN pg_attribute att ON att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped
+             CROSS JOIN LATERAL aclexplode(att.attacl) a
+            WHERE c.relnamespace = 'public'::regnamespace AND c.relname = ANY($1::text[])
+         )
+         SELECT rel, CASE WHEN g = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(g)::text END AS grantee, priv, col
+           FROM (SELECT * FROM tbl UNION ALL SELECT * FROM colg) s
+          ORDER BY 1, 2, 3, 4`,
+        [[...RELATIONS]],
+      )
+    ).rows;
+
+    // The measured owner of each relation, which is what the exclusion uses.
+    const owners = new Map<string, string>(
+      (
+        await ownerPool().query<{ relname: string; owner: string }>(
+          `SELECT relname::text, pg_get_userbyid(relowner)::text AS owner FROM pg_class
+            WHERE relnamespace = 'public'::regnamespace AND relname = ANY($1::text[])`,
+          [[...RELATIONS]],
+        )
+      ).rows.map((r) => [r.relname, r.owner] as const),
+    );
+
+    // Every `daftar_%` role, and whether a connection can arrive as it.
+    const canLogin = new Map<string, boolean>(
+      (
+        await ownerPool().query<{ rolname: string; rolcanlogin: boolean }>(
+          `SELECT rolname::text, rolcanlogin FROM pg_roles WHERE rolname LIKE 'daftar\\_%' ORDER BY 1`,
+        )
+      ).rows.map((r) => [r.rolname, r.rolcanlogin] as const),
+    );
+
+    // ── NON-VACUITY, BEFORE ANY EMPTINESS IS READ AS A REFUSAL ────────────
+    // A probe that returns nothing because the relation names are wrong, or
+    // because `aclexplode` was handed a NULL acl, satisfies every assertion
+    // below for free. So: the probe finds grants, the role set is populated
+    // on BOTH tiers, and every relation has a measured owner.
+    expect(owners.size, 'not every one of the four relations has a measured owner, so the exclusion below has no subject').toBe(RELATIONS.length);
+    expect(all.length, 'the grant probe found NOTHING at all on four relations that certainly carry grants — it is measuring nothing').toBeGreaterThan(0);
+    for (const rel of RELATIONS) {
+      expect(
+        all.some((g) => g.rel === rel && g.grantee === 'daftar_app' && g.priv === 'SELECT'),
+        `the probe cannot even see daftar_app's SELECT on ${rel}, so its silence about writes proves nothing`,
+      ).toBe(true);
+    }
+    expect(canLogin.get('daftar_app'), 'daftar_app is not a daftar_% role the catalogue reports as able to log in').toBe(true);
+    expect(
+      canLogin.get('daftar_inventory_internal'),
+      'daftar_inventory_internal is not in the role set, so the pinned surface below is about a principal this case cannot see',
+    ).toBe(false);
+    expect(PINNED_WRITE_SURFACE.length, 'the pinned surface is empty, so set equality against it is equality with nothing').toBeGreaterThan(0);
+
+    // ── THE SWEEP ────────────────────────────────────────────────────────
+    const isApplicationRole = (g: Grant): boolean => g.grantee !== owners.get(g.rel) && (g.grantee === 'PUBLIC' || canLogin.has(g.grantee));
+    const key = (g: Grant): string => `${g.rel}|${g.grantee}|${g.priv}|${g.col ?? ''}`;
+    const say = (g: Grant): string => `${g.grantee} holds ${g.priv}${g.col === null ? '' : ` (${g.col})`} on ${g.rel}`;
+
+    const writes = all.filter((g) => (WRITE_PRIVILEGES as readonly string[]).includes(g.priv) && isApplicationRole(g));
+
+    // (a) A PLAIN ZERO: nothing a connection can arrive as holds any of the
+    //     three, at table or column level. Nothing pinned, nothing to edit.
+    const credentialed = writes.filter((g) => g.grantee === 'PUBLIC' || canLogin.get(g.grantee) === true);
+    expect(credentialed.map(say), `a principal a connection can authenticate as now holds a write here — ${PRECONDITION}`).toEqual([]);
+
+    // (b) THE WHOLE SURFACE, PINNED — including the NOLOGIN internals.
+    expect(writes.map(key).sort(), `the write surface of the four money relations has changed — ${PRECONDITION}`).toEqual([...PINNED_WRITE_SURFACE].sort());
+  }, 60_000);
+
   // ── 5. THE MONEY READERS, UNDER A TENANT SCOPE ──────────────────────────
   it('the money readers are INVOKER, and one merchant reads NONE of another merchant’s money through them', async () => {
     // INVOKER is measured. A SECURITY DEFINER routine would read with its

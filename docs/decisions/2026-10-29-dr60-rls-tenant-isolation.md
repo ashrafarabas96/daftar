@@ -171,3 +171,137 @@ never `[DR60:business_isolation_read@X]`, and vice versa.
    by no runtime principal, and there the line is a missing grant rather than
    a qual. **Recommended: a follow-up card on the write quals, before the
    seal rather than after it.**
+
+## 8. DR-61 §1 — the grant-pinning law
+
+The owner's decision, in the words it was given in: *write protection must not
+stay dependent on a missing grant.* §4 of this document and the two write cases
+in the suite both rest on one fact — `daftar_app` holds no `UPDATE`, `DELETE`
+or `TRUNCATE` on these four relations — and that fact is an **absence**. An
+absence ends without a trace. So it is pinned, in the same suite, by a case
+added for this purpose: **`DR-61 — no application role holds UPDATE, DELETE or
+TRUNCATE on the four money relations beyond the pinned, measured surface`**.
+
+### 8.1 Who is an "application role"
+
+Derived from the catalogue at run time, **not from a list in the file**: every
+role whose `rolname` matches `daftar\_%`, plus `PUBLIC`, **minus, per
+relation, that relation's measured owner**.
+
+- `PUBLIC` is in scope because one grant to it reaches every principal at
+  once — the worst shape the law could miss.
+- The **owner** is excluded because an owner holds its relation by owning it:
+  `REVOKE` from an owner is undone by the owner's next grant to itself, and
+  `relacl` materialises the owner's whole set as soon as any grant is made.
+  The owner is **measured** (`pg_get_userbyid(relowner)`), not named, so a
+  managed deployment that hands ownership to `daftar_migrator` is followed
+  rather than failed. This is the fix the `DELETE` case already asks for in
+  prose. It says nothing about whether the owner is reachable from a merchant
+  request; that is a question about connection strings and is not in scope.
+
+Because the set is derived, **a role created tomorrow is in scope the moment
+it is created**, with no edit here. Measured today: twelve `daftar_%` roles,
+eight of them `rolcanlogin`.
+
+### 8.2 What is swept, exactly
+
+`UPDATE`, `DELETE` and `TRUNCATE` at **table** level, and `UPDATE` at
+**column** level. **Not** `DELETE` or `TRUNCATE` at column level: PostgreSQL
+has no column-level `DELETE` or `TRUNCATE` privilege, so such a probe is empty
+by construction and buys the appearance of coverage and nothing else — the
+same reason the earlier review batch deleted one. The table-level view is the
+whole of the question for those two.
+
+Read from `pg_class.relacl` and `pg_attribute.attacl` through `aclexplode`,
+**not** from `information_schema.role_table_grants`: that view shows only
+grants whose grantor or grantee is a *currently enabled* role, so it can return
+nothing for a reason that has nothing to do with grants — a silent green.
+
+### 8.3 The two assertions
+
+- **(a) A plain zero.** No principal a connection can authenticate as
+  (`rolcanlogin`), and not `PUBLIC`, holds any of the three at either level.
+  Nothing is pinned here and there is nothing to maintain; the measured answer
+  today is zero.
+- **(b) The whole write surface, pinned by set equality**, including the
+  `NOLOGIN` internal principals. Measured on a live PostgreSQL 16.15 cluster
+  carrying migrations `0000 … 0086` (**87 applied**), the surface is exactly
+  **nine** entries, all of them column-level `UPDATE` held by
+  `daftar_inventory_internal`: `invoices.status`, and eight columns on `sales`
+  (`binding_source_id`, `business_transaction_id`, `confirmed_at`,
+  `confirmed_by`, `status`, `void_intent_sha256`, `voided_at`, `voided_by`).
+  No table-level `UPDATE`, no `DELETE` and no `TRUNCATE` is held by any
+  application role anywhere.
+
+### 8.4 The decision taken where the card left a choice, and why
+
+The card allowed either excluding `daftar_inventory_internal` from the
+definition of "application role" — on the grounds that it is an internal
+principal no merchant logs in as — **or** recording its existing grants as a
+measured floor. **The second was taken.** Excluding it would make the law blind
+to the *only* principal in the cluster that can write to these relations at
+all, which is precisely the thing worth watching; the law would then be green
+whatever was granted to it. Pinning it costs nine literal lines and reddens on
+`GRANT UPDATE (total_txn_minor) ON invoices TO daftar_inventory_internal` —
+which is measured below, not asserted.
+
+It is a **pin, not an exception list**. Nothing is appended to it to make a new
+grant pass. The failure message of both assertions carries the precondition
+verbatim: `business_isolation_update` and `business_isolation_delete` must
+first be proved, live, on a cluster with two populated tenants in it, and
+neither has ever been executed in this project. Editing the pinned set is the
+deliberate act of a card that has already done that; it is not the quiet
+maintenance an exception list invites.
+
+### 8.5 The plants (DR-55 and its complement)
+
+Five. For each: the grant is applied, **proved applied by counting the write
+surface in the catalogue before and after** — never assumed — the law is run,
+then the grant is revoked and the count proved returned, and the law is run
+again and is green. Every plant reddened **this** case with an
+`AssertionError` naming the grantee, the privilege and the relation.
+
+| plant | surface before → after | law | named in the failure |
+| --- | --- | --- | --- |
+| `GRANT UPDATE ON invoices TO daftar_app` | 9 → 10 | EXIT 1 | `daftar_app holds UPDATE on invoices` |
+| `GRANT DELETE ON sales TO daftar_app` | 9 → 10 | EXIT 1 | `daftar_app holds DELETE on sales` |
+| `GRANT TRUNCATE ON payment_allocations TO daftar_worker` | 9 → 10 | EXIT 1 | `daftar_worker holds TRUNCATE on payment_allocations` |
+| `GRANT UPDATE (total_txn_minor) ON invoices TO daftar_inventory_internal` | 9 → 10 | EXIT 1 | `invoices\|daftar_inventory_internal\|UPDATE\|total_txn_minor` |
+| `GRANT UPDATE ON customer_credit_applications TO PUBLIC` | 9 → 10 | EXIT 1 | `PUBLIC holds UPDATE on customer_credit_applications` |
+
+After every revoke the surface returned to **9** and the law returned **EXIT
+0**. The third plant uses a login role that is *not* `daftar_app`, and the
+fifth uses `PUBLIC`, so the three together show the role set is derived rather
+than written down. The fourth is the only one that reddens assertion (b)
+rather than (a) — which is the evidence that the pin, not the zero, is what
+covers the internal principals.
+
+**The positive control**, without which every assertion above is satisfied by a
+broken probe: the sweep is taken over *all* privileges first, and the case
+asserts that it can see `daftar_app`'s `SELECT` on each of the four, that every
+relation has a measured owner, that `daftar_app` is reported `rolcanlogin` and
+`daftar_inventory_internal` is reported not, and that the pinned set is not
+empty. A probe that returns nothing therefore fails rather than passes.
+
+### 8.6 What this law does NOT do — `NOT_RUN` by name
+
+- **It does not prove the write policies.** It pins the absence that makes
+  proving them unnecessary *today*. `business_isolation_update` and
+  `business_isolation_delete` remain executed by nothing in this project.
+  Proving them is **a blocking card for the first slice that grants a write,
+  not for the seal** — the owner's decision, recorded here.
+- **It is not run by CI.** Like the rest of this suite, the evidence is local,
+  on one machine, by one hand, with the cluster described in §8.3.
+  Reproducing it on the seal branch (DR-26) is outstanding.
+- **`INSERT` is not swept.** It is already held by
+  `daftar_inventory_internal` on all four and is judged by `WITH CHECK`, not
+  by the clauses this suite is about; §6 keeps it named.
+- **Default privileges are not swept.** `ALTER DEFAULT PRIVILEGES` can grant
+  on relations created *later*; it cannot add a privilege to these four, which
+  already exist, so it is out of scope here and not a hole in this law.
+- **Relations outside the four are not swept.** The law's subject is the four
+  relations `0086` rewrote quals on.
+- **A write principal whose role name does not match `daftar\_%`** would be
+  out of the derived set. Every role this deployment creates is prefixed
+  (`bootstrap.sql`), so the gap is declared rather than open — but it is
+  declared.
