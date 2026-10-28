@@ -258,6 +258,15 @@ function verdict(o: Options, records: readonly StepRecord[], coverage: RouteCove
   const gaps = coverage.unpaced();
   if (gaps.length > 0) {
     for (const g of gaps) console.log(`FAIL unpaced: ${g.route} — ${g.unpaced} request(s) reached the API without passing the gate's budget`);
+    // Named, not just counted. One unpaced request in a hundred is exactly
+    // the case where "a hole in the flows" and "a request issued while the
+    // context was being torn down" need telling apart, and the step it came
+    // from is what tells them apart.
+    const named = coverage.unaccounted();
+    if (named.length > 0) {
+      console.log('  each one, and where it came from:');
+      for (const r of named) console.log(`    ${r.route} · ${r.locale} ${r.viewport}px · step ${r.step} · ${r.url}`);
+    }
   }
   if (o.plants.length === 0) {
     const bad = records.filter((r) => r.issues.length > 0);

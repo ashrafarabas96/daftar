@@ -144,7 +144,7 @@ export class Run {
       async (route) => {
         const request = route.request();
         const { pathname } = new URL(request.url());
-        this.o.budgets.coverage.paced(request.method(), pathname);
+        this.o.budgets.coverage.paced(request.method(), pathname, request);
         await this.o.budgets.route.take(request.method(), pathname);
         await route.fallback();
       },
@@ -157,7 +157,16 @@ export class Run {
     page.on('request', (r) => {
       const url = r.url();
       if (!url.startsWith(`${base}/api/proxy/`)) return;
-      this.o.budgets.coverage.seen(r.method(), new URL(url).pathname);
+      // The step is carried with it: a request that turns out to be unpaced is
+      // then named by where it came from, and "(between steps)" is itself an
+      // answer — it points at teardown rather than at a hole in the flows.
+      this.o.budgets.coverage.seen(r.method(), new URL(url).pathname, r, {
+        locale: this.locale,
+        viewport: String(this.viewport.width),
+        step: this.current?.step ?? '(between steps)',
+        url: url.replace(base, ''),
+        atMs: Date.now(),
+      });
     });
     page.on('console', (m) => {
       const text = m.text();
@@ -240,8 +249,8 @@ export class Run {
    * letting the coverage check tolerate a shortfall — is exactly the leniency
    * that would let a genuinely unpaced request pass as a deliberate one.
    */
-  answeredLocally(method: string, url: string): void {
-    this.o.budgets.coverage.fulfilled(method, new URL(url).pathname);
+  answeredLocally(method: string, url: string, token?: object): void {
+    this.o.budgets.coverage.fulfilled(method, new URL(url).pathname, token);
   }
 
   /** A full document load spends one refresh; wait for the budget first. */

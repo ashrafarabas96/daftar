@@ -112,8 +112,30 @@ export class RouteBudgets {
  * hold names a request that reached the API unpaced, and the gate fails on it
  * rather than reporting a clean run it cannot justify.
  */
+/** Where a request was issued from, so an unpaced one can be named instead of merely counted. */
+export interface RequestOrigin {
+  readonly locale: string;
+  readonly viewport: string;
+  /** The step that was running, or `(between steps)` — which is itself a useful answer. */
+  readonly step: string;
+  readonly url: string;
+  readonly atMs: number;
+}
+
 export class RouteCoverage {
   private readonly rows = new Map<string, { seen: number; paced: number; fulfilled: number }>();
+  /**
+   * Every request seen, keyed by Playwright's own Request object — the same
+   * object the interceptor is handed, so "was this one paced?" is an identity
+   * question and not a counting one.
+   *
+   * Counts alone say a route is short by one; they cannot say WHICH one, and
+   * a single unpaced request out of a hundred is exactly the case where the
+   * difference between a real leak and a teardown artefact decides whether
+   * anything needs fixing.
+   */
+  private readonly pending = new Map<object, RequestOrigin & { route: string }>();
+  private readonly settled = new WeakSet<object>();
 
   private row(key: string): { seen: number; paced: number; fulfilled: number } {
     let row = this.rows.get(key);
@@ -124,16 +146,31 @@ export class RouteCoverage {
     return row;
   }
 
-  seen(method: string, pathname: string): void {
-    this.row(routeKey(method, pathname)).seen += 1;
+  seen(method: string, pathname: string, token?: object, origin?: RequestOrigin): void {
+    const route = routeKey(method, pathname);
+    this.row(route).seen += 1;
+    if (token !== undefined && origin !== undefined) this.pending.set(token, { ...origin, route });
   }
 
-  paced(method: string, pathname: string): void {
+  paced(method: string, pathname: string, token?: object): void {
     this.row(routeKey(method, pathname)).paced += 1;
+    this.settle(token);
   }
 
-  fulfilled(method: string, pathname: string): void {
+  fulfilled(method: string, pathname: string, token?: object): void {
     this.row(routeKey(method, pathname)).fulfilled += 1;
+    this.settle(token);
+  }
+
+  private settle(token: object | undefined): void {
+    if (token === undefined) return;
+    this.settled.add(token);
+    this.pending.delete(token);
+  }
+
+  /** The requests that were seen and never accounted for, each with where it came from. */
+  unaccounted(): (RequestOrigin & { route: string })[] {
+    return [...this.pending.values()].sort((a, b) => a.atMs - b.atMs);
   }
 
   /** Every route key with its three counts, busiest first — the gate prints this whether it passes or fails. */
