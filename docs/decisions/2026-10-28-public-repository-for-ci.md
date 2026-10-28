@@ -35,22 +35,18 @@ construction, not by a count**. Its reader enters step mode only on a `steps:`
 key and never consumes the value of `runs-on`, and the only **non-comment**
 change in this diff is those six `runs-on:` lines.
 
-Stated as a table rather than a sentence, because four drafts of this
-paragraph each smuggled a false claim into prose and three of them were an
-ambiguous list of references. Reduce `ci.yml` by deleting comment lines and
-blank lines, and compare line by line:
+Reduce `ci.yml` by deleting comment lines and blank lines, and compare line by
+line:
 
 | `ci.yml` reduced to | lines | `main` vs this commit |
 | --- | --- | --- |
 | no comments, no blank lines | 490 both | differs on **exactly 6** lines, **all of them `runs-on:`** |
 | and no `runs-on:` lines | 484 both | **identical** |
 
-Row 1 had to differ, or nothing would have changed. Row 2 is the one that
-matters: every line of the workflow other than those six is `main`'s,
-unchanged. (Deliberately no digests here: the value depends on how the
-reduction treats indentation, trailing newlines and CRLF, so a digest written
-down invites a later reader to compute a different one and think something
-drifted. The relation and the counts above reproduce from the recipe.)
+No digests: the value depends on how the reduction treats indentation,
+trailing newlines and CRLF, so writing one down invites a later reader to
+compute a different one and conclude something drifted. The relation and the
+counts reproduce from the recipe above.
 
 Three further corrections, all measured: `requiredCiProblems` pins step
 **content** as well as order (the gate step's `run:` must equal its command
