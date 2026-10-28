@@ -85,3 +85,92 @@ carried **zero** CR bytes, so the line-ending explanation that has excused
 first: a failure is the card's only once the same command has been shown to pass
 without the card's changes. Three of the failures above were the card's; the
 build failure was not, and it is recorded as not.
+
+---
+
+## DR-53 — three classes of wording block a merge; the rest do not
+
+**The decision.** Wording and documentation findings are **not** merge-blocking and
+are collected into a follow-up pull request. Three classes are blocking:
+
+1. a **false security or protection claim**;
+2. **wrong documentation of financial behaviour** — including an assertion on a
+   money figure that **cannot fail**;
+3. **wrong operating instructions that could cause harm**.
+
+And any review round beyond the third on one card is reported to the owner in
+one line.
+
+**Why the ceiling exists.** One card's decision record went through five review
+rounds, and every round found a false claim in the same paragraph — each one a
+sentence restating a measurement that was already correct beside it. Four of
+those were patched and the fifth was deleted instead; deleting ended the class.
+The ceiling is there because rounds of prose repair generate the defects they
+are meant to remove.
+
+**What the blocking classes have in common** is that the reader acts on them. A
+comment claiming the repository refuses GitHub-hosted jobs sat directly above
+`runs-on: ubuntu-latest`; a reader who believed it would reach for a
+self-hosted runner, which on a public repository is the one thing the CI
+decision record forbids outright. That is class 3, not a typo.
+
+## DR-55 — a money or security assertion arrives with the mutation that reddens it
+
+**The decision.** Every **new** assertion about money or security carries, before
+it is sent for review, a planted defect that is shown to make it fail.
+
+**And its complement, from a probe of mine that returned nothing:** a negative
+control must first prove **the mutation was applied** — the file's digest
+changed, or the pattern matched. **A mutation that did not apply is a control
+that did not run, not a control that passed.** A generic text substitution can
+silently match nothing; the run that follows it then looks like a green
+negative control and is worth nothing. The guard that caught this was a digest
+comparison after the write.
+
+**What produced the rule.** A test case named its strongest assertion "the proof
+that the exactness is real" and the assertion could not fail. The prose said a
+total was odd; the total is even, and the odd quantity was the bucket number.
+The assertion tested `total % 2 === 0`, and the mutated total —
+`18014398509481984`, exactly 2^54 — is also even, so it passed on the correct
+value and on the wrong one alike. Non-representability in `[2^54, 2^55)` rests
+on `% 4 === 2`, because the double step there is 4, not 2.
+
+**Chained assertions hide each other.** That assertion sat behind a literal
+comparison that failed first, so the case went red and the useless assertion
+looked like the guard. Proving a specific assertion bites means blinding the
+ones before it in the same case and watching that one fail alone.
+
+## DR-56 — `0084` may be amended for a comment, and the digests say what changed
+
+**The decision.** Changing `0084`'s blob for a **comment** is accepted: the
+migration is a **candidate, not frozen** (DR-03). The conditions were measured
+before the decision: the six function-body digests are identical,
+`check:migrations` exits 0, and there is no behavioural effect.
+
+**The record.** Two hash functions are named with every value, because quoting a
+digest without naming its function produced a contradiction between reviewers
+on this very card — one quoted git object ids, another sha256 of the content,
+and both were right about the same blob. `0084`'s non-comment line count is the
+load-bearing number.
+
+| commit | git object id | sha256 of content | non-comment lines |
+| --- | --- | --- | --- |
+| `7b7c9cdd` (branch base) | `374814af…` | `d7205005…` | **424** |
+| `a2f48d31` (the card's SQL work) | `0b5f2225…` | `a80317f3…` | **443** |
+| `59eb73fb` (fix batch 1) | `0b5f2225…` | `a80317f3…` | **443** |
+| `fe9e43c8` (fix batch 2) | `0b5f2225…` | `a80317f3…` | **443** |
+| `30fe12b6` (comment: `count(*)`) | `ae4a7780…` | `7ebd272f…` | **443** |
+| `18536104` (comment: DR-54) | `74478a87…` | `338c68ac…` | **443** |
+
+Read down the last column: the non-comment body moved **once**, from 424 to 443,
+and that was the card's actual SQL. Batches 1 and 2 are byte-identical to
+`a2f48d31` under both functions — they touched no SQL at all. The last two rows
+move the blob and leave 443 untouched, which is what "a comment only" means
+here.
+
+**What the comment changes bought.** The first removed a sentence saying
+`customer_ar_aging` counts DISTINCT invoices within a band when its body is
+`count(*)` — correct today only because `invoice_outstanding` returns one row
+per invoice and asserts it, which is the very reliance the routine this card
+adds refuses for itself. The second carried DR-54 into the contract. Both are
+class 2 of DR-53, so neither could wait for a follow-up.
