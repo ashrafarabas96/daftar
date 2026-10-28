@@ -636,8 +636,20 @@ function sqlStatementsDeep(sql: string, depth = 0): { statements: readonly SqlSt
       // statement and reddened fifteen laws. Prose about a routine is not a
       // change to it, and a guard that cannot tell the difference is one that
       // gets switched off. Neither that body nor its parent says `EXECUTE`.
-      const onExecutePath = /\bEXECUTE\b/i.test(body) || /\bEXECUTE\b/i.test(statement.code);
-      if (!onExecutePath) continue;
+      // Descend when the PARENT is an executable statement, not when the
+      // word `EXECUTE` happens to appear. PL/pgSQL runs DDL inside
+      // `DO $$ … $$;` with no `EXECUTE` keyword at all, and `0073` ALREADY
+      // SHIPS `ALTER TABLE … FORCE ROW LEVEL SECURITY;` that way — so the
+      // `EXECUTE` gate missed the SIMPLEST form of the kill while closing the
+      // more elaborate one. Measured: a `DO $mig$ … $mig$;` dropping and
+      // re-creating the routine in plain text was green at 19/19.
+      //
+      // The cry-wolf case is told apart by the parent's VERB, which is what it
+      // always was: `DO` executes its body, `COMMENT ON` describes something.
+      // A comment body quoting `CREATE FUNCTION invoice_outstanding(…)` has a
+      // parent of `COMMENT ON` and is still not descended.
+      const executableParent = /^\s*DO\b/i.test(statement.code) || /\bEXECUTE\b/i.test(statement.code) || /\bEXECUTE\b/i.test(body);
+      if (!executableParent) continue;
       if (!/\b(?:CREATE|DROP|ALTER|EXECUTE)\b/i.test(body)) continue;
       const inner = sqlStatementsDeep(body, depth + 1);
       statements.push(...inner.statements);
@@ -857,7 +869,13 @@ const PINS: readonly Pin[] = [
     token: 'UUID NOT NULL + a VALIDATED composite edge',
   },
   { law: 'rc_12', role: 'preventer', bound: 'above', subject: 'the array-form routine header', token: 'no SECURITY DEFINER' },
-  { law: 'rc_13', role: 'preventer', bound: 'both', subject: 'every migration', token: 'nothing later drops or invalidates the five' },
+  {
+    law: 'rc_13',
+    role: 'preventer',
+    bound: 'both',
+    subject: 'every migration the lexer can read',
+    token: 'nothing later drops, renames or redefines, bar a run-time-assembled name',
+  },
 ];
 
 /** The laws that resolve the subject or audit the table, rather than pinning a constraint. */
@@ -1282,23 +1300,23 @@ describe('section 4: the count cannot fall short except for an id that names no 
     const undo: { name: string; re: RegExp; plant: string; afterResolved?: true; scan?: (sql: string) => boolean }[] = [
       {
         name: 'the invoices primary key',
-        re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_pkey"?/i,
+        re: /DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?"?invoices_pkey"?/i,
         plant: 'ALTER TABLE invoices DROP CONSTRAINT invoices_pkey;',
       },
-      { name: 'the sales primary key', re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?sales_pkey"?/i, plant: 'ALTER TABLE sales DROP CONSTRAINT "sales_pkey";' },
+      { name: 'the sales primary key', re: /DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?"?sales_pkey"?/i, plant: 'ALTER TABLE sales DROP CONSTRAINT "sales_pkey";' },
       {
         name: 'the composite edge to sales',
-        re: /DROP CONSTRAINT\s+(?:IF EXISTS\s+)?"?invoices_sale_fk"?/i,
+        re: /DROP\s+CONSTRAINT\s+(?:IF\s+EXISTS\s+)?"?invoices_sale_fk"?/i,
         plant: 'ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_sale_fk;',
       },
       {
         name: 'the edge, by renaming it',
-        re: /RENAME CONSTRAINT\s+"?invoices_sale_fk"?/i,
+        re: /RENAME\s+CONSTRAINT\s+"?invoices_sale_fk"?/i,
         plant: 'ALTER TABLE invoices RENAME CONSTRAINT invoices_sale_fk TO invoices_sale_fk_old;',
       },
       {
         name: "invoices.sale_id's NOT NULL",
-        re: /ALTER COLUMN\s+"?sale_id"?\s+DROP NOT NULL/i,
+        re: /ALTER\s+COLUMN\s+"?sale_id"?\s+DROP\s+NOT\s+NULL/i,
         plant: 'ALTER TABLE invoices ALTER COLUMN sale_id DROP NOT NULL;',
       },
       // The one a reviewer called the most dangerous, and rightly: `0075` is
@@ -1306,14 +1324,14 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // truthfully while the database no longer has the column at all.
       {
         name: 'invoices.sale_id itself',
-        re: /ALTER TABLE\s+(?:public\.)?invoices\s+DROP COLUMN\s+(?:IF EXISTS\s+)?"?sale_id"?/i,
+        re: /ALTER\s+TABLE\s+(?:public\.)?invoices\s+DROP\s+COLUMN\s+(?:IF\s+EXISTS\s+)?"?sale_id"?/i,
         plant: 'ALTER TABLE public.invoices DROP COLUMN IF EXISTS sale_id;',
       },
       // Anchored, for the reason `rc_11` records: the unanchored form fired on
       // `0077`'s own refusal message, «invoices_sale_fk would not validate».
       {
         name: 'the edge validation',
-        re: /ADD CONSTRAINT\s+invoices_sale_fk[^;]{0,200}?\bNOT VALID\b/i,
+        re: /ADD\s+CONSTRAINT\s+invoices_sale_fk[^;]{0,200}?\bNOT\s+VALID\b/i,
         plant: 'ALTER TABLE invoices ADD CONSTRAINT invoices_sale_fk FOREIGN KEY (business_id, sale_id) REFERENCES sales (business_id, id) NOT VALID;',
       },
       // THE ROUTINE ITSELF, which this law did not look at and should have.
@@ -1351,14 +1369,32 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // 16 cluster and confirmed each spelling is accepted and that the stub
       // body wins, so these are legal SQL and not word games.
       //
-      // Enumerating spellings is the feature pin again. Matching the NAME and
-      // stopping at the first `(` or `;` has no spelling remainder: whatever
-      // types, modes, defaults, quoting or case a later migration writes, the
-      // name is still the name. Anything that creates,
-      // drops or alters a routine called `invoice_outstanding` after the file
-      // these laws read is reported, and the slice that legitimately replaces
-      // this routine comes back here and re-pins the digests, which is the
-      // review it owes anyway.
+      // Enumerating spellings is the feature pin again. The question is asked
+      // PER STATEMENT, on text a lexer tokenized, and about the NAME: whatever
+      // types, modes, defaults, quoting, case, comments or extra drop targets
+      // a later migration writes, the name is still the name.
+      //
+      // THE CLAIM, AND ITS TWO DECLARED LIMITS, because an earlier version of
+      // this comment said «stopping at the first `(` or `;`» — the mechanism
+      // round ten deleted — and a commit message claimed to have narrowed it
+      // without doing so. Both reviewers caught that, and it is exactly the
+      // defect this file exists to retire.
+      //
+      // What IS reported: any `CREATE`, `DROP` or `ALTER` of a routine named
+      // `invoice_outstanding`, in any spelling, in any migration after the one
+      // these laws read — including inside `DO … END` and inside
+      // `EXECUTE '…'`, to three levels — and any migration the lexer cannot
+      // tokenize at all, which fails this law by file name rather than being
+      // skimmed.
+      //
+      // What is NOT, and is declared rather than discovered: DDL whose routine
+      // NAME is assembled at run time, `EXECUTE format('… %I …', …)` or
+      // `EXECUTE 'DROP … ' || 'invoice_outstanding(…)'`. No text scanner can
+      // read a name that does not exist until the statement runs. Measured:
+      // neither form occurs in any of the 87 migrations today.
+      //
+      // The slice that legitimately replaces this routine comes back here and
+      // re-pins the digests, which is the review it owes anyway.
       //
       // Measured clean on the tree: the CREATE probe matches `0075`, `0080`,
       // `0081`, `0083` and `0084` and nothing after them; the DROP probe only
@@ -1473,7 +1509,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // here, closes the class instead of its two instances. One named helper so
     // the controls and the scan cannot drift apart — two call sites that must
     // agree are two call sites that will not.
-    const hitsIn = (u: (typeof undo)[number], sql: string) => (u.scan ? u.scan(sql) : new RegExp(u.re.source, u.re.flags).test(sqlCodeOnly(sql)));
+    const hitsIn = (u: (typeof undo)[number], sql: string) => (u.scan ? u.scan(sql) : new RegExp(u.re.source, u.re.flags).test(collapse(sqlCodeOnly(sql))));
 
     // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
     // or a clean scan below means nothing at all.
@@ -1529,7 +1565,22 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // always has one more spelling left. An unbalanced block comment or an
     // unterminated literal in ANY migration is reported here by file name, and
     // this law fails — the file is quarantined rather than skimmed.
-    const unscannable = files.flatMap((f) => sqlScanProblems(readFileSync(join(MIGRATIONS, f), 'utf8')).map((p) => `${f}: ${p}`));
+    // THE QUARANTINE AND THE ROWS MUST READ THE SAME STRING. They did not:
+    // the quarantine read the raw file while the rows read `sqlLiveCode`'s
+    // output, and `sqlLiveCode` drops every whole-line `--` — including a line
+    // that carries a block comment's terminator. The lexer then correctly
+    // reported an unterminated comment on the text the ROWS read, their code
+    // view collapsed to the empty string so EVERY row went silent for that
+    // file, and the quarantine reported nothing because it had asked a
+    // different question of a different text. Measured, on two fixtures
+    // differing by exactly two comment lines: without them `rc_13` was red,
+    // with them the suite was green at 19/19 while the one definition of the
+    // settlement sum was replaced by a body with no refusal.
+    //
+    // Both now read the RAW file. The lexer handles comments itself, so
+    // `sqlLiveCode` was not merely redundant here — it was destructive.
+    const migrationText = (f: string) => readFileSync(join(MIGRATIONS, f), 'utf8');
+    const unscannable = files.flatMap((f) => sqlScanProblems(migrationText(f)).map((p) => `${f}: ${p}`));
     expect(unscannable, `a migration cannot be tokenized, so no claim below about it is measured: ${JSON.stringify(unscannable)}`).toEqual([]);
     // Positive control: the quarantine must actually trigger, or the clean
     // result above is a broken probe reporting nothing.
@@ -1539,7 +1590,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
 
     const found: string[] = [];
     for (const f of files) {
-      const sql = sqlLiveCode(join(MIGRATIONS, f));
+      const sql = migrationText(f);
       for (const u of undo) {
         if (u.afterResolved && f <= resolved) continue;
         if (hitsIn(u, sql)) found.push(`${f} undoes ${u.name}`);
