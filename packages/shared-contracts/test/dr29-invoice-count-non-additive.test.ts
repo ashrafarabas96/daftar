@@ -26,6 +26,23 @@ import type { CustomerAgingDto } from '../src';
  * the buckets may exceed the number of open invoices" — and the fact never
  * reached the contract the clients read. THAT GAP IS THIS CARD.
  *
+ * ── A METHODOLOGICAL GAP IN THIS SUITE'S OWN HISTORY, RECORDED ───────────
+ *
+ * Two of the laws below — `dr29_1` and `dr29_10` — DID NOT GO GREEN ON THE
+ * COMMIT THAT WAS SUPPOSED TO FIX THEM. Measured, by running the suite at each
+ * commit of the chain: red-first at `9b996770` gave EXIT 1 with nine failed
+ * assertions, and its fix `d3c0e99d` gave EXIT 1 with TWO still failing. They
+ * only went green at `d9915ffb`, the DR-39 commit AFTER it, because DR-39
+ * rewrote the very contract sentences they assert.
+ *
+ * So the red→green pairing this project requires holds for the DR-39 pair and
+ * for `domain-core`, and DOES NOT hold for the DR-29 pair here. The history is
+ * left exactly as it happened rather than rebased into a tidier shape: a
+ * reader comparing a law to the commit named as its fix would otherwise find
+ * the two disagreeing and have no way to learn why. The cause is in the open —
+ * a law that asserts the WORDING of a contract is hostage to the next decision
+ * that rewords it, and DR-39 was that decision.
+ *
  * ── WHY A SEPARATE FIELD AND NOT A DOCUMENTED SUM ────────────────────────
  *
  * Because the number a merchant asks for ("how many of my invoices are open?")

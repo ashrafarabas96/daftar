@@ -96,6 +96,23 @@ function sqlLiveCode(path: string): string {
     .join('\n');
 }
 
+/**
+ * One routine's body, from its `CREATE FUNCTION` to the `$fn$;` that closes
+ * it.
+ *
+ * A SLICE and not a bounded lookahead. A law about ORDER has to know where the
+ * routine ends: `/name[\s\S]{0,2600}?x/` will happily find its `x` in the NEXT
+ * routine once this one grows, and then the law passes by reaching past its
+ * own subject. Returns `''` when the routine is absent, which the callers
+ * assert against rather than treating as a vacuous pass.
+ */
+function routineBody(sql: string, name: string): string {
+  const start = sql.indexOf(`CREATE FUNCTION ${name}`);
+  if (start === -1) return '';
+  const end = sql.indexOf('$fn$;', start);
+  return end === -1 ? '' : sql.slice(start, end + '$fn$;'.length);
+}
+
 // ── Section 1. The contract declares both, and forbids their sum ─────────
 
 describe('section 1 DR-39: the contract carries TWO counters and says the pair is not a total', () => {
@@ -212,6 +229,56 @@ describe('section 2 DR-39: `customer_ar_open_document_counts` splits by SIGN in 
     // figure must not rest on the set-based reader happening to return one row
     // per invoice.
     expect(sql, 'and neither may be a row count').not.toMatch(/customer_ar_open_document_counts[\s\S]{0,2600}?count\(\*\)/);
+  });
+
+  /**
+   * dr39_8b — WHICH COUNTER IS WHICH, which `dr39_8` above cannot say.
+   *
+   * `dr39_8` asserts the two FILTER expressions with two `toContain` calls,
+   * and `toContain` is MEMBERSHIP, not position. Swapping the two lines in the
+   * routine leaves both substrings present, so `dr39_8` stays green while
+   * `open_debit_count` carries the number of CREDIT documents and
+   * `open_credit_count` the debit ones — measured, not supposed: the swap was
+   * planted in `0084` and the whole DR-39 suite passed 21/21.
+   *
+   * That is a merchant-visible figure inverted with nothing to catch it. The
+   * fold has a guard for exactly this slip — `signSwappingFoldUnderTest` in
+   * `tests/guards/p4s4-customer-aging-bucket-mapping.test.ts`, whose whole
+   * subject is "the credit column reported as the debit counter" — and the SQL
+   * side had none.
+   *
+   * The binding is POSITIONAL: `RETURNS TABLE (currency_code, open_debit_count,
+   * open_credit_count)` fixes the output names by ordinal, and the `SELECT`
+   * list fills them in order. So the law is a SINGLE ORDERED MATCH over the
+   * routine's own body: the `> 0` filter must be the one that comes first.
+   * Two membership assertions cannot express an order, however many are added.
+   */
+  it('dr39_8b: the DEBIT counter is the FIRST of the two, so `> 0` lands in `open_debit_count`', () => {
+    const body = routineBody(sqlLiveCode(AGING_MIGRATION), 'customer_ar_open_document_counts');
+    // Non-vacuity: the slice really is the routine, or every match below is a
+    // match against an empty string and green about nothing.
+    expect(body.length, 'the routine body must be found, or this law has no subject').toBeGreaterThan(200);
+    expect(body, 'the slice must be the counters routine').toContain('count(DISTINCT o.invoice_id)');
+
+    // The positional contract, stated so the ordering law below means
+    // something: column 2 is the debit count, column 3 the credit count.
+    expect(body, 'the return shape binds the two counters by ordinal').toMatch(
+      /RETURNS TABLE \(currency_code TEXT, open_debit_count INTEGER, open_credit_count INTEGER\)/,
+    );
+
+    // ONE ordered match: `> 0` first, `< 0` second, and ADJACENT in the same
+    // SELECT list. Adjacency rather than a bounded gap, because a `{0,40}`
+    // window would admit a column INSERTED between them — which breaks the
+    // very positional binding this law exists to hold while leaving the law
+    // green. Only whitespace and the schema qualifier may separate them.
+    expect(body, 'the `> 0` filter must PRECEDE the `< 0` filter, or the two columns are inverted').toMatch(
+      /count\(DISTINCT o\.invoice_id\) FILTER \(WHERE o\.outstanding_txn_minor > 0\)::INTEGER,\s*pg_catalog\.count\(DISTINCT o\.invoice_id\) FILTER \(WHERE o\.outstanding_txn_minor < 0\)::INTEGER/,
+    );
+    // And the inversion is named as forbidden, so a failure says which way
+    // round it went rather than only that the ordered match failed.
+    expect(body, 'and the `< 0` filter must not come first').not.toMatch(
+      /count\(DISTINCT o\.invoice_id\) FILTER \(WHERE o\.outstanding_txn_minor < 0\)::INTEGER,\s*pg_catalog\.count\(DISTINCT o\.invoice_id\) FILTER \(WHERE o\.outstanding_txn_minor > 0\)::INTEGER/,
+    );
   });
 
   it('dr39_9: the population is CHARACTER FOR CHARACTER the one the buckets are built from', () => {

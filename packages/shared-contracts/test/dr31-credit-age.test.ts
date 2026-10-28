@@ -73,6 +73,41 @@ import type { CustomerOpenInvoiceDto } from '../src';
 const REPO_ROOT = join(__dirname, '..', '..', '..');
 const READER = join(REPO_ROOT, 'apps', 'api', 'src', 'modules', 'selling', 'customer-reads.ts');
 const AGING_MIGRATION = join(REPO_ROOT, 'infrastructure', 'database', 'migrations', '0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+
+/**
+ * The POPULATION filters over `outstanding_txn_minor` in a migration: the
+ * `WHERE` predicates that decide WHICH documents a routine reads.
+ *
+ * Two things are removed first, and both removals are the point rather than
+ * convenience:
+ *
+ *   - `--` comments, because a sentence describing a predicate is not one. The
+ *     band routine's own commentary quotes `(WHERE o.outstanding_txn_minor >
+ *     0)` while explaining what it does NOT do.
+ *   - `FILTER (…)` clauses, because a per-aggregate predicate splits a
+ *     population that has already been chosen; it does not choose it.
+ *     `count(…) FILTER (WHERE … > 0)` counts the debit side OF the `<> 0`
+ *     population, which is DR-39's requirement and not a violation of DR-23.
+ *
+ * What is left is what DR-31 and DR-23 are about.
+ *
+ * DECLARED LIMIT: `[^)]*` cannot cross a `)`, so a `FILTER (…)` holding a
+ * nested call — `FILTER (WHERE coalesce(x, 0) > 0)` — is stripped only up to
+ * that inner paren and its predicate then matches nothing. Such a filter
+ * becomes INVISIBLE to this probe, which is the safe direction: an aggregate's
+ * predicate is out of scope here by design. A population `WHERE` can never be
+ * swallowed instead, because the removal starts at `FILTER (` and stops at or
+ * before that filter's own closing paren, so it cannot reach a later clause.
+ * The floor asserted at the call site is what keeps the whole probe honest.
+ */
+function populationFiltersOf(sql: string): readonly string[] {
+  const code = sql
+    .split('\n')
+    .filter((line) => !/^\s*--/.test(line))
+    .join('\n');
+  const withoutAggregateFilters = code.replace(/FILTER\s*\([^)]*\)/gi, ' ');
+  return withoutAggregateFilters.match(/WHERE\s+o\.outstanding_txn_minor\s*(?:<>|>=|<=|>|<|=)\s*0/gi) ?? [];
+}
 const SELLING_CORE_MIGRATION = join(REPO_ROOT, 'infrastructure', 'database', 'migrations', '0075_phase4_customers_invoices_numbering.sql');
 
 /** Source text with block and line comments removed, and nothing else removed. */
@@ -240,7 +275,40 @@ describe('DR-31 — a credit has no overdue age', () => {
     expect(ageDays('2027-01-02', '2025-11-28')).toBe(400);
     const aging = readFileSync(AGING_MIGRATION, 'utf8');
     expect(/WHERE\s+o\.outstanding_txn_minor\s*<>\s*0/i.test(aging)).toBe(true);
-    expect(/WHERE\s+o\.outstanding_txn_minor\s*>\s*0/i.test(aging)).toBe(false);
+    // ── AND THE NEGATIVE HALF, NARROWED TO ITS SUBJECT ────────────────────
+    //
+    // This used to read `expect(/WHERE … > 0/.test(aging)).toBe(false)` over
+    // the WHOLE FILE, and that was over-broad in a way that only became
+    // visible when DR-39 arrived: it forbade a SUBSTRING rather than a
+    // behaviour, so a legitimate `> 0` anywhere in the migration broke it.
+    // DR-39 then introduced two of them — `customer_ar_open_document_counts`
+    // splits its counters by sign IN SQL, which is DR-39's own requirement and
+    // is pinned by `dr39-open-document-counts.test.ts` (dr39_8) — plus one in
+    // a comment. The two laws became MUTUALLY UNSATISFIABLE as written: one
+    // demanded the substring exist, the other that it not.
+    //
+    // Neither intent yields. DR-31 is about which documents the routines
+    // SELECT — the population must be `<> 0` so credit balances are carried
+    // (DR-23) — and DR-39 is about how a counter SPLITS that population once
+    // selected. A per-aggregate `FILTER (…)` is the second thing and never the
+    // first, and a comment is not code at all. So the claim is now stated
+    // POSITIVELY and over the population filters alone.
+    const population = populationFiltersOf(aging);
+    // Non-vacuity FIRST: a probe that found nothing would satisfy every
+    // "every" below, and silently. Three routines select this population —
+    // `customer_ar_aging`, `customer_ar_open_document_counts` and
+    // `customer_open_invoices_page` — so three is the floor. A FLOOR and not
+    // an equality, because a later migration adding a fourth selector should
+    // have to satisfy this law, not renumber it.
+    expect(population.length, 'the probe must find the population filters, or "every one is <> 0" is vacuous').toBeGreaterThanOrEqual(3);
+    // And the substance: EVERY population filter selects `<> 0`. A `> 0` here
+    // would drop every credit balance from the page and the bands — money
+    // leaving a report by omission, which is what DR-23 forbids.
+    for (const [i, filter] of population.entries()) {
+      expect(filter, `population filter ${String(i + 1)} of ${String(population.length)} must select \`<> 0\`, never \`> 0\``).toMatch(
+        /outstanding_txn_minor\s*<>\s*0/i,
+      );
+    }
   });
 
   it('days_past_due is NEVER negative for a credit — asserted over the space, not by example', () => {
