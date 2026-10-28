@@ -48,11 +48,27 @@ async function fullyVisible(run: Run, target: Locator, what: string): Promise<vo
  * to catch, and it stays exactly as strict.
  */
 async function waitForFocusTarget(run: Run, predicate: string, what: string): Promise<void> {
-  try {
-    await run.page.waitForFunction(`Array.from(document.querySelectorAll('*')).some(${predicate})`);
-  } catch {
-    run.fail('flow', `${what} never rendered, so the keyboard walk had nothing to reach`);
-    throw new Error(`render: ${what} absent`);
+  // Polled with `page.evaluate`, which travels the debugging protocol, and NOT
+  // with `page.waitForFunction`, which installs a polling script INSIDE the
+  // page. This app serves `script-src 'self' 'nonce-…' 'strict-dynamic'` with
+  // no `unsafe-eval`, so that injected script is refused — measured on run
+  // 40607960533: nine `CSP-VIOLATION script-src eval`, the wait never
+  // evaluated once, and every `receive` step reported the button as absent in
+  // all three locales at all three widths. `tabUntil` has always polled this
+  // way for the same reason.
+  //
+  // The 100ms between polls is the interval of a condition-bounded wait, not a
+  // blind sleep: the loop ends the moment the element exists, and the deadline
+  // is the page's own default timeout rather than a raised one.
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    const present: unknown = await run.page.evaluate(`(() => Array.from(document.querySelectorAll('*')).some(${predicate}))()`);
+    if (present === true) return;
+    if (Date.now() >= deadline) {
+      run.fail('flow', `${what} never rendered, so the keyboard walk had nothing to reach`);
+      throw new Error(`render: ${what} absent`);
+    }
+    await run.page.waitForTimeout(100);
   }
 }
 
