@@ -117,6 +117,34 @@ function tsLiveCode(path: string): string {
  * `count(DISTINCT`, a `GRANT`, a `RETURNS` clause), so the limit is stated
  * rather than relied upon.
  */
+/**
+ * One routine's body, and the POPULATION it reads from inside it.
+ *
+ * Local copies, like `sqlLiveCode` beside them: this file's laws and
+ * `dr39-open-document-counts.test.ts`'s are deliberately separate homes, and a
+ * shared helper is a subject one edit could weaken for both at once. See the
+ * fuller note on the copy there — in short, the open-invoice population clause
+ * appears in THREE routines in `0084`, so a whole-file `toContain` guards none
+ * of them, measured.
+ */
+function routineBody(sql: string, name: string): string {
+  const start = sql.indexOf(`CREATE FUNCTION ${name}`);
+  if (start === -1) return '';
+  const end = sql.indexOf('$fn$;', start);
+  return end === -1 ? '' : sql.slice(start, end + '$fn$;'.length);
+}
+
+function populationOf(sql: string, routine: string): string {
+  const body = routineBody(sql, routine);
+  if (body === '') return '';
+  return body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^WHERE\s+x\.business_id/i.test(line) || /^WHERE\s+o\.outstanding_txn_minor/i.test(line))
+    .map((line) => line.replace(/\s+/g, ' '))
+    .join(' | ');
+}
+
 function sqlLiveCode(path: string): string {
   return readFileSync(path, 'utf8')
     .split('\n')
@@ -201,15 +229,33 @@ describe('section 2 DR-29: the separate counting routine exists, counts DISTINCT
     expect(sql, 'the routine must be created').toMatch(/CREATE FUNCTION customer_ar_open_document_counts\(p_business_id UUID, p_customer_id UUID\)/);
     // THE WHOLE POINT: a DISTINCT count over the invoice ids, and not a count
     // of rows, and not a sum of anything.
-    expect(sql, 'it must count DISTINCT invoice ids').toContain('count(DISTINCT o.invoice_id)');
+    //
+    // Read from the routine's body too, for consistency with the predicates
+    // below — though unlike them this one was NOT a live hole, and the
+    // difference is worth recording rather than blurring. `count(DISTINCT
+    // o.invoice_id)` occurs three times in the file but only TWICE after
+    // `sqlLiveCode` strips the full-line comments, and both survivors are
+    // inside this routine, so no other routine could have satisfied it. What
+    // it was is SCOPE-FRAGILE: the first other routine to count distinct
+    // invoice ids would have made it satisfiable from there, silently.
+    expect(routineBody(sql, 'customer_ar_open_document_counts'), 'it must count DISTINCT invoice ids').toContain('count(DISTINCT o.invoice_id)');
     // The SAME population the buckets are built from: this customer's open
     // invoices whose settlement sum is non-zero. `<> 0` and not `> 0`, because
     // a credit balance is a real open figure (DR-23).
-    expect(sql, 'the population must be the open invoices of this customer').toContain(
+    // READ FROM THE ROUTINE'S OWN BODY. This clause occurs THREE times in
+    // `0084` — `customer_ar_outstanding`, `customer_ar_aging` and the counters
+    // routine — so a `toContain` over the whole file is satisfied by any one
+    // of them and guards none: corrupting it in the counters routine left this
+    // suite green. `dr39_9` holds the stronger claim, that the counters' and
+    // the bands' populations are IDENTICAL; this case holds the half DR-29 is
+    // about, that the counters routine reads the intended population at all.
+    const population = populationOf(sql, 'customer_ar_open_document_counts');
+    expect(population, 'the counters routine must be found, or this law reads nothing').not.toBe('');
+    expect(population, 'the population must be the open invoices of this customer').toContain(
       "WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open'",
     );
-    expect(sql, 'and the non-zero filter must be `<> 0`, so a credit balance is still an open invoice (DR-23)').toMatch(
-      /customer_ar_open_document_counts[\s\S]{0,2600}?o\.outstanding_txn_minor <> 0/,
+    expect(population, 'and the non-zero filter must be `<> 0`, so a credit balance is still an open invoice (DR-23)').toContain(
+      'WHERE o.outstanding_txn_minor <> 0',
     );
   });
 

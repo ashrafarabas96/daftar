@@ -113,6 +113,38 @@ function routineBody(sql: string, name: string): string {
   return end === -1 ? '' : sql.slice(start, end + '$fn$;'.length);
 }
 
+/**
+ * The POPULATION one routine reads: the predicates that decide WHICH documents
+ * it sees, taken from INSIDE its own body.
+ *
+ * Generic over the routine, and that is the point rather than convenience.
+ * `WHERE x.business_id … AND x.status = 'open'` occurs THREE times in `0084` —
+ * in `customer_ar_outstanding`, in `customer_ar_aging` and in
+ * `customer_ar_open_document_counts` — so a `toContain` over the whole file is
+ * satisfied by ANY ONE of them and guards NONE. Measured, not supposed: with
+ * the clause corrupted in the counters routine the DR-39 suite passed 22/22,
+ * and with it corrupted in the aging body it passed 22/22 as well.
+ *
+ * That is `dr39_8b`'s lesson one law later — membership is not position, and
+ * here it is not LOCATION either. A law about which documents a particular
+ * reader sees has to read that reader.
+ *
+ * Whitespace is collapsed, so the comparison is about the predicate and not
+ * about how deeply the two routines happen to be indented — they differ there,
+ * and that difference is not part of any claim. Returns `''` for an absent
+ * routine, which callers assert against rather than compare as equal.
+ */
+function populationOf(sql: string, routine: string): string {
+  const body = routineBody(sql, routine);
+  if (body === '') return '';
+  return body
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => /^WHERE\s+x\.business_id/i.test(line) || /^WHERE\s+o\.outstanding_txn_minor/i.test(line))
+    .map((line) => line.replace(/\s+/g, ' '))
+    .join(' | ');
+}
+
 // ── Section 1. The contract declares both, and forbids their sum ─────────
 
 describe('section 1 DR-39: the contract carries TWO counters and says the pair is not a total', () => {
@@ -286,15 +318,39 @@ describe('section 2 DR-39: `customer_ar_open_document_counts` splits by SIGN in 
     // If the two readers can come to disagree about WHICH documents are open,
     // the counters stop being a second measurement of one population and
     // become a second population.
-    expect(sql, 'the population must be this customer’s open invoices').toContain(
+    //
+    // THE NAME OF THIS CASE IS THE LAW, so it is written as one: the two
+    // populations are COMPARED, each read from inside its own routine. What
+    // stood here instead was a `toContain` over the whole file for a clause
+    // that appears in THREE routines, so any one of them satisfied it — and
+    // corrupting either of these two left this suite at 22/22.
+    const bands = populationOf(sql, 'customer_ar_aging');
+    const counters = populationOf(sql, 'customer_ar_open_document_counts');
+
+    // Non-vacuity before the comparison: two empty strings are equal, and
+    // `routineBody` returns `''` for a routine it cannot find — a renamed
+    // routine would otherwise make this law pass by finding nothing twice.
+    expect(bands, 'the aging body must be found, or this law compares nothing').not.toBe('');
+    expect(counters, 'the counters body must be found, or this law compares nothing').not.toBe('');
+    expect(bands.split(' | ').length, 'the aging population must be both predicates, not one').toBe(2);
+    expect(counters.split(' | ').length, 'and the counters population likewise').toBe(2);
+
+    // CHARACTER FOR CHARACTER, modulo indentation: the counters read the
+    // documents the bands read, or they are measuring something else.
+    expect(counters, 'the counters must read the population the bands are built from, predicate for predicate').toBe(bands);
+
+    // And the shared predicate is the INTENDED one, because an equality alone
+    // would be satisfied by both routines drifting together.
+    expect(counters, 'the population must be this customer’s open invoices').toContain(
       "WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open'",
     );
-    // And the zero-balance document is excluded ONCE, by the same `<> 0` the
-    // aging body uses — which is rule 3 expressed where the population is
-    // defined rather than as a third predicate that could drift from it.
-    expect(sql, 'and the zero-balance document must be excluded by the same `<> 0` filter (rule 3)').toMatch(
-      /customer_ar_open_document_counts[\s\S]{0,2600}?WHERE o\.outstanding_txn_minor <> 0/,
-    );
+    // The zero-balance document is excluded ONCE, by the same `<> 0` the aging
+    // body uses — rule 3 expressed where the population is defined rather than
+    // as a third predicate that could drift from it. Read from the body, not
+    // through a `{0,2600}` window: that window happens to stop short of the
+    // next `<> 0` in this file today, which makes it correct by DISTANCE
+    // rather than by construction.
+    expect(counters, 'and the zero-balance document must be excluded by the same `<> 0` filter (rule 3)').toContain('WHERE o.outstanding_txn_minor <> 0');
   });
 
   it('dr39_10: it is STABLE, SECURITY INVOKER, path-pinned, and EXECUTE is exactly the two accepted roles', () => {
@@ -510,13 +566,33 @@ describe('section 4 DR-39: no interface adds the two counters together', () => {
     expect(counterCombiningProblems(moneyNearby, 'synthetic/Money.ts'), 'the window is deliberately wide and this is the cost').toHaveLength(1);
   });
 
-  it('dr39_20: ANTI-VACUITY — the sweep really walked the app trees', () => {
+  it('dr39_20: ANTI-VACUITY — the sweep really walked EACH app tree', () => {
     expect(scanned.length, 'the sweep found no files at all, so dr39_18 cleared nothing').toBeGreaterThan(0);
+    // PER TREE, not in aggregate. The total was satisfied by `apps/web` alone,
+    // so a path typo or a rename that made `apps/android` scan NOTHING left
+    // this law green and `dr39_18` silently clearing two trees instead of
+    // three — the Kotlin spelling of the defect is in `COMBINATION` precisely
+    // because the Android tree is meant to be swept.
+    for (const app of APP_TREES) {
+      const prefix = join(REPO_ROOT, 'apps', app);
+      const found = scanned.filter((f) => f.startsWith(prefix));
+      expect(found.length, `the sweep found no code under apps/${app}, so dr39_18 cleared nothing there`).toBeGreaterThan(0);
+    }
+
     // And the measured fact, recorded where it cannot rot unnoticed: no
-    // interface references either counter yet. When the first one does, this
-    // list stops being empty and dr39_18 starts having a subject.
+    // interface references either counter yet.
+    //
+    // ASSERTED AS AN EMPTY LIST, because `toBeGreaterThanOrEqual(0)` is true
+    // of every possible list — it recorded nothing at all while its own
+    // comment claimed otherwise. Now the fact is pinned: when the first
+    // interface references a counter THIS CASE GOES RED, which is the signal,
+    // not a regression. Whoever adds that reference rewrites this case, and
+    // `dr39_18` starts having a subject to clear.
     const referencing = scanned.filter((f) => COUNTER_REFERENCE.test(readFileSync(f, 'utf8')));
-    expect(referencing.length, `interfaces now referencing a counter: ${referencing.join(', ')}`).toBeGreaterThanOrEqual(0);
+    expect(
+      referencing.map((f) => f.slice(REPO_ROOT.length + 1).replace(/\\/g, '/')),
+      'an interface now references a counter — that is expected eventually: rewrite this case to name the files, and check dr39_18 covers them',
+    ).toEqual([]);
   });
 
   it('dr39_21: NEGATIVE CONTROL — the retired combined figure survives nowhere in code', () => {
