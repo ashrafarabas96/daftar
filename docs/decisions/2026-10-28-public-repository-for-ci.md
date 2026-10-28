@@ -18,9 +18,11 @@ Public restores free hosted runners and ends all three problems at once.
 
 ## What this card changes
 
-`.github/workflows/ci.yml`, six `runs-on:` lines, nothing else:
-`[self-hosted, daftar-wsl]` → `ubuntu-latest`, for `workspaces`, `backend`,
-`web-admin`, `android`, `browser` and `hygiene`.
+`.github/workflows/ci.yml`: six `runs-on:` lines, and the comments that
+explained why they used to say something else. `[self-hosted, daftar-wsl]` →
+`ubuntu-latest`, for `workspaces`, `backend`, `web-admin`, `android`, `browser`
+and `hygiene`. Measured against `main`: 44 lines added and 32 removed, of which
+**12 are code — the six `runs-on:` lines, replaced — and 64 are comment.**
 
 Nothing else needed changing, and that is a property of the file rather than
 luck: every self-hosted-specific step is already guarded at runtime by
@@ -30,9 +32,12 @@ work-folder purge skips itself, and the Chromium install takes the
 
 The workflow guard in `scripts/phase4-s4-gate.ts` is unaffected **by
 construction, not by a count**. Its reader enters step mode only on a `steps:`
-key and never reads `runs-on` at all, and every step line in this diff is
-byte-identical — the whole diff is six `runs-on:` lines. Two corrections to an
-earlier draft of this paragraph, both measured: `requiredCiProblems` pins step
+key and never consumes the value of `runs-on`, and every step line in this diff
+is byte-identical — the only **non-comment** change is those six `runs-on:`
+lines. Proven rather than asserted: strip comment and blank lines from
+`ci.yml` and `main`, `fcf7595d` and this commit agree to the byte, and strip
+`runs-on:` as well and all three are identical at 484 lines. Three corrections
+to earlier drafts of this paragraph, all measured: `requiredCiProblems` pins step
 **content** as well as order (the gate step's `run:` must equal its command
 exactly and its `name:` must equal the expected name, so a renamed gate step
 fails it), and that script does not exist on this branch at all — it lives on
@@ -69,16 +74,22 @@ Reverse checklist, in order:
    --accept-visibility-change-consequences`, then verify three ways:
    `gh repo view --json visibility` is `PRIVATE`, the API's `.private` is
    `true`, and an unauthenticated `curl` of the repository returns `404`.
-2. Re-check branch protection on `main` after the flip. Protection rules do
-   not always survive a visibility change, and on a private repository
-   without GitHub Pro they are not available at all — which is how this
-   repository lost them on 2026-10-26 (TD-08). If they are gone, the local
-   `pre-push` hook and the `deny` rules are the only remaining guard, and that
-   must be stated rather than assumed.
+2. Re-check branch protection on `main` after the flip, **including the list
+   of required status checks** — not just that protection exists. The list is
+   part of what has to be re-established: it is `workspaces`, `backend`,
+   `web-admin`, `android` and `browser` today, and `hygiene` joins it once #9
+   is merged. Protection rules do not always survive a visibility change, and
+   on a private repository without GitHub Pro they are not available at all —
+   which is how this repository lost them on 2026-10-26 (TD-08). If they are
+   gone, the local `pre-push` hook and the `deny` rules are the only remaining
+   guard, and that must be stated rather than assumed.
 3. Re-register the self-hosted runners only if CI is needed while private,
    and only after confirming the repository is private — never the other way
    round. Their files were left in place, so this is a registration step, not
-   a rebuild: `daftar-wsl` (id 21) and `daftar-wsl-2` (id 22), plus their
+   a rebuild. The ids GitHub gave them — 21 and 22 — are **not** recoverable:
+   an id is issued at registration, so the new runners will have new ones. What
+   carries over is their names and their folders on disk: `daftar-wsl` and
+   `daftar-wsl-2`, plus their
    systemd services, the `DAFTAR-WSL-KeepAwake` task and the
    `DAFTAR-WSL-Runner-Boot` anchor task.
 4. Restore `runs-on` to the self-hosted labels if, and only if, step 3 was
