@@ -81,7 +81,9 @@ const row = (bucketNo: number, baseMinor: string, invoices = 1): CustomerAgingSq
   currency_code: 'SAR',
   txn_minor: baseMinor,
   base_minor: baseMinor,
-  invoice_count: invoices, open_debit_count: 3, open_credit_count: 1,
+  invoice_count: invoices,
+  open_debit_count: 3,
+  open_credit_count: 1,
 });
 
 /**

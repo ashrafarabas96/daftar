@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { agingBucketLabels } from '@daftar/domain-core';
+import { agingBucketLabels, type AppError } from '@daftar/domain-core';
 import type {
   CustomerAgingBucketDto,
   CustomerAgingDto,
@@ -224,6 +224,136 @@ export interface CustomerAgingSqlRow {
   open_credit_count: number | null;
 }
 
+/**
+ * ONE ROW OF `customer_ar_aging(...)` AS A CORRECT DATABASE YIELDS IT: the
+ * wire row above with every column present.
+ *
+ * It is DERIVED from `CustomerAgingSqlRow` and not declared beside it, so the
+ * two cannot drift: a column added to the wire row appears here with no edit,
+ * and a column that stops being nullable there stops being narrowed here. Two
+ * hand-written interfaces would have let a later field exist in one and not
+ * the other — silently, and in a money row.
+ *
+ * WHY THE NAME EXISTS AT ALL. Since DR-39 the read is a `FULL JOIN` of the
+ * bands against the per-currency document counters, so every column is
+ * nullable in the WIRE type — a counter row that no band matches arrives with
+ * no band, and a band row whose currency the counters do not know about
+ * arrives with no counters. Both are impossible in a correct database and
+ * representable in a row set, and `foldCustomerAging` REFUSES them
+ * (`customer.aging_bucket_mapping_invalid`) rather than placing them
+ * somewhere.
+ *
+ * That makes the nullability a fact about the JOIN, not about the data a
+ * caller constructs. A test fixture, an oracle, or any other producer that
+ * builds the rows a correct database would return should say so in its type
+ * and read the columns without re-deciding, per field, what a null would have
+ * meant — because `?? 0`, `?? -1` and `!` are each a silent answer to a
+ * question this module answers loudly in exactly one place.
+ *
+ * IT ASSERTS COMPLETENESS AND NEVER VALIDITY. Every column is present; what
+ * the columns SAY is still the fold's business. A row typed this way may carry
+ * `bucket_no = 0`, an ordinal past the last band, a fractional counter or a
+ * negative one, and `foldCustomerAging` refuses each — which is the sharper
+ * statement, because a case built on a total row isolates the ordinal, or the
+ * counter, as the single defect instead of leaving a reader to wonder whether
+ * the refusal was really about a column that never arrived.
+ *
+ * ASSIGNABLE TO `CustomerAgingSqlRow`, never the reverse: a producer of total
+ * rows can always feed the fold, and a row set that may carry the JOIN's
+ * orphans can never be read as though it cannot. `tests/guards/
+ * p4s4-customer-aging-bucket-mapping.test.ts` §0 pins both directions.
+ */
+export type CustomerAgingBandRow = {
+  [K in keyof CustomerAgingSqlRow]-?: NonNullable<CustomerAgingSqlRow[K]>;
+};
+
+/**
+ * THE ONE PLACE A DEGENERATE AGING ROW IS REFUSED, and the one that hands the
+ * fold below a TOTAL row.
+ *
+ * Since DR-39 the read is a `FULL JOIN` of the bands against the per-currency
+ * document counters, so the wire row's every column is nullable for a reason
+ * that has nothing to do with the data: a counter row that no band matches
+ * arrives with no band, and a band row whose currency the counters do not know
+ * about arrives with no counters. Both are impossible in a correct database
+ * and representable in a row set.
+ *
+ * The seven checks live HERE, together, rather than beside each of the reads
+ * downstream. That is not tidiness. A null test next to a read invites the
+ * reader to answer "and what if it is missing?" locally — with `?? 0`, `?? -1`
+ * or a cast — and each of those is a silent answer, in a different direction,
+ * to a question this module answers loudly once. Seven checks in one function
+ * are a boundary; seven checks spread over a fold are seven chances to guess.
+ *
+ * IT CHECKS COMPLETENESS AND NOTHING ELSE. Whether `bucket_no` is in range,
+ * whether a counter is a non-negative integer, and whether the rows of one
+ * currency agree with each other are all judgements about what the columns
+ * SAY, they need the bucket count and the accumulated map, and they stay in
+ * the fold. This function only establishes that there is something to judge.
+ *
+ * NO CAST. The narrowing is done by seven `=== null` tests over locals, so the
+ * returned object is built from values the compiler has already proved
+ * non-null. `!`, `as` and `any` would each have moved the claim from the
+ * compiler to the author.
+ */
+function bandRowOrRefuse(row: CustomerAgingSqlRow, rowIndex: number): CustomerAgingBandRow {
+  const bucketNo = row.bucket_no;
+  if (bucketNo === null) throw agingRowRefusal(rowIndex, 'bucket_no');
+  // And a counter row with no currency has no key, so it cannot be placed
+  // per currency at all; filing it under some other currency's name would
+  // be a guess about which merchant's figure it belongs to. The reasoning
+  // moved here with the check when the seven were gathered into one
+  // boundary; `dr39-open-document-counts.test.ts` (dr39_17) pins it to this
+  // module, not to a particular line of it.
+  const currencyCode = row.currency_code;
+  if (currencyCode === null) throw agingRowRefusal(rowIndex, 'currency_code');
+  const txnMinor = row.txn_minor;
+  if (txnMinor === null) throw agingRowRefusal(rowIndex, 'txn_minor');
+  const baseMinor = row.base_minor;
+  if (baseMinor === null) throw agingRowRefusal(rowIndex, 'base_minor');
+  const invoiceCount = row.invoice_count;
+  if (invoiceCount === null) throw agingRowRefusal(rowIndex, 'invoice_count');
+  const openDebitCount = row.open_debit_count;
+  if (openDebitCount === null) throw agingRowRefusal(rowIndex, 'open_debit_count');
+  const openCreditCount = row.open_credit_count;
+  if (openCreditCount === null) throw agingRowRefusal(rowIndex, 'open_credit_count');
+  return {
+    bucket_no: bucketNo,
+    currency_code: currencyCode,
+    txn_minor: txnMinor,
+    base_minor: baseMinor,
+    invoice_count: invoiceCount,
+    open_debit_count: openDebitCount,
+    open_credit_count: openCreditCount,
+  };
+}
+
+/**
+ * The refusal a degenerate row leaves through, NAMING THE ROW — and naming it
+ * where the merchant cannot see it.
+ *
+ * The code, the status and the generic sentence are exactly what every other
+ * refusal in this module carries, because that is the client contract:
+ * `details` is `{ sellingCode }` and nothing else, and the message is the safe
+ * sentence the client replaces with its own localized text. `details` is
+ * serialized into `ApiErrorBody`, so the offending column's NAME must not go
+ * there — an internal column name is "written for an engineer reading a log
+ * and not for a merchant reading a screen", and a read that leaks the shape of
+ * its own query to a browser has told the reader nothing and everyone else
+ * something.
+ *
+ * So the row and the column travel on `cause`, which `ApiErrorBody` has no
+ * field for and no serializer reaches. The wire answer is byte-identical to
+ * the refusal this module already produced; what is new is that whoever reads
+ * the error object knows WHICH row of the result set was malformed and in
+ * WHICH column, instead of knowing only that one of them was.
+ */
+function agingRowRefusal(rowIndex: number, column: keyof CustomerAgingSqlRow): AppError {
+  const refusal = sellingRefusal('customer.aging_bucket_mapping_invalid');
+  refusal.cause = `customer_ar_aging row ${String(rowIndex)} carries no ${column}: the FULL JOIN against the per-currency document counters left it out, which a correct database cannot do`;
+  return refusal;
+}
+
 /** The bucket SHAPE a fold folds into: the labels and the boundaries they came from. */
 export interface CustomerAgingShape {
   /** `agingBucketLabels(bucketDays)` — length is `bucketDays.length + 1`. */
@@ -344,27 +474,37 @@ export function foldCustomerAging(
   // counted in neither, so their sum is not the number of open documents, and
   // nothing in this module computes it.
   const openCounts = new Map<string, CustomerOpenDocumentCountsDto>();
-  for (const r of rows) {
-    // The ordinal first, because it is the guard that catches the FULL JOIN's
-    // counter-row orphan — no band, hence no `bucket_no` — before any band
-    // figure on that row is read.
-    const bucketNo = r.bucket_no;
-    if (bucketNo === null || !Number.isInteger(bucketNo) || bucketNo < 1 || bucketNo > buckets.length) {
+  for (const [rowIndex, wireRow] of rows.entries()) {
+    // COMPLETENESS FIRST, in one place, and before any figure on the row is
+    // read: `bandRowOrRefuse` catches the FULL JOIN's orphans in both
+    // directions — the counter row with no band and the band row with no
+    // counters — and names the offending row and column on the refusal. From
+    // here down `r` is a TOTAL row, so nothing below asks again whether a
+    // column arrived; every test below is about what the columns SAY.
+    const r = bandRowOrRefuse(wireRow, rowIndex);
+    // The ordinal, which is a judgement about the value and not about its
+    // presence: the SQL function's base must agree with this module's.
+    //
+    // READ OFF `r` DIRECTLY, as it was before DR-39 made the columns nullable.
+    // DR-39 had to copy each column into a local to narrow it, and copying
+    // `r.bucket_no` into `bucketNo` silently retired a C-1 guard:
+    // `phase4-s7-installment-aging.test.ts:1568` pins the literal
+    // `buckets[r.bucket_no - 1]` as the proof that the oldest band's money
+    // still maps one-based, and a local made that text — and so the guard's
+    // positive half — disappear while the negative half went on passing. The
+    // boundary above is what lets these reads be total again, so the
+    // expressions the guards were written against come back rather than the
+    // guards being rewritten around a refactor.
+    if (!Number.isInteger(r.bucket_no) || r.bucket_no < 1 || r.bucket_no > buckets.length) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
     const debit = r.open_debit_count;
     const credit = r.open_credit_count;
-    // And the band-row orphan, the other direction of the same impossibility:
-    // a band whose currency the counters do not know about. Refused, never
-    // read as zero — zero documents is a claim, and this would be the absence
-    // of one.
-    if (debit === null || credit === null) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
+    // A counter that is not a count. A negative DOCUMENT COUNT is not a credit
+    // balance — it is a malformed answer, and it is never read as zero,
+    // because zero documents is a claim and this would be the absence of one.
     if (!Number.isInteger(r.open_debit_count) || debit < 0) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     if (!Number.isInteger(r.open_credit_count) || credit < 0) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
-    // And a counter row with no currency has no key, so it cannot be placed
-    // per currency at all; filing it under some other currency's name would
-    // be a guess about which merchant's figure it belongs to.
-    if (r.currency_code === null) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     const seen = openCounts.get(r.currency_code);
     if (seen === undefined) {
       openCounts.set(r.currency_code, { currency: r.currency_code, openDebitCount: debit, openCreditCount: credit });
@@ -373,15 +513,15 @@ export function foldCustomerAging(
     }
     const baseMinor = r.base_minor;
     const invoiceCount = r.invoice_count;
-    if (baseMinor === null || invoiceCount === null || !Number.isInteger(invoiceCount)) {
+    if (!Number.isInteger(invoiceCount)) {
       throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     }
-    const bucket = buckets[bucketNo - 1];
+    const bucket = buckets[r.bucket_no - 1];
     if (bucket === undefined) throw sellingRefusal('customer.aging_bucket_mapping_invalid');
     bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(baseMinor)).toString();
     bucket.invoiceCount += invoiceCount;
     totalBaseMinor += BigInt(baseMinor);
-    if (r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
+    bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
   }
 
   return {

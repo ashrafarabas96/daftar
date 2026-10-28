@@ -181,9 +181,7 @@ describe('section 2 DR-29: the separate counting routine exists, counts DISTINCT
     // shape law for that is `dr39_7`, and what this case keeps asserting is
     // the property DR-29 is about - a DISTINCT count over the bucket
     // population, measured in a routine of its own.
-    expect(sql, 'the routine must be created').toMatch(
-      /CREATE FUNCTION customer_ar_open_document_counts\(p_business_id UUID, p_customer_id UUID\)/,
-    );
+    expect(sql, 'the routine must be created').toMatch(/CREATE FUNCTION customer_ar_open_document_counts\(p_business_id UUID, p_customer_id UUID\)/);
     // THE WHOLE POINT: a DISTINCT count over the invoice ids, and not a count
     // of rows, and not a sum of anything.
     expect(sql, 'it must count DISTINCT invoice ids').toContain('count(DISTINCT o.invoice_id)');
@@ -376,9 +374,7 @@ describe('section 5 DR-29: no interface sums the per-bucket counts', () => {
   const scanned = APP_TREES.flatMap((app) => walk(join(REPO_ROOT, 'apps', app)));
 
   it('dr29_13: no file under apps/web, apps/admin or apps/android adds the bucket counts up', () => {
-    const problems = scanned.flatMap((file) =>
-      bucketCountSummingProblems(readFileSync(file, 'utf8'), file.slice(REPO_ROOT.length + 1).replace(/\\/g, '/')),
-    );
+    const problems = scanned.flatMap((file) => bucketCountSummingProblems(readFileSync(file, 'utf8'), file.slice(REPO_ROOT.length + 1).replace(/\\/g, '/')));
     expect(problems, problems.join('\n')).toEqual([]);
   });
 

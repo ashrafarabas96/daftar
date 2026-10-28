@@ -206,12 +206,8 @@ describe('section 2 DR-39: `customer_ar_open_document_counts` splits by SIGN in 
     // stated in SQL, and NOT a `<> 0` count divided up afterwards by the
     // reader. A figure split in TypeScript would be a second place where the
     // sign convention lives.
-    expect(sql, 'the debit counter must filter on `> 0`').toContain(
-      'count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor > 0)::INTEGER',
-    );
-    expect(sql, 'the credit counter must filter on `< 0`').toContain(
-      'count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor < 0)::INTEGER',
-    );
+    expect(sql, 'the debit counter must filter on `> 0`').toContain('count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor > 0)::INTEGER');
+    expect(sql, 'the credit counter must filter on `< 0`').toContain('count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor < 0)::INTEGER');
     // `count(DISTINCT invoice_id)` and not `count(*)`: the honesty of the
     // figure must not rest on the set-based reader happening to return one row
     // per invoice.
@@ -417,9 +413,7 @@ describe('section 4 DR-39: no interface adds the two counters together', () => {
   const scanned = APP_TREES.flatMap((app) => walk(join(REPO_ROOT, 'apps', app)));
 
   it('dr39_18: no file under apps/web, apps/admin or apps/android combines them', () => {
-    const problems = scanned.flatMap((file) =>
-      counterCombiningProblems(readFileSync(file, 'utf8'), file.slice(REPO_ROOT.length + 1).replace(/\\/g, '/')),
-    );
+    const problems = scanned.flatMap((file) => counterCombiningProblems(readFileSync(file, 'utf8'), file.slice(REPO_ROOT.length + 1).replace(/\\/g, '/')));
     expect(problems, problems.join('\n')).toEqual([]);
   });
 

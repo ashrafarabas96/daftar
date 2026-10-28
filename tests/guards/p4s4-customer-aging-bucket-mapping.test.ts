@@ -52,7 +52,12 @@
  */
 import { describe, expect, it } from 'vitest';
 import { AppError, MAX_AGING_BUCKETS, agingBucketLabels, validateAgingBucketDays } from '@daftar/domain-core';
-import { foldCustomerAging, type CustomerAgingShape, type CustomerAgingSqlRow } from '../../apps/api/src/modules/selling/customer-reads';
+import {
+  foldCustomerAging,
+  type CustomerAgingBandRow,
+  type CustomerAgingShape,
+  type CustomerAgingSqlRow,
+} from '../../apps/api/src/modules/selling/customer-reads';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The fixture: the canonical four-band shape, and rows in every band.
@@ -91,7 +96,18 @@ const OLDEST_BUCKET_NO = BUCKET_DAYS.length + 1;
  * DIFFERENT pairs, so a fold that collapsed the counters across currencies
  * could not produce this fixture's answer.
  */
-const ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
+/*
+ * TYPED `CustomerAgingBandRow`, the TOTAL row — rows as a CORRECT database
+ * yields them. Every column of the wire row is nullable since DR-39, and that
+ * is a fact about the read's `FULL JOIN`, not about a fixture: these rows are
+ * written here, in full, by hand. Saying so in the type is what lets the
+ * oracles below read `base_minor` and `invoice_count` as the money and the
+ * count they are, instead of each deciding for itself what a null would have
+ * meant. The JOIN's orphans have their own, nullable, type and their own
+ * cases — §A's impossible ordinals and §E4's missing columns — where the
+ * refusal is the subject rather than an obstacle.
+ */
+const ROWS: readonly CustomerAgingBandRow[] = Object.freeze([
   { bucket_no: 1, currency_code: 'USD', txn_minor: '1000', base_minor: '1000', invoice_count: 2, open_debit_count: 3, open_credit_count: 1 },
   { bucket_no: 2, currency_code: 'USD', txn_minor: '2000', base_minor: '2000', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
   { bucket_no: 3, currency_code: 'EUR', txn_minor: '3000', base_minor: '3300', invoice_count: 3, open_debit_count: 2, open_credit_count: 0 },
@@ -100,12 +116,12 @@ const ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
 ]);
 
 /** Σ `base_minor` over a row set — the ORACLE, summed from the input and never from the fold. */
-function sumBase(rows: readonly CustomerAgingSqlRow[]): bigint {
+function sumBase(rows: readonly CustomerAgingBandRow[]): bigint {
   return rows.reduce((acc, r) => acc + BigInt(r.base_minor), 0n);
 }
 
 /** Σ `invoice_count` over a row set — likewise an independent reducer. */
-function sumCount(rows: readonly CustomerAgingSqlRow[]): number {
+function sumCount(rows: readonly CustomerAgingBandRow[]): number {
   return rows.reduce((acc, r) => acc + r.invoice_count, 0);
 }
 
@@ -120,7 +136,7 @@ function sumBucketCount(buckets: readonly { invoiceCount: number }[]): number {
 }
 
 /** The rows the SQL function would have put in one band. */
-function rowsOf(bucketNo: number): readonly CustomerAgingSqlRow[] {
+function rowsOf(bucketNo: number): readonly CustomerAgingBandRow[] {
   return ROWS.filter((r) => r.bucket_no === bucketNo);
 }
 
@@ -166,8 +182,15 @@ interface OldBucket {
  * a file neither suite owns can be weakened by editing that subject, and both
  * proofs then go green together and in silence. Two homes for a WRONG
  * implementation is correct; two homes for a truth is what the rule forbids.
+ *
+ * IT TAKES THE TOTAL ROW, and that is the historically faithful signature: the
+ * implementation this reproduces PREDATES DR-39, so the columns it reads were
+ * not nullable when it was written and it never had a null branch. Its two
+ * planted defects — the 1-based index and the silent `continue` — are
+ * untouched by the type; the only thing the type removes is a question the
+ * original was never asked.
  */
-function oldFoldUnderTest(rows: readonly CustomerAgingSqlRow[], shape: CustomerAgingShape): { buckets: OldBucket[]; totalBaseMinor: string } {
+function oldFoldUnderTest(rows: readonly CustomerAgingBandRow[], shape: CustomerAgingShape): { buckets: OldBucket[]; totalBaseMinor: string } {
   const buckets: OldBucket[] = shape.labels.map((label) => ({ label, baseMinor: '0', invoiceCount: 0, byCurrency: [] }));
   let totalBaseMinor = 0n;
   for (const r of rows) {
@@ -176,7 +199,7 @@ function oldFoldUnderTest(rows: readonly CustomerAgingSqlRow[], shape: CustomerA
     bucket.baseMinor = (BigInt(bucket.baseMinor) + BigInt(r.base_minor)).toString();
     bucket.invoiceCount += r.invoice_count;
     totalBaseMinor += BigInt(r.base_minor);
-    if (r.currency_code !== null && r.txn_minor !== null) bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
+    bucket.byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
   }
   return { buckets, totalBaseMinor: totalBaseMinor.toString() };
 }
@@ -214,6 +237,90 @@ describe('§0 the fixture has a subject', () => {
     // Pinned by hand so a bug in `sumBase` cannot travel into every expectation.
     expect(sumBase(ROWS)).toBe(1000n + 2000n + 3300n + 5500n + 4000n);
     expect(sumCount(ROWS)).toBe(2 + 1 + 3 + 5 + 4);
+  });
+
+  /**
+   * THE TOTAL ROW TYPE, PINNED IN BOTH DIRECTIONS.
+   *
+   * `CustomerAgingBandRow` is DERIVED from `CustomerAgingSqlRow`
+   * (`NonNullable` over its keys), and the fixtures above are typed with it so
+   * the oracles can read money and counts without each one deciding, per
+   * field, what a null would have meant. That makes the derivation
+   * load-bearing: if it ever widened — a column added nullable and not
+   * narrowed, a `NonNullable` lost, the whole thing collapsing to `any` — the
+   * oracles would go on compiling while silently accepting the `FULL JOIN`'s
+   * orphans, and §E4's refusals would be refusing something else.
+   *
+   * So it is asserted, and by the compiler, which is the only thing that can
+   * assert it. The claims are:
+   *
+   *   NEGATIVE — a null in ANY of the seven columns is rejected. Each
+   *   `@ts-expect-error` IS the assertion: should the line stop being an
+   *   error, TypeScript reports the unused directive as `TS2578` and
+   *   `npm run typecheck` fails. Seven directives, one per column, because a
+   *   derivation that narrowed six would be a hole in the seventh.
+   *
+   *   POSITIVE — and this is what stops the seven from being vacuous: the
+   *   UNMUTATED total row is accepted by the total type AND by the wire type.
+   *   A `CustomerAgingBandRow` that had degenerated to something accepting
+   *   nothing would fail the first; one that had degenerated to `any` would
+   *   make all seven directives unused and fail on `TS2578`. Only a type that
+   *   is exactly "the wire row with no nulls" passes both.
+   *
+   * It is a `describe`-level block with a runtime body so the suite also
+   * states, at run time, that the fixture row really carries all seven
+   * columns — a type-only claim about a fixture nobody runs is worth little.
+   */
+  it('the TOTAL row type rejects a null in every column and still accepts the row the fixture writes', () => {
+    const total = ROWS[0];
+    if (total === undefined) throw new Error('the fixture lost its first row, so this case has no subject');
+
+    // Run time: all seven columns really are present on the fixture's row, so
+    // "no nulls" is a statement about something.
+    expect(Object.keys(total).sort()).toEqual([
+      'base_minor',
+      'bucket_no',
+      'currency_code',
+      'invoice_count',
+      'open_credit_count',
+      'open_debit_count',
+      'txn_minor',
+    ]);
+
+    const asBand = (_row: CustomerAgingBandRow): void => undefined;
+    const asWire = (_row: CustomerAgingSqlRow): void => undefined;
+
+    // POSITIVE, first, so the negatives below cannot be vacuous.
+    asBand(total);
+    asWire(total);
+
+    // NEGATIVE, one per column.
+    // @ts-expect-error a total row's `bucket_no` may not be null
+    asBand({ ...total, bucket_no: null });
+    // @ts-expect-error a total row's `currency_code` may not be null
+    asBand({ ...total, currency_code: null });
+    // @ts-expect-error a total row's `txn_minor` may not be null
+    asBand({ ...total, txn_minor: null });
+    // @ts-expect-error a total row's `base_minor` may not be null
+    asBand({ ...total, base_minor: null });
+    // @ts-expect-error a total row's `invoice_count` may not be null
+    asBand({ ...total, invoice_count: null });
+    // @ts-expect-error a total row's `open_debit_count` may not be null
+    asBand({ ...total, open_debit_count: null });
+    // @ts-expect-error a total row's `open_credit_count` may not be null
+    asBand({ ...total, open_credit_count: null });
+
+    // And the wire row DOES take every one of those — it is the `FULL JOIN`'s
+    // shape, and refusing them is `foldCustomerAging`'s job (§E4), not the
+    // type's. Without this the seven above would only show that SOMETHING
+    // rejects a null, not that the two types differ in exactly that way.
+    asWire({ ...total, bucket_no: null });
+    asWire({ ...total, currency_code: null });
+    asWire({ ...total, txn_minor: null });
+    asWire({ ...total, base_minor: null });
+    asWire({ ...total, invoice_count: null });
+    asWire({ ...total, open_debit_count: null });
+    asWire({ ...total, open_credit_count: null });
   });
 });
 
@@ -329,7 +436,12 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 9
   it('CASE 9 — `bucket_no = 0` is REFUSED as an internal invariant failure, not skipped', () => {
-    const impossible: CustomerAgingSqlRow[] = [{ bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
+    // TOTAL and still impossible: every column is present and the ordinal is
+    // the defect, so the refusal cannot be mistaken for a refusal of a missing
+    // column. `CustomerAgingBandRow` asserts COMPLETENESS, never validity.
+    const impossible: CustomerAgingBandRow[] = [
+      { bucket_no: 0, currency_code: 'USD', txn_minor: '700', base_minor: '700', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
+    ];
     // Non-vacuity: the row carries money, so a silent skip would really lose it.
     expect(sumBase(impossible)).toBe(700n);
     let thrown: unknown;
@@ -354,7 +466,16 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
 
   // 10
   it('CASE 10 — a `bucket_no` GREATER than the labels length is REFUSED', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: LABELS.length + 1, currency_code: 'USD', txn_minor: '900', base_minor: '900', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 };
+    // Total, and the ordinal is still past the end — see CASE 9.
+    const row: CustomerAgingBandRow = {
+      bucket_no: LABELS.length + 1,
+      currency_code: 'USD',
+      txn_minor: '900',
+      base_minor: '900',
+      invoice_count: 1,
+      open_debit_count: 3,
+      open_credit_count: 1,
+    };
     expect(row.bucket_no).toBe(5); // non-vacuity: it really is past the end
     expect(sumBase([row])).toBe(900n); // and it really carries money
     let thrown: unknown;
@@ -406,7 +527,9 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     // (b) EVERY legal ordinal places its row, one band and no other. A sweep,
     //     so a future shape change cannot quietly reopen the end of the range.
     for (let bucketNo = 1; bucketNo <= LABELS.length; bucketNo += 1) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
+      const one: CustomerAgingSqlRow[] = [
+        { bucket_no: bucketNo, currency_code: 'USD', txn_minor: '11', base_minor: '11', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
+      ];
       const folded = foldCustomerAging(one, SHAPE);
       expect(BigInt(folded.totalBaseMinor), `band ${bucketNo} lost its row`).toBe(11n);
       const landedIndexes = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
@@ -420,7 +543,9 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
     const impossibleOrdinals = [-1, 0, 0.5, 1.5, LABELS.length + 1, LABELS.length + 2, Number.NaN, Number.POSITIVE_INFINITY];
     expect(impossibleOrdinals.length).toBeGreaterThan(0);
     for (const bucketNo of impossibleOrdinals) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
+      const one: CustomerAgingSqlRow[] = [
+        { bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
+      ];
       let refused = false;
       let total: string | null = null;
       try {
@@ -439,7 +564,15 @@ describe('§A foldCustomerAging: the 1-based → 0-based mapping', () => {
   // 13 — CHAL-4. `foldCustomerAging` is EXPORTED, so the shape is an input and
   // not an internal fact, and a malformed one used to reach the DTO.
   it('CASE 13 — a `labels` length that is not `bucketDays.length + 1` is REFUSED, and no DTO carries `fromDays: NaN`', () => {
-    const row: CustomerAgingSqlRow = { bucket_no: 1, currency_code: 'USD', txn_minor: '55', base_minor: '55', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 };
+    const row: CustomerAgingSqlRow = {
+      bucket_no: 1,
+      currency_code: 'USD',
+      txn_minor: '55',
+      base_minor: '55',
+      invoice_count: 1,
+      open_debit_count: 3,
+      open_credit_count: 1,
+    };
 
     // ONE TOO LONG. This is the NaN path: band index 4 read `bucketDays[3]`,
     // which is `undefined`, and `undefined + 1` is `NaN` — a money DTO with a
@@ -517,7 +650,10 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
       expect(labels.length, where).toBe(days.length + 1);
 
       // The oldest legal ordinal lands, in the LAST band.
-      const atBound = foldCustomerAging([{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }], shape);
+      const atBound = foldCustomerAging(
+        [{ bucket_no: labels.length, currency_code: 'USD', txn_minor: '77', base_minor: '77', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }],
+        shape,
+      );
       expect(atBound.totalBaseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.baseMinor, where).toBe('77');
       expect(atBound.buckets[labels.length - 1]?.toDays, where).toBeNull();
@@ -538,7 +674,10 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
 
       // Every legal ordinal lands in exactly one band, at `bucket_no - 1`.
       for (let bucketNo = 1; bucketNo <= labels.length; bucketNo += 1) {
-        const folded = foldCustomerAging([{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }], shape);
+        const folded = foldCustomerAging(
+          [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '9', base_minor: '9', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }],
+          shape,
+        );
         expect(BigInt(folded.totalBaseMinor), `${where}, band ${bucketNo} lost its row`).toBe(9n);
         const landed = folded.buckets.flatMap((b, i) => (b.baseMinor === '0' ? [] : [i]));
         expect(landed, `${where}, band ${bucketNo}`).toEqual([bucketNo - 1]);
@@ -562,12 +701,14 @@ describe('§D the mapping holds at 1, 3 and MAX_AGING_BUCKETS boundaries', () =>
   it('and the conservation law holds at every shape, with every band populated', () => {
     for (const days of SHAPES) {
       const labels = agingBucketLabels(days);
-      const rows: CustomerAgingSqlRow[] = labels.map((_, i) => ({
+      const rows: CustomerAgingBandRow[] = labels.map((_, i) => ({
         bucket_no: i + 1,
         currency_code: 'USD',
         txn_minor: String((i + 1) * 100),
         base_minor: String((i + 1) * 100),
-        invoice_count: i + 1, open_debit_count: 3, open_credit_count: 1,
+        invoice_count: i + 1,
+        open_debit_count: 3,
+        open_credit_count: 1,
       }));
       const where = `${days.length} boundaries`;
       // Non-vacuity: a row per band, and real money in each.
@@ -661,7 +802,9 @@ describe('§B the OLD `buckets[r.bucket_no]` implementation goes RED under these
 
   it('RED 5 — CASES 9, 10 and 12 fail against the planted old implementation: an impossible ordinal is swallowed in silence', () => {
     for (const bucketNo of [0, LABELS.length + 1]) {
-      const one: CustomerAgingSqlRow[] = [{ bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 }];
+      const one: CustomerAgingBandRow[] = [
+        { bucket_no: bucketNo, currency_code: 'USD', txn_minor: '13', base_minor: '13', invoice_count: 1, open_debit_count: 3, open_credit_count: 1 },
+      ];
       expect(sumBase(one)).toBe(13n); // non-vacuity: there is money on the row
       // The new fold refuses…
       expect(() => foldCustomerAging(one, SHAPE)).toThrow(AppError);
@@ -743,8 +886,12 @@ interface OpenCountsRow {
  * whose money reaches THREE bands. Its per-band `invoice_count` is 1 in each,
  * summing to 3, while its `open_debit_count` is 1 — which is exactly the
  * difference DR-29 named and DR-39 keeps.
+ *
+ * TOTAL rows, for the reason given at `ROWS`. §E4 mutates them into the wire
+ * type's orphans — `{ ...base, bucket_no: null }` and the rest — where the
+ * literal is checked against `CustomerAgingSqlRow` and the null is the point.
  */
-const DR39_ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
+const DR39_ROWS: readonly CustomerAgingBandRow[] = Object.freeze([
   { bucket_no: 1, currency_code: 'JOD', txn_minor: '4000', base_minor: '4000', invoice_count: 1, open_debit_count: 1, open_credit_count: 1 },
   { bucket_no: 1, currency_code: 'KWD', txn_minor: '600', base_minor: '600', invoice_count: 1, open_debit_count: 1, open_credit_count: 0 },
   { bucket_no: 2, currency_code: 'KWD', txn_minor: '300', base_minor: '300', invoice_count: 1, open_debit_count: 1, open_credit_count: 0 },
@@ -752,15 +899,27 @@ const DR39_ROWS: readonly CustomerAgingSqlRow[] = Object.freeze([
   { bucket_no: OLDEST_BUCKET_NO, currency_code: 'JOD', txn_minor: '-4000', base_minor: '-4000', invoice_count: 1, open_debit_count: 1, open_credit_count: 1 },
 ]);
 
-/** The counters a row set declares for one currency, read straight off the fixture. */
-function declaredPair(rows: readonly CustomerAgingSqlRow[], currency: string): { debit: number; credit: number } {
+/**
+ * The counters a row set declares for one currency, read straight off the
+ * fixture.
+ *
+ * THE `?? -1` IS GONE, and that matters beyond the type. It was a SILENT
+ * SUBSTITUTION with an unsigned direction: a fixture whose counter went
+ * missing came back as `-1`, which made §E0's `toBeGreaterThan(0)` fail —
+ * correctly — but made `expect(declaredPair(JOD)).not.toEqual(declaredPair(
+ * KWD))` PASS for the wrong reason, since `-1` differs from anything. A guard
+ * that reads an absence as a distinct value cannot tell "these two currencies
+ * disagree" from "both forgot to answer". The row is total now, so there is no
+ * absence to substitute for, and the figure is read rather than defaulted.
+ */
+function declaredPair(rows: readonly CustomerAgingBandRow[], currency: string): { debit: number; credit: number } {
   const first = rows.find((r) => r.currency_code === currency);
   if (first === undefined) throw new Error(`the fixture has no ${currency} row, so the case has no subject`);
-  return { debit: first.open_debit_count ?? -1, credit: first.open_credit_count ?? -1 };
+  return { debit: first.open_debit_count, credit: first.open_credit_count };
 }
 
 /** Σ the per-band `invoice_count` of one currency — the figure DR-29 forbids as a document total. */
-function bandCountsOf(rows: readonly CustomerAgingSqlRow[], currency: string): number {
+function bandCountsOf(rows: readonly CustomerAgingBandRow[], currency: string): number {
   return rows.filter((r) => r.currency_code === currency).reduce((acc, r) => acc + r.invoice_count, 0);
 }
 
@@ -845,18 +1004,17 @@ describe('§E DR-39: the two counters, per currency, independent of the bands', 
     // And the row carries NOTHING ELSE — rule 5: no combined field, however
     // named, may ride along beside the pair.
     for (const row of openCounts) {
-      expect(Object.keys(row).sort(), `${row.currency} carries a field beyond the pair and its key`).toEqual([
-        'currency',
-        'openCreditCount',
-        'openDebitCount',
-      ]);
+      expect(Object.keys(row).sort(), `${row.currency} carries a field beyond the pair and its key`).toEqual(['currency', 'openCreditCount', 'openDebitCount']);
     }
   });
 
   // E2 — the owner's second required case, which is DR-33 seen from here.
   it('E2 — a currency whose open documents NET TO ZERO still appears, with both counters standing', () => {
     const jod = DR39_ROWS.filter((r) => r.currency_code === 'JOD');
-    expect(jod.reduce((a, r) => a + BigInt(r.base_minor), 0n), 'non-vacuity: the net really is zero').toBe(0n);
+    expect(
+      jod.reduce((a, r) => a + BigInt(r.base_minor), 0n),
+      'non-vacuity: the net really is zero',
+    ).toBe(0n);
     const { openCounts, buckets } = foldCustomerAging(DR39_ROWS, SHAPE);
     const row = openCounts.find((c) => c.currency === 'JOD');
     expect(row, 'a net of zero must not delete the currency from the answer (DR-33)').toEqual({
@@ -931,9 +1089,92 @@ describe('§E DR-39: the two counters, per currency, independent of the bands', 
     refuses([{ ...base, open_debit_count: null }], 'a band row with no counters is a defect');
     refuses([{ ...base, open_credit_count: null }], 'in either column');
 
+    // (e) AND THE REMAINING THREE COLUMNS, so the boundary is measured over
+    //     all SEVEN rather than over the four a reader happened to think of.
+    //     `bandRowOrRefuse` is the single place a degenerate row is refused,
+    //     and a boundary tested on a subset of its columns is a boundary with
+    //     holes in the columns nobody tried.
+    //
+    //     `txn_minor` IS A CHANGE OF OUTCOME and is pinned here deliberately.
+    //     The fold used to read it as `if (txn_minor !== null) push(...)`: a
+    //     row missing only that column was ACCEPTED, its `base_minor` went
+    //     into the band and into `totalBaseMinor`, and it simply contributed
+    //     no line to `byCurrency`. So a merchant could be shown a band whose
+    //     base figure no per-currency line accounts for — the two disagreeing
+    //     on one document, silently, which is the shape of defect this whole
+    //     function exists to refuse. It is now refused like its six siblings.
+    refuses([{ ...base, txn_minor: null }], 'a band row with no transaction figure is a defect, not a row to count and not list');
+    refuses([{ ...base, base_minor: null }], 'a band row with no base money is a defect');
+    refuses([{ ...base, invoice_count: null }], 'a band row with no invoice count is a defect');
+
     // The POSITIVE control for the whole of E4: the UNMUTATED row is accepted,
     // or every refusal above would be a refusal of something else.
     expect(foldCustomerAging([base], SHAPE).openCounts).toEqual([{ currency: 'KWD', openDebitCount: 1, openCreditCount: 0 }]);
+  });
+
+  /**
+   * E4b — THE REFUSAL NAMES THE ROW, AND NAMES IT WHERE THE MERCHANT CANNOT
+   * SEE IT.
+   *
+   * `bandRowOrRefuse` is the single boundary, and a boundary that reports only
+   * "one of these rows was malformed" sends whoever reads the log back to the
+   * query. So it names the row's index and the missing column — on `cause`,
+   * which `ApiErrorBody` has no field for.
+   *
+   * Both halves are asserted, because either alone is the wrong outcome: a
+   * refusal that named nothing would be useless, and one that named the column
+   * in `details` would ship this read's internal query shape to a browser.
+   * `details` stays exactly `{ sellingCode }` and the message stays the
+   * generic sentence — the wire answer is the one §A CASE 9 already pins.
+   */
+  it('E4b — a degenerate row names itself and its column on `cause`, while the client body stays exactly as it was', () => {
+    const base = DR39_ROWS[1];
+    if (base === undefined) throw new Error('the fixture lost its KWD row, so E4b has no subject');
+
+    // The row index is the position in the SET, not in the band: the second
+    // row here, so index 1, and a boundary that reported 0 for everything
+    // would fail this.
+    let thrown: unknown;
+    try {
+      foldCustomerAging([base, { ...base, bucket_no: 2, open_debit_count: null }], SHAPE);
+    } catch (error) {
+      thrown = error;
+    }
+    // Narrowed by `instanceof` and not by a cast: the assertion states the
+    // claim for the report, and the guard is what lets the compiler read the
+    // lines below. A cast would have asserted it twice and proved it once.
+    expect(thrown).toBeInstanceOf(AppError);
+    if (!(thrown instanceof AppError)) throw new Error('the refusal was not an AppError, so E4b has no subject');
+    const refusal = thrown;
+
+    // The client's answer: UNCHANGED, and asserted in full so a later edit
+    // cannot widen it quietly.
+    expect(refusal.httpStatus).toBe(500);
+    expect(refusal.message).toBe('Internal error');
+    expect(Object.keys(refusal.details ?? {})).toEqual(['sellingCode']);
+    expect(refusal.details?.['sellingCode']).toBe('customer.aging_bucket_mapping_invalid');
+
+    // The engineer's answer: the row and the column, by name.
+    expect(typeof refusal.cause).toBe('string');
+    expect(String(refusal.cause)).toContain('row 1');
+    expect(String(refusal.cause)).toContain('open_debit_count');
+    // And the column name went NOWHERE near the body.
+    expect(JSON.stringify(refusal.details ?? {})).not.toContain('open_debit_count');
+
+    // THE POSITIVE CONTROL, and it is what stops the two assertions above from
+    // being satisfied by a `cause` that says the same thing for everything: a
+    // refusal of a row that is COMPLETE and merely invalid does not come from
+    // this boundary at all, so it carries no such naming.
+    let other: unknown;
+    try {
+      foldCustomerAging([{ ...base, bucket_no: 0 }], SHAPE);
+    } catch (error) {
+      other = error;
+    }
+    expect(other).toBeInstanceOf(AppError);
+    if (!(other instanceof AppError)) throw new Error('the ordinal refusal was not an AppError, so the control has no subject');
+    expect(other.cause).toBeUndefined();
+    expect(other.details?.['sellingCode']).toBe('customer.aging_bucket_mapping_invalid');
   });
 
   // E5 — the empty answer is a STATEMENT.

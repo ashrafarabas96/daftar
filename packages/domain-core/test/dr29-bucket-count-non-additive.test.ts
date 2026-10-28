@@ -137,8 +137,14 @@ describe('DR-29: the per-bucket counts do not partition the invoices', () => {
     // 1 at 2026-09-27 is band 2, instalment 2 at 2026-12-01 is band 1, and the
     // plain invoice at 2026-08-01 is band 4. The schedule declares the whole
     // total, so there is no residual and no fourth contribution.
-    expect(buckets.map((b) => b.bucketNo), 'four bands are reached, in ascending order').toEqual([1, 2, 4, 5]);
-    expect(buckets.map((b) => b.invoiceCount), 'and each band holds exactly one DISTINCT invoice').toEqual([1, 1, 1, 1]);
+    expect(
+      buckets.map((b) => b.bucketNo),
+      'four bands are reached, in ascending order',
+    ).toEqual([1, 2, 4, 5]);
+    expect(
+      buckets.map((b) => b.invoiceCount),
+      'and each band holds exactly one DISTINCT invoice',
+    ).toEqual([1, 1, 1, 1]);
 
     // THE WHOLE CARD, in two numbers that are not equal.
     expect(sumOfBucketCounts(buckets), 'the forbidden sum').toBe(4);
@@ -161,7 +167,10 @@ describe('DR-29: the per-bucket counts do not partition the invoices', () => {
     // what makes the habit dangerous rather than obviously broken.
     const contributions = nonZero(contributionsFor([PLAIN, { ...PLANNED, invoiceId: 'INV-OTHER' }], [], AS_OF, [...STANDARD]));
     const buckets = aggregate(contributions);
-    expect(buckets.map((b) => b.bucketNo), 'both age at their own term; both land in band 4').toEqual([4]);
+    expect(
+      buckets.map((b) => b.bucketNo),
+      'both age at their own term; both land in band 4',
+    ).toEqual([4]);
     expect(sumOfBucketCounts(buckets)).toBe(2);
     expect(distinctOpenInvoices(contributions)).toBe(2);
     expect(sumOfBucketCounts(buckets), 'equal here, and that is permitted').toBe(distinctOpenInvoices(contributions));
@@ -174,7 +183,10 @@ describe('DR-29: the per-bucket counts do not partition the invoices', () => {
     // neither figure, and the distinct count cannot drift from the bands by
     // counting a different set.
     const contributions = nonZero(contributionsFor([PLANNED, PLAIN, SETTLED], [PLAN], AS_OF, [...STANDARD]));
-    expect(contributions.some((c) => c.invoiceId === 'INV-SETTLED'), 'a zero contribution is not a row').toBe(false);
+    expect(
+      contributions.some((c) => c.invoiceId === 'INV-SETTLED'),
+      'a zero contribution is not a row',
+    ).toBe(false);
     expect(distinctOpenInvoices(contributions), 'two of the three invoices are open with something outstanding').toBe(2);
 
     // And the figure is INVARIANT across the slice that made the sum unreliable:
