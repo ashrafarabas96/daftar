@@ -268,12 +268,11 @@ export interface CustomerAgingBucketDto {
  * one row here for every currency in which the customer has an open document,
  * and NOT a pair of scalars aggregated over all of their currencies — a pair
  * of all-currency scalars could not express a per-currency appearance at a net
- * of zero at all. **This reading is the coordinator's and is overturnable by
- * one word from the owner**; the correction is two lines, and it is recorded
- * in `docs/decisions/2026-10-27-phase4-aging-decisions.md` rather than left
- * in a reviewer's head.
+ * of zero at all. **This reading is now OWNER DECISION DR-54 (2026-10-28)**,
+ * no longer a coordinator's reading awaiting a word; it is recorded in
+ * `docs/decisions/2026-10-27-phase4-aging-decisions.md`.
  *
- * ── ⚠ AND THE SIBLING READER DOES NOT AGREE ABOUT PRESENCE, YET ──────────
+ * ── ⚠ AND THE SIBLING READER DISAGREES ABOUT PRESENCE — THIS ONE IS RIGHT ─
  *
  * Per-currency presence at a net of zero is what this document promises, and
  * `GET /v1/customers/:customerId/receivable` DOES NOT KEEP IT. That endpoint
@@ -282,16 +281,24 @@ export interface CustomerAgingBucketDto {
  * aging document shows that same currency with both counters standing and two
  * bands that cancel.
  *
- * So one customer, one moment, two endpoints: the currency is absent from the
- * receivable summary and present in the aging report. NEITHER figure is
- * wrong — they answer different questions — but a client that lists currencies
- * from one and reads counters from the other will find a currency it has no
- * row for, and that is worth knowing before it is discovered in a merchant's
- * browser.
+ * **THE AGING SCREEN IS AUTHORITATIVE (owner decision DR-54, 2026-10-28.)**
+ * Not "both answer different questions": until DR-33 unifies them, ANY
+ * divergence between the two is a DEFECT IN THE RECEIVABLE LIST and not in
+ * the aging report. The reason is DR-30 — no debt leaves a report except by
+ * being paid — and showing the cancelling currency is what keeps it: a
+ * currency the customer still has open documents in does not stop existing
+ * because its debits and credits happen to sum to zero today.
  *
- * This is stated and NOT resolved here: reconciling the two is DR-33's own
- * card, and changing the `HAVING` is a change to a figure a merchant reads,
- * which is the owner's call and not a contract comment's.
+ * So a client that lists currencies from the receivable summary and reads
+ * counters from here will find a currency it has no row for. The missing row
+ * is the summary's error.
+ *
+ * WHAT IS SETTLED is the authority, above. What is NOT settled is the
+ * UNIFICATION, and it is DR-33's own card — which is BLOCKING for the Phase 4
+ * seal and owes four things: both readers on one presence rule, a `net_zero`
+ * field, a test that the customer-and-currency SETS match between the two
+ * endpoints, and a double review. Changing `HAVING sum(...) <> 0` belongs to
+ * that card, not to this comment.
  */
 export interface CustomerOpenDocumentCountsDto {
   /** The transaction currency these two counters are about. */

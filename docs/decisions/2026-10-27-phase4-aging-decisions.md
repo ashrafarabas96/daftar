@@ -566,3 +566,48 @@ described as being. **The numbers, as the owner measured them:**
 
 **Not in scope.** Changing any DR-27 behaviour, any boundary, or any budget. This is a
 card about the strength of guards, not about the rules they guard.
+
+## DR-54 — the aging screen is authoritative where the two readers disagree
+
+**Decided by the owner, 2026-10-28.**
+
+Two endpoints answer "which currencies does this customer have open receivables
+in", and they do not agree:
+
+- `GET /v1/customers/:customerId/receivable` reads `customer_ar_outstanding`,
+  which ends in `HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0`, so a
+  currency whose debits and credits cancel **returns no row**.
+- `GET /v1/customers/:customerId/receivable/aging` shows that same currency,
+  with both DR-39 counters standing and two bands that cancel.
+
+**The decision: the aging screen is the reference.** Until DR-33 is
+implemented, **any divergence between the two is a defect in the receivable
+list, not in the aging report.**
+
+**Why that way round.** The aging screen shows the cancelling currency, and
+that is what keeps DR-30 — *no debt leaves a report except by being paid*. A
+currency in which the customer still holds open documents does not stop
+existing because its debits and credits happen to sum to zero on the day the
+merchant looks. The summary's silence is the loss of information; the aging
+report's row is the honest answer.
+
+**What this settles and what it does not.** It settles **authority**. It does
+not unify the two readers — that is DR-33's card, and this decision does not
+license touching `HAVING sum(...) <> 0` anywhere else.
+
+### DR-33 is BLOCKING for the Phase 4 seal
+
+It owes four things, and none of them is this card's:
+
+1. both readers on **one presence rule**;
+2. a **`net_zero`** field;
+3. a test that the **customer-and-currency sets match** between the two
+   endpoints — the divergence above is exactly what it must catch;
+4. **double review** (`daftar-reviewer` + `daftar-finance`), as a change to a
+   figure a merchant reads.
+
+**Recorded in code** at `CustomerOpenDocumentCountsDto` in
+`packages/shared-contracts/src/customers.ts`, which carried the superseded
+wording — "neither figure is wrong, they answer different questions" — until
+this decision made it false, and the per-currency reading as "the
+coordinator's, overturnable by one word from the owner" until the word came.

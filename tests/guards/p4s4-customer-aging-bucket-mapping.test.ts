@@ -1197,6 +1197,31 @@ describe('§E DR-39: the two counters, per currency, independent of the bands', 
 //    a NEGATIVE total rather than a clamped zero.
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * EVERY ASSERTION BELOW HAS A PLANT THAT REDDENS IT, and they were run. A
+ * money assertion nobody has seen fail is not a guard, which is how F1's
+ * original "proof" shipped a `% 2n === 0n` that was true of the right answer
+ * and the wrong one alike. The plants, each a defect in `foldCustomerAging`
+ * unless stated, with the failure they produced:
+ *
+ *   * `BEYOND_DOUBLE` → `5n` (this file's own constant) — the three anchors at
+ *     the top of F1 go red: `expected false to be true`. They assert the
+ *     fixture is a HARD case, so the fixture is their subject.
+ *   * double arithmetic for BigInt — F1 and F3: `expected
+ *     '18014398509481984' to be '18014398509481986'`. With every other total
+ *     and band check in F1 blinded, the residue check still reddens on
+ *     `expected 0n to be 2n`, which is what makes it the proof it claims.
+ *   * the total emitted as a JS number — F1, F2, F3: `expected 900 to be
+ *     '900'`.
+ *   * the total clamped at zero — F2 alone: `expected '0' to be '-2000000'`.
+ *   * the total's sign dropped (absolute value) — F2; with F2's earlier
+ *     checks blinded, the dropped-sign guard reddens alone on `expected
+ *     2000000n not to be 2000000n`.
+ *   * each BAND clamped at zero — F2 and F3: `expected '0' to be '-1200000'`,
+ *     and `expected 9007199254741000n to be 7n`.
+ *
+ * Adding an assertion here means naming its plant and running it.
+ */
 describe('§F the money edges: beyond 2^53, and a total that is negative', () => {
   /** 2^53 + 1 — the first integer a double cannot represent. */
   const BEYOND_DOUBLE = 9_007_199_254_740_993n;
@@ -1215,6 +1240,11 @@ describe('§F the money edges: beyond 2^53, and a total that is negative', () =>
     // NON-VACUITY FIRST, and it is the whole reason this case exists: the
     // subject must be a number `Number` cannot hold, or "exact past 2^53" is
     // a claim about nothing. A round trip through a double LOSES it.
+    //
+    // THESE THREE ARE ABOUT THE CONSTANT, NOT ABOUT THE FOLD, so they cannot
+    // fail and are not meant to — they establish that the figure chosen below
+    // is a hard case rather than a large one. The assertions with
+    // discriminating power are the ones after the fold runs.
     expect(BEYOND_DOUBLE > BigInt(Number.MAX_SAFE_INTEGER)).toBe(true);
     expect(BigInt(Number(BEYOND_DOUBLE))).not.toBe(BEYOND_DOUBLE);
     expect(BigInt(Number(BEYOND_DOUBLE))).toBe(9_007_199_254_740_992n);
@@ -1232,12 +1262,37 @@ describe('§F the money edges: beyond 2^53, and a total that is negative', () =>
     expect(sumBucketBase(buckets)).toBe(18_014_398_509_481_986n);
     expect(BigInt(totalBaseMinor)).toBe(18_014_398_509_481_986n);
     // The DTO carries it as TEXT, which is why none of this rounds: a JSON
-    // number could not express the figure the merchant is owed.
+    // number could not express the figure the merchant is owed. (A restatement
+    // of the signature at run time; it can only fail if the implementation
+    // contradicts its own type.)
     expect(typeof totalBaseMinor).toBe('string');
-    // And the proof that the exactness is real rather than incidental: the
-    // total is ODD, and every double in this range is even.
-    expect(BigInt(totalBaseMinor) % 2n).toBe(0n);
+
+    // ── THE RESIDUE PROOF, AND THE ARITHMETIC IT HAS TO USE ───────────────
+    //
+    // This is the assertion that says the exactness is structural rather than
+    // incidental, and it has to be stated on the RIGHT MODULUS for each
+    // figure, because the double grid is coarser the higher you go.
+    //
+    //   * The BAND holds 9007199254740993, in [2^53, 2^54), where the doubles
+    //     step by 2 — so every representable value there is EVEN and an ODD
+    //     band figure cannot be one. `% 2n === 1n` is the discriminating test,
+    //     and under a `Number` fold the band becomes …992, which is even.
+    //
+    //   * The TOTAL holds 18014398509481986, in [2^54, 2^55), where the
+    //     doubles step by FOUR. Parity says nothing there: a `Number` fold
+    //     gives 18014398509481984 — which is exactly 2^54 — and that is EVEN
+    //     TOO, so `% 2n === 0n` was true of the right answer and the wrong one
+    //     alike. The claim with teeth is `% 4n === 2n`: the correct total is
+    //     2^54 + 2 and leaves 2, every representable double in the range
+    //     leaves 0.
+    //
+    // The comment that stood here said "the total is ODD" and then asserted it
+    // was even — it described the band and tested the total, and the test it
+    // chose could not fail. This is the same defect class the population laws
+    // were repaired for one commit ago: prose asserting what the assertion
+    // does not.
     expect(BigInt(buckets[0]?.baseMinor ?? '0') % 2n).toBe(1n);
+    expect(BigInt(totalBaseMinor) % 4n).toBe(2n);
   });
 
   it('F2 — a customer wholly IN CREDIT reports a NEGATIVE total, not a clamped zero (DR-23)', () => {

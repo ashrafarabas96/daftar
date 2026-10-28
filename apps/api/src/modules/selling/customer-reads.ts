@@ -309,10 +309,13 @@ function bandRowOrRefuse(row: CustomerAgingSqlRow, rowIndex: number): CustomerAg
   // UNREACHABLE FROM `aging()`, AND KEPT ANYWAY. That reader selects
   // `coalesce(a.currency_code, c.currency_code)`, which is null only when BOTH
   // sides are, and a row with neither side does not exist — so this arm cannot
-  // fire for the one caller in this module today. It is defence in depth for
-  // the other callers the exported fold invites, and it would be the first
-  // thing to matter if that `coalesce` were ever dropped. Read the arm as
-  // "this cannot happen and is refused regardless", not as a live branch.
+  // fire for the one caller in this module today, and `aging()` below is the
+  // ONLY production caller there is: the fold is exported, but nothing else in
+  // `apps` or `packages` calls it. What exercises this arm today is a test.
+  //
+  // So it is defence in depth for a caller that MAY one day exist — not for
+  // callers that do — and for the day that `coalesce` is dropped. Read the arm
+  // as "this cannot happen and is refused regardless", not as a live branch.
   const currencyCode = row.currency_code;
   if (currencyCode === null) throw agingRowRefusal(rowIndex, 'currency_code');
   const txnMinor = row.txn_minor;

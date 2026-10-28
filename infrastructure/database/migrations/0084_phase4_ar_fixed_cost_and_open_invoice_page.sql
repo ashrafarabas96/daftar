@@ -788,8 +788,17 @@ COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
 --     in the band ONLY BECAUSE `invoice_outstanding` returns one row per
 --     invoice and asserts it. The per-band figure is therefore correct today
 --     by resting on a property of another routine, not by measuring
---     distinctness itself: were `invoice_outstanding` ever to return two rows
---     for one invoice, the band count would inflate.
+--     distinctness itself.
+--
+--     AND THE ASSERTION IS THE REASON, SO BOTH HALVES ARE WORTH STATING.
+--     While it stands, a second row for one invoice does NOT inflate this
+--     count — it is REFUSED: `invoice_outstanding` reads `GET DIAGNOSTICS
+--     v_found = ROW_COUNT` and raises `invoice.not_found` when the rows found
+--     differ from the distinct ids asked for (section 5). So the band count
+--     cannot be wrong in that way without the refusal firing first. It is if
+--     that assertion is ever weakened or removed that `count(*)` silently
+--     inflates, and nothing here would notice — which is what makes the
+--     dependency worth naming rather than relying on.
 --
 --     THE ROUTINE BELOW DELIBERATELY DOES NOT REST ON THAT PROPERTY. It
 --     counts `count(DISTINCT o.invoice_id)` precisely so that the honesty of
