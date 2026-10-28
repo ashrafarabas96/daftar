@@ -162,8 +162,20 @@ const VALIDATION_MIGRATION = '0080_phase4_cash_invoice_no_receivable.sql';
  * name matches twenty-one lines across the Phase 4 migrations, and the wrapper
  * is written BEFORE the array form on purpose (`0084` §4's comment, R-100).
  */
-const ARRAY_FORM =
-  /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_ids\s+UUID\s*\[\s*\]\s*\)/g;
+const ARRAY_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\[\s*\]\s*\)/g;
+
+/**
+ * The SCALAR signature — the `(UUID, UUID)` wrapper.
+ *
+ * The two overloads are told apart by `UUID[]` against `UUID`, not by the
+ * parameter NAMES, which is why both patterns take `\w+` there. Round five
+ * measured why that matters: `CREATE OR REPLACE` cannot rename a parameter
+ * (PostgreSQL refuses with `42P13`), so a rewrite has to DROP first — and a
+ * recreate with renamed parameters then slipped past a resolver keyed on
+ * `p_invoice_ids`, leaving every digest here measuring a body the database no
+ * longer had. Measured: exactly one `CREATE` of each signature in `0084`.
+ */
+const SCALAR_FORM = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\)/g;
 
 /** Whitespace collapsed, so a claim is about the text and not about indentation. */
 function collapse(s: string): string {
@@ -322,6 +334,29 @@ const PINNED_BODY_CHARS = 1885;
  * remainder — not the body, which is what the previous commit claimed.
  */
 const PINNED_HEADER_SHA256 = '889b888328b293de908eae6050a39193d3e50fa982a4345a12eade635ec9371a';
+
+/**
+ * THE SCALAR WRAPPER'S OWN DECLARATION, pinned for the third time in the same
+ * shape — and the reason is the same defect at one more remove.
+ *
+ * Round four pinned the array form's header after `paid_txn_minor` and
+ * `outstanding_txn_minor` exchanged places in its `RETURNS TABLE` went green.
+ * Round five found the wrapper's `RETURNS TABLE` unpinned and did exactly the
+ * same thing to it — MEASURED green at 17/17 — and the wrapper is the form
+ * PRODUCTION calls: `receivables-reads.ts:86`, `invoice-reads.ts:249` and
+ * `customer-reads.ts:792` all read it as
+ * `JOIN LATERAL invoice_outstanding(i.business_id, i.id) o`, BY NAME. One
+ * comment there calls it «the ONE definition». So a fully paid invoice would
+ * report its full value as outstanding on the path the merchant actually sees,
+ * and the wrapper's body — which projects POSITIONALLY — would not notice.
+ *
+ * `rc_1b` asserts the wrapper DELEGATES; that is a different claim from its
+ * columns meaning what they are named.
+ */
+const PINNED_WRAPPER_HEADER_SHA256 = 'fadca39c3885a9930cab6ef7a7227c06b66ec434c10649db8c25f4f5131ae994';
+const PINNED_WRAPPER_HEADER_CHARS = 278;
+const PINNED_WRAPPER_BODY_SHA256 = '424e9bfe93072d9be3a18ade7207af6c05b6912c1c792d0905c0c69440e93fd1';
+const PINNED_WRAPPER_BODY_CHARS = 188;
 /** Its normalised length. */
 const PINNED_HEADER_CHARS = 339;
 
@@ -543,9 +578,8 @@ describe('section 1: the subject is resolved by signature, from the last migrati
     // wrapper, and a name-keyed helper is one edit away from doing exactly
     // that.
     const { sql } = lastDefining(ARRAY_FORM);
-    const scalar = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_id\s+UUID\s*\)/g;
     const arrayBody = signatureBody(sql, ARRAY_FORM);
-    const scalarBody = signatureBody(sql, scalar);
+    const scalarBody = signatureBody(sql, SCALAR_FORM);
     expect(scalarBody, 'the scalar wrapper must be present, or this control proves nothing').not.toBe('');
     expect(scalarBody).not.toBe(arrayBody);
     expect(scalarBody, 'the wrapper holds no arithmetic and no refusal — if it did, the two would not be distinguishable by this means').not.toMatch(
@@ -561,6 +595,42 @@ describe('section 1: the subject is resolved by signature, from the last migrati
     expect(collapse(scalarBody), 'the scalar wrapper must delegate to the array form — its refusal is borrowed, not its own').toMatch(
       /FROM public\.invoice_outstanding\(p_business_id, ARRAY\[p_invoice_id\]\)/,
     );
+  });
+
+  it('rc_1c: the wrapper DECLARATION is pinned by digest too — it is the form production calls', () => {
+    // Round five's blocker. The array form's header was pinned in round four
+    // because two same-typed columns exchanged in its `RETURNS TABLE` invert
+    // paid and outstanding for every consumer that reads by name. The wrapper
+    // has a `RETURNS TABLE` of its own, it was unpinned, and the same swap on
+    // it was MEASURED green at 17/17 — on the form three production readers
+    // actually call. Its body projects POSITIONALLY
+    // (`SELECT o.paid_txn_minor, …`), so the body notices nothing.
+    const wrapper = signatureBody(lastDefining(ARRAY_FORM).sql, SCALAR_FORM);
+    expect(wrapper, 'the scalar wrapper did not slice, so both digests below would be of empty strings').not.toBe('');
+
+    const header = collapse(routineHeader(wrapper));
+    expect(header.startsWith('CREATE'), 'the wrapper header slice must start at its CREATE').toBe(true);
+    expect(
+      createHash('sha256').update(header, 'utf8').digest('hex'),
+      `the wrapper DECLARATION changed. Normalised length ${header.length} against the pinned ${PINNED_WRAPPER_HEADER_CHARS}.
+` +
+        `It reads: ${header}
+` +
+        `Three API readers select from this by column NAME, so exchanging two same-typed columns here inverts paid and outstanding for the merchant.`,
+    ).toBe(PINNED_WRAPPER_HEADER_SHA256);
+    expect(header.length, 'the wrapper header length must match the pinned one').toBe(PINNED_WRAPPER_HEADER_CHARS);
+
+    const body = normalisedBody(wrapper);
+    expect(body, 'the wrapper body did not slice between its $fn$ quotes').not.toBe('');
+    expect(
+      createHash('sha256').update(body, 'utf8').digest('hex'),
+      `the wrapper BODY changed. Normalised length ${body.length} against the pinned ${PINNED_WRAPPER_BODY_CHARS}.
+` +
+        `It reads: ${body}
+` +
+        `This body projects positionally, so a reordering here is invisible to its own column names.`,
+    ).toBe(PINNED_WRAPPER_BODY_SHA256);
+    expect(body.length, 'the wrapper body length must match the pinned one').toBe(PINNED_WRAPPER_BODY_CHARS);
   });
 });
 
@@ -662,10 +732,15 @@ describe('section 2: the detector lives in the array-form body, and this is the 
   it('rc_4c: the WHOLE declaration is pinned by digest — header and body, so there is no remainder left to move the kill into', () => {
     // The law with no remainder, now over the whole `CREATE … $fn$;` and not
     // only the part between the dollar quotes. Most of what `rc_2` through
-    // `rc_6b` assert is a consequence of this; they exist for their failure
-    // messages. `rc_12` is NOT a consequence of it — it reads attributes as
-    // a later `ALTER` can leave them, which no digest of this file's text can
-    // see — and `rc_7`, `rc_8`, `rc_11` and `rc_13` read other files entirely.
+    // `rc_6b` and `rc_12` assert is a consequence of this; they exist for
+    // their failure messages. `rc_7`, `rc_8`, `rc_11` and `rc_13` are NOT
+    // consequences — they read other files. `rc_12` IS one, and the previous
+    // wording that said otherwise was measured false: planting
+    // `SECURITY DEFINER` in `0084`'s header reddens `rc_4c` AND `rc_12`
+    // together, while a later `ALTER FUNCTION … SECURITY DEFINER` reddens
+    // `rc_13` ALONE and leaves `rc_12` green. What sees a later `ALTER` is
+    // `rc_13`, not `rc_12` — and saying otherwise invited a future reader to
+    // delete those rows as duplicates of a law that cannot see what they see.
     //
     // THE HEADER FIRST, because it is the remainder round four found.
     const header = collapse(routineHeader(body()));
@@ -935,6 +1010,12 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // is the other half, because a redefinition ANYWHERE after the resolved
       // file is a change to the subject of all sixteen laws, whether the
       // resolver follows it or not.
+      // `ROUTINE` is matched beside `FUNCTION` in every row below that names a
+      // routine. They are exact synonyms in PostgreSQL 11+ and this project
+      // runs `postgres:16`; round five measured `DROP ROUTINE` and
+      // `ALTER ROUTINE … SECURITY DEFINER` sailing past all three rows while
+      // the suite stayed green. And it catches nothing legitimate: `DROP
+      // ROUTINE` and `ALTER ROUTINE` occur ZERO times in all 87 migrations.
       // These two are UNSCOPED, unlike the rows below: measured, `ALTER
       // FUNCTION … invoice_outstanding` occurs ZERO times in all 87
       // migrations, so every file can be scanned and nothing legitimate is
@@ -952,13 +1033,28 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // pinned, and `ALTER … SECURITY DEFINER` keeps the `SET` from the CREATE.
       {
         name: "the routine's INVOKER reads, by altering it later",
-        re: /ALTER FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*SECURITY\s+DEFINER/i,
+        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*SECURITY\s+DEFINER/i,
         plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) SECURITY DEFINER;',
       },
       {
         name: "the routine's pinned search_path, by altering it later",
-        re: /ALTER FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
+        re: /ALTER (?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\([^)]*\)[^;]*(?:RESET|SET)\s+search_path/i,
         plant: 'ALTER FUNCTION public.invoice_outstanding(UUID, UUID[]) RESET search_path;',
+      },
+      // THE SCALAR SIGNATURE'S OWN DROP, which no row covered: the drop row
+      // below names `(UUID, UUID[])` only. Round five's route in was exactly
+      // this — drop the wrapper, recreate it with renamed parameters and no
+      // delegation. `CREATE OR REPLACE` cannot rename a parameter (`42P13`),
+      // so the drop is the necessary first step and catching it closes the
+      // route rather than one spelling of it. UNSCOPED, and the row-by-row
+      // control is how that was settled: the scalar signature is dropped by
+      // NO migration (measured, zero files), unlike the array signature which
+      // `0084` drops itself — so this row can read every file and the array
+      // row cannot.
+      {
+        name: 'the scalar wrapper, by dropping it',
+        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\)/i,
+        plant: 'DROP FUNCTION IF EXISTS public.invoice_outstanding(UUID, UUID);',
       },
       // THE SCALAR WRAPPER, which `rc_1b` reads only inside the resolved file.
       // `CREATE OR REPLACE` with the same argument names is legal and needs no
@@ -967,7 +1063,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // the form three production readers call. MEASURED green before this row.
       {
         name: 'the scalar wrapper, by redefining it after the file these laws read',
-        re: /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*p_business_id\s+UUID\s*,\s*p_invoice_id\s+UUID\s*\)/i,
+        re: /CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*\w+\s+UUID\s*,\s*\w+\s+UUID\s*\)/i,
         plant: 'CREATE OR REPLACE FUNCTION public.invoice_outstanding(p_business_id UUID, p_invoice_id UUID)',
         afterResolved: true,
       },
@@ -978,7 +1074,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
       // fires on the subject it is meant to protect.
       {
         name: 'the routine, by dropping it after the file these laws read',
-        re: /DROP FUNCTION\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\[\s*\]\s*\)/i,
+        re: /DROP (?:FUNCTION|ROUTINE)\s+(?:IF EXISTS\s+)?(?:(?:public|app)\.)?invoice_outstanding\s*\(\s*UUID\s*,\s*UUID\s*\[\s*\]\s*\)/i,
         plant: 'DROP FUNCTION IF EXISTS public.invoice_outstanding(UUID, UUID[]);',
         afterResolved: true,
       },
