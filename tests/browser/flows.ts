@@ -65,7 +65,19 @@ async function waitForFocusTarget(run: Run, predicate: string, what: string): Pr
     const present: unknown = await run.page.evaluate(`(() => Array.from(document.querySelectorAll('*')).some(${predicate}))()`);
     if (present === true) return;
     if (Date.now() >= deadline) {
-      run.fail('flow', `${what} never rendered, so the keyboard walk had nothing to reach`);
+      // Say what WAS there. Measured on run 40625531024: this branch reported
+      // the receive button absent at 768px in ar and tr, and the error
+      // screenshot taken immediately afterwards shows that button plainly
+      // rendered — so "absent" was true of the predicate at every poll and
+      // false of the page a moment later, and the message could not tell the
+      // two apart. The page's own answer (its URL and the buttons it actually
+      // holds) turns the next occurrence into a named cause instead of a
+      // repeat of this ambiguity: a different label means the predicate is
+      // wrong, the right label means the render landed after the deadline.
+      const seen: unknown = await run.page.evaluate(
+        `(() => JSON.stringify({ url: location.pathname, buttons: Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 12) }))()`,
+      );
+      run.fail('flow', `${what} never rendered, so the keyboard walk had nothing to reach; the page held ${String(seen)}`);
       throw new Error(`render: ${what} absent`);
     }
     await run.page.waitForTimeout(100);
