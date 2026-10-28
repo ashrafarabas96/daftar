@@ -227,8 +227,16 @@ function migrationFiles(): string[] {
 function lastDefining(re: RegExp): { file: string; sql: string } {
   let found = { file: '', sql: '' };
   for (const file of migrationFiles()) {
-    const sql = sqlLiveCode(join(MIGRATIONS, file));
-    if (new RegExp(re.source, re.flags).test(sql)) found = { file, sql };
+    const raw = readFileSync(join(MIGRATIONS, file), 'utf8');
+    // The DECISION is made on the lexer's code view, where string bodies are
+    // absent; the SLICE is taken from `sqlLiveCode`, which keeps the routine
+    // body and its `$fn$;` terminator. The asymmetry is deliberate: a
+    // `COMMENT ON` body that quotes a `CREATE FUNCTION invoice_outstanding(…)`
+    // signature — ordinary prose, and this file is full of such comments —
+    // used to move this resolver onto that migration and redden fifteen laws.
+    // It failed closed, so it was safe, but a guard that reddens on a comment
+    // is a guard someone turns off.
+    if (new RegExp(re.source, re.flags).test(sqlCodeOnly(raw))) found = { file, sql: sqlLiveCode(join(MIGRATIONS, file)) };
   }
   return found;
 }
@@ -411,79 +419,297 @@ function ifConditions(region: string): { at: number; cond: string }[] {
 // better gone than left for someone to reach for again.
 
 /**
- * Statements, with EVERY comment form removed — for the routine probes alone.
+ * ONE STATEMENT OF SQL, as a lexer sees it rather than as a regex guesses it.
  *
- * Not a widening of `sqlLiveCode`, and deliberately separate from it: that
- * helper strips only FULL-LINE `--` comments, because the `COMMENT ON` bodies
- * these migrations are full of contain two dashes inside single quotes and a
- * greedier strip would delete live code after one. `rc_11` depends on that
- * caution. The probes below ask only «does this statement create, drop or
- * alter a routine called `invoice_outstanding`», a question no `COMMENT ON`
- * body can answer, so here the greedy strip is safe and necessary.
- *
- * MEASURED NECESSITY. Round eight broke the previous, adjacency-based probes
- * with a blocking character between the keyword and the name:
- *   CREATE OR REPLACE FUNCTION /* supersedes §5 (R-100) *\/ public.invoice_outstanding(…)
- *   DROP FUNCTION /* retire the array form (R-100) *\/ IF EXISTS public.invoice_outstanding(…)
- *   CREATE OR REPLACE FUNCTION -- replaces the array form (R-100)
- *   public.invoice_outstanding(…)
- * Each left all eighteen laws green while replacing or removing the one
- * definition of the settlement sum, verified legal on a PostgreSQL 16.15
- * cluster where the replacement body won. A control with a block comment
- * carrying NEITHER `(` nor `;` was red, which is what isolated the cause: the
- * old `[^(;]*?` could not cross a parenthesis, and `(R-100)` has one.
- *
- * And the worst case needed no comment at all — a multi-target drop, where the
- * FIRST target's parenthesis blocked the probe:
- *   DROP FUNCTION IF EXISTS public.other(UUID), public.invoice_outstanding(UUID, UUID[]);
- * That is ordinary SQL, not a contrivance, which is why the answer is to stop
- * reasoning about adjacency and ask the question per statement.
+ * `code` is the statement with comments blanked and string BODIES removed, so
+ * a probe reads code and never prose. `strings` carries those bodies, so DDL
+ * built inside `EXECUTE '…'` can be read as SQL in its own right.
  */
-function undoScanText(sql: string): string {
-  return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+interface SqlStatement {
+  readonly code: string;
+  readonly strings: readonly string[];
 }
 
-function routineScanStatements(sql: string): string[] {
-  return undoScanText(sql).split(';');
+/**
+ * THE SQL SCANNER, AND WHY IT IS A WALKER AND NOT A PATTERN.
+ *
+ * Rounds seven and eight ended with probes that stripped comments with a
+ * regular expression and split on `;`. Round nine measured two ways that reads
+ * this project's SQL WRONGLY, on legal input, and one of them needs nothing
+ * written by an attacker at all:
+ *
+ *   1. PostgreSQL NESTS block comments. A non-greedy `/*…*\/` strip stops at
+ *      the first close, so `/* a /* b *\/ c *\/` leaves ` c *\/` between the
+ *      keyword and the name: every probe blind, every digest still matching,
+ *      and the one definition of the settlement sum replaced by a body with no
+ *      refusal. Verified legal on PostgreSQL 16.15, where the replacement won.
+ *   2. Stripping `--` to end of line deletes the `;` that ENDS a statement when
+ *      the `--` sits inside a quoted string. `0085` ALREADY SHIPS
+ *      `E'\n--8<--\n'` followed by `;`, so a later `DROP` was glued onto the
+ *      previous fragment and no longer began with `DROP`. No comment of the
+ *      attacker's own was required.
+ *
+ * Both are one mistake: reasoning about characters instead of lexical state.
+ * So this walks the text once, in states — line comments, NESTED block
+ * comments, single quotes with `''`, `E'…'` backslash escapes, double-quoted
+ * identifiers, and dollar quoting with any tag, whose bodies contain `;`
+ * freely.
+ *
+ * AND IT REPORTS WHAT IT CANNOT TOKENIZE. That is the part that makes this the
+ * end of the regress rather than one more round of it: an unbalanced comment or
+ * an unterminated literal is NAMED, and `rc_13` fails on it, because a file
+ * this cannot read is a file whose statements it must not pretend to know. Nine
+ * rounds of this card were spent discovering that a scanner which guesses on
+ * input it does not understand will always have one more spelling left.
+ */
+function scanSql(sql: string): { statements: readonly SqlStatement[]; problems: readonly string[] } {
+  const statements: SqlStatement[] = [];
+  const problems: string[] = [];
+  let code = '';
+  let strings: string[] = [];
+
+  const flush = () => {
+    if (code.trim() !== '' || strings.length > 0) statements.push({ code, strings });
+    code = '';
+    strings = [];
+  };
+
+  let i = 0;
+  const n = sql.length;
+  while (i < n) {
+    const two = sql.slice(i, i + 2);
+
+    // A line comment runs to the end of the line — and the newline is LEFT for
+    // the default branch, so a `;` on a later line still ends its statement.
+    if (two === '--') {
+      const nl = sql.indexOf('\n', i);
+      if (nl === -1) break;
+      code += ' ';
+      i = nl;
+      continue;
+    }
+
+    // A block comment, counted by DEPTH, because PostgreSQL nests them.
+    if (two === '/*') {
+      const start = i;
+      let depth = 0;
+      while (i < n) {
+        if (sql.slice(i, i + 2) === '/*') {
+          depth += 1;
+          i += 2;
+        } else if (sql.slice(i, i + 2) === '*/') {
+          depth -= 1;
+          i += 2;
+          if (depth === 0) break;
+        } else {
+          i += 1;
+        }
+      }
+      if (depth !== 0) {
+        problems.push(`an unterminated block comment opens at offset ${start}`);
+        break;
+      }
+      code += ' ';
+      continue;
+    }
+
+    // Dollar quoting, with any tag. Its body may hold `;`, `--` and `/*`.
+    const dollar = /^\$([A-Za-z_]\w*)?\$/.exec(sql.slice(i));
+    if (dollar) {
+      const tag = dollar[0];
+      const end = sql.indexOf(tag, i + tag.length);
+      if (end === -1) {
+        problems.push(`an unterminated dollar-quoted string ${JSON.stringify(tag)} opens at offset ${i}`);
+        break;
+      }
+      strings.push(sql.slice(i + tag.length, end));
+      code += "''";
+      i = end + tag.length;
+      continue;
+    }
+
+    // A single-quoted string: `''` is an escaped quote, and in `E'…'` a
+    // backslash escapes the next character.
+    if (sql[i] === "'") {
+      const isEscapeString = /[eE]/.test(sql[i - 1] ?? '') && !/\w/.test(sql[i - 2] ?? ' ');
+      let j = i + 1;
+      let body = '';
+      let closed = false;
+      while (j < n) {
+        if (isEscapeString && sql[j] === '\\') {
+          body += sql[j + 1] ?? '';
+          j += 2;
+          continue;
+        }
+        if (sql[j] === "'") {
+          if (sql[j + 1] === "'") {
+            body += "'";
+            j += 2;
+            continue;
+          }
+          closed = true;
+          j += 1;
+          break;
+        }
+        body += sql[j];
+        j += 1;
+      }
+      if (!closed) {
+        problems.push(`an unterminated string literal opens at offset ${i}`);
+        break;
+      }
+      strings.push(body);
+      code += "''";
+      i = j;
+      continue;
+    }
+
+    // A double-quoted identifier is KEPT in `code`: the name is the subject.
+    if (sql[i] === '"') {
+      let j = i + 1;
+      let closed = false;
+      while (j < n) {
+        if (sql[j] === '"') {
+          if (sql[j + 1] === '"') {
+            j += 2;
+            continue;
+          }
+          closed = true;
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      if (!closed) {
+        problems.push(`an unterminated quoted identifier opens at offset ${i}`);
+        break;
+      }
+      code += sql.slice(i, j);
+      i = j;
+      continue;
+    }
+
+    if (sql[i] === ';') {
+      flush();
+      i += 1;
+      continue;
+    }
+
+    code += sql[i];
+    i += 1;
+  }
+  flush();
+  return { statements, problems };
+}
+
+/**
+ * Every statement of a migration, plus the statements of any SQL it BUILDS AS
+ * A STRING — one level of `EXECUTE '…'`.
+ *
+ * Measured necessity: `DO $m$ BEGIN EXECUTE 'CREATE OR REPLACE FUNCTION
+ * public.invoice_outstanding(…)'; END $m$;` replaced the routine with the suite
+ * green, because the outer statement begins with `DO` and the DDL lives in a
+ * string. One level, and the limit is declared rather than left to be found:
+ * `EXECUTE format('… %I …', 'invoice_outstanding')` assembles the name at RUN
+ * time and no text scanner can see it. `rc_13` says so in its own comment.
+ */
+function sqlStatementsDeep(sql: string, depth = 0): { statements: readonly SqlStatement[]; problems: readonly string[] } {
+  const top = scanSql(sql);
+  const statements = [...top.statements];
+  const problems = [...top.problems];
+  // Three levels, because the real shape is two deep and one spare is cheap:
+  // `DO $mig$ BEGIN EXECUTE 'DROP FUNCTION …'; END $mig$;` puts the DDL inside
+  // a single-quoted string inside a dollar-quoted body. Measured: with one
+  // level, that drop was green.
+  if (depth >= 3) return { statements, problems };
+  for (const statement of top.statements) {
+    for (const body of statement.strings) {
+      // ONLY strings on an EXECUTE path, and the test is on the BODY as well as
+      // on the parent, because the two levels differ: in
+      // `DO $mig$ BEGIN EXECUTE '…'; END $mig$;` the outer statement's code is
+      // just `DO ''` — the `EXECUTE` is inside the dollar-quoted body — while
+      // one level down the parent code is the `EXECUTE` and the body is the DDL.
+      //
+      // Descending into every string that merely mentions `CREATE` was the
+      // first attempt and it CRIED WOLF: a `COMMENT ON` body saying «CREATE
+      // FUNCTION invoice_outstanding(…) was retired» became a phantom
+      // statement and reddened fifteen laws. Prose about a routine is not a
+      // change to it, and a guard that cannot tell the difference is one that
+      // gets switched off. Neither that body nor its parent says `EXECUTE`.
+      const onExecutePath = /\bEXECUTE\b/i.test(body) || /\bEXECUTE\b/i.test(statement.code);
+      if (!onExecutePath) continue;
+      if (!/\b(?:CREATE|DROP|ALTER|EXECUTE)\b/i.test(body)) continue;
+      const inner = sqlStatementsDeep(body, depth + 1);
+      statements.push(...inner.statements);
+      // An unparsable inner string is prose, not a defect in the migration, so
+      // its problems are not escalated — the outer scan is what must be sound.
+    }
+  }
+  return { statements, problems };
 }
 
 /** The last dotted segment of a possibly-qualified, possibly-quoted identifier. */
 function bareName(ident: string): string {
   const last = ident.split('.').pop() ?? '';
-  return last.replace(/"/g, '').toLowerCase();
+  return last.replace(/"/g, '').trim().toLowerCase();
 }
 
 /**
- * Does any statement CREATE a routine whose own name is `invoice_outstanding`?
+ * Does any statement CREATE a routine whose own name is `routine`?
  *
  * The NAME BEING CREATED, parsed, and not mere containment — this is the one
  * place where containment would cry wolf, and that is measured, not feared:
  * SEVEN statements in `0075`, `0083` and `0084` create `customer_ar_outstanding`,
  * `customer_ar_aging` and `customer_ar_open_document_counts`, each of which
  * READS `invoice_outstanding` in its body. A later slice adding another such
- * reader is ordinary work — DR-29 added the third one — and a guard that
- * reddens on it would be switched off within a week. `rc_13` asserts that
- * negative control directly.
+ * reader is ordinary work — DR-29 added the third — and a guard that reddened
+ * on it would be switched off within a week. `rc_13` asserts that negative
+ * control directly.
+ *
+ * The qualified name tolerates whitespace around its dots, because
+ * `public . invoice_outstanding` is one legal identifier and round nine
+ * measured the tighter `[\w".]+` capturing `public` and never seeing the name.
  */
 function createsRoutineNamed(sql: string, routine: string): boolean {
-  for (const statement of routineScanStatements(sql)) {
-    const m = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE)\s+([\w".]+)/i.exec(statement);
-    if (m?.[1] !== undefined && bareName(m[1]) === routine) return true;
-  }
-  return false;
+  const header = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|ROUTINE|PROCEDURE)\s+((?:[\w"]+\s*\.\s*)*[\w"]+)/i;
+  return sqlStatementsDeep(sql).statements.some((statement) => {
+    const m = header.exec(statement.code);
+    return m?.[1] !== undefined && bareName(m[1]) === routine;
+  });
 }
 
 /**
  * Does any statement of `verb` NAME this routine anywhere in itself?
  *
- * Containment is safe for `DROP` and `ALTER` and only for them: neither
- * carries a routine body, so the only identifiers in such a statement are its
- * targets. That is what lets one probe cover a multi-target drop, a quoted
- * name, argument names in the signature, and any type spelling at once.
+ * Containment is safe for `DROP` and `ALTER` and only for them: neither carries
+ * a routine body, so the only identifiers in such a statement are its targets.
+ * That is what lets one probe cover a multi-target drop, a quoted name,
+ * argument names in the signature, and any type spelling at once.
  */
 function statementTouchesRoutine(sql: string, verb: RegExp, routine: string): boolean {
   const named = new RegExp(`\\b${routine}\\b`, 'i');
-  return routineScanStatements(sql).some((statement) => verb.test(statement) && named.test(statement));
+  return sqlStatementsDeep(sql).statements.some((statement) => verb.test(statement.code) && named.test(statement.code));
+}
+
+/**
+ * Every statement's CODE, joined — the successor to the regex comment strip the
+ * message-provider rows used to read.
+ *
+ * Built on the lexer for the same reason those rows existed to be fixed: a
+ * block comment with a parenthesis in it, or a nested one, or a `--` inside a
+ * shipped string literal, all read wrongly without lexical state. String
+ * bodies are absent from this view, so a `COMMENT ON` body can neither
+ * trigger a probe nor hide one.
+ */
+function sqlCodeOnly(sql: string): string {
+  return sqlStatementsDeep(sql)
+    .statements.map((statement) => statement.code)
+    .join(';');
+}
+
+/** Everything the scanner could not tokenize, which `rc_13` refuses to scan past. */
+function sqlScanProblems(sql: string): readonly string[] {
+  return sqlStatementsDeep(sql).problems;
 }
 
 /**
@@ -1247,7 +1473,7 @@ describe('section 4: the count cannot fall short except for an id that names no 
     // here, closes the class instead of its two instances. One named helper so
     // the controls and the scan cannot drift apart — two call sites that must
     // agree are two call sites that will not.
-    const hitsIn = (u: (typeof undo)[number], sql: string) => (u.scan ? u.scan(sql) : new RegExp(u.re.source, u.re.flags).test(undoScanText(sql)));
+    const hitsIn = (u: (typeof undo)[number], sql: string) => (u.scan ? u.scan(sql) : new RegExp(u.re.source, u.re.flags).test(sqlCodeOnly(sql)));
 
     // POSITIVE CONTROL FIRST: each probe must match its own planted statement,
     // or a clean scan below means nothing at all.
@@ -1296,6 +1522,20 @@ describe('section 4: the count cannot fall short except for an id that names no 
         `the probe for ${u.name} does not match inside ${resolved}, so scoping it after that file proves nothing — either the scoping is unnecessary or the probe is wrong`,
       ).toBe(true);
     }
+
+    // FAIL CLOSED ON ANYTHING THE SCANNER CANNOT READ. This is what makes the
+    // scan a measurement rather than an optimistic guess, and it is the lesson
+    // of nine rounds: a scanner that proceeds on input it does not understand
+    // always has one more spelling left. An unbalanced block comment or an
+    // unterminated literal in ANY migration is reported here by file name, and
+    // this law fails — the file is quarantined rather than skimmed.
+    const unscannable = files.flatMap((f) => sqlScanProblems(readFileSync(join(MIGRATIONS, f), 'utf8')).map((p) => `${f}: ${p}`));
+    expect(unscannable, `a migration cannot be tokenized, so no claim below about it is measured: ${JSON.stringify(unscannable)}`).toEqual([]);
+    // Positive control: the quarantine must actually trigger, or the clean
+    // result above is a broken probe reporting nothing.
+    expect(sqlScanProblems('CREATE FUNCTION /* unbalanced public.f()').length, 'the scanner does not notice an unbalanced block comment').toBeGreaterThan(0);
+    expect(sqlScanProblems("SELECT 'unterminated").length, 'the scanner does not notice an unterminated string').toBeGreaterThan(0);
+    expect(sqlScanProblems('SELECT 1;').length, 'and it must not report a problem in ordinary SQL').toBe(0);
 
     const found: string[] = [];
     for (const f of files) {
@@ -1406,6 +1646,33 @@ describe('section 5: which of these is a detector and which is a preventer, as a
   // natural phrasing is an instance, and this file is one of the files the
   // probe reads. Two of these rewordings were FORCED by a red run, not
   // foreseen.
+  it('rc_9b: this file contains no stray control characters, because one silently disarmed a law three times', () => {
+    // MEASURED, AND ON THIS FILE. Writing a regex through a shell heredoc
+    // into a script turned `\b` into a literal BACKSPACE (U+0008), so
+    // `/\bEXECUTE\b/` became `/<BS>EXECUTE<BS>/` and matched nothing. The
+    // suite stayed green, `grep` printed the pattern as if it were correct
+    // because the byte is invisible, and the law it gated simply never fired.
+    // That is the worst failure mode a guard has: not red, not green-for-a-
+    // reason, but absent while looking present. It happened three times on
+    // this card before it was caught by reading bytes instead of characters.
+    const source = readFileSync(THIS_FILE, 'utf8');
+    const strays = [...source].reduce<string[]>((acc, ch, at) => {
+      const code = ch.codePointAt(0) ?? 0;
+      // Tab, newline and carriage return are the only control characters a
+      // source file has any business containing.
+      if (code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) acc.push(`U+${code.toString(16).padStart(4, '0')} at ${at}`);
+      return acc;
+    }, []);
+    expect(strays, `this file holds control characters, which is how an escape becomes an invisible no-op: ${JSON.stringify(strays)}`).toEqual([]);
+    // Positive control: the probe must see one when it is there, or the empty
+    // list above is a measurement of nothing.
+    const planted = `a${String.fromCharCode(8)}b`;
+    expect(
+      [...planted].some((ch) => (ch.codePointAt(0) ?? 0) < 0x20),
+      'the control-character probe cannot see a planted backspace',
+    ).toBe(true);
+  });
+
   it('rc_10: neither this file nor the migration credits the refusal with making duplication impossible — and the probe finds that claim when it is there', () => {
     // POSITIVE CONTROL FIRST, so the absence below is a measurement and not a
     // broken regular expression reporting zero. These are the sentences the
