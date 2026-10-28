@@ -19,14 +19,140 @@ on:
 env:
   NODE_VERSION: '24.12.x'
 
+# Added by CI-RUNNER-01 (DR-17), when the heavy jobs ran on ONE self-hosted
+# runner with a single job slot and two runs of the same ref queued behind each
+# other for hours. DR-48 removed that runner and every job below is
+# GitHub-hosted again, so the six now run in parallel and the queueing reason
+# is gone. The rule stays because its other reason never depended on capacity:
+# a push that replaces a head makes the older run's result evidence for a tree
+# nobody will merge.
+#
+# The key deliberately includes `github.event_name`, so a `push` run and a
+# `pull_request` run NEVER share a group and can never cancel each other.
+# Superseding happens only within one event kind and one ref: a newer push to a
+# branch cancels the older push run for that branch, and a new head on a pull
+# request cancels the older run for that pull request.
+#
+# The DOUBLE RUN is therefore NOT suppressed, and must not be. This comment
+# used to claim that suppressing it was the point, and an earlier fix made the
+# key actually do it. Both were wrong, because the two runs are not duplicates:
+# a `pull_request` run checks out the merge commit and is equivalent-tree
+# evidence only, while the `push` run checks out the literal pushed SHA, and
+# `docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md` closure requirement E-1 demands an
+# exact-SHA run and names this trigger as what provides it. Merging the two
+# groups under `cancel-in-progress` would let a pull-request event destroy that
+# evidence, and a cancelled run is not evidence by this project's own rule.
+#
+# Keying pull requests on their NUMBER rather than the branch also keeps two
+# pull requests opened from one head branch against different bases apart,
+# which a branch-name key would have collapsed into one group.
+#
+# `main` is deliberately NOT exempted: its runs are serialised the same way,
+# and the surviving run is always the newest head.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   # -------------------------------------------------------------------------
   # 1. Workspace integrity — every declared workspace must exist; a missing
   #    workspace is a HARD FAILURE, never a skipped job.
   # -------------------------------------------------------------------------
   workspaces:
+    # CI-RUNNER-01 (DR-17), SECOND ROUND. This job was meant to stay on
+    # GitHub's machines as one of the light ones, and in 2026-10 it could not:
+    # while the repository was PRIVATE and the account carried a payment block,
+    # every GitHub-hosted job was refused before a runner was ever assigned,
+    # and the API annotation said why, verbatim —
+    #
+    #   "The job was not started because recent account payments have failed
+    #    or your spending limit needs to be increased."
+    #
+    # None of that holds now. The repository is public, GitHub-hosted minutes
+    # are unmetered, and this job runs on `ubuntu-latest` — so do not read the
+    # paragraph above as a reason to bring a self-hosted runner back. On a
+    # public repository that is the one thing this workflow's decision record
+    # forbids outright, because a fork's pull request would execute untrusted
+    # code on the machine.
+    #
+    # Measured on run 40419719684: `workspaces` failed 3 seconds in with
+    # `runner_name: ""` and zero steps, and because every other job declares
+    # `needs: workspaces`, all five were `skipped` — including the two this
+    # card had just moved to the self-hosted runner. Leaving the light jobs on
+    # GitHub therefore does not keep them cheap, it stops the whole workflow.
+    #
+    # That is why CI-RUNNER-01 moved this job to a self-hosted runner, which is
+    # not metered. DR-48 reversed the premise rather than the conclusion: a
+    # PUBLIC repository gets unmetered GitHub-hosted minutes, so the billing
+    # block that made the move necessary cannot recur here, and the job is
+    # hosted again. Not one step changed by either move.
     runs-on: ubuntu-latest
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - name: Verify exact workspace set
         run: |
@@ -55,6 +181,18 @@ jobs:
   # -------------------------------------------------------------------------
   backend:
     needs: workspaces
+    # CI-RUNNER-01 (DR-17). This is the heaviest job in the workflow — 442 of
+    # the 789 billable minutes measured on 2026-10-26, 56% of the total — and
+    # it is the one whose evidence the phase gates depend on. It now runs on
+    # the owner's own machine, in a WSL2 Ubuntu 24.04 runner labelled
+    # `daftar-wsl`.
+    #
+    # Nothing else in this job changed: not a step, not a gate, not a
+    # `--max-warnings`, not the Lint heap ceiling, not the service container.
+    # The `services:` block below still brings up a throwaway `postgres:16`
+    # through Docker and still publishes 5432, so every `psql
+    # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
+    # exactly as it did on `ubuntu-latest`.
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -67,6 +205,71 @@ jobs:
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       # Full history: the corrective gate runs the explicit Phase 3 secret
       # range scan from 0f2b09e7… and the full review-index check, and
       # neither can reach the Phase 3 base from a depth-1 checkout.
@@ -110,8 +313,25 @@ jobs:
         run: npm run check:localization
       - name: Format
         run: npm run format
+      # `eslint . --max-warnings 0` walks the whole monorepo in one process and
+      # died here with a V8 "Ineffective mark-compacts near heap limit" abort
+      # (exit 134) against a ~2057MB ceiling. It is the fourteenth step of this
+      # job, so its abort left steps 15-36 `skipped` — Typecheck, the unit
+      # tests, the fresh PostgreSQL bring-up, the migrations, the integration
+      # and security suites, the golden regression suite, every Phase 2 slice
+      # gate, the Phase 3 corrective gate and the API build. A memory ceiling
+      # was silently standing in for all of that evidence.
+      #
+      # Raising the ceiling for THIS STEP ONLY is the honest fix. The runner has
+      # far more memory than 6144MB, so nothing here is oversubscribed. What is
+      # deliberately NOT done: narrowing what Lint covers, lowering
+      # --max-warnings, or adding ignore entries. Each of those would turn a
+      # resource limit into permanently unreported lint errors, which is the
+      # opposite of what a gate is for.
       - name: Lint
         run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
       - name: Typecheck
         run: npm run typecheck
       - name: Unit tests
@@ -285,7 +505,33 @@ jobs:
       # Budget A last. An entry the coordinator has not filled is a FAIL, not
       # a skip, so this step is red until every corrective stream has landed.
       - name: Install Chromium for the corrective gate's real-browser matrix
-        run: npx playwright-core install --with-deps chromium
+        # DR-18. `--with-deps` installs apt packages, and as a non-root user
+        # playwright runs them through `sudo`: measured, `install-deps
+        # --dry-run` as `laptop` prints `sudo -- sh -c "apt-get update&&
+        # apt-get install -y --no-install-recommends ..."`. GitHub's image
+        # grants its runner passwordless sudo. The self-hosted runner must not
+        # have it, and no sudoers rule was added, because a NOPASSWD rule for
+        # apt-get is root in all but name.
+        #
+        # So on the self-hosted runner the 33 system packages were installed
+        # ONCE as root, from `playwright-core@1.56.1 install-deps chromium
+        # --dry-run` — the pinned version's own list, not a hand-written one —
+        # and every package and version is recorded in the card's evidence.
+        # Verified afterwards as the runner user: 33 installed, 0 missing.
+        #
+        # What does NOT change: the BROWSER is still installed per job, by the
+        # pinned playwright-core, from the lockfile. Only the apt half is
+        # dropped, and only where it is already satisfied.
+        #
+        # One step with a shell branch, not two steps with `if:`, deliberately:
+        # two steps would leave one `skipped` in every run, and `skipped` is
+        # what this project refuses to read as evidence.
+        run: |
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            npx playwright-core install chromium
+          else
+            npx playwright-core install --with-deps chromium
+          fi
       - name: Phase 3 corrective gate (composes P3-S8)
         run: npm run gate:phase3:corrective
         env:
@@ -326,8 +572,75 @@ jobs:
   # -------------------------------------------------------------------------
   web-admin:
     needs: workspaces
+    # CI-RUNNER-01 moved this to the self-hosted runner for the same measured
+    # reason as `workspaces`; DR-48 moved it back for the same reason too.
     runs-on: ubuntu-latest
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -348,8 +661,81 @@ jobs:
   # -------------------------------------------------------------------------
   android:
     needs: workspaces
+    # CI-RUNNER-01 moved this to the self-hosted runner, where the Android
+    # toolchain was NOT part of the machine image: setup-java downloads Temurin
+    # 17 and setup-android downloads platform 35 + build-tools 35.0.0 into the
+    # runner's own tool cache, both without root, and Gradle 8.9 had to be
+    # installed on the machine because `gradle wrapper` below needs a gradle to
+    # bootstrap from and only GitHub's image ships one. DR-48 moved the job
+    # back to that image, so the bootstrap gradle is there again. Nothing in
+    # this job was changed by either move.
     runs-on: ubuntu-latest
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
@@ -381,9 +767,86 @@ jobs:
   # -------------------------------------------------------------------------
   browser:
     needs: workspaces
+    # CI-RUNNER-01 / DR-18 moved this to the self-hosted runner: 111 billable
+    # minutes on 2026-10-26. Two steps of this job pull in opposite directions
+    # — the Chromium dependency install wants root, and `embedded-postgres` in
+    # the gate REFUSES to initialise as root — which is why the job could not
+    # simply be moved. It was resolved by removing the root half rather than
+    # granting root: see the install step below.
+    #
+    # DR-48 moved the job back here. The `embedded-postgres` half still holds,
+    # but on a DIFFERENT fact: on the self-hosted runner the service ran as
+    # `laptop` (uid 1000); on a GitHub-hosted runner the job runs as `runner`.
+    # Neither is root, which is all that routine requires — so do not read the
+    # old reason as the current one.
     runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -400,7 +863,33 @@ jobs:
           npm run build -w @daftar/api
           npm run build -w @daftar/web
       - name: Install Chromium for the pinned playwright-core
-        run: npx playwright-core install --with-deps chromium
+        # DR-18. `--with-deps` installs apt packages, and as a non-root user
+        # playwright runs them through `sudo`: measured, `install-deps
+        # --dry-run` as `laptop` prints `sudo -- sh -c "apt-get update&&
+        # apt-get install -y --no-install-recommends ..."`. GitHub's image
+        # grants its runner passwordless sudo. The self-hosted runner must not
+        # have it, and no sudoers rule was added, because a NOPASSWD rule for
+        # apt-get is root in all but name.
+        #
+        # So on the self-hosted runner the 33 system packages were installed
+        # ONCE as root, from `playwright-core@1.56.1 install-deps chromium
+        # --dry-run` — the pinned version's own list, not a hand-written one —
+        # and every package and version is recorded in the card's evidence.
+        # Verified afterwards as the runner user: 33 installed, 0 missing.
+        #
+        # What does NOT change: the BROWSER is still installed per job, by the
+        # pinned playwright-core, from the lockfile. Only the apt half is
+        # dropped, and only where it is already satisfied.
+        #
+        # One step with a shell branch, not two steps with `if:`, deliberately:
+        # two steps would leave one `skipped` in every run, and `skipped` is
+        # what this project refuses to read as evidence.
+        run: |
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            npx playwright-core install chromium
+          else
+            npx playwright-core install --with-deps chromium
+          fi
       - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
         run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
         env:
@@ -424,8 +913,96 @@ jobs:
   # -------------------------------------------------------------------------
   hygiene:
     needs: workspaces
+    # CI-RUNNER-01 moved this to the self-hosted runner for the same measured
+    # reason as `workspaces`, and DR-48 moved it back. Nothing here needs root:
+    # gitleaks runs as a Docker container action and both machines have Docker.
+    # The `permissions:` block above is #14's fix and is untouched.
     runs-on: ubuntu-latest
+    # gitleaks-action reads the pull request's commit list through the REST API
+    # (GET /repos/{owner}/{repo}/pulls/{n}/commits) before it scans anything.
+    # This workflow declared no `permissions:` anywhere and the repository's
+    # default_workflow_permissions is the restricted `read`, which grants the
+    # job token `contents: read` and `packages: read` and NOTHING else. So that
+    # call answered 403 "Resource not accessible by integration" (the response's
+    # x-accepted-github-permissions asked for `pull_requests=read`) and the step
+    # died having scanned nothing. The defect was latent for as long as the
+    # `Dependency audit` step above failed first and skipped this one; the first
+    # pull request whose audit passed is the one that exposed it.
+    #
+    # Declared at JOB level, not file level, deliberately: every other job in
+    # this workflow needs nothing beyond the default, and a file-level block
+    # would hand all five of them a permission they have no use for. Adding
+    # `permissions` here also pins THIS job to exactly these two scopes, so a
+    # later change to the repository's default cannot silently widen it.
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
       # Full history: gitleaks scans the pull request's commit RANGE, so with the
       # default depth-1 checkout the base commit is absent, git writes to stderr
       # and the action fails having scanned ~0 bytes. Depth 0 makes the scan real.
