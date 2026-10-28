@@ -1072,3 +1072,125 @@ jobs:
           name: secret-history-scan
           path: release/secret-history-scan.json
           if-no-files-found: ignore
+
+  # -------------------------------------------------------------------------
+  # TEMPORARY — DO NOT MERGE. This job exists on the branch
+  # `verify/perf01-negative-control` only, to run the two arms DR-15 requires
+  # before PERF-01 can be accepted: the hardened measurement green on a clean
+  # run, and red when the endpoint it measures is genuinely slowed. It is not
+  # part of `main`'s workflow and must never reach it.
+  #
+  # Why it is a job of its own rather than an env on `backend`: `backend` is
+  # ~2 hours and invokes this suite seven times through the composed gates, so
+  # a job-level env would spend two hours to produce one arm. This runs the
+  # suite directly, twice, in one pass.
+  #
+  # The job asserts its own polarity, so its conclusion IS the evidence: it is
+  # green only when the clean arm passed AND the delayed arm failed AND the
+  # delay is visible in the measured numbers. A delayed arm that fails for any
+  # other reason would leave the p50 where it was, which the last check
+  # catches — DR-55's complement: a control must first prove the mutation was
+  # applied, or it is a control that did not run.
+  perf-negative-control:
+    needs: workspaces
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the packages the suite loads
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 -> latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: The two arms DR-15 requires
+        env:
+          PG_PORT: '5432'
+        run: |
+          set -uo pipefail
+          echo '--- arm 1: clean. The hardened measurement must PASS. ---'
+          set +e
+          npx vitest run tests/performance/accounting-budgets.test.ts > clean.log 2>&1
+          CLEAN=$?
+          set -e
+          tail -30 clean.log
+          cp release/phase2-s8-performance-tier1.json clean.json
+          echo "CLEAN_EXIT=$CLEAN"
+
+          echo '--- arm 2: PERF01_NEGATIVE_CONTROL_MS=50. The budget must go RED. ---'
+          set +e
+          PERF01_NEGATIVE_CONTROL_MS=50 npx vitest run tests/performance/accounting-budgets.test.ts > slow.log 2>&1
+          SLOW=$?
+          set -e
+          tail -40 slow.log
+          cp release/phase2-s8-performance-tier1.json slow.json || true
+          echo "SLOW_EXIT=$SLOW"
+
+          node -e '
+            const fs = require("fs");
+            const pick = (f) => {
+              const j = JSON.parse(fs.readFileSync(f, "utf8"));
+              const all = JSON.stringify(j);
+              const m = all.match(/\{"name":"B manual adjustment endpoint".*?"min":[0-9.]+/);
+              if (!m) throw new Error(`no B measurement in ${f}`);
+              return JSON.parse(m[0] + "}");
+            };
+            const c = pick("clean.json"), s = pick("slow.json");
+            console.log("clean  B p50", c.p50, "p95", c.p95, "iterations", c.iterations);
+            console.log("slowed B p50", s.p50, "p95", s.p95, "iterations", s.iterations);
+            const shift = s.p50 - c.p50;
+            console.log("p50 shift", shift.toFixed(3), "ms");
+            if (shift < 40) {
+              console.log("REFUSED: a 50 ms per-iteration delay did not move the median by 40 ms, so the delay was not applied and this control did not run");
+              process.exit(1);
+            }
+            if (c.iterations < 200 || s.iterations < 200) {
+              console.log(`REFUSED: the hardened sample count did not take effect (clean ${c.iterations}, slowed ${s.iterations})`);
+              process.exit(1);
+            }
+          '
+          test "$CLEAN" -eq 0 || { echo 'REFUSED: the hardened measurement did not pass on a clean run'; exit 1; }
+          test "$SLOW" -ne 0 || { echo 'REFUSED: the slowed endpoint did not redden the budget'; exit 1; }
+          echo "PERF01 NEGATIVE CONTROL: PASS (clean=$CLEAN, slowed=$SLOW)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf01-negative-control
+          path: |
+            clean.log
+            slow.log
+            clean.json
+            slow.json
+          if-no-files-found: warn
