@@ -73,17 +73,40 @@ const WARMUP = 5;
  * PERF-01 (owner decision DR-15): a stable p95 for the two CHEAP budgets, A
  * and B. No budget value changed; only the measurement got sturdier.
  *
- * Why 200 samples. The estimator is `sorted[floor(0.95 * N)]`. With N = 30
- * that is index 28, so exactly ONE sample sits above p95 and the second
- * largest value IS the p95: two stalled iterations decide the verdict. That
- * is what failed on CI run 40359807575, attempt 1 (27 of 30 samples between
- * 8.3 and 14.5 ms; THREE stalls, at 48.3, 77.7 and 152.7 ms, gave
+ * Why 200 samples. The estimator is `sorted[min(N - 1, floor(0.95 * N))]`.
+ * With N = 30 that is index 28, so exactly ONE sample sits above p95 and the
+ * second largest value IS the p95: two stalled iterations decide the verdict.
+ * That is what failed on CI run 40359807575, attempt 1 (27 of 30 samples
+ * between 8.3 and 14.5 ms; THREE stalls, at 48.3, 77.7 and 152.7 ms, gave
  * p95 = 77.7). With N = 200 the index is 190, so 9 samples sit above p95 and
- * the verdict moves only when at least 10 of 200 (5 %) are slow. A runner
- * stall that cost 3 of 30 (10 %) costs the same 3 of 200 (1.5 %), well short
- * of the line — and note the fraction is what matters, not the count. A genuine
- * regression shifts the whole distribution, not 5 % of it, so it still
- * fails: see the negative control below.
+ * the verdict moves only when at least 10 of 200 are slow.
+ *
+ * What that buys, and what it costs, both measured on the estimator itself.
+ * The verdict now turns on a FRACTION rather than on two samples, and the
+ * fraction that trips it tightens: at N = 30 it took 2 of 30 (6.67 %), at
+ * N = 200 it takes 10 of 200 (5.00 %). The price is the other side of the
+ * same arithmetic: the number of samples that may be arbitrarily slow while
+ * the case still passes goes from 1 of 30 (3.33 %) to 9 of 200 (4.50 %). So
+ * between 4.50 % and 6.67 % of requests this measurement is strictly better
+ * than the one it replaces, and below 4.50 % it is strictly blind — p95
+ * ignores its top tail by construction, at every N. A tail-only regression
+ * that slowed 4 % of a merchant's adjustments to any duration whatsoever
+ * would pass here, and would have passed at N = 30 too.
+ *
+ * So do NOT read this block as "a real regression still fails". What the
+ * negative control below proves is narrower and should be read narrowly: a
+ * UNIFORM shift of every iteration is detected. It is set on B only, so A's
+ * hardening carries no negative control at all — and A is the budget that
+ * failed on run 40748054752 at p95 23.5 ms against 15 ms.
+ *
+ * Why the hardening nevertheless answers the failure it was built for,
+ * measured by replaying the failing series through both estimators: the
+ * 30 samples of that run give p95 = 60.055 at N = 30 (it failed against 60),
+ * and the same four stalls among 200 calm samples give p95 = 12.216 — while
+ * the same stall FRACTION (27 of 200) gives 60.055 again. The hardening
+ * therefore holds if a runner stall is a bounded number of events per run,
+ * and does nothing if it is a constant rate. The evidence for the first
+ * reading is one measured run on each side, not a proof.
  * Cost: 200 x ~10 ms = about 2 s per case. A and B are cheap; C, D, E and F
  * keep their counts because each iteration is far more expensive.
  *
