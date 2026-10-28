@@ -99,6 +99,29 @@ literal left stale by the same commit. It is kept in a **separate commit**
 intact. `0085`'s non-comment line count is unchanged at 608 and no `CREATE` in
 it is touched.
 
+### Ratified as DR-59 (2026-10-29)
+
+The owner ratified this expansion rather than reverting it, and the deciding
+argument is one the coordinator had under-stated when putting the choice:
+reverting `bab792f3` does not drop that one repair, **it drops the evidence for
+both**. The only evidence this card accepts is a migration run that completes,
+and `0000 -> latest` does not complete without the two together — it dies at
+`0085` (the run in the table in section 7 shows exactly that intermediate
+state). A revert would have produced two cards with no live evidence for
+either.
+
+With that, the scope of the double review is fixed: the review on `f70fdecb`
+**covers `0084` and `0085` together**, and the live evidence it is read against
+is the full chain — fresh database to `0086`, then a no-op re-run, then the
+history check.
+
+Three limits were declared with the ratification and are **not** closed by it:
+the law in section 5 reads `0084` only and would not have caught the `0085`
+instance; the `FOREACH` loop in `0084`'s E(1) still does not name `issue_date`
+(weaker than its sibling, not contradictory); and the Phase 4 slice gates are
+`NOT_RUN`. Each is a card of its own, and each is settled by the live run on
+the seal branch, not here.
+
 ## 5. The law, and what it does not guarantee
 
 `tests/guards/mig-0084-end-state-signature-law.test.ts`. One corrected string
