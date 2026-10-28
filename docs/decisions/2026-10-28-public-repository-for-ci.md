@@ -32,17 +32,32 @@ work-folder purge skips itself, and the Chromium install takes the
 
 The workflow guard in `scripts/phase4-s4-gate.ts` is unaffected **by
 construction, not by a count**. Its reader enters step mode only on a `steps:`
-key and never consumes the value of `runs-on`, and every step line in this diff
-is byte-identical — the only **non-comment** change is those six `runs-on:`
-lines. Proven rather than asserted: strip comment and blank lines from
-`ci.yml` and `main`, `fcf7595d` and this commit agree to the byte, and strip
-`runs-on:` as well and all three are identical at 484 lines. Three corrections
-to earlier drafts of this paragraph, all measured: `requiredCiProblems` pins step
+key and never consumes the value of `runs-on`, and the only **non-comment**
+change in this diff is those six `runs-on:` lines.
+
+Stated as a table rather than a sentence, because four drafts of this
+paragraph each smuggled a false claim into prose and three of them were an
+ambiguous list of references. Reduce `ci.yml` by deleting comment lines and
+blank lines, and compare line by line:
+
+| `ci.yml` reduced to | lines | `main` vs this commit |
+| --- | --- | --- |
+| no comments, no blank lines | 490 both | differs on **exactly 6** lines, **all of them `runs-on:`** |
+| and no `runs-on:` lines | 484 both | **identical** |
+
+Row 1 had to differ, or nothing would have changed. Row 2 is the one that
+matters: every line of the workflow other than those six is `main`'s,
+unchanged. (Deliberately no digests here: the value depends on how the
+reduction treats indentation, trailing newlines and CRLF, so a digest written
+down invites a later reader to compute a different one and think something
+drifted. The relation and the counts above reproduce from the recipe.)
+
+Three further corrections, all measured: `requiredCiProblems` pins step
 **content** as well as order (the gate step's `run:` must equal its command
 exactly and its `name:` must equal the expected name, so a renamed gate step
-fails it), and that script does not exist on this branch at all — it lives on
-the Phase 4 lineage, where this file will eventually be read. Nothing here
-licenses renaming or re-wording a gate step.
+fails it); that script does not exist on this branch at all — it lives on the
+Phase 4 lineage, where this file will eventually be read; and the marker count
+is 70, not 53. Nothing here licenses renaming or re-wording a gate step.
 
 The marker count is also unchanged by every way of counting it: 53 `- name:`,
 13 `- uses:` and 4 unnamed `- run:` — 70 in total, identical before and after.
