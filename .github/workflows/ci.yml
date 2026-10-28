@@ -74,7 +74,7 @@ jobs:
     # Self-hosted runners are not metered and are not subject to the spending
     # limit, so moving this job is what makes the rest of the workflow
     # reachable at all. Not one step changed.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -181,7 +181,7 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
@@ -561,7 +561,7 @@ jobs:
   web-admin:
     needs: workspaces
     # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -654,7 +654,7 @@ jobs:
     # cache, both without root. Gradle 8.9 is installed on the runner because
     # `gradle wrapper` below needs a gradle to bootstrap from and only
     # GitHub's image ships one. Nothing in this job was changed.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -759,7 +759,7 @@ jobs:
     # moved. It is resolved by removing the root half rather than granting
     # root: see the install step below. The runner runs as `laptop` (uid 1000),
     # so the embedded PostgreSQL half is satisfied by construction.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
@@ -897,7 +897,7 @@ jobs:
     # Nothing here needs root: gitleaks runs as a Docker container action and
     # the runner has Docker. The `permissions:` block above is #14's fix and is
     # untouched.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     # gitleaks-action reads the pull request's commit list through the REST API
     # (GET /repos/{owner}/{repo}/pulls/{n}/commits) before it scans anything.
     # This workflow declared no `permissions:` anywhere and the repository's
