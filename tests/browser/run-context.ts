@@ -10,7 +10,8 @@ import { join } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright-core';
 import { TOUCH_MIN_PX, comboTag, type Locale, type Viewport } from './config';
 import { inspect, type CatalogFacts, type Issue, type IssueKind } from './invariants';
-import type { RouteBudgets, SlidingBudget } from './pacer';
+import { BlockedClock } from './pacer';
+import type { RouteBudgets, RouteCoverage, SlidingBudget } from './pacer';
 import { NAMES, type LocaleNames, type LocaleSeed } from './seed';
 
 export type Plant = 'overflow' | 'raw-key' | 'console-error' | 'missing-string';
@@ -29,6 +30,12 @@ export interface StepRecord {
   readonly shots: ShotRecord[];
   readonly issues: Issue[];
   readonly ms: number;
+  /**
+   * Of `ms`, the wall-clock time this step spent with at least one of its
+   * proxied requests held by the pacer rather than in flight. It is a union of
+   * intervals, never a sum of concurrent waits, so it can never exceed `ms`.
+   */
+  readonly pacedWaitMs: number;
 }
 
 export interface Budgets {
@@ -37,6 +44,8 @@ export interface Budgets {
   readonly loginPerAccount: SlidingBudget;
   /** Every request a page sends through the BFF proxy, per API route. */
   readonly route: RouteBudgets;
+  /** The three counts that prove `route` is in front of every one of them. */
+  readonly coverage: RouteCoverage;
 }
 
 export interface RunOptions {
@@ -80,7 +89,21 @@ export class Run {
   readonly steps: StepRecord[] = [];
   page!: Page;
   private context!: BrowserContext;
-  private current: { step: string; issues: Issue[]; shots: ShotRecord[]; started: number } | null = null;
+  private current: { step: string; issues: Issue[]; shots: ShotRecord[]; started: number; pacedAt: number } | null = null;
+  /**
+   * The gate throttles itself below the API's per-route allowance, so a page's
+   * request can sit in `RouteBudgets` for as long as it takes the route's
+   * window to free a slot - up to the whole window. That is the harness
+   * holding the page back, not the application being slow, and a deadline that
+   * counts it is measuring the wrong thing.
+   *
+   * Measured as a UNION of blocked intervals: `blockedSince` is set when the
+   * first request starts waiting and cleared when the last one stops, so two
+   * requests waiting at once count once. Summing each `take()`'s own wait
+   * would exceed wall time whenever waits overlap, and would excuse time the
+   * page never actually lost.
+   */
+  private readonly pacerClock = new BlockedClock();
   private readonly expected: RegExp[] = [];
   private readonly outDir: string;
 
@@ -92,6 +115,16 @@ export class Run {
     this.seed = o.seed;
     this.outDir = join(o.outDir, this.tag);
     mkdirSync(this.outDir, { recursive: true });
+  }
+
+  /**
+   * Wall-clock milliseconds this run has spent with a proxied request held by
+   * the pacer. Monotonic, and already closed for waits that have ended; a wait
+   * still in flight is added so a deadline computed mid-wait is not short by
+   * exactly the stall it is meant to discount.
+   */
+  pacedWaitMs(): number {
+    return this.pacerClock.elapsed();
   }
 
   /** The catalog text for `key` in this run's locale, as translate() renders it. */
@@ -141,12 +174,36 @@ export class Run {
       (url) => url.href.startsWith(`${base}/api/proxy/`),
       async (route) => {
         const request = route.request();
-        await this.o.budgets.route.take(request.method(), new URL(request.url()).pathname);
+        const { pathname } = new URL(request.url());
+        this.o.budgets.coverage.paced(request.method(), pathname, request);
+        this.pacerClock.enter();
+        try {
+          await this.o.budgets.route.take(request.method(), pathname);
+        } finally {
+          this.pacerClock.leave();
+        }
         await route.fallback();
       },
     );
     const page = await this.context.newPage();
     page.setDefaultTimeout(20_000);
+    // Counted BEFORE anything can intercept: `request` fires for every request
+    // the page makes, so a proxied request missing from the paced count below
+    // reached the API without a budget.
+    page.on('request', (r) => {
+      const url = r.url();
+      if (!url.startsWith(`${base}/api/proxy/`)) return;
+      // The step is carried with it: a request that turns out to be unpaced is
+      // then named by where it came from, and "(between steps)" is itself an
+      // answer — it points at teardown rather than at a hole in the flows.
+      this.o.budgets.coverage.seen(r.method(), new URL(url).pathname, r, {
+        locale: this.locale,
+        viewport: String(this.viewport.width),
+        step: this.current?.step ?? '(between steps)',
+        url: url.replace(base, ''),
+        atMs: Date.now(),
+      });
+    });
     page.on('console', (m) => {
       const text = m.text();
       if (/CSP-VIOLATION|Content Security Policy/i.test(text)) this.record('csp', text);
@@ -156,7 +213,19 @@ export class Run {
     page.on('requestfailed', (r) => {
       const failure = r.failure()?.errorText ?? '';
       // A fetch the browser abandons because the document navigated is not a failure of the app.
-      if (failure.includes('ERR_ABORTED') || this.isExpected(r.url())) return;
+      if (failure.includes('ERR_ABORTED') || this.isExpected(r.url())) {
+        // ... and it is not a hole in the pacing either. `page.on('request')`
+        // already counted it as seen; if the navigation beat the context's
+        // route handler to it, nothing will ever pace it and the gate would
+        // report it as having reached the API without a budget - which it did
+        // not, because it never left the interception layer. Settling it here
+        // is what keeps that line about real holes. Measured on run
+        // 40864085275: two such requests, both `GET /api/proxy/inventory/stock`
+        // issued in `starting-stock`, whose first act is `run.reload()`.
+        if (failure.includes('ERR_ABORTED') && r.url().startsWith(`${base}/api/proxy/`))
+          this.o.budgets.coverage.cancelled(r.method(), new URL(r.url()).pathname, r);
+        return;
+      }
       this.record('network', `${r.method()} ${r.url().replace(base, '')} ${failure}`);
     });
     page.on('response', (r) => {
@@ -184,7 +253,7 @@ export class Run {
   /** Run one named step; anything it throws is a `flow` issue of that step. */
   async step(name: string, fn: () => Promise<void>): Promise<void> {
     if (this.o.only !== null && name !== 'login' && !this.o.only.includes(name)) return;
-    this.current = { step: name, issues: [], shots: [], started: Date.now() };
+    this.current = { step: name, issues: [], shots: [], started: Date.now(), pacedAt: this.pacedWaitMs() };
     try {
       await fn();
       await this.page.waitForTimeout(300); // let the step's last responses and console lines arrive
@@ -202,6 +271,7 @@ export class Run {
       shots: done.shots,
       issues: done.issues,
       ms: Date.now() - done.started,
+      pacedWaitMs: this.pacedWaitMs() - done.pacedAt,
     });
   }
 
@@ -220,6 +290,16 @@ export class Run {
 
   fail(kind: IssueKind, detail: string): void {
     this.record(kind, detail);
+  }
+
+  /**
+   * A step answered this request itself, so it never reached the API and owes
+   * it nothing. Declared here rather than inferred, because the alternative —
+   * letting the coverage check tolerate a shortfall — is exactly the leniency
+   * that would let a genuinely unpaced request pass as a deliberate one.
+   */
+  answeredLocally(method: string, url: string, token?: object): void {
+    this.o.budgets.coverage.fulfilled(method, new URL(url).pathname, token);
   }
 
   /** A full document load spends one refresh; wait for the budget first. */

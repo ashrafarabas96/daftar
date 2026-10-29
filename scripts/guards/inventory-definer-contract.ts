@@ -175,7 +175,7 @@ function internalRoleWindows(sql: string): [number, number][] {
 export function inventoryRoutineDefinitions(migrations: Readonly<Record<string, string>>): InventoryRoutineDefinition[] {
   const out: InventoryRoutineDefinition[] = [];
   for (const path of Object.keys(migrations).sort()) {
-    const file = path.split('/').pop() ?? path;
+    const file = path.split(/[\\/]/).pop() ?? path;
     const sql = stripComments(migrations[path] ?? '');
     const windows = internalRoleWindows(sql);
     for (const m of sql.matchAll(DEFINITION_HEADER)) {
@@ -237,7 +237,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   };
 
   for (const path of files) {
-    const file = path.split('/').pop() ?? path;
+    const file = path.split(/[\\/]/).pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
 
     for (const m of sql.matchAll(new RegExp(`REVOKE\\s+ALL\\s+ON\\s+${ROUTINE_KIND}\\s+([^;]*?)\\s+FROM\\s+PUBLIC\\s*;`, 'gi'))) {
@@ -283,7 +283,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   // ALTER may undo the shape. Checked once the transferred set is known, so a
   // statement in a file after the transfer is still seen.
   for (const path of files) {
-    const file = path.split('/').pop() ?? path;
+    const file = path.split(/[\\/]/).pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
     for (const m of sql.matchAll(new RegExp(`GRANT\\s+[^;]*?\\bON\\s+${ROUTINE_KIND}\\s+([^;]*?)\\s+TO\\s+([^;]*);`, 'gi'))) {
       if (!/\bPUBLIC\b/i.test(m[2] ?? '')) continue;
@@ -303,7 +303,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
 
   // Later ALTERs that would undo the shape.
   for (const path of files) {
-    const file = path.split('/').pop() ?? path;
+    const file = path.split(/[\\/]/).pop() ?? path;
     const sql = stripComments(src.migrations[path] ?? '');
     for (const m of sql.matchAll(new RegExp(`ALTER\\s+${ROUTINE_KIND}\\s+${ANY_SCHEMA}${IDENT}${OPTIONAL_ARGS}\\s*([^;]*);`, 'gi'))) {
       const name = (m[1] ?? '').toLowerCase();
@@ -319,7 +319,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
   }
 
   const dropped = (name: string, file: string, before: number): boolean => {
-    const path = files.find((p) => (p.split('/').pop() ?? p) === file);
+    const path = files.find((p) => (p.split(/[\\/]/).pop() ?? p) === file);
     const sql = stripComments(src.migrations[path ?? ''] ?? '').slice(0, before);
     return new RegExp(`DROP\\s+${ROUTINE_KIND}\\s+(?:IF\\s+EXISTS\\s+)?${ANY_SCHEMA}"?${name}"?\\b`, 'i').test(sql);
   };
@@ -336,7 +336,7 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
       const byOwnerChange = new RegExp(
         `ALTER\\s+${ROUTINE_KIND}\\s+${ANY_SCHEMA}"?${name}"?${OPTIONAL_ARGS}\\s*OWNER\\s+TO\\s+${INTERNAL}(?![\\w$])`,
         'i',
-      ).test(stripComments(src.migrations[files.find((p) => (p.split('/').pop() ?? p) === file) ?? ''] ?? ''));
+      ).test(stripComments(src.migrations[files.find((p) => (p.split(/[\\/]/).pop() ?? p) === file) ?? ''] ?? ''));
       const asInternal = defs.filter((d) => d.file === file && d.createdAsInternal);
       const earlier = handedIn.indexOf(file) > 0;
       const keepsAcl = !byOwnerChange && earlier && asInternal.every((d) => d.orReplace && !dropped(name, file, d.offset));
