@@ -162,12 +162,25 @@ describe('P7-03: replay suppression under real concurrency', () => {
       lines: [{ productId: A.piece.productId, quantity: '99', unitCost: '13' }],
     });
     expect(conflicting.status).toBe(409);
-    // `body.error.code`, not `body.code`. `GlobalExceptionFilter` wraps every
-    // refusal as `{ error: { code, message, requestId } }`, which is also what
-    // thirty other assertions in `tests/integration` read. The first version of
-    // this line read `body.code`, got `undefined`, and CI caught it — the one
-    // failure in this suite, against two cases that passed.
-    expect(conflicting.body.error.code).toBe('inventory.idempotency_conflict');
+    /*
+     * TWO LAYERS, AND CI TAUGHT ME BOTH IN TURN.
+     *
+     * `GlobalExceptionFilter` wraps every refusal as
+     * `{ error: { code, message, requestId, details } }`, where `code` is the
+     * GENERIC `ApiErrorCode` — here `CONFLICT` — and the DOMAIN code travels in
+     * `details.inventoryCode`. So:
+     *
+     *   body.code                        -> undefined   (first attempt)
+     *   body.error.code                  -> 'CONFLICT'  (second attempt)
+     *   body.error.details.inventoryCode -> the real one
+     *
+     * Five assertions in `tests/integration/inventory-configuration.test.ts`
+     * already read that third form. Both wrong guesses failed loudly rather
+     * than passing, which is the only reason this is a corrected test and not
+     * a false green.
+     */
+    expect(conflicting.body.error.code).toBe('CONFLICT');
+    expect(conflicting.body.error.details.inventoryCode).toBe('inventory.idempotency_conflict');
 
     // And still exactly one row: a refusal writes nothing.
     expect(await adjustmentRows(adjustmentId)).toBe(1);

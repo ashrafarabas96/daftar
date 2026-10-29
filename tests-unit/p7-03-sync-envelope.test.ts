@@ -240,11 +240,16 @@ describe('P7-03: the real-concurrency proof is written, and named as not run', (
    * convention worth pinning rather than remembering, and it is read from the
    * filter itself.
    */
-  it('reads a refusal code at body.error.code, the shape the filter actually sends', () => {
+  it('reads a refusal where the filter actually puts it: details.inventoryCode', () => {
     const filter = readFileSync(FILTER, 'utf8');
     expect(filter).toContain('const payload: ApiErrorBody = { error: { code, message, requestId');
+    // The generic `ApiErrorCode` and the DOMAIN code are two different fields.
+    // `body.error.code` is `CONFLICT`; the inventory code travels in details,
+    // which is what `inventory-configuration.test.ts` has always read.
+    expect(filter).toContain('body(e.code, e.message, e.httpStatus, e.details)');
     const source = readFileSync(INTEGRATION, 'utf8');
-    expect(source).toContain('conflicting.body.error.code');
+    expect(source).toContain("conflicting.body.error.details.inventoryCode).toBe('inventory.idempotency_conflict')");
+    expect(source).toContain("conflicting.body.error.code).toBe('CONFLICT')");
     // Probe proven able to find the defect it denies: the bare `body.code`
     // form, which reads undefined on every refusal this API returns.
     //
