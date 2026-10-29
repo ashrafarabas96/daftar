@@ -162,7 +162,12 @@ describe('P7-03: replay suppression under real concurrency', () => {
       lines: [{ productId: A.piece.productId, quantity: '99', unitCost: '13' }],
     });
     expect(conflicting.status).toBe(409);
-    expect(conflicting.body.code).toBe('inventory.idempotency_conflict');
+    // `body.error.code`, not `body.code`. `GlobalExceptionFilter` wraps every
+    // refusal as `{ error: { code, message, requestId } }`, which is also what
+    // thirty other assertions in `tests/integration` read. The first version of
+    // this line read `body.code`, got `undefined`, and CI caught it — the one
+    // failure in this suite, against two cases that passed.
+    expect(conflicting.body.error.code).toBe('inventory.idempotency_conflict');
 
     // And still exactly one row: a refusal writes nothing.
     expect(await adjustmentRows(adjustmentId)).toBe(1);

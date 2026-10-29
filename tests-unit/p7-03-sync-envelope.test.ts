@@ -231,6 +231,33 @@ describe('P7-03: the real-concurrency proof is written, and named as not run', (
     expect(schedulerTrusted.test(source)).toBe(false);
   });
 
+  /**
+   * Added after CI caught the one real defect in that suite: the conflict case
+   * read `body.code`, which is always `undefined`, because
+   * `GlobalExceptionFilter` wraps every refusal as
+   * `{ error: { code, message, requestId } }`. A `toBe` against `undefined`
+   * fails loudly, so nothing was silently green — but the shape is a project
+   * convention worth pinning rather than remembering, and it is read from the
+   * filter itself.
+   */
+  it('reads a refusal code at body.error.code, the shape the filter actually sends', () => {
+    const filter = readFileSync(FILTER, 'utf8');
+    expect(filter).toContain('const payload: ApiErrorBody = { error: { code, message, requestId');
+    const source = readFileSync(INTEGRATION, 'utf8');
+    expect(source).toContain('conflicting.body.error.code');
+    // Probe proven able to find the defect it denies: the bare `body.code`
+    // form, which reads undefined on every refusal this API returns.
+    //
+    // It matches an ASSERTION, not the bare string. A plain /body\.code/ failed
+    // on its first run against the prose above, which names the wrong form in
+    // order to explain it — a guard that cannot tell code from the comment
+    // describing it would force the explanation out of the file.
+    const bare = /expect\([A-Za-z0-9_.]*\.body\.code\b/;
+    expect(bare.test('expect(res.body.code).toBe(1)')).toBe(true);
+    expect(bare.test('// the first version read body.code and got undefined')).toBe(false);
+    expect(bare.test(source)).toBe(false);
+  });
+
   it('asserts one row and the 1-plus-9 status split', () => {
     const source = readFileSync(INTEGRATION, 'utf8');
     expect(source).toMatch(/toBe\(1\)|toHaveLength\(1\)/);
