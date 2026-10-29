@@ -29,6 +29,7 @@
     "check:localization": "tsx scripts/check-localization.ts",
     "check:guards": "tsx scripts/static-guards.ts",
     "check:migrations": "tsx scripts/check-migration-manifest.ts",
+    "check:train-heads": "tsx scripts/check-train-heads.ts",
     "check:supply-chain": "tsx scripts/check-supply-chain.ts",
     "scan:secrets:phase3": "tsx scripts/phase3-secret-scan.ts",
     "evidence:phase2:s8": "tsx scripts/phase2-s8-evidence.ts",
