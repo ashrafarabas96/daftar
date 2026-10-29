@@ -187,3 +187,45 @@ export class RouteCoverage {
       .map((r) => ({ route: r.route, unpaced: r.unpaced }));
   }
 }
+
+/**
+ * How long a page was held by the pacer, in wall-clock time.
+ *
+ * The gate throttles itself below the API's per-route allowance, so a request
+ * can sit in `RouteBudgets` until the route's window frees a slot - up to the
+ * whole window. A step deadline that counts that is measuring the harness, not
+ * the application. This is the quantity to discount, and it must be a UNION of
+ * blocked intervals, not a sum of each wait: requests on different routes wait
+ * at the same time, and summing them would exceed wall-clock and excuse time
+ * the page never lost.
+ *
+ * `now` is injected so the arithmetic can be tested without sleeping.
+ */
+export class BlockedClock {
+  private closed = 0;
+  private waiting = 0;
+  private since = 0;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** A request has begun waiting on a budget. */
+  enter(): void {
+    if (this.waiting === 0) this.since = this.now();
+    this.waiting += 1;
+  }
+
+  /** A request has stopped waiting. The interval closes only when the LAST one leaves. */
+  leave(): void {
+    if (this.waiting === 0) throw new Error('BlockedClock.leave() without a matching enter()');
+    this.waiting -= 1;
+    if (this.waiting === 0) this.closed += this.now() - this.since;
+  }
+
+  /**
+   * Blocked milliseconds so far, including an interval still open - a deadline
+   * computed in the middle of a stall must not be short by exactly that stall.
+   */
+  elapsed(): number {
+    return this.waiting === 0 ? this.closed : this.closed + (this.now() - this.since);
+  }
+}

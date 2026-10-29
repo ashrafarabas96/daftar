@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import type { Browser, BrowserContext, Locator, Page } from 'playwright-core';
 import { TOUCH_MIN_PX, comboTag, type Locale, type Viewport } from './config';
 import { inspect, type CatalogFacts, type Issue, type IssueKind } from './invariants';
+import { BlockedClock } from './pacer';
 import type { RouteBudgets, RouteCoverage, SlidingBudget } from './pacer';
 import { NAMES, type LocaleNames, type LocaleSeed } from './seed';
 
@@ -29,6 +30,12 @@ export interface StepRecord {
   readonly shots: ShotRecord[];
   readonly issues: Issue[];
   readonly ms: number;
+  /**
+   * Of `ms`, the wall-clock time this step spent with at least one of its
+   * proxied requests held by the pacer rather than in flight. It is a union of
+   * intervals, never a sum of concurrent waits, so it can never exceed `ms`.
+   */
+  readonly pacedWaitMs: number;
 }
 
 export interface Budgets {
@@ -82,7 +89,21 @@ export class Run {
   readonly steps: StepRecord[] = [];
   page!: Page;
   private context!: BrowserContext;
-  private current: { step: string; issues: Issue[]; shots: ShotRecord[]; started: number } | null = null;
+  private current: { step: string; issues: Issue[]; shots: ShotRecord[]; started: number; pacedAt: number } | null = null;
+  /**
+   * The gate throttles itself below the API's per-route allowance, so a page's
+   * request can sit in `RouteBudgets` for as long as it takes the route's
+   * window to free a slot - up to the whole window. That is the harness
+   * holding the page back, not the application being slow, and a deadline that
+   * counts it is measuring the wrong thing.
+   *
+   * Measured as a UNION of blocked intervals: `blockedSince` is set when the
+   * first request starts waiting and cleared when the last one stops, so two
+   * requests waiting at once count once. Summing each `take()`'s own wait
+   * would exceed wall time whenever waits overlap, and would excuse time the
+   * page never actually lost.
+   */
+  private readonly pacerClock = new BlockedClock();
   private readonly expected: RegExp[] = [];
   private readonly outDir: string;
 
@@ -94,6 +115,16 @@ export class Run {
     this.seed = o.seed;
     this.outDir = join(o.outDir, this.tag);
     mkdirSync(this.outDir, { recursive: true });
+  }
+
+  /**
+   * Wall-clock milliseconds this run has spent with a proxied request held by
+   * the pacer. Monotonic, and already closed for waits that have ended; a wait
+   * still in flight is added so a deadline computed mid-wait is not short by
+   * exactly the stall it is meant to discount.
+   */
+  pacedWaitMs(): number {
+    return this.pacerClock.elapsed();
   }
 
   /** The catalog text for `key` in this run's locale, as translate() renders it. */
@@ -145,7 +176,12 @@ export class Run {
         const request = route.request();
         const { pathname } = new URL(request.url());
         this.o.budgets.coverage.paced(request.method(), pathname, request);
-        await this.o.budgets.route.take(request.method(), pathname);
+        this.pacerClock.enter();
+        try {
+          await this.o.budgets.route.take(request.method(), pathname);
+        } finally {
+          this.pacerClock.leave();
+        }
         await route.fallback();
       },
     );
@@ -205,7 +241,7 @@ export class Run {
   /** Run one named step; anything it throws is a `flow` issue of that step. */
   async step(name: string, fn: () => Promise<void>): Promise<void> {
     if (this.o.only !== null && name !== 'login' && !this.o.only.includes(name)) return;
-    this.current = { step: name, issues: [], shots: [], started: Date.now() };
+    this.current = { step: name, issues: [], shots: [], started: Date.now(), pacedAt: this.pacedWaitMs() };
     try {
       await fn();
       await this.page.waitForTimeout(300); // let the step's last responses and console lines arrive
@@ -223,6 +259,7 @@ export class Run {
       shots: done.shots,
       issues: done.issues,
       ms: Date.now() - done.started,
+      pacedWaitMs: this.pacedWaitMs() - done.pacedAt,
     });
   }
 

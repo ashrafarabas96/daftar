@@ -60,11 +60,30 @@ async function waitForFocusTarget(run: Run, predicate: string, what: string): Pr
   // The 100ms between polls is the interval of a condition-bounded wait, not a
   // blind sleep: the loop ends the moment the element exists, and the deadline
   // is the page's own default timeout rather than a raised one.
-  const deadline = Date.now() + 20_000;
+  //
+  // The deadline is 20s OF THE APPLICATION'S OWN TIME. Time the gate itself
+  // spent holding this page's requests in `RouteBudgets` is added back, so a
+  // stall the harness imposed is not charged to the app it is measuring.
+  //
+  // This is not a raised timeout and it does not soften the assertion: the
+  // allowance only ever grows by wall-clock the harness admits to taking, it
+  // is measured as a union of blocked intervals so overlapping waits count
+  // once, and an app that is genuinely slow still fails at 20s with the
+  // allowance at zero. Measured on run 40851309513, which is why it exists:
+  // step durations were bimodal - six steps between 19.1s and 23.1s and the
+  // seventh-slowest at 4.98s, with p50 at 1.68s - and the one failure,
+  // `tr 768px receive` at 20.4s, sat just over a deadline that `ar 768px
+  // receive` cleared at 22.4s. Nothing in the app explains a 20s page; the
+  // route the pages read most was at 92% of its 240/min budget, and when that
+  // window saturates `SlidingBudget.take()` waits for the oldest entry to age
+  // out. The harness was racing itself.
+  const start = Date.now();
+  const pacedAtStart = run.pacedWaitMs();
+  const allowed = (): number => 20_000 + (run.pacedWaitMs() - pacedAtStart);
   for (;;) {
     const present: unknown = await run.page.evaluate(`(() => Array.from(document.querySelectorAll('*')).some(${predicate}))()`);
     if (present === true) return;
-    if (Date.now() >= deadline) {
+    if (Date.now() - start >= allowed()) {
       // Say what WAS there. Measured on run 40625531024: this branch reported
       // the receive button absent at 768px in ar and tr, and the error
       // screenshot taken immediately afterwards shows that button plainly
@@ -77,7 +96,11 @@ async function waitForFocusTarget(run: Run, predicate: string, what: string): Pr
       const seen: unknown = await run.page.evaluate(
         `(() => JSON.stringify({ url: location.pathname, buttons: Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 12) }))()`,
       );
-      run.fail('flow', `${what} never rendered, so the keyboard walk had nothing to reach; the page held ${String(seen)}`);
+      const held = run.pacedWaitMs() - pacedAtStart;
+      run.fail(
+        'flow',
+        `${what} never rendered in ${Date.now() - start}ms (${held}ms of which the pacer held this page's requests, and was allowed for), so the keyboard walk had nothing to reach; the page held ${String(seen)}`,
+      );
       throw new Error(`render: ${what} absent`);
     }
     await run.page.waitForTimeout(100);

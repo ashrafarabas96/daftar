@@ -268,6 +268,14 @@ function verdict(o: Options, records: readonly StepRecord[], coverage: RouteCove
       for (const r of named) console.log(`    ${r.route} · ${r.locale} ${r.viewport}px · step ${r.step} · ${r.url}`);
     }
   }
+  // What the gate's own throttling cost, printed whether it passes or fails.
+  // Without it the bimodal step times that pacing produces read as an
+  // unexplained slow run, and the next person to see a 20s step has to
+  // re-derive the cause from scratch, as this gate's author did.
+  const held = records.filter((r) => r.pacedWaitMs > 0).sort((a, b) => b.pacedWaitMs - a.pacedWaitMs);
+  const heldTotal = records.reduce((sum, r) => sum + r.pacedWaitMs, 0);
+  console.log(`pacer: held a page's requests for ${heldTotal}ms across ${held.length} of ${records.length} steps`);
+  for (const r of held.slice(0, 5)) console.log(`    ${r.pacedWaitMs}ms of ${r.ms}ms · ${r.locale} ${r.width}px ${r.step}`);
   if (o.plants.length === 0) {
     const bad = records.filter((r) => r.issues.length > 0);
     for (const r of bad) {
