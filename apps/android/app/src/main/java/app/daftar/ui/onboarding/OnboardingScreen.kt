@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import app.daftar.R
 import app.daftar.data.ApiClient
 import app.daftar.data.Result
+import app.daftar.ui.theme.ButtonMinHeight
 import kotlinx.coroutines.launch
 
 @Composable
@@ -58,7 +60,7 @@ fun OnboardingScreen(api: ApiClient, onDone: () -> Unit) {
                 }
             },
             enabled = !busy && businessName.isNotBlank() && countryCode.length == 2 && baseCurrency.length == 3 && storeSlug.length >= 3,
-            modifier = Modifier.fillMaxWidth().padding(top = 24.dp),
+            modifier = Modifier.fillMaxWidth().padding(top = 24.dp).heightIn(min = ButtonMinHeight),
         ) {
             Text(stringResource(R.string.onboarding_submit))
         }

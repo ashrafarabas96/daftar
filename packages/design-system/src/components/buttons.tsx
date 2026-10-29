@@ -1,12 +1,13 @@
 'use client';
 import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from 'react';
-import { colors, motion, radius, spacing, TOUCH_TARGET, typography } from '../tokens';
+import { BUTTON_MIN_PRIMARY, colors, motion, radius, spacing, TOUCH_TARGET, typography } from '../tokens';
 
 type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
 
+// Governance 04 §3: every button is a >= 44px touch target; a primary button is >= 48px (see Button).
 const sizeStyles: Record<Size, CSSProperties> = {
-  sm: { minHeight: `calc(${TOUCH_TARGET} - 0.5rem)`, padding: `0 ${spacing[3]}`, fontSize: typography.size.sm },
+  sm: { minHeight: TOUCH_TARGET, padding: `0 ${spacing[3]}`, fontSize: typography.size.sm },
   md: { minHeight: TOUCH_TARGET, padding: `0 ${spacing[4]}`, fontSize: typography.size.md },
   lg: { minHeight: `calc(${TOUCH_TARGET} + 0.5rem)`, padding: `0 ${spacing[6]}`, fontSize: typography.size.lg },
 };
@@ -44,6 +45,8 @@ export function Button({ variant = 'primary', size = 'md', loading, fullWidth, d
         transition: `background ${motion.fast}, opacity ${motion.fast}`,
         width: fullWidth ? '100%' : undefined,
         ...sizeStyles[size],
+        // A primary button is never under 48px, at any size (lg is already 52px).
+        ...(variant === 'primary' && size !== 'lg' ? { minHeight: BUTTON_MIN_PRIMARY } : null),
         ...variantStyles[variant],
         ...style,
       }}
