@@ -499,16 +499,20 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
    * but it is a boundary made of an absence: the day any slice grants a write
    * on one of these four, every one of those proofs evaporates in silence and
    * the only thing left between two merchants on the write path is
-   * `business_isolation_update` and `business_isolation_delete` — two quals
-   * `0086` did not touch and which NO suite in this tree has ever executed
-   * against a live cluster. So the absence is pinned here, and the pin says
-   * out loud what has to happen before it may be relaxed.
+   * `business_isolation_update` and `business_isolation_delete`, two quals
+   * `0086` did not touch — and what is and is not already known about those
+   * two is stated exactly in `PRECONDITION` below, because a card that reads
+   * "nothing exists" will rebuild what does. So the absence is pinned here,
+   * and the pin says out loud what has to happen before it may be relaxed.
    *
    * WHO IS AN "APPLICATION ROLE", DERIVED FROM THE CATALOGUE AND NOT LISTED.
    * Every role whose name matches `daftar\_%`, plus `PUBLIC` — minus, PER
    * RELATION, that relation's MEASURED OWNER. There is no hand-written list
-   * of principals anywhere in this case, so a role created tomorrow is in
-   * scope the moment it is created, without an edit here.
+   * of principals anywhere in this case, so a `daftar_%` role created
+   * tomorrow is in scope the moment it is created, without an edit here.
+   * A role whose name does NOT carry that prefix is NOT in scope at all; the
+   * comment on the role query below says so where the query is, and the
+   * follow-up card named there is where widening it is decided.
    *
    *   — `PUBLIC` is in scope because a grant to it reaches every one of them
    *     at once, which is the worst shape this law could miss.
@@ -538,11 +542,13 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
    *
    * THE TWO ASSERTIONS, AND WHY THEY ARE NOT THE SAME ONE.
    *
-   *   (a) NO CREDENTIALED PRINCIPAL HOLDS ANY OF THE THREE — a plain zero,
-   *       with nothing pinned and nothing to maintain. "Credentialed" is
-   *       `rolcanlogin`, read from `pg_roles`: a role a connection can arrive
-   *       as. Today that is eight roles and the measured answer is zero, so
-   *       this assertion needs no floor at all.
+   *   (a) NO CREDENTIALED `daftar_%` PRINCIPAL HOLDS ANY OF THE THREE — a
+   *       plain zero, with nothing pinned and nothing to maintain.
+   *       "Credentialed" is `rolcanlogin`, read from `pg_roles`: a role a
+   *       connection can arrive as. Today that is eight roles and the
+   *       measured answer is zero, so this assertion needs no floor at all.
+   *       It is a zero over the prefixed roles, NOT over every role in the
+   *       cluster.
    *   (b) THE WHOLE WRITE SURFACE EQUALS WHAT WAS MEASURED — set equality
    *       against `PINNED_WRITE_SURFACE` below, which covers the NOLOGIN
    *       internal principals too.
@@ -571,7 +577,17 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
    * Every entry is a COLUMN-level `UPDATE` held by `daftar_inventory_internal`
    * — `NOLOGIN NOINHERIT`, reachable only by `SET ROLE`, which is what the
    * inventory routines do. No table-level `UPDATE`, no `DELETE` and no
-   * `TRUNCATE` is held by any application role, at any level, anywhere.
+   * `TRUNCATE` is held at any level by any role whose name carries the
+   * `daftar_` prefix, nor by `PUBLIC`. Roles outside that prefix are not
+   * swept — see the comment on the role query below.
+   *
+   * ONE NOTE ON HOW THIS SET CAN BREAK, SO A BREAK IS NOT MISREAD. These
+   * grants are LOAD-BEARING: `invoices.status` and the `sales` columns are
+   * what the inventory routines write. Deleting one of them to see this
+   * case go red does not test this case — the fixture's own commands fail
+   * first (HTTP 403) and the whole file ends as skipped rather than as a
+   * named failure here. The plants that DO test this case add a grant; they
+   * never remove one.
    */
   const PINNED_WRITE_SURFACE: readonly string[] = [
     'invoices|daftar_inventory_internal|UPDATE|status',
@@ -585,11 +601,41 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
     'sales|daftar_inventory_internal|UPDATE|voided_by',
   ];
 
-  /** What has to be true before any entry above may be added to. */
+  /**
+   * What has to be true before any entry above may be added to.
+   *
+   * THE STATE OF THE TWO WRITE QUALS IS STATED EXACTLY, BECAUSE AN EARLIER
+   * DRAFT OF THIS STRING SAID "neither qual has ever been executed in this
+   * project" AND THAT IS FALSE. Measured in
+   * `tests/security/p4s4-rls-barrier-behaviour.test.ts`:
+   *
+   *   — `business_isolation_update` IS exercised by behaviour, for
+   *     `daftar_inventory_internal` on `invoices` and `sales`, over the
+   *     narrow column list it holds: a row of a foreign business is reached
+   *     by ZERO rows and the same statement reaches the principal's own row,
+   *     so there is a positive control. But that arm does NOT isolate it:
+   *     the suite's own comment says what refuses there is
+   *     `business_isolation_update` *or* the tenant policy, and which of the
+   *     two it was is not decided. And it is exercised for NO OTHER
+   *     principal — `daftar_app` cannot reach it, which is exactly the
+   *     absence this case pins.
+   *   — `business_isolation_delete` is NOT exercised under the shipped
+   *     grants at all, and cannot be: every `DELETE` dies at the privilege
+   *     check (42501) before row security. The one place it is executed is a
+   *     rolled-back case in that suite which GRANTS the missing `DELETE`
+   *     itself in order to show the RESTRICTIVE operator is load-bearing —
+   *     a hypothesis, not this cluster.
+   *
+   * So the error below asks for what is genuinely missing and not for work
+   * already done.
+   */
   const PRECONDITION =
-    'DR-61: before ANY write grant is added to one of these four relations, ' +
-    '`business_isolation_update` and `business_isolation_delete` MUST first be proved, live, on a cluster ' +
-    'with two populated tenants in it — neither qual has ever been executed in this project. ' +
+    'DR-61: before ANY write grant is added to one of these four relations, the write quals must first be proved ' +
+    'for the principal receiving the grant, live, on a cluster with two populated tenants in it. ' +
+    'What exists today: `business_isolation_update` is exercised behaviourally ONLY for daftar_inventory_internal ' +
+    'on invoices and sales, and NOT in isolation from tenant_membership (p4s4-rls-barrier-behaviour); ' +
+    '`business_isolation_delete` is unreachable under the shipped grants and is executed only inside a ' +
+    'rolled-back case that grants the missing DELETE to itself. Neither is proved for any other principal. ' +
     'Until then the write boundary here is a missing grant, and this case is what holds it. ' +
     'Do not edit the pinned set to make this pass.';
 
@@ -634,6 +680,22 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
     );
 
     // Every `daftar_%` role, and whether a connection can arrive as it.
+    //
+    // THE SCOPE OF THIS QUERY IS THE SCOPE OF THE WHOLE LAW, AND IT IS A
+    // PREFIX. A role that can log in but whose name does NOT begin with
+    // `daftar_` is invisible to everything below: create `rogue_writer
+    // LOGIN`, grant it `UPDATE ON invoices` and `TRUNCATE ON sales`, and
+    // this case stays green. That is measured, not supposed. So neither
+    // assertion below may be read as "no role in this cluster holds a
+    // write"; both say "no `daftar_%` role, and not PUBLIC, holds one".
+    //
+    // Widening the prefix to every role in `pg_roles` is NOT a free
+    // strengthening and is deliberately not done here: a cluster carries
+    // system and tooling roles whose grants are legitimate and are nobody's
+    // business here, and a law that turns red on them teaches people to
+    // widen the exclusion instead of reading it. It is a follow-up card with
+    // its own measurement, named in §8.6 of
+    // `docs/decisions/2026-10-29-dr60-rls-tenant-isolation.md`.
     const canLogin = new Map<string, boolean>(
       (
         await ownerPool().query<{ rolname: string; rolcanlogin: boolean }>(
@@ -669,13 +731,18 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
 
     const writes = all.filter((g) => (WRITE_PRIVILEGES as readonly string[]).includes(g.priv) && isApplicationRole(g));
 
-    // (a) A PLAIN ZERO: nothing a connection can arrive as holds any of the
-    //     three, at table or column level. Nothing pinned, nothing to edit.
+    // (a) A PLAIN ZERO: no `daftar_%` role a connection can arrive as, and
+    //     not PUBLIC, holds any of the three at table or column level.
+    //     Nothing pinned, nothing to edit. The prefix is the limit of the
+    //     claim — see the comment on the role query above.
     const credentialed = writes.filter((g) => g.grantee === 'PUBLIC' || canLogin.get(g.grantee) === true);
-    expect(credentialed.map(say), `a principal a connection can authenticate as now holds a write here — ${PRECONDITION}`).toEqual([]);
+    expect(credentialed.map(say), `a daftar_% role a connection can authenticate as (or PUBLIC) now holds a write here — ${PRECONDITION}`).toEqual([]);
 
-    // (b) THE WHOLE SURFACE, PINNED — including the NOLOGIN internals.
-    expect(writes.map(key).sort(), `the write surface of the four money relations has changed — ${PRECONDITION}`).toEqual([...PINNED_WRITE_SURFACE].sort());
+    // (b) THE WHOLE SURFACE HELD BY `daftar_%` ROLES, PINNED — including the
+    //     NOLOGIN internals, which is what (a) cannot reach.
+    expect(writes.map(key).sort(), `the write surface held by daftar_% roles on the four money relations has changed — ${PRECONDITION}`).toEqual(
+      [...PINNED_WRITE_SURFACE].sort(),
+    );
   }, 60_000);
 
   // ── 5. THE MONEY READERS, UNDER A TENANT SCOPE ──────────────────────────

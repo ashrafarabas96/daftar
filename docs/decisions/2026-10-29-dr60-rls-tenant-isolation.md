@@ -199,9 +199,26 @@ relation, that relation's measured owner**.
   prose. It says nothing about whether the owner is reachable from a merchant
   request; that is a question about connection strings and is not in scope.
 
-Because the set is derived, **a role created tomorrow is in scope the moment
-it is created**, with no edit here. Measured today: twelve `daftar_%` roles,
-eight of them `rolcanlogin`.
+Because the set is derived, **a `daftar_%` role created tomorrow is in scope
+the moment it is created**, with no edit here. Measured today: twelve
+`daftar_%` roles, eight of them `rolcanlogin`.
+
+**The prefix is the limit of the whole law, and it is a real limit.** A role
+that can log in but whose name does not begin with `daftar_` is invisible to
+every assertion in §8.3: `CREATE ROLE rogue_writer LOGIN` with
+`GRANT UPDATE ON invoices` and `GRANT TRUNCATE ON sales` takes the measured
+write surface from **9 to 11** — and leaves the suite at **17/17, EXIT 0**.
+That is measured, not supposed, and it is now stated **in
+the code, beside the role query** rather than only here — a limit declared in
+another file does not make the sentence in the failure message true, and the
+failure message is what an engineer reads at the moment it matters.
+
+Widening the sweep to every role in `pg_roles` is **not** a free
+strengthening and is deliberately not done in this card: a cluster carries
+system and tooling roles whose grants are legitimate and are nobody's business
+here, and a law that reddens on them teaches people to widen an exclusion
+instead of reading it. It is **a follow-up card**, with its own measurement of
+what such a sweep would actually see. See §8.6.
 
 ### 8.2 What is swept, exactly
 
@@ -219,19 +236,21 @@ nothing for a reason that has nothing to do with grants — a silent green.
 
 ### 8.3 The two assertions
 
-- **(a) A plain zero.** No principal a connection can authenticate as
-  (`rolcanlogin`), and not `PUBLIC`, holds any of the three at either level.
-  Nothing is pinned here and there is nothing to maintain; the measured answer
-  today is zero.
-- **(b) The whole write surface, pinned by set equality**, including the
+- **(a) A plain zero.** No **`daftar_%`** principal a connection can
+  authenticate as (`rolcanlogin`), and not `PUBLIC`, holds any of the three at
+  either level. Nothing is pinned here and there is nothing to maintain; the
+  measured answer today is zero. It is a zero over the prefixed roles, **not**
+  over every role in the cluster — §8.1.
+- **(b) The whole write surface held by `daftar_%` roles, pinned by set
+  equality**, including the
   `NOLOGIN` internal principals. Measured on a live PostgreSQL 16.15 cluster
   carrying migrations `0000 … 0086` (**87 applied**), the surface is exactly
   **nine** entries, all of them column-level `UPDATE` held by
   `daftar_inventory_internal`: `invoices.status`, and eight columns on `sales`
   (`binding_source_id`, `business_transaction_id`, `confirmed_at`,
   `confirmed_by`, `status`, `void_intent_sha256`, `voided_at`, `voided_by`).
-  No table-level `UPDATE`, no `DELETE` and no `TRUNCATE` is held by any
-  application role anywhere.
+  No table-level `UPDATE`, no `DELETE` and no `TRUNCATE` is held at any level
+  by any `daftar_%` role or by `PUBLIC`.
 
 ### 8.4 The decision taken where the card left a choice, and why
 
@@ -247,11 +266,34 @@ which is measured below, not asserted.
 
 It is a **pin, not an exception list**. Nothing is appended to it to make a new
 grant pass. The failure message of both assertions carries the precondition
-verbatim: `business_isolation_update` and `business_isolation_delete` must
-first be proved, live, on a cluster with two populated tenants in it, and
-neither has ever been executed in this project. Editing the pinned set is the
-deliberate act of a card that has already done that; it is not the quiet
-maintenance an exception list invites.
+verbatim: the write quals must first be proved **for the principal receiving
+the grant**, live, on a cluster with two populated tenants in it. Editing the
+pinned set is the deliberate act of a card that has already done that; it is
+not the quiet maintenance an exception list invites.
+
+**And the precondition states what already exists, because an earlier draft of
+it said "neither qual has ever been executed in this project" and that is
+false.** Measured in `tests/security/p4s4-rls-barrier-behaviour.test.ts`:
+
+- **`business_isolation_update` IS exercised by behaviour** — for
+  `daftar_inventory_internal` on `invoices` and `sales`, over the narrow
+  column list it holds. A row of a foreign business is reached by **zero**
+  rows and the same statement reaches the principal's own row, so there is a
+  positive control. But that arm **does not isolate it**: the suite's own
+  comment says the refuser there is `business_isolation_update` *or* the
+  tenant policy, and which one is not decided. And it is exercised for **no
+  other principal** — `daftar_app` cannot reach it at all, which is precisely
+  the absence this card pins.
+- **`business_isolation_delete` is not exercised under the shipped grants**,
+  and cannot be: every `DELETE` dies at the privilege check (42501) before row
+  security is reached. The one place it is executed is a rolled-back case in
+  that suite which **grants the missing `DELETE` to itself** in order to show
+  the `RESTRICTIVE` operator is load-bearing — a hypothesis, not this cluster.
+
+The error direction of the retired sentence was conservative — it claimed
+*less* protection than exists — so it was never a security risk. It was still
+a false statement of fact inside the text that governs a later blocking card,
+and someone reading it would have rebuilt work that is already there.
 
 ### 8.5 The plants (DR-55 and its complement)
 
@@ -276,6 +318,22 @@ than written down. The fourth is the only one that reddens assertion (b)
 rather than (a) — which is the evidence that the pin, not the zero, is what
 covers the internal principals.
 
+**Two things these plants do not show, recorded so the table is not read for
+more than it says.**
+
+- **Removing a pinned grant is not a plant for this case.** The nine entries
+  are load-bearing: `invoices.status` and the `sales` columns are what the
+  inventory routines write. Delete one and the fixture's own commands fail
+  first (HTTP 403), so the file ends **17 skipped** rather than with a named
+  failure here. That is a correct red, but it is the fixture collapsing, not
+  this law biting, and it must not be counted as evidence for it. Every plant
+  above **adds** a grant; none removes one.
+- **`DELETE` is caught twice, `UPDATE` and `TRUNCATE` once.** The older case
+  `DELETE is held by NO runtime principal …` also reddens on plant two —
+  **by coincidence of subject, not by design**: it sweeps `DELETE` only, so
+  it is silent on the `TRUNCATE` and `UPDATE` plants. It is not a second
+  layer under this law and must not be read as one.
+
 **The positive control**, without which every assertion above is satisfied by a
 broken probe: the sweep is taken over *all* privileges first, and the case
 asserts that it can see `daftar_app`'s `SELECT` on each of the four, that every
@@ -286,9 +344,12 @@ empty. A probe that returns nothing therefore fails rather than passes.
 ### 8.6 What this law does NOT do — `NOT_RUN` by name
 
 - **It does not prove the write policies.** It pins the absence that makes
-  proving them unnecessary *today*. `business_isolation_update` and
-  `business_isolation_delete` remain executed by nothing in this project.
-  Proving them is **a blocking card for the first slice that grants a write,
+  proving them unnecessary *today*. What is already there is in §8.4 and is
+  narrow: `business_isolation_update` exercised **only** for
+  `daftar_inventory_internal`, on two of the four relations, and **not in
+  isolation** from `tenant_membership`; `business_isolation_delete`
+  unreachable under the shipped grants. Proving them for the principal that
+  receives a write is **a blocking card for the first slice that grants one,
   not for the seal** — the owner's decision, recorded here.
 - **It is not run by CI.** Like the rest of this suite, the evidence is local,
   on one machine, by one hand, with the cluster described in §8.3.
@@ -301,7 +362,13 @@ empty. A probe that returns nothing therefore fails rather than passes.
   already exist, so it is out of scope here and not a hole in this law.
 - **Relations outside the four are not swept.** The law's subject is the four
   relations `0086` rewrote quals on.
-- **A write principal whose role name does not match `daftar\_%`** would be
-  out of the derived set. Every role this deployment creates is prefixed
-  (`bootstrap.sql`), so the gap is declared rather than open — but it is
-  declared.
+- **A write principal whose role name does not match `daftar\_%` is invisible
+  to the whole law** — measured, not supposed: `rogue_writer LOGIN` holding
+  `UPDATE ON invoices` and `TRUNCATE ON sales` takes the write surface from 9
+  to 11 and leaves the suite at 17/17, EXIT 0. Every role this deployment creates is prefixed (`bootstrap.sql`),
+  so nothing it ships falls in the gap, but the gap is real. **Follow-up
+  card: sweep every role in `pg_roles`, measure first what such a sweep sees
+  on a stock cluster (system and tooling roles hold legitimate grants), and
+  decide the exclusion from that measurement rather than ahead of it.** It is
+  not folded into this card because a law that reddens on legitimate grants
+  teaches people to widen an exclusion instead of reading it.
