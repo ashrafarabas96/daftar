@@ -89,6 +89,37 @@ function direct(localAddress: string, forged?: string): Promise<number> {
   });
 }
 
+interface Refusal {
+  status: number;
+  code: unknown;
+  retryAfter: string | undefined;
+}
+
+/** The same direct call, but keeping what the refusal actually says — the client is told to back off, not merely told "no". */
+function directRefusal(localAddress: string): Promise<Refusal> {
+  const url = new URL(`/v1/${ROUTE.join('/')}`, apiUrl);
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: url.hostname, port: url.port, path: url.pathname, method: 'GET', localAddress }, (res) => {
+      let raw = '';
+      res.setEncoding('utf8');
+      res.on('data', (c: string) => (raw += c));
+      res.on('end', () => {
+        let code: unknown;
+        try {
+          const parsed: unknown = JSON.parse(raw);
+          code = typeof parsed === 'object' && parsed !== null ? (parsed as { error?: { code?: unknown } }).error?.code : undefined;
+        } catch {
+          code = undefined;
+        }
+        const header = res.headers['retry-after'];
+        resolve({ status: res.statusCode ?? 0, code, retryAfter: Array.isArray(header) ? header[0] : header });
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 /** Spend `n` of an allowance, each call counted (401) and none refused. */
 async function spend(n: number, send: (i: number) => Promise<number>): Promise<void> {
   for (let i = 0; i < n; i += 1) {
@@ -137,5 +168,30 @@ describe('TD-19: the API route allowance counts the client, not the web server',
     await spend(LIMIT, () => direct('127.0.0.3'));
     expect(await direct('127.0.0.3')).toBe(429);
     expect(await direct('127.0.0.4')).toBe(401);
+  });
+
+  /**
+   * The browser gate paces itself below this allowance so that a fast machine
+   * does not meet a limiter a merchant never meets. That pacing would be
+   * indistinguishable from a limiter that had quietly stopped limiting, so
+   * the limiter is proved here, on its own, against the production limit:
+   * going over it refuses with the status AND the product's own error code —
+   * not merely with some 4xx. If this case ever goes green while saying
+   * something else, the gate's quiet runs mean nothing.
+   *
+   * `Retry-After` is deliberately NOT asserted here. The filter sets it for
+   * the auth limiter's own `RateLimitError`, and this route's refusal travels
+   * the generic `HttpException` arm instead, which sets no header; whether
+   * `@nestjs/throttler` sets one of its own before throwing is a measurement
+   * this card has not made, and `error.filter.ts` belongs to another open
+   * branch. Pinning a header we have not observed would be a claim, and
+   * pinning its absence would freeze a gap worth closing.
+   */
+  it('going over the allowance is refused as RATE_LIMITED, not merely with some 4xx', async () => {
+    await spend(LIMIT, () => direct('127.0.0.5'));
+    const refused = await directRefusal('127.0.0.5');
+    expect(refused.status).toBe(429);
+    expect(refused.code).toBe('RATE_LIMITED');
+    console.log(`[throttle-contract] Retry-After on the refusal: ${refused.retryAfter ?? '(absent)'}`);
   });
 });
