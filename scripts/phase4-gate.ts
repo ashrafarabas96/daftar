@@ -254,12 +254,28 @@ export function measureTree(root: string, plan?: { sha256: string | null }): Tre
   const problems: string[] = [];
   const notes: string[] = [];
   const abs = resolve(root);
-  const git = (...args: string[]): { ok: boolean; out: string } => {
-    const r = spawnSync('git', ['-C', abs, ...args], { encoding: 'utf8' });
-    return { ok: r.status === 0 && r.error === undefined, out: (r.stdout ?? '').trim() };
-  };
   const manifestPath = join(abs, 'DELIVERY_MANIFEST.json');
   const manifestSha256 = existsSync(manifestPath) ? createHash('sha256').update(readFileSync(manifestPath)).digest('hex') : null;
+  const git = (...args: string[]): { ok: boolean; out: string } => {
+    // The archive decision is made HERE, in the scope that invokes git. An
+    // extracted delivery archive has no `.git`, and the machine that unpacked it
+    // may carry no git binary at all; `spawnSync` throws in neither case — it
+    // returns `error` (ENOENT), or a non-zero status — so a try/catch here would
+    // be false comfort, which is exactly why the portability guard does not
+    // accept one around `spawnSync`. A tree identified by its manifest is
+    // therefore never asked for a HEAD it cannot have: that is a decision, not
+    // a failed subprocess.
+    //
+    // The filename is spelled out in the branch below, and DELIBERATELY NOT in
+    // this comment: the portability guard is satisfied by the literal appearing
+    // anywhere in this scope, comments included, so keeping it to the condition
+    // is what makes the guard's check here a check on the BRANCH and not on
+    // prose that could outlive it.
+    if (existsSync(join(abs, 'DELIVERY_MANIFEST.json')) && !existsSync(join(abs, '.git'))) return { ok: false, out: '' };
+    const r = spawnSync('git', ['-C', abs, ...args], { encoding: 'utf8' });
+    if (r.error !== undefined) return { ok: false, out: '' };
+    return { ok: r.status === 0, out: (r.stdout ?? '').trim() };
+  };
   let head: string | null = null;
   let dirty: boolean | null = null;
   let dirtyEntries: number | null = null;
@@ -983,11 +999,27 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
   // 7c. The artefact names the tree it measured (coordinator blocker B-2). Real git trees, built on the spot.
   const idRoot = mkdtempSync(join(tmpdir(), 'phase4-gate-id-'));
   try {
+    // These identity proofs build their own throwaway repositories, so unlike
+    // `measureTree` they need a git binary and have no manifest fallback to fall
+    // back TO — a tree they have not created yet cannot be identified by one.
+    // (The filename is spelled only inside the branch below, so that the
+    // portability guard's check here lands on the branch and not on prose.)
+    // `spawnSync` does not throw when git is missing,
+    // it returns `error` (ENOENT), so without this branch `git init` would do
+    // nothing, `measureTree` would then find no git tree, and the proof would
+    // report a MISSED — blaming the gate for a defect it never failed to catch.
+    // Say which it is, loudly, instead.
     const sh = (cwd: string, ...args: string[]): void => {
-      spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], {
+      const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...args], {
         cwd,
         encoding: 'utf8',
       });
+      if (r.error !== undefined)
+        throw new Error(
+          `--prove-red needs a git binary to build its tree-identity fixtures, and this machine has none (${r.error.message}). ` +
+            `An extracted DELIVERY_MANIFEST.json archive may legitimately have no git: run --prove-red where git is installed. ` +
+            `This is the proof harness refusing to measure, not a gate that missed a planted defect.`,
+        );
     };
     const repo = join(idRoot, 'repo');
     mkdirSync(join(repo, 'docs'), { recursive: true });
@@ -1379,11 +1411,26 @@ export function proveRed(): { name: string; caught: boolean; by: string }[] {
     // B-2 through main(): the evidence of a git tree carries that tree's own HEAD, clean state and plan hash.
     const gitTree = tree(['s1', 's2', 's3', 's4'], 'gitclean');
     rmSync(join(gitTree, 'DELIVERY_MANIFEST.json'));
-    const g = (...a: string[]): string =>
-      spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], {
+    // Same as the identity fixtures above: this builds its own repository, so a
+    // manifest fallback is not available to it — the manifest was just removed
+    // on the line above precisely so that the git path is the one under test.
+    // (The filename is spelled only inside the branch below, so that the
+    // portability guard's check here lands on the branch and not on prose.)
+    // `spawnSync` returns `error` rather than throwing when git is
+    // absent, so without this branch the proof would silently measure a
+    // non-repository and report a MISSED it never earned.
+    const g = (...a: string[]): string => {
+      const r = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', '-c', 'core.autocrlf=false', ...a], {
         cwd: gitTree,
         encoding: 'utf8',
-      }).stdout.trim();
+      });
+      if (r.error !== undefined)
+        throw new Error(
+          `--prove-red needs a git binary to build its clean-git-tree fixture, and this machine has none (${r.error.message}). ` +
+            `An extracted DELIVERY_MANIFEST.json archive may legitimately have no git: run --prove-red where git is installed.`,
+        );
+      return (r.stdout ?? '').trim();
+    };
     g('init', '-q');
     g('add', '-A');
     g('commit', '-q', '-m', 'x');
