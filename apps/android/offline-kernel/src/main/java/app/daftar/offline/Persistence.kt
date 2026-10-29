@@ -43,6 +43,50 @@ package app.daftar.offline
 const val SCHEMA_VERSION: Int = 1
 
 /**
+ * DR-67 CONDITION 1 — THE OPEN INVENTORY: every column stored OUTSIDE the
+ * AES-GCM payload, named, so that deferring OD-P7-01 is a measured acceptance
+ * rather than a gap nobody wrote down.
+ *
+ * These five are in the clear because the queue is rows SELECTED by them: a
+ * column that must be decrypted to be compared cannot be indexed. Each is
+ * listed with what an attacker holding the database file learns from it:
+ *
+ *   * `idempotencyKey`   — a client-minted UUID v4. Links a row to a server
+ *                          document id. Carries no merchant data and is not
+ *                          derived from any: it is random, not a hash of the
+ *                          intent, so it cannot be brute-forced back to one.
+ *   * `schemaVersion`    — a small integer. Which build wrote the row (L13).
+ *   * `state`            — one of seven enum names. WHERE in the lifecycle the
+ *                          row is. This is the real residual leak: counts per
+ *                          state are visible, so "how many sales are pending"
+ *                          is readable. Not WHAT any of them says.
+ *   * `attempts`         — a small integer. How many sends were tried.
+ *   * `payloadDigest`    — sha256 OF the payload, never the payload. A digest
+ *                          is one-way; it is also exactly what the server
+ *                          compares to refuse a replayed key carrying a
+ *                          different intent, so it cannot be encrypted without
+ *                          losing replay suppression.
+ *
+ * WHAT MAY NEVER APPEAR IN ANY OF THEM: a customer name, a phone number, an
+ * amount, a note, or any other personal or financial datum. That is not a
+ * convention — [CleartextColumnExposureTest] writes all four into a payload
+ * and fails if any reaches a cleartext column, and its own leaky control
+ * proves the check can fail.
+ *
+ * `tests-unit/p7-02-cleartext-column-inventory.test.ts` asserts this list
+ * EQUALS [StoredRow]'s fields minus `sealedPayload` — so a column added to the
+ * row without being inventoried here fails, and so does an entry here that no
+ * longer corresponds to a column. Equality, both directions.
+ */
+val CLEARTEXT_COLUMNS: List<String> = listOf(
+    "idempotencyKey",
+    "schemaVersion",
+    "state",
+    "attempts",
+    "payloadDigest",
+)
+
+/**
  * Sealing for payload bytes. An implementation must be AUTHENTICATED: a cipher
  * without integrity lets a tampered payload decrypt to something, and a queue
  * row that silently changes meaning is worse than one that refuses.
