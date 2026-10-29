@@ -12,5 +12,5 @@
       "@daftar/shared-contracts": ["./packages/shared-contracts/src"]
     }
   },
-  "include": ["tests/**/*.ts", "vitest.config.ts", "scripts/**/*.ts"]
+  "include": ["tests/**/*.ts", "tests-unit/**/*.ts", "vitest.config.ts", "vitest.unit.config.ts", "scripts/**/*.ts"]
 }

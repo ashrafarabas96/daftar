@@ -91,3 +91,171 @@ export class RouteBudgets {
     return budget.take();
   }
 }
+
+/**
+ * Proof that the pacer is in front of EVERY proxied request, not merely in
+ * front of the ones we happened to think of.
+ *
+ * A budget only holds if nothing walks past it. The gate paces in a
+ * `context.route` handler, so a request that never reaches that handler is
+ * spent at the API without being counted here — and the first symptom of that
+ * is a 429 on the busiest route, which is indistinguishable from "the budget
+ * is set too high" unless the two numbers are kept apart and compared.
+ *
+ * So each proxied request is counted four ways, per route key:
+ *   seen      — the browser issued it (`page.on('request')`, which fires for
+ *               every request a page makes, intercepted or not)
+ *   paced     — the context handler charged a budget for it
+ *   fulfilled — a step answered it locally and it never reached the network
+ *   cancelled — the document navigated away before the handler ran, so it
+ *               never left the interception layer either
+ *
+ * `seen === paced + fulfilled + cancelled` for every key, always. A key where it does not
+ * hold names a request that reached the API unpaced, and the gate fails on it
+ * rather than reporting a clean run it cannot justify.
+ */
+/** Where a request was issued from, so an unpaced one can be named instead of merely counted. */
+export interface RequestOrigin {
+  readonly locale: string;
+  readonly viewport: string;
+  /** The step that was running, or `(between steps)` — which is itself a useful answer. */
+  readonly step: string;
+  readonly url: string;
+  readonly atMs: number;
+}
+
+export class RouteCoverage {
+  private readonly rows = new Map<string, { seen: number; paced: number; fulfilled: number; cancelled: number }>();
+  /**
+   * Every request seen, keyed by Playwright's own Request object — the same
+   * object the interceptor is handed, so "was this one paced?" is an identity
+   * question and not a counting one.
+   *
+   * Counts alone say a route is short by one; they cannot say WHICH one, and
+   * a single unpaced request out of a hundred is exactly the case where the
+   * difference between a real leak and a teardown artefact decides whether
+   * anything needs fixing.
+   */
+  private readonly pending = new Map<object, RequestOrigin & { route: string }>();
+  private readonly settled = new WeakSet<object>();
+
+  private row(key: string): { seen: number; paced: number; fulfilled: number; cancelled: number } {
+    let row = this.rows.get(key);
+    if (row === undefined) {
+      row = { seen: 0, paced: 0, fulfilled: 0, cancelled: 0 };
+      this.rows.set(key, row);
+    }
+    return row;
+  }
+
+  seen(method: string, pathname: string, token?: object, origin?: RequestOrigin): void {
+    const route = routeKey(method, pathname);
+    this.row(route).seen += 1;
+    if (token !== undefined && origin !== undefined) this.pending.set(token, { ...origin, route });
+  }
+
+  paced(method: string, pathname: string, token?: object): void {
+    this.row(routeKey(method, pathname)).paced += 1;
+    this.settle(token);
+  }
+
+  fulfilled(method: string, pathname: string, token?: object): void {
+    this.row(routeKey(method, pathname)).fulfilled += 1;
+    this.settle(token);
+  }
+
+  /**
+   * The browser abandoned this request because the document navigated away,
+   * so it never left the interception layer and never reached the API.
+   *
+   * This is NOT a hole in the pacing, and counting it as one fails the gate on
+   * a non-event: the context handler matches every `/api/proxy/` URL, and a
+   * URL it matches cannot reach the network except through it. The case the
+   * invariant exists to catch is the opposite one - a URL the handler does NOT
+   * match, which goes straight to the API and gets a response. That case never
+   * appears here, because a request that reached the API did not abort during
+   * interception.
+   *
+   * Counted rather than quietly settled, so an abort storm is visible in the
+   * table instead of hiding behind a clean `unpaced` line.
+   */
+  cancelled(method: string, pathname: string, token?: object): void {
+    if (token !== undefined && !this.pending.has(token)) return; // already paced, fulfilled, or never ours
+    this.row(routeKey(method, pathname)).cancelled += 1;
+    this.settle(token);
+  }
+
+  private settle(token: object | undefined): void {
+    if (token === undefined) return;
+    this.settled.add(token);
+    this.pending.delete(token);
+  }
+
+  /** The requests that were seen and never accounted for, each with where it came from. */
+  unaccounted(): (RequestOrigin & { route: string })[] {
+    return [...this.pending.values()].sort((a, b) => a.atMs - b.atMs);
+  }
+
+  /** Every route key with its three counts, busiest first — the gate prints this whether it passes or fails. */
+  table(): { route: string; seen: number; paced: number; fulfilled: number; cancelled: number; unpaced: number }[] {
+    return [...this.rows.entries()]
+      .map(([route, r]) => ({
+        route,
+        seen: r.seen,
+        paced: r.paced,
+        fulfilled: r.fulfilled,
+        cancelled: r.cancelled,
+        unpaced: r.seen - r.paced - r.fulfilled - r.cancelled,
+      }))
+      .sort((a, b) => b.seen - a.seen);
+  }
+
+  /** The keys where a request reached the API without being charged. Empty is the only acceptable answer. */
+  unpaced(): { route: string; unpaced: number }[] {
+    return this.table()
+      .filter((r) => r.unpaced !== 0)
+      .map((r) => ({ route: r.route, unpaced: r.unpaced }));
+  }
+}
+
+/**
+ * How long a page was held by the pacer, in wall-clock time.
+ *
+ * The gate throttles itself below the API's per-route allowance, so a request
+ * can sit in `RouteBudgets` until the route's window frees a slot - up to the
+ * whole window. A step deadline that counts that is measuring the harness, not
+ * the application. This is the quantity to discount, and it must be a UNION of
+ * blocked intervals, not a sum of each wait: requests on different routes wait
+ * at the same time, and summing them would exceed wall-clock and excuse time
+ * the page never lost.
+ *
+ * `now` is injected so the arithmetic can be tested without sleeping.
+ */
+export class BlockedClock {
+  private closed = 0;
+  private waiting = 0;
+  private since = 0;
+
+  constructor(private readonly now: () => number = Date.now) {}
+
+  /** A request has begun waiting on a budget. */
+  enter(): void {
+    if (this.waiting === 0) this.since = this.now();
+    this.waiting += 1;
+  }
+
+  /** A request has stopped waiting. The interval closes only when the LAST one leaves. */
+  leave(): void {
+    if (this.waiting === 0) throw new Error('BlockedClock.leave() without a matching enter()');
+    this.waiting -= 1;
+    if (this.waiting === 0) this.closed += this.now() - this.since;
+  }
+
+  /**
+   * Blocked milliseconds so far, including an interval still open - a deadline
+   * computed in the middle of a stall must not be short by exactly that stall.
+   */
+  elapsed(): number {
+    return this.waiting === 0 ? this.closed : this.closed + (this.now() - this.since);
+  }
+}

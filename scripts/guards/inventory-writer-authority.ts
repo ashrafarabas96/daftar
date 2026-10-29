@@ -95,7 +95,7 @@ const INVENTORY_PRINCIPAL = 'daftar_inventory_internal';
 
 /** Whether a migration path is after the Phase 2 prefix, i.e. a Phase 3 (or later) file. */
 export function isAfterPhase2Prefix(path: string): boolean {
-  return (path.split('/').pop() ?? path) > PHASE2_PREFIX_END;
+  return (path.split(/[\\/]/).pop() ?? path) > PHASE2_PREFIX_END;
 }
 
 /** Objects a GRANT can name that are not tables. */
@@ -305,7 +305,7 @@ const ANY_WRITE =
 function definitionHeader(migrations: Readonly<Record<string, string>>, stripped: Map<string, string>, d: InventoryRoutineDefinition): string {
   let text = stripped.get(d.file);
   if (text === undefined) {
-    const path = Object.keys(migrations).find((p) => (p.split('/').pop() ?? p) === d.file) ?? d.file;
+    const path = Object.keys(migrations).find((p) => (p.split(/[\\/]/).pop() ?? p) === d.file) ?? d.file;
     text = stripComments(migrations[path] ?? '');
     stripped.set(d.file, text);
   }

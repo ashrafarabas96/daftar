@@ -99,7 +99,7 @@ export const FLOAT_ARITHMETIC_EVASIVE =
   /\bMath\b\s*(?:\?\.|\.)\s*round\b|\bMath\b\s*\[|\bMath\b(?!\s*(?:\?\.|\.|\[))|\bNumber\b(?!\s*\??\.\s*is(?:Integer|SafeInteger|NaN|Finite)\b)|\btoFixed\b|\bparseFloat\b/;
 
 export function isInventoryMigration(path: string): boolean {
-  return /inventory/i.test(path.split('/').pop() ?? path);
+  return /inventory/i.test(path.split(/[\\/]/).pop() ?? path);
 }
 
 /**
