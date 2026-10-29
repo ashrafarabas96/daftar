@@ -231,7 +231,7 @@ async function main(): Promise<void> {
       await browser.close();
     }
     const table = coverage.table();
-    console.log('proxied requests per route — seen = paced + answered locally:');
+    console.log('proxied requests per route — seen = paced + answered locally + cancelled at a navigation:');
     for (const r of table.slice(0, 12))
       console.log(
         `  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.cancelled === 0 ? '' : `, cancelled ${r.cancelled}`}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`,

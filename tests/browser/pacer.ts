@@ -102,7 +102,7 @@ export class RouteBudgets {
  * is a 429 on the busiest route, which is indistinguishable from "the budget
  * is set too high" unless the two numbers are kept apart and compared.
  *
- * So each proxied request is counted three ways, per route key:
+ * So each proxied request is counted four ways, per route key:
  *   seen      — the browser issued it (`page.on('request')`, which fires for
  *               every request a page makes, intercepted or not)
  *   paced     — the context handler charged a budget for it

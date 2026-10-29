@@ -30,12 +30,23 @@ by a wide margin. The API allows 300 per client and route handler per minute
    before — no random sleeps.
 2. **The API's limit is not changed, no timeout is raised, and no assertion,
    screen, locale or viewport is dropped.**
-3. **Coverage is proved, not assumed.** Every proxied request is counted three
-   ways per route — seen by the page, charged by the pacer, or answered
-   locally by a step — and `seen = paced + local` must hold for every route or
-   the gate fails and names it. A wider margin alone would have bought a green
-   run while leaving an unpaced path in place, which is the failure this
-   check exists to prevent.
+3. **Coverage is proved, not assumed.** Every proxied request is counted four
+   ways per route — seen by the page, charged by the pacer, answered locally
+   by a step, or cancelled — and `seen = paced + local + cancelled` must hold
+   for every route or the gate fails and names it. A wider margin alone would
+   have bought a green run while leaving an unpaced path in place, which is
+   the failure this check exists to prevent.
+
+   `cancelled` is the one tolerated term, and it is narrow on purpose: the
+   browser abandoned the request because the document navigated, so it never
+   left the interception layer and never reached the API. It is counted and
+   printed, not swallowed, and it is refused for a request already charged or
+   already answered — so an abort arriving after the fact can never absorb a
+   real hole on the same route. It was added for two measured requests on
+   `GET /api/proxy/inventory/stock` in `starting-stock`, a step that reloads.
+   Read the identity with all four terms: a reviewer who checks this proof
+   against three terms will not know `cancelled` exists and will not scrutinise
+   it, which is the one place in this design where that matters.
 4. **A negative control exists.** `BROWSER_GATE_NO_PACING=1` removes the
    waiting and keeps the interception, so a control run meets the limiter
    while the counts stay exact. Never set in CI's own gate steps.
@@ -56,6 +67,14 @@ left open for whichever card owns that file.
 
 ## Evidence owed before this is accepted
 
-- Three consecutive clean browser-gate runs on the self-hosted runner.
+- Three consecutive clean browser-gate runs on GitHub-hosted runners.
+
+  This said "on the self-hosted runner" when it was written. DO NOT satisfy it
+  that way. DR-48 made this repository public and deleted both runners, and
+  `2026-10-28-public-repository-for-ci.md` states why a self-hosted runner may
+  not exist on a public one: a public repository accepts pull requests from
+  forks, and a fork's pull request would run unreviewed code on the owner's
+  own machine. Re-registering a runner to collect this evidence would be doing
+  the thing that document forbids, in order to tick a box in this one.
 - One control run with `BROWSER_GATE_NO_PACING=1` that goes red on 429.
 - The per-route coverage table, with no unpaced route, on each of them.
