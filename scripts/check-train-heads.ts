@@ -56,8 +56,42 @@ export function classify(local: string | null, origin: string | null, isAncestor
   return originIsBehind ? 'local-ahead' : 'diverged';
 }
 
+/**
+ * The one git invocation in this file.
+ *
+ * It needs a fallback for the archive case, because `tests/security/
+ * archive-portability.test.ts` holds every git call under `scripts/**` to a
+ * `DELIVERY_MANIFEST.json` branch or a try/catch — and that law is right here:
+ * an extracted delivery archive has no `.git`, so `git` may not resolve at
+ * all.
+ *
+ * The fallback does NOT degrade to a pass. This tool answers "does origin
+ * agree with the local checkout", and without a repository that question has
+ * no answer, so the only honest outcome is to fail loudly and say why. A
+ * comparator that reports "fine" when it could not compare is the exact defect
+ * this tool exists to prevent.
+ *
+ * Everything that is not git's absence is rethrown UNCHANGED, because callers
+ * read git's own exit status: `originHead` treats `ls-remote --exit-code`
+ * status 2 as "no such ref" and anything else as a real failure. Wrapping
+ * those would turn a network or auth failure into "absent on origin", which is
+ * the same false pass by another road.
+ */
 function git(args: string[]): string {
-  return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  try {
+    return execFileSync('git', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === 'ENOENT') {
+      throw new Error(
+        'check-train-heads needs a git repository: `git` could not be executed. ' +
+          'This tool compares a branch head on origin with the head in this checkout, ' +
+          'so outside a repository there is nothing to compare and no answer to give. ' +
+          'Run it from the repository, not from an extracted delivery archive.',
+      );
+    }
+    throw e;
+  }
 }
 
 function localHead(branch: string): string | null {
