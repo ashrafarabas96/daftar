@@ -183,16 +183,21 @@ jobs:
     needs: workspaces
     # CI-RUNNER-01 (DR-17). This is the heaviest job in the workflow — 442 of
     # the 789 billable minutes measured on 2026-10-26, 56% of the total — and
-    # it is the one whose evidence the phase gates depend on. It now runs on
-    # the owner's own machine, in a WSL2 Ubuntu 24.04 runner labelled
-    # `daftar-wsl`.
+    # it is the one whose evidence the phase gates depend on. CI-RUNNER-01
+    # moved it to the owner's own machine, a WSL2 Ubuntu 24.04 runner labelled
+    # `daftar-wsl`; DR-48 moved it back, and it runs on `ubuntu-latest` below.
+    # This paragraph is the history, not the present state — it is the one job
+    # header that said "it now runs on the owner's own machine" directly above
+    # `runs-on: ubuntu-latest` after DR-48, which a reader could act on by
+    # reaching for a self-hosted runner. On a public repository that is the one
+    # thing this workflow's decision record forbids outright.
     #
-    # Nothing else in this job changed: not a step, not a gate, not a
-    # `--max-warnings`, not the Lint heap ceiling, not the service container.
-    # The `services:` block below still brings up a throwaway `postgres:16`
-    # through Docker and still publishes 5432, so every `psql
+    # Nothing else in this job changed by either move: not a step, not a gate,
+    # not a `--max-warnings`, not the Lint heap ceiling, not the service
+    # container. The `services:` block below still brings up a throwaway
+    # `postgres:16` through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
-    # exactly as it did on `ubuntu-latest`.
+    # exactly as it did on the self-hosted runner.
     runs-on: ubuntu-latest
     services:
       postgres:
