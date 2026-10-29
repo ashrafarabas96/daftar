@@ -49,7 +49,8 @@ would have discarded a true report to protect a wrong tool.
 
 ## Clause 3 is already enforced by construction, and measured
 
-`tests/browser/run-context.ts:173` records a `csp` issue for any
+`tests/browser/run-context.ts` records a `csp` issue — in the `console`
+handler, ahead of the `console-error` branch — for any
 CSP-violation text **unconditionally** — it sits outside the `isExpected`
 URL filter that `console-error` on the next line passes through. Any recorded
 issue fails the run's verdict. So a CSP violation cannot be suppressed by the

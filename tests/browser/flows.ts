@@ -77,6 +77,15 @@ async function waitForFocusTarget(run: Run, predicate: string, what: string): Pr
   // route the pages read most was at 92% of its 240/min budget, and when that
   // window saturates `SlidingBudget.take()` waits for the oldest entry to age
   // out. The harness was racing itself.
+  // The limit, stated rather than left to be discovered: the allowance grows
+  // one-for-one with an OPEN hold, so a page whose request the pacer never
+  // releases has no deadline of its own and is bounded only by the job's
+  // `timeout-minutes`. That is the correct shape - a page held by the harness
+  // has not been measured, and failing it would be reporting a result nobody
+  // took - but it means a wedged budget shows up as a job timeout rather than
+  // as this step's named failure. With the locales running one at a time the
+  // largest hold measured in a whole run is 2ms, so this is a property to know
+  // about, not a risk being run.
   const start = Date.now();
   const pacedAtStart = run.pacedWaitMs();
   const allowed = (): number => 20_000 + (run.pacedWaitMs() - pacedAtStart);

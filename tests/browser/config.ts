@@ -70,8 +70,9 @@ export const LOGIN_PER_ACCOUNT_BUDGET = 9; // API: 10 per address and account pe
 export const ROUTE_WINDOW_MS = 60_000;
 /**
  * API: 300 per client and route handler per minute. The margin was 10% and it
- * was not enough: on a 20-core self-hosted runner the gate drives the matrix
- * several times faster than the 4-core hosted runner it was tuned on, and
+ * was not enough: on the 20-core self-hosted runner this repository used at
+ * the time, the gate drove the matrix several times faster than the 4-core
+ * hosted runner it was tuned on, and
  * `GET /api/proxy/inventory/access` — the one route the header AND four page
  * modules each read, so the busiest by a wide margin — answered 429 twelve
  * times in one run. The budget is now 80% of the allowance, so the margin is
