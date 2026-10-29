@@ -213,7 +213,19 @@ export class Run {
     page.on('requestfailed', (r) => {
       const failure = r.failure()?.errorText ?? '';
       // A fetch the browser abandons because the document navigated is not a failure of the app.
-      if (failure.includes('ERR_ABORTED') || this.isExpected(r.url())) return;
+      if (failure.includes('ERR_ABORTED') || this.isExpected(r.url())) {
+        // ... and it is not a hole in the pacing either. `page.on('request')`
+        // already counted it as seen; if the navigation beat the context's
+        // route handler to it, nothing will ever pace it and the gate would
+        // report it as having reached the API without a budget - which it did
+        // not, because it never left the interception layer. Settling it here
+        // is what keeps that line about real holes. Measured on run
+        // 40864085275: two such requests, both `GET /api/proxy/inventory/stock`
+        // issued in `starting-stock`, whose first act is `run.reload()`.
+        if (failure.includes('ERR_ABORTED') && r.url().startsWith(`${base}/api/proxy/`))
+          this.o.budgets.coverage.cancelled(r.method(), new URL(r.url()).pathname, r);
+        return;
+      }
       this.record('network', `${r.method()} ${r.url().replace(base, '')} ${failure}`);
     });
     page.on('response', (r) => {
