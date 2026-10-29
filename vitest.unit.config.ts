@@ -14,13 +14,17 @@ import { defineConfig } from 'vitest/config';
  *
  * Run it with:
  *
- *     npx vitest run --config vitest.unit.config.ts
+ *     npm run test:unit
  *
- * It is deliberately NOT registered as an npm script yet: the root
- * `package.json` is owned by the open T-10 branch (PR #9), and one writer per
- * file. Wiring `test:unit` into `npm test` — which is what gets this lane into
- * CI — is a follow-up card that unblocks once T-10 merges. Until then this
- * lane is run by hand and its exit codes are the recorded evidence.
+ * It is registered as a root script AND composed into `npm test`, which is the
+ * step `ci.yml` runs — so this lane executes on every CI run, not by hand.
+ *
+ * It did not start that way. When this file was written the root
+ * `package.json` was owned by the open T-10 branch (PR #9), so the lane was
+ * run by hand and its exit codes were the evidence. T-10 has since merged and
+ * the wiring followed. DO NOT read the old arrangement as the current one:
+ * `tests-unit/test-lane-roster.test.ts` now fails if `test:unit` leaves the
+ * `npm test` chain, so the wiring cannot quietly come undone.
  */
 export default defineConfig({
   test: {

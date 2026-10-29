@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classify, main, selfTest } from '../../scripts/check-train-heads';
+import { classify, main, selfTest } from '../scripts/check-train-heads';
 
 // The comparator behind `npm run check:train-heads` (DR-62 item 3).
 describe('train head guard', () => {

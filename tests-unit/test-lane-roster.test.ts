@@ -203,12 +203,43 @@ describe('the test-lane roster', () => {
     expect(unreached, unreached.join('; ')).toEqual([]);
   });
 
-  it('every rostered script is referenced by ci.yml or by a gate script, not merely runnable by hand', () => {
+  it('every rostered script is REACHED by ci.yml or a gate script, directly or through composition', () => {
+    // Being named in `ci.yml` is one route. Composition is another and just as
+    // real: `ci.yml` runs `npm test`, and `npm test` ends in
+    // `&& npm run test:unit`. Demanding the literal name would have called that
+    // lane an orphan while CI ran it on every push — a false alarm, and the
+    // kind that gets a law disabled. So the question asked is the true one:
+    // starting from what CI and the gates name, can we reach this script by
+    // following `npm run <x>` through the root scripts?
+    const s = scripts();
     const text = invokerText();
+
+    const reached = new Set<string>(Object.keys(s).filter((name) => text.includes(name)));
+    // Transitive closure over `npm run <x>` inside the root script commands.
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const name of [...reached]) {
+        for (const m of (s[name] ?? '').matchAll(/npm run ([A-Za-z0-9:_-]+)/g)) {
+          const next = m[1];
+          if (next !== undefined && next in s && !reached.has(next)) {
+            reached.add(next);
+            grew = true;
+          }
+        }
+      }
+    }
+
+    // The probe must find things, or "reached" would be trivially satisfied by
+    // nothing and this law would pass on an empty set forever.
+    expect(reached.size, 'the reachability probe found no scripts at all').toBeGreaterThan(3);
+
     const orphans = ROSTER.map((r) => r.script)
       .filter((v, i, a) => a.indexOf(v) === i)
-      .filter((script) => !text.includes(script))
-      .map((script) => `${script} is declared but neither ci.yml nor any scripts/*.ts calls it`);
+      .filter((script) => !reached.has(script))
+      .map(
+        (script) =>
+          `${script} is declared but nothing in ci.yml or scripts/*.ts reaches it, directly or by composition`,
+      );
     expect(orphans, orphans.join('; ')).toEqual([]);
   });
 

@@ -16,7 +16,8 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web",
+    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web && npm run test:unit",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run tests/integration tests/security",
     "test:golden": "vitest run tests/golden-regression",
     "perf:baseline": "vitest run tests/perf",
