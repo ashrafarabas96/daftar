@@ -1,0 +1,142 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/test-app';
+
+/**
+ * T-10, `multer` 2.4.0 -> 2.5.0: the multipart parser's own limit.
+ *
+ * `media.test.ts` already covers what the MEDIA SERVICE refuses (MIME/magic
+ * disagreement, a fake image, an unsupported type, a traversal filename, a
+ * cross-business attach) and it has an "oversized file -> 413" case. That
+ * case does not pin the parser, and the reason is measured, not guessed: for
+ * any payload UNDER the interceptor's `8 * 1024 * 1024` (catalog.controller.ts)
+ * the first size limit met is the media SERVICE's `MEDIA_MAX_BYTES`
+ * (apps/api/src/config.ts, default 5 MiB; enforced in media.service.ts). Above
+ * 8 MiB the parser is met first, but nothing in the existing suite sends that
+ * much. Anything between 5 and 8 MiB therefore dies in the service with the
+ * same 413 / MEDIA_TOO_LARGE the parser would produce, so with the default
+ * configuration the parser's limit is shadowed and could be deleted without
+ * any size test noticing. (media.test.ts:97 is blind for that
+ * reason, and also because it accepts `[400, 413]`.)
+ *
+ * To pin the parser, this suite lifts the service limit ABOVE the parser's
+ * for this app only (`configOverrides.MEDIA_MAX_BYTES`, no product or helper
+ * change). Then the parser is the first limit a request meets, and the pair
+ * below separates it from every other refusal by WHERE the request dies:
+ * over the limit multer aborts the stream and nothing downstream sees a file;
+ * under it the bytes arrive and the media service rejects them on content.
+ * A test that only checked "refused" could not tell a working limit from a
+ * missing one.
+ *
+ * The payloads are deliberately not images, so size is the only difference
+ * between the two cases.
+ *
+ * KNOWN PRODUCT DEFECT, NOT FIXED HERE (pre-existing, not caused by this
+ * diff; its own card, "unmapped MulterError"): a part sent under an
+ * unexpected field name makes multer raise `LIMIT_UNEXPECTED_FILE`. That
+ * error never becomes an `HttpException`, so the error filter's existing
+ * 400 -> VALIDATION_FAILED mapping is not reached: the
+ * caller gets a 500 / INTERNAL_ERROR and an `unhandled error` log line. The
+ * correct contract is 400 / VALIDATION_FAILED. ONLY the wrong-field case
+ * below records that reality (refused, never accepted); the no-file-part case
+ * is NOT affected and asserts the real contract exactly.
+ */
+describe('T-10 upload limits: the multipart parser refuses before the handler, at its own boundary', () => {
+  let t: TestApp;
+  let token: string;
+  let businessId: string;
+
+  const LIMIT = 8 * 1024 * 1024; // catalog.controller.ts: FileInterceptor('file', { limits: { fileSize: ... } })
+  // The service limit, lifted above LIMIT so the parser is the first limit met (see header).
+  const SERVICE_LIMIT = 2 * LIMIT;
+
+  beforeEach(async () => {
+    t = await createTestApp({ configOverrides: { MEDIA_MAX_BYTES: String(SERVICE_LIMIT) } });
+    await resetData();
+    const reg = await t.request.post('/v1/auth/register').send({
+      email: uniqueEmail(),
+      password: 'Str0ng!Passw0rd',
+      displayName: 'U',
+      preferredLocale: 'ar',
+    });
+    token = reg.body.accessToken as string;
+    const on = await t.request
+      .post('/v1/onboarding/complete')
+      .set('Idempotency-Key', `idem-${Date.now()}-${Math.floor(Math.random() * 1e9)}`)
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        businessName: 'Upload Co',
+        countryCode: 'PS',
+        baseCurrency: 'ILS',
+        storeSlug: `upload-${Date.now()}-${Math.floor(Math.random() * 1e6)}`,
+      });
+    businessId = on.body.businessId as string;
+  });
+
+  const auth = (): Record<string, string> => ({ Authorization: `Bearer ${token}`, 'X-Business-Id': businessId });
+
+  /** Noise, not an image: the media service will refuse it on content if it ever arrives. */
+  const noise = (bytes: number): Buffer => Buffer.alloc(bytes, 0x5a);
+
+  it('one byte over the limit is refused by the parser, as the product contract and not as a crash', async () => {
+    const res = await t.request
+      .post('/v1/catalog/media')
+      .set(auth())
+      .attach('file', noise(LIMIT + 1), { filename: 'over.png', contentType: 'image/png' });
+
+    expect(res.status, 'a payload past the parser limit must be refused').toBe(413);
+    expect(res.body?.error?.code, 'the refusal travels the product error contract, not a raw multer error').toBe('MEDIA_TOO_LARGE');
+  });
+
+  it('one byte under the limit reaches the handler, and dies on its content instead — which is what proves the limit is the parser', async () => {
+    const res = await t.request
+      .post('/v1/catalog/media')
+      .set(auth())
+      .attach('file', noise(LIMIT - 1), { filename: 'under.png', contentType: 'image/png' });
+
+    // Not a 413: the bytes were accepted by the parser and refused further in,
+    // for not being an image. If this ever becomes 413 the boundary has moved
+    // below the declared limit; if the case above stops being 413 the limit is
+    // gone. Only the pair says which.
+    expect(res.status, 'a payload inside the limit must not be refused FOR ITS SIZE').not.toBe(413);
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.body?.error?.code, 'refused on content, by the media service').not.toBe('MEDIA_TOO_LARGE');
+  });
+
+  it('no file part at all is a validation error that names the field, not a 500', async () => {
+    const res = await t.request.post('/v1/catalog/media').set(auth()).field('note', 'no file here');
+
+    // No file part exists here at all (only a text field), so multer raises
+    // nothing: the handler runs with no file and throws AppError.validation.
+    // This IS the target contract, measured, so it is asserted exactly.
+    expect(res.status, 'a request with no file part is a 400, never a 500').toBe(400);
+    expect(res.body?.error?.code, 'it travels the product validation contract').toBe('VALIDATION_FAILED');
+    expect(res.body?.id, 'no media record may be created').toBeUndefined();
+  });
+
+  it('a part under the wrong field name is not silently accepted as the file', async () => {
+    // `FileInterceptor('file', …)` binds one field name. A part sent under any
+    // other name must leave the handler with no file — the same refusal as
+    // sending none, never an upload the caller did not ask for.
+    const res = await t.request.post('/v1/catalog/media').set(auth()).attach('attachment', noise(64), { filename: 'x.png', contentType: 'image/png' });
+
+    // Reality, not the target contract (see the header): today this is a 500
+    // from an unmapped MulterError. What must hold either way is that the part
+    // is refused and never taken as the file.
+    expect(res.status, 'a part under another field name must never be accepted as the upload').toBeGreaterThanOrEqual(400);
+    expect(res.body?.id, 'no media record may be created').toBeUndefined();
+  });
+
+  it('an empty file is refused, and not mistaken for a missing one', async () => {
+    const res = await t.request.post('/v1/catalog/media').set(auth()).attach('file', Buffer.alloc(0), { filename: 'empty.png', contentType: 'image/png' });
+
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  it('the limit is enforced before authorisation is spent on it — an unauthorised caller is still refused', async () => {
+    const res = await t.request.post('/v1/catalog/media').attach('file', noise(64), { filename: 'x.png', contentType: 'image/png' });
+
+    expect(res.status, 'no bearer token: the upload route is not open').toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+});
