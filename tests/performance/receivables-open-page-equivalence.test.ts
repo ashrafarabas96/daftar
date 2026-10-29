@@ -56,6 +56,7 @@ import { Client, Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PG_PORT, PG_USER, PG_PASSWORD, applyBootstrap, startOrReuse } from '../helpers/embedded-cluster';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
+import { routineBody, stripSqlComments, stripTsComments } from '../../scripts/phase4-s4-gate';
 import { planEvidenceBanner, readPlanEvidenceEnvironment } from '../helpers/plan-evidence-env';
 import {
   CANONICAL_SQL,
@@ -667,7 +668,82 @@ describe('P4-S4 0084 — the open-invoice page reader', () => {
 
   // ───── §11, the standing that makes the oracle an oracle ────────────────
 
-  it('§11 the oracle is test-only: no file under apps/api filters on the settlement function’s output', () => {
+  /**
+   * DR-68. THE SUBJECT OF THIS LAW IS BEHAVIOUR, AND BEHAVIOUR LIVES IN SQL.
+   *
+   * What stood here before matched the RAW TEXT of every `.ts` file under
+   * `apps/api`, and raw text includes PROSE. The single match on the whole
+   * estate was a doc comment in `customer-reads.ts` saying — accurately, and
+   * measured against `0084` — that `customer_open_invoices_page` filters on
+   * `outstanding_txn_minor <> 0` and not `> 0`. A law a TRUE SENTENCE can
+   * break is not measuring the thing it is named for; it is measuring who
+   * wrote prose last. The remedy is the one this tree already takes
+   * elsewhere: match the CODE, by stripping the prose with the stripper that
+   * already exists rather than adding a second copy of one.
+   *
+   * So the law now has two limbs, and the first one is the behaviour itself:
+   *
+   *   LIMB 1, POSITIVE. `customer_open_invoices_page`'s installed body
+   *   applies the predicate INSIDE the statement, against the set-based
+   *   `invoice_outstanding(...)` join. That is what lets `LIMIT`
+   *   short-circuit, and it is the fact the oracle exists to be measured
+   *   against. Asserting it POSITIVELY gives the law a subject it can lose:
+   *   delete the filter and this reddens.
+   *
+   *   LIMB 2, NEGATIVE. The oracle stays test-only: no file under `apps/api`
+   *   re-applies that predicate to the function's OUTPUT, which is the shape
+   *   that stops `LIMIT` short-circuiting. This is the old claim, now read
+   *   off code and not off prose.
+   *
+   * ── WHY STRING LITERALS ARE KEPT IN THE TypeScript LIMB ──────────────────
+   *
+   * `stripTsComments` removes comments and leaves string literals standing,
+   * and here that is REQUIRED and not merely tolerated. A production offender
+   * would be SQL, and SQL in this estate lives inside a TEMPLATE LITERAL —
+   * `customer-reads.ts:889` reads this very page from exactly such a literal.
+   * Stripping literals as well would leave limb 2 unable to match any
+   * offender that could ever exist: a green check with no subject, which is
+   * the defect this batch was opened to remove, arriving by the other door.
+   * So the limb strips prose and nothing else, and says so here.
+   */
+
+  /** The defect's exact signature, read off code: the page's business predicate applied to the settlement figure. */
+  const SETTLEMENT_PREDICATE = /outstanding_txn_minor\s*<>\s*0/;
+
+  /**
+   * Does this TypeScript CODE re-apply the page predicate to the settlement
+   * function's output? Prose is removed first; literals are kept, for the
+   * reason stated above. Kept as a function so the control limb below can ask
+   * it about text it plants, instead of asserting a regex about a regex.
+   */
+  const filtersSettlementOutput = (tsSource: string): boolean => SETTLEMENT_PREDICATE.test(stripTsComments(tsSource));
+
+  /** The migration surface, joined in migration order, which is what `routineBody` requires of its callers. */
+  const migrationSurface = (): string =>
+    readdirSync(MIGRATIONS_DIR)
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((f) => readFileSync(join(MIGRATIONS_DIR, f), 'utf8'))
+      .join('\n');
+
+  it('§11 the page pushes its predicate into SQL, and no file under apps/api filters on the settlement function’s output', () => {
+    // ── LIMB 1, the behaviour ─────────────────────────────────────────────
+    //
+    // `routineBody` returns the LAST definition, which is the installed one,
+    // and returns null when it cannot read a body at all — which is a FINDING
+    // and not a routine to skip, so it is asserted and not defaulted away.
+    const body = routineBody(migrationSurface(), 'customer_open_invoices_page');
+    expect(body, 'customer_open_invoices_page has no readable body in the migration surface, which is a finding and not an absence').not.toBeNull();
+    const pageSql = stripSqlComments(body as string);
+    expect(
+      SETTLEMENT_PREDICATE.test(pageSql),
+      'customer_open_invoices_page no longer filters the settlement output INSIDE SQL, so LIMIT cannot short-circuit and the page can come back short',
+    ).toBe(true);
+    // And against THE ONE DEFINITION's output, not a second copy of the
+    // settlement sum computed inside the routine.
+    expect(/invoice_outstanding\s*\(/i.test(pageSql), 'the page no longer calls the one definition set-based').toBe(true);
+
+    // ── LIMB 2, the standing that makes the oracle an oracle ──────────────
     const root = join(__dirname, '../../apps/api/src');
     const offenders: string[] = [];
     const walk = (dir: string): void => {
@@ -678,17 +754,63 @@ describe('P4-S4 0084 — the open-invoice page reader', () => {
           continue;
         }
         if (!path.endsWith('.ts')) continue;
-        const text = readFileSync(path, 'utf8');
-        // The defect's exact signature: the page's business predicate applied
-        // to `invoice_outstanding`'s OUTPUT, which is what stops `LIMIT` from
-        // short-circuiting. The single-invoice settlement read at
-        // `invoice-reads.ts` keeps its `LATERAL` and is not this shape: it is
-        // predicated on the primary key, so its lateral runs once.
-        if (/outstanding_txn_minor\s*<>\s*0/.test(text)) offenders.push(path);
+        // The single-invoice settlement read at `invoice-reads.ts` keeps its
+        // `LATERAL` and is not this shape: it is predicated on the primary
+        // key, so its lateral runs once.
+        if (filtersSettlementOutput(readFileSync(path, 'utf8'))) offenders.push(path);
       }
     };
     walk(root);
     expect(offenders, `these files still filter on the settlement function's output: ${offenders.join(', ')}`).toEqual([]);
+  });
+
+  /**
+   * THE POSITIVE CONTROL THE LAW ABOVE HAS NEVER HAD (DR-68 §3, DR-55).
+   *
+   * A law asserting a presence can rot into a law asserting nothing, and the
+   * only thing that keeps it honest is a plant that makes it fail. Both limbs
+   * get one, and each plant is asserted to have APPLIED before its result is
+   * read — a substitution that matched nothing would otherwise be reported as
+   * a passing control, which is how a dead guard looks from the outside.
+   *
+   * The second arm of each is the whole point of DR-68: the text left behind
+   * IN A COMMENT must not revive the law. That is the exact state the estate
+   * is in today — `customer-reads.ts` describes the filter in prose, and
+   * `0084` itself carries the defect's shape at line 197 as a `--` comment
+   * marked `<-- THE DEFECT`.
+   */
+  it('§11 both limbs redden when the code loses the filter, and a comment does not revive either', () => {
+    // ── LIMB 1's control: delete the filter, leave its text as a comment ──
+    const body = routineBody(migrationSurface(), 'customer_open_invoices_page');
+    expect(body).not.toBeNull();
+    const live = body as string;
+    const planted = live.replace(/WHERE\s+o\.outstanding_txn_minor\s*<>\s*0/i, '-- WHERE o.outstanding_txn_minor <> 0');
+    expect(planted, 'the limb-1 plant matched nothing, so this control measured the unmodified body').not.toBe(live);
+    expect(SETTLEMENT_PREDICATE.test(planted), 'the planted text must survive in prose, or this control is testing deletion and not comment-blindness').toBe(
+      true,
+    );
+    expect(SETTLEMENT_PREDICATE.test(stripSqlComments(planted)), 'the SQL limb accepted a body whose only remaining filter is a comment').toBe(false);
+
+    // ── LIMB 2's control: the forbidden shape as live code, then as prose ──
+    const asCode = 'const sql = `SELECT 1 FROM invoice_outstanding($1, $2) o WHERE o.outstanding_txn_minor <> 0`;\n';
+    expect(filtersSettlementOutput(asCode), 'the TypeScript limb no longer catches the defect written as live code').toBe(true);
+    // The real file's shape: the same words, in a DOC COMMENT. This is the
+    // sentence that failed the old law, and it must not fail this one.
+    //
+    // The fixture carries its `/**` and `*/`, and that is not decoration: the
+    // first draft of this control passed the `* …` BODY LINES alone and the
+    // limb called them code — correctly, because a `*`-prefixed line with no
+    // opener is not a comment to any stripper, and cannot occur in a file
+    // TypeScript accepts. A fixture that misstates its subject measures the
+    // fixture.
+    const asProse = ['/**', ' * `customer_open_invoices_page` filters on `outstanding_txn_minor <> 0`,', ' * NOT `> 0` (measured in `0084`).', ' */', ''].join(
+      '\n',
+    );
+    expect(SETTLEMENT_PREDICATE.test(asProse), 'the prose fixture no longer contains the words, so this control proves nothing').toBe(true);
+    expect(filtersSettlementOutput(asProse), 'the TypeScript limb still reads a doc comment as code').toBe(false);
+    // And a `//` comment, which is the other spelling a stripper can miss.
+    const asLineComment = '// outstanding_txn_minor <> 0 is what the page filters on.\n';
+    expect(filtersSettlementOutput(asLineComment), 'the TypeScript limb still reads a line comment as code').toBe(false);
   });
 
   it('§11 the reader has exactly ONE owning migration, and every serial past the frozen floor is a candidate', () => {
