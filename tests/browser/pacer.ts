@@ -107,8 +107,10 @@ export class RouteBudgets {
  *               every request a page makes, intercepted or not)
  *   paced     — the context handler charged a budget for it
  *   fulfilled — a step answered it locally and it never reached the network
+ *   cancelled — the document navigated away before the handler ran, so it
+ *               never left the interception layer either
  *
- * `seen === paced + fulfilled` for every key, always. A key where it does not
+ * `seen === paced + fulfilled + cancelled` for every key, always. A key where it does not
  * hold names a request that reached the API unpaced, and the gate fails on it
  * rather than reporting a clean run it cannot justify.
  */
@@ -123,7 +125,7 @@ export interface RequestOrigin {
 }
 
 export class RouteCoverage {
-  private readonly rows = new Map<string, { seen: number; paced: number; fulfilled: number }>();
+  private readonly rows = new Map<string, { seen: number; paced: number; fulfilled: number; cancelled: number }>();
   /**
    * Every request seen, keyed by Playwright's own Request object — the same
    * object the interceptor is handed, so "was this one paced?" is an identity
@@ -137,10 +139,10 @@ export class RouteCoverage {
   private readonly pending = new Map<object, RequestOrigin & { route: string }>();
   private readonly settled = new WeakSet<object>();
 
-  private row(key: string): { seen: number; paced: number; fulfilled: number } {
+  private row(key: string): { seen: number; paced: number; fulfilled: number; cancelled: number } {
     let row = this.rows.get(key);
     if (row === undefined) {
-      row = { seen: 0, paced: 0, fulfilled: 0 };
+      row = { seen: 0, paced: 0, fulfilled: 0, cancelled: 0 };
       this.rows.set(key, row);
     }
     return row;
@@ -162,6 +164,27 @@ export class RouteCoverage {
     this.settle(token);
   }
 
+  /**
+   * The browser abandoned this request because the document navigated away,
+   * so it never left the interception layer and never reached the API.
+   *
+   * This is NOT a hole in the pacing, and counting it as one fails the gate on
+   * a non-event: the context handler matches every `/api/proxy/` URL, and a
+   * URL it matches cannot reach the network except through it. The case the
+   * invariant exists to catch is the opposite one - a URL the handler does NOT
+   * match, which goes straight to the API and gets a response. That case never
+   * appears here, because a request that reached the API did not abort during
+   * interception.
+   *
+   * Counted rather than quietly settled, so an abort storm is visible in the
+   * table instead of hiding behind a clean `unpaced` line.
+   */
+  cancelled(method: string, pathname: string, token?: object): void {
+    if (token !== undefined && !this.pending.has(token)) return; // already paced, fulfilled, or never ours
+    this.row(routeKey(method, pathname)).cancelled += 1;
+    this.settle(token);
+  }
+
   private settle(token: object | undefined): void {
     if (token === undefined) return;
     this.settled.add(token);
@@ -174,9 +197,16 @@ export class RouteCoverage {
   }
 
   /** Every route key with its three counts, busiest first — the gate prints this whether it passes or fails. */
-  table(): { route: string; seen: number; paced: number; fulfilled: number; unpaced: number }[] {
+  table(): { route: string; seen: number; paced: number; fulfilled: number; cancelled: number; unpaced: number }[] {
     return [...this.rows.entries()]
-      .map(([route, r]) => ({ route, seen: r.seen, paced: r.paced, fulfilled: r.fulfilled, unpaced: r.seen - r.paced - r.fulfilled }))
+      .map(([route, r]) => ({
+        route,
+        seen: r.seen,
+        paced: r.paced,
+        fulfilled: r.fulfilled,
+        cancelled: r.cancelled,
+        unpaced: r.seen - r.paced - r.fulfilled - r.cancelled,
+      }))
       .sort((a, b) => b.seen - a.seen);
   }
 

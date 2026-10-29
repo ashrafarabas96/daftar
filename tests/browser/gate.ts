@@ -27,7 +27,7 @@
  *                               inject defects the gate must report (red proof);
  *                               with --plant the exit code is 0 only when EVERY
  *                               planted kind was reported in EVERY run
- *   --workers=N                 locales run in parallel (default 3)
+ *   --workers=N                 locales run in parallel (default 1 - see below)
  *   --out=DIR                   evidence directory (default release/browser)
  *   --build                     build the API and the web app first
  *
@@ -90,7 +90,27 @@ function parseArgs(argv: readonly string[]): Options {
   const viewportNames = VIEWPORTS.map((v) => v.name);
   const pickedViewports = listOf('viewports', viewportNames);
   const plantRaw = value('plant');
-  const workers = Number(value('workers') ?? '3');
+  // ONE locale at a time, by measurement.
+  //
+  // The gate paces itself to ROUTE_BUDGET requests per route per minute so it
+  // never meets a limit a real merchant would not meet. Three locales at once
+  // ask for far more than that on the busiest routes, so `SlidingBudget` holds
+  // the overflow - and the gate then spends its own deadlines waiting for
+  // itself. Measured on run 40864085275: the pacer held pages' requests for
+  // 122,279ms across 43 of 135 steps, up to 20,822ms in a single step
+  // (`en 768px receive`, 22,578ms long), and two steps failed on 20s locator
+  // timeouts with 429s, CSP violations and app errors all at zero.
+  //
+  // Serially the same nine runs issue the same requests over roughly three
+  // times the wall-clock, which puts every route comfortably under its budget
+  // and leaves the waiting with nothing to do. Nothing is weakened: the same
+  // three locales, the same three viewports, the same steps and the same
+  // assertions, and the budgets are still shared across all nine runs. What
+  // changes is only how many browsers are open at once.
+  //
+  // `--workers=3` is still available for anyone who wants the old shape; it is
+  // not the default because it makes the gate measure itself.
+  const workers = Number(value('workers') ?? '1');
   if (!Number.isInteger(workers) || workers < 1) throw new Error('--workers must be a positive integer');
   return {
     locales: listOf('locales', LOCALES),
@@ -213,7 +233,9 @@ async function main(): Promise<void> {
     const table = coverage.table();
     console.log('proxied requests per route — seen = paced + answered locally:');
     for (const r of table.slice(0, 12))
-      console.log(`  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`);
+      console.log(
+        `  ${r.route}: seen ${r.seen}, paced ${r.paced}, local ${r.fulfilled}${r.cancelled === 0 ? '' : `, cancelled ${r.cancelled}`}${r.unpaced === 0 ? '' : `, UNPACED ${r.unpaced}`}`,
+      );
     exitCode = verdict(o, records, coverage);
   } finally {
     await stack.stop();
