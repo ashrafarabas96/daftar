@@ -607,6 +607,30 @@ async function databaseReachable(): Promise<string[]> {
   }
 }
 
+/**
+ * The name of the foreign row the tampered-migration proof plants.
+ *
+ * It deliberately does NOT look like a migration. `verify:history` catches a
+ * foreign row by exact filename membership — `onDisk.has(name)`, where `onDisk`
+ * is built from `readdirSync(migrations).filter(f => f.endsWith('.sql'))` — so
+ * the proof needs a name no migration file has, and nothing more. The only
+ * place that reads four leading digits off an applied name is the contiguity
+ * check, and it only asks whether some applied row sits at or above a FROZEN
+ * migration's number; a non-numeric name scores NaN there, which is correct,
+ * because this row is not a migration and must not be counted as one.
+ *
+ * It used to be spelled `NNNN_name.sql` with a far-future number. That made it
+ * a gate naming a migration that does not exist, which bounds the future: the
+ * day a real migration reached that number the name would collide, and until
+ * then `tests/security/phase4-forward-evolution.test.ts` (P4-AL-61) rightly
+ * refused it. Dropping the `.sql` shape removes the thing that rule objects to
+ * rather than hiding it — the row is still foreign, and still refused.
+ *
+ * Because no migration file can ever be named this, it also cannot be mistaken
+ * for one by a reader of `schema_migrations`.
+ */
+const FOREIGN_TAMPER_SENTINEL = 'tamper-proof sentinel (not a migration)';
+
 /** CI's "Tampered-migration hard-fail proof", done in process: plant a foreign history row, require verify:history to refuse it, always remove it. */
 async function tamperedMigrationProof(root: string): Promise<string[]> {
   const url = process.env['DATABASE_URL'];
@@ -616,14 +640,14 @@ async function tamperedMigrationProof(root: string): Promise<string[]> {
   try {
     await client.connect();
     // a previous run killed between plant and cleanup would leave the foreign row behind and poison verify:history for everyone after
-    await client.query("DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'");
-    await client.query("INSERT INTO schema_migrations(name, sha256) VALUES ('9999_foreign_tamper.sql', 'deadbeef')");
+    await client.query('DELETE FROM schema_migrations WHERE name=$1', [FOREIGN_TAMPER_SENTINEL]);
+    await client.query('INSERT INTO schema_migrations(name, sha256) VALUES ($1, $2)', [FOREIGN_TAMPER_SENTINEL, 'deadbeef']);
     try {
       const res = spawnSync(npm, ['run', 'verify:history'], { cwd: root, encoding: 'utf8', env: process.env, shell: win });
       if (res.error !== undefined) problems.push(`verify:history could not be spawned: ${res.error.message}`);
       else if (res.status === 0) problems.push('tampered history was ACCEPTED by verify:history — the history gate is broken');
     } finally {
-      await client.query("DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'");
+      await client.query('DELETE FROM schema_migrations WHERE name=$1', [FOREIGN_TAMPER_SENTINEL]);
     }
   } catch (e) {
     problems.push(`the tampered-migration proof did not complete: ${e instanceof Error ? e.message : String(e)}`);
