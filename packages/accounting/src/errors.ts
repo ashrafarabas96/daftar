@@ -92,7 +92,19 @@ export type AccountingErrorCode =
   | 'accounting.report_cursor_invalid'
   | 'accounting.report_scope_invalid'
   | 'accounting.report_scope_required'
-  | 'accounting.report_amount_invalid';
+  | 'accounting.report_amount_invalid'
+  // Sales — P4-S2 (§13, P4-AL-44)
+  //
+  // `sales_tax_unsupported` is the policy, not a payload complaint. `OD-03` is
+  // OPEN: Phase 4 ships structurally zero sales tax, and `invoices.tax_minor`
+  // and `invoice_items.tax_minor` each carry `CHECK (tax_minor = 0)` in
+  // `0075`, so a non-zero tax is already unrepresentable at the database. This
+  // code exists so the refusal is a STABLE POLICY in the application too,
+  // rather than an accident of a CHECK a later migration might widen, and so
+  // that the day `OD-03` is settled by an approved Country Pack the thing that
+  // changes is the policy and not the error vocabulary. It names no
+  // jurisdiction and carries no rate.
+  | 'accounting.sales_tax_unsupported';
 
 /**
  * Safe identifiers that may accompany a refusal. Deliberately a closed shape:

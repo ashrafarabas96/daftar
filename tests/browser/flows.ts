@@ -15,6 +15,111 @@ import type { Locator } from 'playwright-core';
 import { tabUntil } from './invariants';
 import type { Run } from './run-context';
 
+/**
+ * PHASE OWNERSHIP OF THE BROWSER STEPS (P4-AL-63).
+ *
+ * `scripts/phase3-corrective-gate.ts` ran the browser matrix with no
+ * `--steps`, so it walked every step that existed. That is harmless while
+ * every step is Phase 3's and wrong the moment one is not: a defect on a
+ * Phase 4 screen would turn an already-ACCEPTED Phase 3 gate red — a
+ * predecessor's gate failing on its successor's work. The fix is ownership,
+ * not a looser assertion. Each phase's gate walks the steps that phase owns;
+ * the Phase 3 matrix still performs all nine ar/en/tr x 360/768/1280 runs and
+ * its equality across them is untouched (OD-P4-11 OPTION A). What changed is
+ * WHICH steps it walks, not how many runs it makes.
+ *
+ * The two lists below are a PARTITION of the steps `runFlows` declares, not
+ * two loose lists: every declared step belongs to exactly one of them, and a
+ * step added to this file and left out of both is a problem
+ * `stepOwnershipProblems` names, so a new step is never silently unwalked.
+ * `scripts/phase4-s1-gate.ts` checks the same partition over the source, and
+ * `tests/guards/phase4-browser-step-ownership.test.ts` plants each way of
+ * breaking it and asserts the refusal.
+ */
+export const PHASE3_STEPS: readonly string[] = [
+  'login',
+  'header',
+  'stock',
+  'move',
+  'count',
+  'adjust',
+  'purchases',
+  'receive',
+  'receive-pay',
+  'return',
+  'undo-receipt',
+  'suppliers',
+  'pay',
+  'states',
+  'starting-stock',
+];
+
+/**
+ * The Phase 4 steps. P4-S3 opened this list with the POS screens; every entry
+ * is `p4-`-prefixed and absent from PHASE3_STEPS, so the accepted Phase 3
+ * gate — pinned to PHASE3_STEPS — never walks a Phase 4 screen and a defect on
+ * one can never turn it red. A `run.step` name this list does not hold turns
+ * the ownership test and the P4-S1 gate red.
+ */
+export const PHASE4_STEPS: readonly string[] = ['p4-pos-till', 'p4-pos-sale', 'p4-pos-discount', 'p4-pos-close'];
+
+/**
+ * The prefix every Phase 4 step name carries, so a Phase 4 step can never
+ * collide with a Phase 3 one (P4-AL-68 — this file already has a step named
+ * `return`). `scripts/phase4-s1-gate.ts` holds the same literal and the
+ * ownership test pins the two together.
+ */
+export const PHASE4_STEP_PREFIX = 'p4-';
+
+/** Every step that exists, Phase 3's then Phase 4's. */
+export const ALL_BROWSER_STEPS: readonly string[] = [...PHASE3_STEPS, ...PHASE4_STEPS];
+
+/**
+ * What is wrong with the partition, empty when nothing is. `declared` is the
+ * step names this file declares, in declaration order; pass
+ * `ALL_BROWSER_STEPS` to check only the lists against each other.
+ */
+export function stepOwnershipProblems(declared: readonly string[]): string[] {
+  const problems: string[] = [];
+  const tally = (names: readonly string[]): Map<string, number> => {
+    const counts = new Map<string, number>();
+    for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+    return counts;
+  };
+  for (const [list, names] of [
+    ['PHASE3_STEPS', PHASE3_STEPS],
+    ['PHASE4_STEPS', PHASE4_STEPS],
+  ] as const)
+    for (const [name, n] of tally(names)) if (n > 1) problems.push(`${list} names the step "${name}" ${n} times`);
+  for (const name of PHASE3_STEPS)
+    if (PHASE4_STEPS.includes(name)) problems.push(`the step "${name}" is owned by both PHASE3_STEPS and PHASE4_STEPS — a step is owned by exactly one phase`);
+  for (const name of PHASE4_STEPS)
+    if (!name.startsWith(PHASE4_STEP_PREFIX))
+      problems.push(`the Phase 4 step "${name}" is not ${PHASE4_STEP_PREFIX}-prefixed, so it can collide with a Phase 3 step name (P4-AL-68)`);
+  const owned = new Set(ALL_BROWSER_STEPS);
+  for (const [name, n] of tally(declared)) {
+    if (!owned.has(name))
+      problems.push(
+        `the step "${name}" is declared in tests/browser/flows.ts but is owned by neither PHASE3_STEPS nor PHASE4_STEPS — an unowned step is walked by no phase gate`,
+      );
+    if (n > 1) problems.push(`the step "${name}" is declared ${n} times — a step name is run once and names its own evidence (P4-AL-68)`);
+  }
+  const seen = new Set(declared);
+  if (declared.length > 0)
+    for (const name of owned)
+      if (!seen.has(name)) problems.push(`the step "${name}" is owned by a phase list but tests/browser/flows.ts declares no such step`);
+  return problems;
+}
+
+// The lists themselves, checked as this module loads: a malformed partition is
+// never a browser run that quietly walks the wrong set. The declared half of
+// the partition is checked over the source by the ownership test and the
+// P4-S1 gate, which can see the declarations this module cannot.
+{
+  const broken = stepOwnershipProblems(ALL_BROWSER_STEPS);
+  if (broken.length > 0) throw new Error(`tests/browser/flows.ts step ownership: ${broken.join('; ')}`);
+}
+
 const UUID_PATH = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 
 /** True when the element is fully inside the viewport, its own text not cut. */
@@ -31,7 +136,36 @@ async function fullyVisible(run: Run, target: Locator, what: string): Promise<vo
 }
 
 /** Keyboard: Tab from the top of the page reaches `label` (a button), and Enter presses it. */
+/**
+ * The target must EXIST before its reachability can be measured.
+ *
+ * `tabUntil` presses Tab up to 120 times and reports "never reached" when
+ * none of them lands on the target. That answer is only about the keyboard if
+ * the target is on the page: against a screen still fetching its data it is a
+ * statement about the clock, and it reads exactly like an accessibility
+ * defect.
+ *
+ * MEASURED, and this is why the wait is here rather than a larger `max`: with
+ * the full nineteen-step sequence the `receive` step failed at 768px in `ar`,
+ * `en` AND `tr` on one run of the gate, and on the very next run of the SAME
+ * build `tr` passed while `ar` and `en` failed. A verdict that changes between
+ * runs of one build is not measuring the product. The screenshot kept from the
+ * failing run shows the button rendered and plainly visible, so Tab was being
+ * pressed before it was there — `nav()` resolves on `waitForURL`, which is
+ * navigation and not render, and below `lg` the collapsed menu adds an
+ * interaction that moves the timing.
+ *
+ * So the wait is a PRECONDITION, not a relaxation: nothing about the claim
+ * changes, and a button that never renders now fails saying that, instead of
+ * being reported as unreachable by keyboard.
+ */
 async function tabToButton(run: Run, label: string): Promise<void> {
+  try {
+    await run.page.getByRole('button', { name: label, exact: true }).first().waitFor({ state: 'visible', timeout: 15000 });
+  } catch {
+    run.fail('flow', `the "${label}" button never rendered, so its keyboard reachability could not be measured`);
+    throw new Error(`render: "${label}" absent`);
+  }
   const presses = await tabUntil(run.page, `(a) => a.tagName === 'BUTTON' && (a.textContent || '').trim() === ${JSON.stringify(label)}`);
   if (presses === null) {
     run.fail('keyboard', `Tab never reached the "${label}" button`);
@@ -42,6 +176,14 @@ async function tabToButton(run: Run, label: string): Promise<void> {
 
 /** Keyboard: Tab reaches a list row containing `text`, and Enter opens it. */
 async function tabToRow(run: Run, text: string): Promise<void> {
+  // The same precondition as `tabToButton`, for the same measured reason: a
+  // row that has not rendered yet is not a row the keyboard cannot reach.
+  try {
+    await run.page.locator('main li').filter({ hasText: text }).first().waitFor({ state: 'visible', timeout: 15000 });
+  } catch {
+    run.fail('flow', `a row with "${text}" never rendered, so its keyboard reachability could not be measured`);
+    throw new Error(`render: row "${text}" absent`);
+  }
   const presses = await tabUntil(
     run.page,
     `(a) => a.getAttribute('role') === 'button' && !!a.closest('main li') && (a.textContent || '').includes(${JSON.stringify(text)})`,
@@ -59,6 +201,44 @@ async function nav(run: Run, key: 'stock' | 'purchases' | 'suppliers'): Promise<
   if (await toggle.isVisible()) await toggle.click();
   await run.page.getByRole('link', { name: run.T(`nav.${key}`), exact: true }).click();
   await run.page.waitForURL(new RegExp(`/${run.locale}/${key}$`));
+}
+
+/** Open the POS screens from the header, through the menu button where the viewport collapses it. */
+async function posNav(run: Run): Promise<void> {
+  const toggle = run.page.getByRole('button', { name: run.T('nav.menu'), exact: true });
+  if (await toggle.isVisible()) await toggle.click();
+  await run.page.getByRole('link', { name: run.T('nav.pos'), exact: true }).click();
+  await run.page.waitForURL(new RegExp(`/${run.locale}/pos$`));
+}
+
+/** Add a found item to the basket from the search results. */
+async function addFound(run: Run, name: string): Promise<void> {
+  await run
+    .row(name)
+    .getByRole('button', { name: run.T('common.add'), exact: true })
+    .click();
+}
+
+/** Wait until the basket holds exactly `n` lines, by the quantity fields the screen shows. */
+async function basketLines(run: Run, n: number): Promise<void> {
+  const fields = run.page.getByLabel(run.T('pos.basket.quantity'), { exact: true });
+  for (let i = 0; i < 40; i += 1) {
+    if ((await fields.count()) === n) return;
+    await run.page.waitForTimeout(250);
+  }
+  run.fail('flow', `the basket shows ${await fields.count()} line(s), expected ${n}`);
+  throw new Error(`basket lines: expected ${n}`);
+}
+
+/**
+ * The text of one amount the screen shows, by the label beside it — read
+ * BACK from the page, never computed here. The amounts are the server's, so a
+ * step can only compare what it read before with what it reads after.
+ */
+async function amountShown(run: Run, key: string): Promise<string> {
+  const label = run.page.getByText(run.T(key), { exact: true }).first();
+  await label.waitFor();
+  return (await label.locator('xpath=following-sibling::span[1]').innerText()).trim();
 }
 
 async function startingStockOffered(run: Run): Promise<boolean> {
@@ -415,5 +595,194 @@ export async function runFlows(run: Run): Promise<void> {
     await run.reload();
     await assertStartingStockClosed(run, 'after a reload');
     await run.shot('adjust-starting-closed');
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // P4-S3 — THE POS STEPS.
+  //
+  // Four steps, each `p4-` prefixed and owned by PHASE4_STEPS, so the
+  // accepted Phase 3 gate (pinned to PHASE3_STEPS) never walks them and a
+  // defect on a POS screen can never turn it red (P4-AL-63, P4-AL-68).
+  //
+  // Each step takes its FIRST screenshot as soon as the screen is on the
+  // page, before it drives anything: `run.shot()` is what checks the
+  // invariants, so a planted defect is reported in EVERY locale × viewport
+  // run — the nine-combination red proof — and not only where a flow happens
+  // to get far enough.
+  //
+  // Every amount these steps read is the server's: the steps compare the
+  // text of "To pay" before and after a discount request and require the
+  // SERVER to have changed it. They never compute an expected total; a step
+  // that did would be the browser deciding the price.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  await run.step('p4-pos-till', async () => {
+    // The Phase 3 steps end in the starter business; selling happens in the
+    // one that has stock and prices. One document load per run, no more.
+    await page.evaluate(`localStorage.setItem('daftar_business_id', ${JSON.stringify(seed.businessId)})`);
+    await run.reload();
+    await page.locator('header').waitFor();
+    await posNav(run);
+    await run.shot('p4-pos-no-till');
+    await run.text('pos.till.mustOpen');
+    await tabToButton(run, T('pos.till.goToTill'));
+    await page.waitForURL(new RegExp(`/${run.locale}/pos/till$`));
+    await run.text('pos.till.none');
+    await run.shot('p4-pos-till');
+    // One choice, and it is a WAREHOUSE — which is what this step has always
+    // picked. `TillSessionOpenSchema` requires `branchId` AND `warehouseId`
+    // (plus a `terminalCode`), and the warehouse's answer carries its own home
+    // branch, so choosing the place to sell from supplies both identities. The
+    // screen used to offer BRANCHES and send `branchId` alone, which `.strict()`
+    // refused for the two missing keys.
+    await run.field(T('pos.till.where')).selectOption({ label: seed.mainWarehouse });
+    await tabToButton(run, T('pos.till.open'));
+    await page.waitForURL(new RegExp(`/${run.locale}/pos$`));
+    await run.text('pos.basket.empty');
+    await run.shot('p4-pos-till-open');
+  });
+
+  await run.step('p4-pos-sale', async () => {
+    await posNav(run);
+    await run.shot('p4-pos-register');
+    // The type-ahead is paced by the screen: one read per pause, nothing
+    // under two characters. The step waits for the screen's own pause.
+    // `ricePrefix`, not `riceSearch`: the POS type-ahead is a PREFIX probe
+    // (`lower(t.name) ^@ lower($q)` in pos-reads.ts), unlike the catalog and
+    // stock pickers, which match a substring.
+    await run.field(T('pos.search.label')).fill(names.ricePrefix);
+    await run.row(names.rice).waitFor();
+    await run.shot('p4-pos-search');
+    await addFound(run, names.rice);
+    await basketLines(run, 1);
+    await run.field(T('pos.search.label')).fill(names.teaPrefix);
+    await run.row(names.tea).waitFor();
+    await addFound(run, names.tea);
+    await basketLines(run, 2);
+
+    // ── THE RELOAD ────────────────────────────────────────────────────────
+    // The basket is SERVER-SIDE state in `pos_cart_lines`, and a reload is
+    // the one case the register's "every command answers with the whole
+    // cart" property does not cover. Before the mount read
+    // (`GET .../cart-lines`) was wired, this reload showed an EMPTY register
+    // while the server still held both lines — the defect the cart read was
+    // built for, and the only step here that can tell whether it is wired.
+    //
+    // The amount is read BACK from the page on both sides and compared to
+    // itself; nothing here computes a total.
+    const dueBefore = await amountShown(run, 'pos.total.due');
+    await run.reload();
+    await page.locator('header').waitFor();
+    await basketLines(run, 2);
+    const dueAfter = await amountShown(run, 'pos.total.due');
+    if (dueAfter !== dueBefore) run.fail('flow', `the basket did not survive a reload: "To pay" read ${dueBefore} before and ${dueAfter} after`);
+    await run.shot('p4-pos-reloaded');
+
+    // How many: the screen sends the quantity and takes the server's basket back.
+    const before = await amountShown(run, 'pos.total.due');
+    await run.field(T('pos.basket.quantity')).first().fill('3');
+    await page.waitForTimeout(1200);
+    const after = await amountShown(run, 'pos.total.due');
+    if (after === before) run.fail('flow', `"to pay" did not change after the server was sent a new quantity (still ${before})`);
+    await run.shot('p4-pos-basket');
+    // A quantity that is not a quantity is refused on the line, not sent.
+    await run.field(T('pos.basket.quantity')).first().fill('3..5');
+    await run.text('pos.basket.quantityInvalid');
+    await run.shot('p4-pos-quantity-refused');
+    await run.field(T('pos.basket.quantity')).first().fill('3');
+    await page.waitForTimeout(1200);
+    // One line off again, and the server's basket is what the screen shows.
+    await run.button(T('common.remove')).last().click();
+    await basketLines(run, 1);
+    await run.shot('p4-pos-basket-one');
+  });
+
+  await run.step('p4-pos-discount', async () => {
+    // ── THE DISCOUNT IS ASKED FOR ON A LINE ───────────────────────────────
+    // This step used to ask for ONE discount for the whole basket. The server
+    // has no such command: the discount lives on `pos_cart_lines`
+    // (`requested_discount_minor`), `POST .../cart-lines/:cartLineId/discount`
+    // addresses one line, and P4-S2's sealed `sale_items_discount_ck` is per
+    // line too. A basket-level discount would need a server command that
+    // ALLOCATES across the lines, with an allocation rule and a
+    // rounding-residue decision nobody has given — and a browser that divided
+    // one figure across the lines itself would be computing the per-line
+    // amounts the server owns, which is the whole of `P4-AL-18`.
+    //
+    // So the field is per line (`POS_DISCOUNT_GRAIN` in
+    // `apps/web/src/lib/phase4-pos-api.ts` is the one place that choice
+    // lives), and the BASKET's "Discount given" stays as the figure the
+    // merchant reads — the server's own exact sum of the line requests.
+    //
+    // Nothing else about this step changed: it still compares the text of
+    // "To pay" before and after and requires the SERVER to have changed it,
+    // it still requires an invalid amount to be refused on screen and never
+    // sent, and it still keeps every confirmation and visibility check.
+    //
+    // The GRAIN is asserted here rather than assumed: one discount field per
+    // basket line is what "per line" means on screen, and a basket-level
+    // field would be one field beside two lines.
+    const quantityFields = page.getByLabel(T('pos.basket.quantity'), { exact: true });
+    const discountFields = page.getByLabel(T('pos.discount.amount', { currency: seed.currency }), { exact: true });
+    const lineCount = await quantityFields.count();
+    const fieldCount = await discountFields.count();
+    if (fieldCount !== lineCount)
+      run.fail('flow', `the basket shows ${lineCount} line(s) and ${fieldCount} discount field(s): the discount is asked for per LINE`);
+
+    const due = await amountShown(run, 'pos.total.due');
+    await discountFields.first().fill('1.50');
+    await run.shot('p4-pos-discount');
+    await tabToButton(run, T('pos.discount.apply'));
+    await page.waitForTimeout(800);
+    const discounted = await amountShown(run, 'pos.total.due');
+    if (discounted === due) run.fail('flow', `the server was asked for a discount and "to pay" is unchanged (${due})`);
+    const given = await amountShown(run, 'pos.total.discount');
+    if (!/[1-9]/.test(given)) run.fail('flow', `the discount the server allowed reads as nothing ("${given}")`);
+    await run.shot('p4-pos-discounted');
+    // A discount that is not an amount in this currency never leaves the screen.
+    await discountFields.first().fill('1.5555');
+    await run.button(T('pos.discount.apply')).first().click();
+    await run.text('pos.discount.invalid');
+    await run.shot('p4-pos-discount-refused');
+    // Clearing asks the server for a discount of zero on that line, and the
+    // server's own figure is what comes back.
+    await run.button(T('pos.discount.clear')).first().click();
+    await page.waitForTimeout(800);
+    const cleared = await amountShown(run, 'pos.total.discount');
+    if (cleared === given) run.fail('flow', `the discount was cleared on the line and "discount given" is unchanged (${given})`);
+    // Finish, behind a visible confirmation, and read the sale the server recorded.
+    await tabToButton(run, T('pos.finish.action'));
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    const confirm = dialog.getByRole('button', { name: T('pos.finish.action'), exact: true });
+    await fullyVisible(run, confirm, 'the "Finish the sale" confirmation');
+    await fullyVisible(run, dialog.getByText(T('pos.finish.confirmHint')), 'the finish warning');
+    await run.shot('p4-pos-finish-confirm');
+    await confirm.click();
+    await run.text('pos.finish.done');
+    await run.text('pos.receipt.title');
+    await run.shot('p4-pos-sold');
+    await run.button(T('pos.finish.another')).click();
+    await run.text('pos.basket.empty');
+    await run.shot('p4-pos-next-sale');
+  });
+
+  await run.step('p4-pos-close', async () => {
+    await run.button(T('pos.till.goToTill')).click();
+    await page.waitForURL(new RegExp(`/${run.locale}/pos/till$`));
+    await run.text('pos.till.opened');
+    await run.shot('p4-pos-till-after-sale');
+    await run.button(T('pos.till.close')).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.waitFor();
+    const confirm = dialog.getByRole('button', { name: T('pos.till.close'), exact: true });
+    await fullyVisible(run, confirm, 'the "Close the till" confirmation');
+    await run.shot('p4-pos-close-confirm');
+    await confirm.click();
+    await run.text('pos.till.closed');
+    await run.shot('p4-pos-closed');
+    await posNav(run);
+    await run.text('pos.till.mustOpen');
+    await run.shot('p4-pos-no-till-again');
   });
 }

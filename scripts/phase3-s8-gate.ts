@@ -21,7 +21,7 @@
  * column grants and, under R-B1a, exactly the delimited guard section); the
  * reconciler model; the reconciliation domain; no stored rebuild swap; TD-12;
  * the suites; the premortem matrix (the static half of T-18); the widened
- * guards (23 rules); no skip. The runtime half composes `gate:phase3:s7` first
+ * guards (every declared rule, floor 23); no skip. The runtime half composes `gate:phase3:s7` first
  * (which composes S6 … S1, P2-S8 … P2-S1 and Phase 1), then the two domain
  * packages, the S8 suites, the Tier 1 budgets alone and Budget A (and B, under
  * R-B1a) alone and last.
@@ -132,7 +132,16 @@ export const TD12_SITES = [
 const TD12_HOME = 'packages/accounting/src/assertion-keys.ts';
 
 /** S7's rule count; S8 widens rules and adds none. */
-export const EXPECTED_RULE_COUNT = 23;
+/**
+ * A FLOOR, not an equality — the accepted rule count of S7, which later slices
+ * may only add to. `[[daftar-a-closure-rule-is-not-an-invariant]]`: this was
+ * compared with `===`, and the first legitimate successor rule (Phase 4's rule
+ * 24) made this ACCEPTED gate refuse every later tree, which is the P2-S9
+ * defect `tests/security/phase4-forward-evolution.test.ts` exists to refuse.
+ * The number the banner must print is DERIVED from the guards script's own
+ * `// Rule N` headers, so the two can never disagree.
+ */
+export const EXPECTED_RULE_FLOOR = 23;
 
 /** The one routine after the prefix that may write the stock cache (A-13 §4: no stored swap). */
 const STOCK_CACHE_WRITERS = ['inventory_apply_stock_movements'];
@@ -790,7 +799,18 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
 
   // ── 8. Guards (§7.1(8), A-18) ─────────────────────────────────────────────
   function checkGuards(): void {
-    console.log('P3-S8 GATE — static guards (A-18; 23 rules)');
+    // The number is DERIVED from the script's own `// Rule N` headers: an
+    // evidence line that printed 23 while the tree carried 24 would be a false
+    // statement inside a PASS.
+    const declaredRules = new Set(
+      [...(has('scripts/static-guards.ts') ? read('scripts/static-guards.ts') : '').matchAll(/^\/\/ Rule (\d+)\b/gm)].map((m) => Number(m[1])),
+    ).size;
+    console.log(`P3-S8 GATE — static guards (A-18; ${declaredRules} rules, floor ${EXPECTED_RULE_FLOOR})`);
+    if (declaredRules < EXPECTED_RULE_FLOOR)
+      fail(
+        'guards',
+        `scripts/static-guards.ts declares ${declaredRules} rule(s) and the S7-accepted floor is ${EXPECTED_RULE_FLOOR} — an accepted rule has left the program`,
+      );
     const mark = failures;
     const code = (file: string): string => (has(file) ? stripTsProse(read(file)) : '');
     const references: readonly (readonly [file: string, token: RegExp, why: string])[] = [
@@ -809,9 +829,9 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     // The same guard program `npm run check:guards` runs, under the same tsx.
     const res = spawnSync(process.execPath, [...process.execArgv, join(root, 'scripts/static-guards.ts')], { cwd: root, encoding: 'utf8', env: process.env });
     const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-    if (res.status !== 0 || !output.includes(`STATIC GUARDS: PASS (${EXPECTED_RULE_COUNT} rules)`))
-      fail('guards', `the static guards did not print PASS (${EXPECTED_RULE_COUNT} rules) (exit ${res.status ?? 'signal'}):\n${output.slice(-2500)}`);
-    if (failures === mark) ok(`STATIC GUARDS: PASS (${EXPECTED_RULE_COUNT} rules), with rules 15-18 and 22 on the Phase 3 surface`);
+    if (res.status !== 0 || !output.includes(`STATIC GUARDS: PASS (${declaredRules} rules)`))
+      fail('guards', `the static guards did not print PASS (${declaredRules} rules) (exit ${res.status ?? 'signal'}):\n${output.slice(-2500)}`);
+    if (failures === mark) ok(`STATIC GUARDS: PASS (${declaredRules} rules, floor ${EXPECTED_RULE_FLOOR}), with rules 15-18 and 22 on the Phase 3 surface`);
   }
 
   // ── 9. Budgets stay (§A-17) ───────────────────────────────────────────────
@@ -864,7 +884,9 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean): void
     if (ACCEPTED) console.log(`  structural: frozenThrough at or beyond ${S8_MIGRATION_NAME}; it hashes to S8_ACCEPTED on disk and in the manifest`);
     else console.log(`  structural: frozenThrough = ${S7_BOUNDARY}; after it exactly ${S8_MIGRATION_NAME}, unrecorded`);
     console.log('  structural: §2.11 content (4 reconciler column grants; the delimited R-B1a statements; DO blocks change nothing); the error filter');
-    console.log('  structural: reconciler model; R-INV-01..05; no stored swap; TD-12 at six sites; premortem PM-01..46; static guards (23 rules); budgets');
+    console.log(
+      '  structural: reconciler model; R-INV-01..05; no stored swap; TD-12 at six sites; premortem PM-01..46; static guards (every declared rule); budgets',
+    );
     console.log('  suites:');
     for (const [id, file] of Object.entries(REQUIRED_SUITE_NAMES)) console.log(`    ${id.padEnd(6)} ${file}${has(file) ? '' : '   (missing)'}`);
     console.log('  runtime:    the runner canary');

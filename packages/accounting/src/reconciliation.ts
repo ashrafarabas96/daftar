@@ -260,13 +260,29 @@ export interface DeferredReconciliationDomain {
 
 export const DEFERRED_RECONCILIATION_DOMAINS: readonly DeferredReconciliationDomain[] = [
   // `inventory-valuation` is no longer deferred: R-INV-01..05 check it (P3-S8 A-12).
-  { id: 'ar-operational', reason: 'customers do not exist yet', owningPhase: 'Phase 4' },
+  // P4-S1 created `customers` and `invoices` (0075), so "customers do not
+  // exist yet" stopped being true the moment that migration landed. The
+  // reason is restated as what is actually missing: `R-SAL-01` compares AR in
+  // the journal against the invoice documents net of what settles them, and
+  // nothing that settles an invoice exists before P4-S4. A deferral whose
+  // stated reason has become false is the kind of green nobody re-reads.
+  {
+    id: 'ar-operational',
+    reason: 'customers and invoices exist (0075) but nothing that settles an invoice does: R-SAL-01 lands with the allocations (P4-S4)',
+    owningPhase: 'Phase 4',
+  },
   {
     id: 'ap-operational',
     reason: 'the supplier subledger ↔ Accounts Payable (2000) reconciliation is not in the Phase 3 plan (P:263 names inventory↔GL only)',
     owningPhase: 'production pass',
   },
-  { id: 'sales-payment', reason: 'sales and payments do not exist yet', owningPhase: 'Phase 4' },
+  // Likewise: P4-S2 creates `sales` and posts the two entries of a sale, so
+  // the sale half of this deferral ends with it; the payment half does not.
+  {
+    id: 'sales-payment',
+    reason: 'sales post their revenue and COGS entries from P4-S2, but payments do not exist: the R-SAL-* pass is assembled in P4-S8',
+    owningPhase: 'Phase 4',
+  },
   {
     id: 'read-model-drift',
     reason: 'NOT APPLICABLE — P2-S7 reads are aggregated live from the journal; there is no second store to drift',

@@ -427,17 +427,61 @@ describe('T-01 — the ledger is append-only for every writer, the owner include
     await withRolledBackFixture(async (c) => {
       await seedAll(c);
       // TRUNCATE refuses while deferred checks are pending (55006), so they are
-      // run first; they pass — the rows are complete. Every table referencing
-      // `stock_source_bindings` must be named with it (0A000 otherwise): the
-      // fixture bridge and, since 0061, the four P3-S3 bridges.
-      // P3-S4 (0063/0064): and, since 0063, the two P3-S4 bridges.
-      // P3-S5 (0065/0066): and, since 0065, the two P3-S5 bridges.
+      // run first; they pass — the rows are complete.
       expectAccepted(await attempt(c, () => c.query('SET CONSTRAINTS ALL IMMEDIATE')), 'deferred checks');
-      const o = await attempt(c, () =>
-        c.query(
-          `TRUNCATE stock_source_bridge_fixture_line, ${S3_BRIDGES.join(', ')}, ${S4_BRIDGES.join(', ')}, ${S5_BRIDGES.join(', ')}, stock_source_bindings, negative_deficit_coverages, negative_inventory_deficits, stock_movements, stock_levels`,
-        ),
-      );
+      /**
+       * ── P4-AL-88 ───────────────────────────────────────────────────────
+       *
+       * Every table referencing one of these must be named in the same
+       * statement or PostgreSQL raises 0A000, and the list was TYPED: the
+       * fixture bridge, the four P3-S3 bridges, the two P3-S4 and the two
+       * P3-S5 bridges. That is a closure rule — "nothing else will ever
+       * reference the stock ledger" — and `0077`'s `stock_source_bridge_sale`
+       * makes it false, so this NOTE started reporting a 0A000 refusal and
+       * documenting the OPPOSITE of what it exists to document
+       * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+       *
+       * The claim is unchanged and is not weakened: an owner TRUNCATE of the
+       * ledger is still ACCEPTED, so no suite may claim the ledger is
+       * append-only against its owner (E-24). Only the LIST is discovered now
+       * — the transitive closure of "references one of these", read from
+       * `pg_constraint` — so a bridge any later phase adds is named on the day
+       * it exists. `CASCADE` was the available shortcut and is refused: it
+       * would truncate the referencing tables WITHOUT naming them, so the
+       * statement would stop proving that the owner reaches the whole
+       * referencing set, which is the uncomfortable half of this note.
+       */
+      const BASE = [
+        'stock_source_bridge_fixture_line',
+        ...S3_BRIDGES,
+        ...S4_BRIDGES,
+        ...S5_BRIDGES,
+        'stock_source_bindings',
+        'negative_deficit_coverages',
+        'negative_inventory_deficits',
+        'stock_movements',
+        'stock_levels',
+      ];
+      const closure = (
+        await c.query<{ t: string }>(
+          `WITH RECURSIVE seed AS (
+             SELECT ('public.' || n)::regclass AS oid FROM unnest($1::text[]) n
+           ), reach AS (
+             SELECT oid FROM seed
+             UNION
+             SELECT k.conrelid FROM pg_constraint k JOIN reach r ON k.confrelid = r.oid
+              WHERE k.contype = 'f' AND k.conrelid <> k.confrelid
+           )
+           SELECT DISTINCT c.relname::text AS t FROM reach JOIN pg_class c ON c.oid = reach.oid ORDER BY 1`,
+          [BASE],
+        )
+      ).rows.map((x) => x.t);
+      // The discovery really covers what the note names and really grew past
+      // it: an emptied or shrunken closure would make the TRUNCATE below prove
+      // LESS than the typed list did, so it is checked before it is used.
+      for (const t of BASE) expect(closure, `${t} is in the discovered referencing closure`).toContain(t);
+      expect(closure.length, 'the closure is at least the tables the note names').toBeGreaterThanOrEqual(BASE.length);
+      const o = await attempt(c, () => c.query(`TRUNCATE ${closure.join(', ')}`));
       expectAccepted(o, 'owner TRUNCATE');
       expect(await count(c, `SELECT count(*)::int AS n FROM stock_movements`)).toBe(0);
     });
@@ -479,7 +523,32 @@ describe('T-13 — the closed source registry (P:165)', () => {
     await withRolledBackFixture(
       async (c) => {
         await ownerLevel(c, K1);
-        for (const bad of ['purchase ', 'Purchase', 'sale', FIXTURE_SOURCE_TYPE]) {
+        /**
+         * ── P4-AL-88: a red proof whose planted state became the real one ──
+         *
+         * The unregistered strings were typed, and one of them was `'sale'`:
+         * a plausible future source type the registry did not yet hold. `0077`
+         * registers it, so the proof started reporting "source_type \"sale\"
+         * was accepted" — the subject moved, and the proof was not wrong about
+         * anything it exists to test.
+         *
+         * Re-aimed rather than deleted, and at something still plantable: the
+         * near-miss cases stay TYPED (a trailing space and a wrong case on a
+         * REGISTERED type are the interesting ones, and they can never become
+         * registered because the registry's CHECK is `^[a-z][a-z0-9_]{1,62}$`),
+         * and the "a name the registry does not hold" case is now DISCOVERED —
+         * a well-formed candidate asserted absent from `stock_source_types`
+         * before it is used. So this case can never again rot into a registered
+         * name, and it is still a real foreign-key refusal and not a syntax one.
+         */
+        const unregistered = (
+          await c.query<{ t: string }>(
+            `SELECT t FROM unnest($1::text[]) t WHERE NOT EXISTS (SELECT 1 FROM stock_source_types s WHERE s.source_type = t) LIMIT 1`,
+            [['sale', 'not_a_source_type', 'unregistered_source_probe']],
+          )
+        ).rows[0]?.t;
+        expect(unregistered, 'a well-formed source type the registry does not hold').toBeTypeOf('string');
+        for (const bad of ['purchase ', 'Purchase', must(unregistered), FIXTURE_SOURCE_TYPE]) {
           const b = await attempt(c, () => ownerBinding(c, randomUUID(), randomUUID(), 'purchase', bad));
           const m = await attempt(c, () => ownerMovement(c, { sourceType: bad }));
           for (const o of [b, m]) {
@@ -511,12 +580,65 @@ describe('T-13 — the closed source registry (P:165)', () => {
     // P3-S5 (0065/0066): 0065 registered the two stock source types and 0066
     // the two op→kind rows (docs/PHASE_3_S5_CONTRACT.md §2.1, §2.6), all by
     // P3-S5; nothing else.
-    const r = await ownerPool().query<{ types: string[]; mapping: string[] }>(
-      `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS types,
+    /**
+     * ── P4-AL-88 ─────────────────────────────────────────────────────────
+     *
+     * The three reads below were ABSOLUTE — `array_agg` over the whole of
+     * `stock_source_types`, `inventory_operation_movement_kinds` and
+     * `stock_movement_kinds` — which is a closure rule ("these registries
+     * contain nothing else, ever"), not an invariant. `0077` registers the
+     * `sale` source type, the `sale.commit → sale` mapping and the `sale`
+     * movement kind, all as `P4-S2`, and turns it red although nothing about
+     * the P3-S2/P3-S3 registry changed
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by the registries' own provenance column, `registered_by ~
+     * '^P3-'` — the estate's established idiom (`assertMigrationState`,
+     * `tests/helpers/stock-ledger.ts:661-692`), made possible by `0074`'s
+     * widened CHECK. Every literal below is unchanged, entry for entry,
+     * including each row's `:P3-Sn` provenance, so a missing registration and
+     * a row mislabelled with Phase 3 provenance are both still red.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY just below,
+     * with a CLOSURE assertion that the two halves are the whole of each
+     * registry.
+     */
+    const r = await ownerPool().query<{ types: string[]; mapping: string[]; all_types: string[]; all_mapping: string[]; unowned: string[] }>(
+      `SELECT (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type)
+                 FROM stock_source_types WHERE registered_by ~ '^P3-') AS types,
               (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
-                 FROM inventory_operation_movement_kinds) AS mapping`,
+                 FROM inventory_operation_movement_kinds WHERE registered_by ~ '^P3-') AS mapping,
+              (SELECT array_agg(source_type || ':' || registered_by ORDER BY source_type) FROM stock_source_types) AS all_types,
+              (SELECT array_agg(op_code || ':' || movement_kind || ':' || registered_by ORDER BY op_code, movement_kind)
+                 FROM inventory_operation_movement_kinds) AS all_mapping,
+              (SELECT array_agg(DISTINCT x) FROM (
+                 SELECT source_type || ':' || registered_by AS x, registered_by AS by FROM stock_source_types
+                 UNION ALL
+                 SELECT op_code || ':' || movement_kind || ':' || registered_by, registered_by FROM inventory_operation_movement_kinds
+                 UNION ALL
+                 SELECT movement_kind || ':' || registered_by, registered_by FROM stock_movement_kinds) y
+                WHERE y.by !~ '^P[0-9]+-S[0-9]+$' AND y.by <> 'P3-C') AS unowned`,
     );
-    expect(r.rows[0]).toEqual({
+    const scoped = r.rows[0];
+    // POSITIVE: every row of all three registries records a well-formed
+    // registrant, in scope and beyond it alike, so no row's provenance can be
+    // omitted or invented.
+    expect(scoped?.unowned ?? null, 'every registry row records a well-formed registrant').toBeNull();
+    // CLOSURE: the scoped half plus the beyond-scope half is the whole of each
+    // registry, so nothing escapes between the two claims.
+    const beyondTypes = (scoped?.all_types ?? []).filter((t) => !(scoped?.types ?? []).includes(t));
+    const beyondMapping = (scoped?.all_mapping ?? []).filter((m) => !(scoped?.mapping ?? []).includes(m));
+    expect([...(scoped?.types ?? []), ...beyondTypes].sort(), 'the two halves are the whole source registry').toEqual([...(scoped?.all_types ?? [])].sort());
+    expect([...(scoped?.mapping ?? []), ...beyondMapping].sort(), 'the two halves are the whole op→kind registry').toEqual(
+      [...(scoped?.all_mapping ?? [])].sort(),
+    );
+    // And no beyond-scope row claims Phase 3 provenance: the scoping cannot be
+    // dodged by relabelling a later phase's registration.
+    expect(
+      [...beyondTypes, ...beyondMapping].filter((x) => /:P3-/.test(x)),
+      'no beyond-scope row carries Phase 3 provenance',
+    ).toEqual([]);
+    expect({ types: scoped?.types, mapping: scoped?.mapping }).toEqual({
       types: [
         ...S3_SOURCE_TYPES.map((t) => `${t}:P3-S3`),
         // P3-S4 (0063/0064)
@@ -532,10 +654,26 @@ describe('T-13 — the closed source registry (P:165)', () => {
         ...S5_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}:P3-S5`),
       ],
     });
+    // The ten seeds, by the same provenance scope. (This assertion never ran
+    // once the equality above went red — a failing assertion aborts its test
+    // body — so `0077`'s `sale` movement kind was a break hiding behind
+    // another break.)
     const k = await ownerPool().query<{ kind: string; qtySign: string; requiresReason: boolean; by: string }>(
       `SELECT movement_kind AS kind, qty_sign AS "qtySign", requires_reason AS "requiresReason", registered_by AS by FROM stock_movement_kinds ORDER BY movement_kind`,
     );
-    expect(k.rows).toEqual(SEEDED_KINDS.map((x) => ({ ...x, by: 'P3-S2' })));
+    expect(k.rows.filter((x) => /^P3-/.test(x.by))).toEqual(SEEDED_KINDS.map((x) => ({ ...x, by: 'P3-S2' })));
+    const beyondKinds = k.rows.filter((x) => !/^P3-/.test(x.by));
+    expect(
+      beyondKinds.filter((x) => !/^P[0-9]+-S[0-9]+$/.test(x.by)),
+      'every movement kind beyond the Phase 3 scope records a well-formed later-phase registrant',
+    ).toEqual([]);
+    // Every beyond-scope kind still obeys the registry's own shape law: a
+    // signed direction, and a reason flag that is a boolean and not a NULL.
+    expect(
+      beyondKinds.filter((x) => !['positive', 'negative', 'either', 'zero'].includes(x.qtySign) || typeof x.requiresReason !== 'boolean'),
+      'every movement kind beyond the scope carries a registered direction and a decided reason flag',
+    ).toEqual([]);
+    expect([...k.rows.filter((x) => /^P3-/.test(x.by)), ...beyondKinds].length, 'and the two halves are the whole movement-kind registry').toBe(k.rows.length);
   });
 });
 

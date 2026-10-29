@@ -1,0 +1,2877 @@
+{
+  "$schema": "daftar/plan-claim-inventory/1",
+  "generator": "scripts/plan-evidence/discover-plan-claims.ts",
+  "discoveryRule": {
+    "roots": ["tests", "scripts", "apps", "packages", "infrastructure", "docs", ".github"],
+    "extensions": [".json", ".md", ".mts", ".sql", ".ts", ".tsx", ".yaml", ".yml"],
+    "signals": [
+      {
+        "id": "explain",
+        "pattern": "\\bEXPLAIN\\b",
+        "flags": ""
+      },
+      {
+        "id": "explain-analyze",
+        "pattern": "\\bEXPLAIN\\s*\\((?=[^)]*\\bANALYZE\\b)",
+        "flags": "i"
+      },
+      {
+        "id": "node-type",
+        "pattern": "['\"`]Node Type['\"`]|\\bnodeType\\b",
+        "flags": ""
+      },
+      {
+        "id": "seq-scan",
+        "pattern": "\\bSeq(uential)? Scan\\b",
+        "flags": ""
+      },
+      {
+        "id": "index-scan",
+        "pattern": "\\bIndex Scan\\b",
+        "flags": ""
+      },
+      {
+        "id": "index-only-scan",
+        "pattern": "\\bIndex Only Scan\\b",
+        "flags": ""
+      },
+      {
+        "id": "index-cond",
+        "pattern": "\\bIndex Cond\\b",
+        "flags": ""
+      },
+      {
+        "id": "bitmap-plan",
+        "pattern": "\\bBitmap (Index|Heap) Scan\\b",
+        "flags": ""
+      },
+      {
+        "id": "index-name",
+        "pattern": "['\"`]Index Name['\"`]",
+        "flags": ""
+      },
+      {
+        "id": "planning-statistics",
+        "pattern": "\\bplanningStatistics\\b",
+        "flags": ""
+      },
+      {
+        "id": "plan-cost",
+        "pattern": "['\"`](Total|Startup) Cost['\"`]|\\bCOSTS\\s+(ON|OFF|true|false)\\b",
+        "flags": "i"
+      },
+      {
+        "id": "query-plan-json",
+        "pattern": "['\"`]QUERY PLAN['\"`]|FORMAT\\s+JSON",
+        "flags": "i"
+      },
+      {
+        "id": "plan-shape-word",
+        "pattern": "\\bplan[- ]shape\\b|\\bplanShape\\b",
+        "flags": "i"
+      },
+      {
+        "id": "collation-dependent-range",
+        "pattern": "\\^@|text_pattern_ops|varchar_pattern_ops|COLLATE\\s+\"?C\"?\\b|\\bdatcollate\\b|\\bindcollation\\b",
+        "flags": ""
+      },
+      {
+        "id": "row-estimate",
+        "pattern": "['\"`]Plan Rows['\"`]|['\"`]Actual Rows['\"`]|\\breltuples\\b|\\bn_distinct\\b",
+        "flags": ""
+      }
+    ],
+    "assertionVerb": {
+      "pattern": "\\bexpect\\s*\\(|\\bassert\\b|\\bmust\\b|\\bthrow\\b|\\bfail\\s*\\(|\\bok\\s*\\(",
+      "flags": "i"
+    },
+    "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
+  },
+  "totals": {
+    "hits": 301,
+    "planGates": 65,
+    "assertions": 22,
+    "files": 47
+  },
+  "byPhase": {
+    "cross-phase": {
+      "planGates": 50,
+      "assertions": 11,
+      "mentions": 116
+    },
+    "phase-2": {
+      "planGates": 0,
+      "assertions": 3,
+      "mentions": 15
+    },
+    "phase-4": {
+      "planGates": 9,
+      "assertions": 5,
+      "mentions": 66
+    },
+    "phase-3": {
+      "planGates": 6,
+      "assertions": 3,
+      "mentions": 17
+    }
+  },
+  "byFile": {
+    ".github/workflows/ci.yml": {
+      "planGates": 0,
+      "assertions": 2,
+      "mentions": 7,
+      "phase": "cross-phase"
+    },
+    ".github/workflows/phase2-s8-evidence.yml": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-2"
+    },
+    "apps/api/src/modules/pos/pos-reads.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 20,
+      "phase": "phase-4"
+    },
+    "docs/PHASE_2_PERFORMANCE_BASELINE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-2"
+    },
+    "docs/PHASE_2_S7_ACCEPTANCE.md": {
+      "planGates": 0,
+      "assertions": 2,
+      "mentions": 7,
+      "phase": "phase-2"
+    },
+    "docs/PHASE_2_S8_ACCEPTANCE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-2"
+    },
+    "docs/PHASE_3_S1_ACCEPTANCE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-3"
+    },
+    "docs/PHASE_3_S7_CONTRACT.md": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 2,
+      "phase": "phase-3"
+    },
+    "docs/PHASE_4_ARCHITECTURE_LOCK.md": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 1,
+      "phase": "phase-4"
+    },
+    "docs/PHASE_4_EXECUTION_PLAN.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 2,
+      "phase": "phase-4"
+    },
+    "docs/PHASE_4_S3_ACCEPTANCE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-4"
+    },
+    "docs/PHASE_4_S4_PERFORMANCE_EVIDENCE.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 4,
+      "phase": "phase-4"
+    },
+    "infrastructure/database/migrations/0050_accounting_report_indexes.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "cross-phase"
+    },
+    "infrastructure/database/migrations/0052_accounting_journal_lines_rls_performance.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "infrastructure/database/migrations/0070_definer_ownership_hardening.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "cross-phase"
+    },
+    "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 12,
+      "phase": "phase-4"
+    },
+    "infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "phase-4"
+    },
+    "infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-4"
+    },
+    "scripts/bootstrap-platform-owner.ts": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 0,
+      "phase": "cross-phase"
+    },
+    "scripts/phase2-s8-release-gate.ts": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 2,
+      "phase": "phase-2"
+    },
+    "scripts/phase3-review-index.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "phase-3"
+    },
+    "scripts/phase3-s7-gate.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 2,
+      "phase": "phase-3"
+    },
+    "scripts/plan-evidence/discover-plan-claims.ts": {
+      "planGates": 0,
+      "assertions": 1,
+      "mentions": 8,
+      "phase": "cross-phase"
+    },
+    "scripts/plan-evidence/target-cluster.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/browser/flows.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/browser/invariants.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/browser/seed.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/guards/required-ci-chain-composition.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/helpers/plan-evidence-env.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 19,
+      "phase": "cross-phase"
+    },
+    "tests/integration/read-s7-no-cache.test.ts": {
+      "planGates": 6,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-budgets.test.ts": {
+      "planGates": 1,
+      "assertions": 2,
+      "mentions": 9,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-correction-candidate.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 4,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-dataset.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 5,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-read-plans.test.ts": {
+      "planGates": 6,
+      "assertions": 0,
+      "mentions": 5,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-rls-equivalence.test.ts": {
+      "planGates": 8,
+      "assertions": 1,
+      "mentions": 5,
+      "phase": "cross-phase"
+    },
+    "tests/performance/accounting-trial-balance-diagnosis.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 10,
+      "phase": "cross-phase"
+    },
+    "tests/performance/phase3-s7-read-budgets.test.ts": {
+      "planGates": 6,
+      "assertions": 2,
+      "mentions": 9,
+      "phase": "phase-3"
+    },
+    "tests/performance/plan-evidence-contract.test.ts": {
+      "planGates": 1,
+      "assertions": 1,
+      "mentions": 7,
+      "phase": "cross-phase"
+    },
+    "tests/performance/pos-s3-budgets.test.ts": {
+      "planGates": 9,
+      "assertions": 4,
+      "mentions": 21,
+      "phase": "phase-4"
+    },
+    "tests/performance/receivables-ar-setbased-equivalence.test.ts": {
+      "planGates": 4,
+      "assertions": 0,
+      "mentions": 5,
+      "phase": "cross-phase"
+    },
+    "tests/performance/receivables-s4-budgets.test.ts": {
+      "planGates": 20,
+      "assertions": 2,
+      "mentions": 12,
+      "phase": "cross-phase"
+    },
+    "tests/performance/receivables-s4-dataset.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "cross-phase"
+    },
+    "tests/security/journal-lines-rls-policy.test.ts": {
+      "planGates": 2,
+      "assertions": 1,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/security/p3c-td18-definer-ownership.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/security/p4s4-cross-tenant-command-refusal.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-4"
+    },
+    "tests/security/phase2-s8-gate-tamper.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 3,
+      "phase": "phase-2"
+    },
+    "tests/security/policy-helper-inlining.test.ts": {
+      "planGates": 2,
+      "assertions": 0,
+      "mentions": 2,
+      "phase": "cross-phase"
+    }
+  },
+  "hits": [
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 377,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 383,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "# prove from the text that required CI executes every plan-shape claim."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 398,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# holds a plan-shape claim and is executed by no step of the required"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 467,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 470,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "assertion",
+      "text": "# against — `server_version_num`, `datcollate`, `datctype`, the locale"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 472,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "# one rather than a byte-order collation that answers `^@` differently."
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 473,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# `A plan-shape claim made on a different server major or collation is"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 492,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "# `server_version_num`, `datcollate`, `datctype`, the locale provider and"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 495,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# plan-shape PASS in this job is recorded nowhere, which is how the P4-S3"
+    },
+    {
+      "file": ".github/workflows/phase2-s8-evidence.yml",
+      "line": 152,
+      "phase": "phase-2",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "#    EXPLAIN (ANALYZE, BUFFERS); then 0052 applied to the SAME database and"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 52,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* ── `^@` and not `LIKE`, and the RLS fact that decided it ───────────────"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 54,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* The arms use `x ^@ $n` (`starts_with`) rather than `x LIKE $n || '%'`, and"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 56,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* cluster (PostgreSQL 18.4, `datcollate = C`), the same statement as the two"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 62,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `barcode ^@ $p`                | index RANGE  | **index RANGE** |"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 63,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `lower(sku) ^@ $p`             | index RANGE  | **no range**    |"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 64,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `lower(name) ^@ $p`            | index RANGE  | **no range**    |"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 75,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* arms use `^@`."
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 79,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* The row above says `datcollate = C`, and that turned out to be carrying the"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 80,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* whole claim. PostgreSQL derives a prefix RANGE from `^@` only when the"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 87,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* fell to a Seq Scan. Measured on PostgreSQL 16.13, the version CI runs."
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 91,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* on now. Nothing in the SQL below changed: `^@` is a byte-prefix test by"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 99,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* the index: the two barcode arms order by `barcode COLLATE \"C\"` rather than"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 133,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* `^@` also removes the need to escape the prefix. A typed `%` or `_` — and a"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 286,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "WHERE v.business_id = $1 AND v.barcode IS NOT NULL AND v.status <> 'archived' AND v.barcode ^@ $3"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 287,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ORDER BY v.barcode COLLATE \"C\""
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 292,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "WHERE p.business_id = $1 AND p.barcode IS NOT NULL AND p.status <> 'archived' AND p.barcode ^@ $3"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 293,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ORDER BY p.barcode COLLATE \"C\""
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 298,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "WHERE v.business_id = $1 AND v.sku IS NOT NULL AND v.status <> 'archived' AND lower(v.sku) ^@ $2"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 304,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "WHERE p.business_id = $1 AND p.sku IS NOT NULL AND p.status <> 'archived' AND lower(p.sku) ^@ $2"
+    },
+    {
+      "file": "apps/api/src/modules/pos/pos-reads.ts",
+      "line": 315,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "WHERE t.business_id = $1 AND lower(t.name) ^@ $2"
+    },
+    {
+      "file": "docs/PHASE_2_PERFORMANCE_BASELINE.md",
+      "line": 38,
+      "phase": "phase-2",
+      "signals": ["planning-statistics", "row-estimate"],
+      "kind": "mention",
+      "text": "- **Every table a measured read touches is ANALYZEd before the measurement**, not only the two the generator fills. This rule is written down because it was learned from a failure: `accounts` is read by the trial balance, written by nothing in the dataset generator, and about twenty rows per busines"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 149,
+      "phase": "phase-2",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "`tests/performance/accounting-read-plans.test.ts` seeds **4,000 entries / 8,000 lines across 21 accounts** — two years of a small merchant — and runs each read under `EXPLAIN (ANALYZE, BUFFERS)`."
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 155,
+      "phase": "phase-2",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "| trial balance (whole history) | Seq Scan on `journal_lines`, Seq Scan on `journal_entries` | ~12.8 ms |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 156,
+      "phase": "phase-2",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "| ledger page (one account, first 50 rows) | Seq Scan on `journal_entries`, Seq Scan on `journal_lines` | ~3.7 ms |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 157,
+      "phase": "phase-2",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "| account balance as of a date | Seq Scan on `journal_entries`, Seq Scan on `journal_lines` | ~6.0 ms |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 166,
+      "phase": "phase-2",
+      "signals": ["index-scan"],
+      "kind": "assertion",
+      "text": "| ledger page (one account, first 50 rows) | Index Scan using `journal_lines_business_account_idx` | ~1.2 ms |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 167,
+      "phase": "phase-2",
+      "signals": ["index-only-scan"],
+      "kind": "assertion",
+      "text": "| entry list keyset page | Index Only Scan using `journal_entries_business_date_idx` | ~0.1 ms |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 198,
+      "phase": "phase-2",
+      "signals": ["index-scan"],
+      "kind": "mention",
+      "text": "| sparse account, first 50 rows | `Index Scan using journal_lines_business_account_idx` | the entry walk would visit thousands of entries to find fifty rows; the index visits about sixty |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 199,
+      "phase": "phase-2",
+      "signals": ["index-scan"],
+      "kind": "mention",
+      "text": "| sparse account, whole history | `Index Scan using journal_lines_business_account_idx` | no `LIMIT` stops it early, so without the index the only way to total one account is to visit every entry |"
+    },
+    {
+      "file": "docs/PHASE_2_S7_ACCEPTANCE.md",
+      "line": 200,
+      "phase": "phase-2",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "| dense account, first 50 rows | never a `Seq Scan on journal_lines` | half the journal is cash, so both plans are genuinely reasonable — asserting one would be asserting a planner's taste, not a property of the product |"
+    },
+    {
+      "file": "docs/PHASE_2_S8_ACCEPTANCE.md",
+      "line": 222,
+      "phase": "phase-2",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "The first, since corrected: budget C originally missed at **2.9 s** on a runner while passing locally on the same commit. The plan named the cause — a nested loop whose outer side was the `accounts` index scan estimated at **one** row against twenty-one actual, and whose inner side, the whole parall"
+    },
+    {
+      "file": "docs/PHASE_3_S1_ACCEPTANCE.md",
+      "line": 108,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "- The only P3-S1 object on that path is the `0058` trigger. Measured in isolation with `EXPLAIN ANALYZE` over 40 inserts: median **0.13 ms**, max 0.31 ms warm — the same as the accepted `accounting_period_guard` trigger beside it (median 0.13 ms). It cannot produce a 10–30 ms tail."
+    },
+    {
+      "file": "docs/PHASE_3_S7_CONTRACT.md",
+      "line": 5,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "> **Migrations.** S7 plans none. The only admissible file is a conditional, index-only `0069_…_read_indexes.sql` (A-02), admitted only with T-17's EXPLAIN attached. If it lands, P3-S8's first migration is 0070; otherwise S8 starts at 0069. The S7 gate's accepted tense checks nothing after 0068 when "
+    },
+    {
+      "file": "docs/PHASE_3_S7_CONTRACT.md",
+      "line": 181,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "- The coordinator must approve it with T-17's EXPLAIN output attached. The gate's `S7_MIGRATIONS` then becomes `['0069_…']`."
+    },
+    {
+      "file": "docs/PHASE_3_S7_CONTRACT.md",
+      "line": 756,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "| T-17 | `tests/performance/phase3-s7-read-budgets.test.ts` | Seeded: 5,000 variants × 3 warehouses; 2,000 suppliers; 50,000 purchases; 200,000 AP lines. Budgets (p95 of 20 runs, warm): stock page ≤ 150 ms; supplier-balances page (20) ≤ 250 ms; open-purchases (one supplier with 500 purchases) ≤ 200 "
+    },
+    {
+      "file": "docs/PHASE_4_ARCHITECTURE_LOCK.md",
+      "line": 1437,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "**P4-AL-74 — Every measured relation is `ANALYZE`d, `planningStatistics` is recorded, and a null fails the"
+    },
+    {
+      "file": "docs/PHASE_4_ARCHITECTURE_LOCK.md",
+      "line": 2235,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word", "collation-dependent-range"],
+      "kind": "assertion",
+      "text": "| `TL-P4-S3-R4` | **DEPLOYMENT PLAN-EVIDENCE ENVIRONMENT.** The P4-S3 barcode defect exposed a systemic evidence problem: the local embedded test server is PostgreSQL 18 at a commonly `C` collation, while the required CI and deployment target is the PostgreSQL 16 family at a deployment-style `en_US."
+    },
+    {
+      "file": "docs/PHASE_4_EXECUTION_PLAN.md",
+      "line": 260,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "zero deadlocks over the full pair matrix; every budget met with `planningStatistics` non-null and the RLS cost"
+    },
+    {
+      "file": "docs/PHASE_4_EXECUTION_PLAN.md",
+      "line": 394,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "5. Every budget met at both tiers with `planningStatistics` non-null, every sample recorded, the RLS cost"
+    },
+    {
+      "file": "docs/PHASE_4_S3_ACCEPTANCE.md",
+      "line": 93,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "| `TL-P4-S3-R4` | Plan-shape gates were measured on the embedded test cluster, whose collation is `C`. PostgreSQL derives a prefix range from `^@` only on a byte-order collation and recognises exactly `C` and `POSIX` — so the till's scanner path had **no index range at all** on the deployment target"
+    },
+    {
+      "file": "docs/PHASE_4_S4_PERFORMANCE_EVIDENCE.md",
+      "line": 46,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "server_version_num=160013 datcollate=C.UTF-8 datctype=C.UTF-8"
+    },
+    {
+      "file": "docs/PHASE_4_S4_PERFORMANCE_EVIDENCE.md",
+      "line": 54,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "| `datcollate` / `datctype` | `C.UTF-8` / `C.UTF-8` |"
+    },
+    {
+      "file": "docs/PHASE_4_S4_PERFORMANCE_EVIDENCE.md",
+      "line": 75,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "literal, because PostgreSQL stores `datcollate` exactly as given and"
+    },
+    {
+      "file": "docs/PHASE_4_S4_PERFORMANCE_EVIDENCE.md",
+      "line": 403,
+      "phase": "phase-4",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "`resetData()`-ed the shared database, so no post-hoc `EXPLAIN (ANALYZE)`"
+    },
+    {
+      "file": "infrastructure/database/migrations/0050_accounting_report_indexes.sql",
+      "line": 12,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--   trial balance     Seq Scan on journal_lines, Seq Scan on journal_entries"
+    },
+    {
+      "file": "infrastructure/database/migrations/0050_accounting_report_indexes.sql",
+      "line": 13,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--   ledger page       Seq Scan on journal_entries, Seq Scan on journal_lines"
+    },
+    {
+      "file": "infrastructure/database/migrations/0050_accounting_report_indexes.sql",
+      "line": 14,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--   account balance   Seq Scan on journal_entries, Seq Scan on journal_lines"
+    },
+    {
+      "file": "infrastructure/database/migrations/0052_accounting_journal_lines_rls_performance.sql",
+      "line": 199,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- refuses outright to inline ANY function with a SET clause. `EXPLAIN"
+    },
+    {
+      "file": "infrastructure/database/migrations/0070_definer_ownership_hardening.sql",
+      "line": 368,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ORDER BY p.proname COLLATE \"C\")"
+    },
+    {
+      "file": "infrastructure/database/migrations/0070_definer_ownership_hardening.sql",
+      "line": 441,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ORDER BY pol.polname COLLATE \"C\")"
+    },
+    {
+      "file": "infrastructure/database/migrations/0070_definer_ownership_hardening.sql",
+      "line": 482,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "SELECT array_agg((c.relname || '.' || g.tgname) COLLATE \"C\" ORDER BY (c.relname || '.' || g.tgname) COLLATE \"C\") INTO v_actual"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 518,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "--     P4-AL-76 in `pos-reads.ts` chose `x ^@ $n` over `x LIKE $n || '%'`"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 519,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "--     because `^@` needs no escaping and because the barcode arms \"get a real"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 525,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "--       | index the arm can reach                  | plan for `barcode ^@ $p`  |"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 527,
+      "phase": "phase-4",
+      "signals": ["index-cond", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "--       | `(business_id, barcode)`, default collation | Index Cond on business_id ONLY, `^@` as a Filter |"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 528,
+      "phase": "phase-4",
+      "signals": ["index-cond", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "--       | `(business_id, barcode COLLATE \"C\")`     | Index Cond: `business_id = … AND barcode >= $p AND barcode < succ($p)` |"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 530,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "--     PostgreSQL derives a prefix RANGE from `^@` only when the index's"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 538,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--     every barcode in the business, and the products arm fell to a Seq Scan."
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 547,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "--     WHY AN INDEX AND NOT A REWRITTEN PREDICATE. `^@` is a byte-prefix test"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 565,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ON products (business_id, barcode COLLATE \"C\")"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 569,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "ON product_variants (business_id, barcode COLLATE \"C\")"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 588,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "JOIN pg_collation c ON c.oid = i.indcollation[1]"
+    },
+    {
+      "file": "infrastructure/database/migrations/0079_phase4_pos_till_sessions_cart.sql",
+      "line": 1728,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- not a convenience: these two bodies EXPLAIN in prose why they carry no"
+    },
+    {
+      "file": "infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql",
+      "line": 74,
+      "phase": "phase-4",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "-- ~3%. F's `EXPLAIN (ANALYZE, BUFFERS)` of the median read WITH the re-join"
+    },
+    {
+      "file": "infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql",
+      "line": 78,
+      "phase": "phase-4",
+      "signals": ["index-scan"],
+      "kind": "mention",
+      "text": "--     InitPlan 1  -> Index Scan using invoices_customer_idx  (actual rows=3)"
+    },
+    {
+      "file": "infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql",
+      "line": 81,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--           ->  Hash  ->  Seq Scan on invoices i  (actual rows=2003,"
+    },
+    {
+      "file": "infrastructure/database/migrations/0086_phase4_rls_quals_once_per_query.sql",
+      "line": 8,
+      "phase": "phase-4",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "-- Decomposed with EXPLAIN (ANALYZE, BUFFERS, VERBOSE) on PostgreSQL 16.13 as"
+    },
+    {
+      "file": "scripts/bootstrap-platform-owner.ts",
+      "line": 45,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "assertion",
+      "text": "if (!email || !/^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$/.test(email)) {"
+    },
+    {
+      "file": "scripts/phase2-s8-release-gate.ts",
+      "line": 215,
+      "phase": "phase-2",
+      "signals": ["planning-statistics", "row-estimate"],
+      "kind": "mention",
+      "text": "readonly planningStatistics?: { table: string; relpages: number; reltuples: number; analyzedAt: string | null }[];"
+    },
+    {
+      "file": "scripts/phase2-s8-release-gate.ts",
+      "line": 258,
+      "phase": "phase-2",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "const stats = e.planningStatistics ?? [];"
+    },
+    {
+      "file": "scripts/phase2-s8-release-gate.ts",
+      "line": 266,
+      "phase": "phase-2",
+      "signals": ["row-estimate"],
+      "kind": "assertion",
+      "text": "ok(`${label}: every measured table had statistics — ${stats.map((s) => `${s.table} ~${Math.round(s.reltuples)} rows`).join('; ')}`);"
+    },
+    {
+      "file": "scripts/phase3-review-index.ts",
+      "line": 248,
+      "phase": "phase-3",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "const pkg = /^@daftar\\/([a-z-]+)(?:\\/(.+))?$/.exec(spec);"
+    },
+    {
+      "file": "scripts/phase3-review-index.ts",
+      "line": 460,
+      "phase": "phase-3",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": ".filter((l) => !/eslint-|prettier-ignore|@ts-|^@\\w+/.test(l))"
+    },
+    {
+      "file": "scripts/phase3-review-index.ts",
+      "line": 478,
+      "phase": "phase-3",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "while (at >= 0 && /^@\\w/.test(lines[at] ?? '')) at--;"
+    },
+    {
+      "file": "scripts/phase3-s7-gate.ts",
+      "line": 8,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* index-only `0069_…_read_indexes.sql` (A-02), admitted with T-17's EXPLAIN."
+    },
+    {
+      "file": "scripts/phase3-s7-gate.ts",
+      "line": 52,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "/** P3-S7's migrations: none. Becomes ['0069_…_read_indexes.sql'] only under A-02's exception, with T-17's EXPLAIN attached. */"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 2,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* DISCOVER EVERY PLAN-SHAPE CLAIM IN THE TREE."
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 4,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* The P4-S3 defect stood for months because the set of plan-shape claims was"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 71,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "{ id: 'plan-shape-word', re: /\\bplan[- ]shape\\b|\\bplanShape\\b/i },"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 75,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "re: /\\^@|text_pattern_ops|varchar_pattern_ops|COLLATE\\s+\"?C\"?\\b|\\bdatcollate\\b|\\bindcollation\\b/,"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 169,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "// signature — and the `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` eight"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 193,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// 'EXPLAIN …')` taint every later `r` in the file. A seed is the"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 202,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// `async function capture()` runs its EXPLAIN eight lines in, and a"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 213,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// that runs the EXPLAIN. A declaration-only rule reads the type annotation,"
+    },
+    {
+      "file": "scripts/plan-evidence/discover-plan-claims.ts",
+      "line": 215,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "// a genuine plan-shape gate. Found by hand while auditing, which is the"
+    },
+    {
+      "file": "scripts/plan-evidence/target-cluster.ts",
+      "line": 47,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* prefix range from `^@` over a default-collation index, which is the"
+    },
+    {
+      "file": "tests/browser/flows.ts",
+      "line": 651,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "// (`lower(t.name) ^@ lower($q)` in pos-reads.ts), unlike the catalog and"
+    },
+    {
+      "file": "tests/browser/invariants.ts",
+      "line": 247,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "const ownText = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim() !== '');"
+    },
+    {
+      "file": "tests/browser/seed.ts",
+      "line": 81,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* matches `lower(t.name) ^@ lower($q)`. `riceSearch` is the substring term"
+    },
+    {
+      "file": "tests/guards/required-ci-chain-composition.test.ts",
+      "line": 131,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* that every plan-shape gate the tree declares is reachable from the required"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 4,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* A plan-shape claim made on a different server major or a different"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 10,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* PostgreSQL derives a prefix range from `^@` only when the index's collation"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 17,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     datcollate   | `^@` over a default-collation index"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 19,
+      "phase": "cross-phase",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "*     C            | Index Cond: barcode >= 'x' AND barcode < 'y'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 20,
+      "phase": "cross-phase",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "*     POSIX        | Index Cond: barcode >= 'x' AND barcode < 'y'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 21,
+      "phase": "cross-phase",
+      "signals": ["seq-scan", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     C.utf8       | Seq Scan, Filter: barcode ^@ 'x'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 22,
+      "phase": "cross-phase",
+      "signals": ["seq-scan", "collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     en_US.utf8   | Seq Scan, Filter: barcode ^@ 'x'"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 25,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* PostgreSQL stores `datcollate` exactly as it was given and normalises"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 29,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'en_US.utf8'   -> datcollate = en_US.utf8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 30,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'en_US.UTF-8'  -> datcollate = en_US.UTF-8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 31,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*     CREATE DATABASE … LOCALE 'C.utf8'       -> datcollate = C.utf8"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 46,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "readonly datcollate: string;"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 75,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "export const isByteOrderCollation = (datcollate: string): boolean => BYTE_ORDER_COLLATIONS.includes(datcollate);"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 92,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: string;"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 100,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "d.datcollate,"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 128,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: r.datcollate,"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 133,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "collationIsByteOrder: isByteOrderCollation(r.datcollate),"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 161,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "reasons.push(`datcollate=${env.datcollate} is byte order; the deployment target is not, and a prefix range derived here is not derivable there`);"
+    },
+    {
+      "file": "tests/helpers/plan-evidence-env.ts",
+      "line": 193,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "return `[plan-evidence] ${label} | server_version_num=${env.serverVersionNum} datcollate=${env.datcollate} datctype=${env.datctype} provider=${env.localeProvider ?? 'n/a'} byteOrder=${env.collationIsByteOrder}${v.authoritative ? '' : ` | ${v.reasons.join('; ')}`}`;"
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 94,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": ") x ORDER BY line COLLATE \"C\"`,"
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 191,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["all"],
+      "text": "for (const g of [...P3C_APP_GRANTS, ...P4_S1_APP_GRANTS, ...P4_S2_APP_GRANTS]) expect(all, g).toContain(g);"
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 208,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["all"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 270,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["all"],
+      "text": "expect([...matrix, ...named, ...beyond].sort(), 'the two scopes together are the whole matrix').toEqual([...all].sort());"
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 287,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["seen"],
+      "text": "expect(seen.violations).toEqual(["
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 293,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["seen", "before"],
+      "text": "expect(seen.matrix.lines, 'one more grant').toBe(before.lines + 1);"
+    },
+    {
+      "file": "tests/integration/read-s7-no-cache.test.ts",
+      "line": 294,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["seen", "before"],
+      "text": "expect(seen.matrix.sha256).not.toBe(before.sha256);"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 224,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "* missed, records `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` beside its"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 234,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "let planningStatistics: TableStatistics[] = [];"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 242,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// runs under: an EXPLAIN taken as the owner would plan without row level"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 246,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, [businessId, '2000-01-01', spec.endDate]);"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 248,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "trialBalancePlan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? null;"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 355,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "planningStatistics = await measuredTableStatistics(ownerPool());"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 361,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// A failure to EXPLAIN is a gap in the evidence, never a reason to lose"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 426,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "planningStatistics,"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 594,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// `reltuples = -1`, the planner estimated one row where there were"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 603,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "plan-gate",
+      "via": ["planningStatistics"],
+      "text": "expect(planningStatistics.map((s) => s.table)).toEqual(['accounts', 'branches', 'businesses', 'journal_entries', 'journal_lines']);"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 604,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "assertion",
+      "text": "for (const stat of planningStatistics) {"
+    },
+    {
+      "file": "tests/performance/accounting-budgets.test.ts",
+      "line": 606,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "assertion",
+      "text": "expect(stat.reltuples, `${stat.table} has no row estimate`).toBeGreaterThanOrEqual(0);"
+    },
+    {
+      "file": "tests/performance/accounting-correction-candidate.test.ts",
+      "line": 109,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "const type = node['Node Type'];"
+    },
+    {
+      "file": "tests/performance/accounting-correction-candidate.test.ts",
+      "line": 113,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "out.scans[relation] = { est: Number(node['Plan Rows'] ?? 0), act: Number(node['Actual Rows'] ?? 0), loops: Number(node['Actual Loops'] ?? 0) };"
+    },
+    {
+      "file": "tests/performance/accounting-correction-candidate.test.ts",
+      "line": 152,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${sql}`, params);"
+    },
+    {
+      "file": "tests/performance/accounting-correction-candidate.test.ts",
+      "line": 154,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? {};"
+    },
+    {
+      "file": "tests/performance/accounting-dataset.ts",
+      "line": 385,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "* statistics at all — `relpages = 0`, `reltuples = -1`, `last_analyze` null —"
+    },
+    {
+      "file": "tests/performance/accounting-dataset.ts",
+      "line": 416,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "readonly reltuples: number;"
+    },
+    {
+      "file": "tests/performance/accounting-dataset.ts",
+      "line": 430,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "const { rows } = await pool.query<{ table: string; relpages: string; reltuples: string; analyzed_at: string | null }>("
+    },
+    {
+      "file": "tests/performance/accounting-dataset.ts",
+      "line": 431,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname AS table, c.relpages::text, c.reltuples::text,"
+    },
+    {
+      "file": "tests/performance/accounting-dataset.ts",
+      "line": 439,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "return rows.map((r) => ({ table: r.table, relpages: Number(r.relpages), reltuples: Number(r.reltuples), analyzedAt: r.analyzed_at }));"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 12,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "* under `EXPLAIN (ANALYZE, BUFFERS)`, and asserts the plan properties the"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 95,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "const res = await client.query<{ 'QUERY PLAN': string }>(`EXPLAIN (ANALYZE, BUFFERS, COSTS, FORMAT TEXT) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 96,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const text = res.rows.map((r) => r['QUERY PLAN']).join('\\n');"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 97,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "const scans = [...text.matchAll(/(Seq Scan on (\\w+)|Index (?:Only )?Scan (?:Backward )?using (\\w+))/g)].map((m) => m[0]);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 203,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "describe('the three reads, under EXPLAIN (ANALYZE, BUFFERS) (§13, §57, §71)', () => {"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 272,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 273,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "text"],
+      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 283,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 284,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "text"],
+      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 304,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 313,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "text"],
+      "text": "expect(plan.text).toContain('journal_entries_business_date_idx');"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 17,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "assertion",
+      "text": "*   §11 THE CORRELATED SUBPLAN IS GONE. `EXPLAIN (ANALYZE, BUFFERS)` on the"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 114,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "const type = node['Node Type'];"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 139,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${TRIAL_BALANCE_SQL}`, params);"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 142,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? {};"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 154,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "actualRows: Number(root['Actual Rows'] ?? 0),"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 155,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "estimatedRows: Number(root['Plan Rows'] ?? 0),"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 288,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["before"],
+      "text": "expect(boundaryBefore.startsWith('0051'), `before: ${boundaryBefore}`).toBe(true);"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 289,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["after"],
+      "text": "expect(boundaryAfter.startsWith('0052'), `after: ${boundaryAfter}`).toBe(true);"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 294,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["before"],
+      "text": "expect(before.rowCount).toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 300,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["after", "before"],
+      "text": "expect(JSON.stringify(after.rows)).toBe(JSON.stringify(before.rows));"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 304,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["after", "before"],
+      "text": "expect(after.rowCount).toBe(before.rowCount);"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 316,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["before"],
+      "text": "expect(before.subplanRelations[table] ?? [], `before: ${JSON.stringify(before.subplanRelations)}`).toContain('businesses');"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 317,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["after"],
+      "text": "expect(after.subplanRelations[table] ?? [], `after: ${JSON.stringify(after.subplanRelations)}`).not.toContain('businesses');"
+    },
+    {
+      "file": "tests/performance/accounting-rls-equivalence.test.ts",
+      "line": 338,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["after", "before"],
+      "text": "expect(after.executionMs, `${before.executionMs} ms → ${after.executionMs} ms`).toBeLessThan(before.executionMs);"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 9,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* them: warm up, then time N iterations, then EXPLAIN once."
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 186,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "const type = node['Node Type'];"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 199,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "else out.scans[relation] = { est: Number(node['Plan Rows'] ?? 0), act: Number(node['Actual Rows'] ?? 0), loops: Number(node['Actual Loops'] ?? 0) };"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 211,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* One reading. The timing and the EXPLAIN are separate deliberately:"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 212,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "* `EXPLAIN (ANALYZE)` instruments every node and charges for it, and the"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 252,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "const explained = await client.query<Record<string, unknown>>(`EXPLAIN (ANALYZE, BUFFERS, SETTINGS, FORMAT JSON) ${sql}`, params);"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 255,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = ((explained.rows[0]?.['QUERY PLAN'] as Record<string, unknown>[] | undefined) ?? [])[0] ?? {};"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 290,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "actualRows: Number(root['Actual Rows'] ?? 0),"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 291,
+      "phase": "cross-phase",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "estimatedRows: Number(root['Plan Rows'] ?? 0),"
+    },
+    {
+      "file": "tests/performance/accounting-trial-balance-diagnosis.test.ts",
+      "line": 482,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// clause demands. `EXPLAIN (VERBOSE)` shows the filter still naming"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 24,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* index migration 0069 (A-02), and this file's EXPLAIN output is its"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 254,
+      "phase": "phase-3",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "readonly 'Node Type': string;"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 256,
+      "phase": "phase-3",
+      "signals": ["index-name"],
+      "kind": "mention",
+      "text": "readonly 'Index Name'?: string;"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 264,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "/** EXPLAIN every captured statement of a read, under its own scope, as `daftar_app`. */"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 269,
+      "phase": "phase-3",
+      "signals": ["explain", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await db.scoped<{ 'QUERY PLAN': { Plan: PlanNode }[] }>(c.scope, `EXPLAIN (FORMAT JSON) ${c.text}`, c.params);"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 270,
+      "phase": "phase-3",
+      "signals": ["query-plan-json"],
+      "kind": "assertion",
+      "text": "const plan = must(must(r.rows[0])['QUERY PLAN'][0]).Plan;"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 276,
+      "phase": "phase-3",
+      "signals": ["index-scan", "index-only-scan", "bitmap-plan"],
+      "kind": "mention",
+      "text": "const INDEX_ACCESS = new Set(['Index Scan', 'Index Only Scan', 'Bitmap Index Scan']);"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 281,
+      "phase": "phase-3",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "INDEX_ACCESS.has(n['Node Type']) &&"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 282,
+      "phase": "phase-3",
+      "signals": ["index-name"],
+      "kind": "mention",
+      "text": "(index === undefined ? (n['Index Name'] ?? '').startsWith(table) || n['Relation Name'] === table : n['Index Name'] === index),"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 343,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stock"],
+      "text": "expect(v.keys, 'every variant holds stock in the three warehouses').toBe(VOLUME.variants * 3);"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 360,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["results"],
+      "text": "expect(results.map((m) => ({ name: m.name, withinBudget: m.p95 <= m.budgetMs }))).toEqual(results.map((m) => ({ name: m.name, withinBudget: true })));"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 363,
+      "phase": "phase-3",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "it('EXPLAIN: index access on stock_levels, purchases_supplier_idx and journal_lines_business_account_idx; no sequential scan on journal_lines', async () => {"
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 372,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["usesIndexOn", "stock"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 379,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["usesIndexOn", "open"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 387,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["usesIndexOn", "balances"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 395,
+      "phase": "phase-3",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["all"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/phase3-s7-read-budgets.test.ts",
+      "line": 396,
+      "phase": "phase-3",
+      "signals": ["node-type", "seq-scan"],
+      "kind": "assertion",
+      "text": "all.filter((n) => n['Node Type'] === 'Seq Scan' && n['Relation Name'] === 'journal_lines'),"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 12,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "*   1. THE INVENTORY IS CURRENT. The set of plan-shape claims is DERIVED from"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 25,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*      stores `datcollate` verbatim; `en_US.utf8` and `en_US.UTF-8` are the"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 87,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "// different strings, because PostgreSQL stores datcollate verbatim."
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 113,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'C',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 127,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'C',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 138,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: 'en_US.utf8',"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 147,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "describe('every discovered plan-shape claim is executed by required CI against postgres:16', () => {"
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 249,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["unreached"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/plan-evidence-contract.test.ts",
+      "line": 251,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "assertion",
+      "text": "`these files hold plan-shape claims that required CI never executes against its postgres:16 service, ` +"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 146,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "* plan shape over an index with nothing in it — measured: `pg_stats.null_frac`"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 147,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "* 1.0, `reltuples` 0, and the planner choosing a Sort over the unique index by"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 175,
+      "phase": "phase-4",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "readonly 'Node Type': string;"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 177,
+      "phase": "phase-4",
+      "signals": ["index-name"],
+      "kind": "mention",
+      "text": "readonly 'Index Name'?: string;"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 178,
+      "phase": "phase-4",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "readonly 'Index Cond'?: string;"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 334,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "async function planningStatistics(): Promise<Record<string, { rows: number; analyzed: string | null }>> {"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 385,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "/** EXPLAIN every captured statement under its own scope, as `daftar_app`, row security applied (P4-AL-75). */"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 390,
+      "phase": "phase-4",
+      "signals": ["explain", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await db.scoped<{ 'QUERY PLAN': { Plan: PlanNode }[] }>(c.scope, `EXPLAIN (FORMAT JSON) ${c.text}`, c.params);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 391,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "assertion",
+      "text": "const plan = must(must(r.rows[0])['QUERY PLAN'][0]).Plan;"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 444,
+      "phase": "phase-4",
+      "signals": ["index-scan", "index-only-scan", "bitmap-plan"],
+      "kind": "mention",
+      "text": "const INDEX_ACCESS = new Set(['Index Scan', 'Index Only Scan', 'Bitmap Index Scan']);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 447,
+      "phase": "phase-4",
+      "signals": ["node-type", "index-name"],
+      "kind": "mention",
+      "text": "return nodes.some((n) => INDEX_ACCESS.has(n['Node Type']) && n['Index Name'] === index);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 452,
+      "phase": "phase-4",
+      "signals": ["index-cond", "index-name"],
+      "kind": "assertion",
+      "text": "return nodes.some((n) => n['Index Name'] === index && /\\s>=\\s/.test(n['Index Cond'] ?? '') && /\\s<\\s/.test(n['Index Cond'] ?? ''));"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 504,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "const stats = await planningStatistics();"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 505,
+      "phase": "phase-4",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "console.info('[P4-A] planningStatistics', JSON.stringify(stats));"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 507,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stats"],
+      "text": "expect(stats[relation], `${relation} has no row in pg_stat_user_tables`).toBeDefined();"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 508,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stats"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 524,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* index. PostgreSQL derives a prefix range from `^@` only when the index's"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 530,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* fell to a Seq Scan. `0079` adds the two byte-order indexes this case"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 543,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* there would be a gate with no subject; a gate demanding \"no Seq Scan\""
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 560,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["usesIndex", "nodes"],
+      "text": "expect(usesIndex(nodes, 'variants_sku_uq'), 'the arm served by variants_sku_uq must reach it').toBe(true);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 561,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["usesIndex", "nodes"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 572,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["indexRangeOn", "barcodeNodes"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 574,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "assertion",
+      "text": "`the ${table} barcode arm must carry a >= / < RANGE on one of ${candidates.join(' / ')} — a scanned barcode is the till's hot path, and only a byte-order index makes ^@ a range`,"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 587,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "JOIN pg_collation c ON c.oid = i.indcollation[1]"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 602,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `barcode ^@ $p`            | index RANGE | index RANGE |"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 603,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `lower(sku) ^@ $p`         | index RANGE | no range    |"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 604,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "*   | `lower(name) ^@ $p`        | index RANGE | no range    |"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 632,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "assertion",
+      "text": "expect(leakproof.get('starts_with'), '^@ is leakproof, which is what gives the barcode arms their range under RLS').toBe(true);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 634,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 645,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["indexRangeOn", "nodes"],
+      "text": "expect(indexRangeOn(nodes, 'products_sku_uq'), 'the SKU arm cannot range inside its index').toBe(false);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 646,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["indexRangeOn", "nodes"],
+      "text": "expect(indexRangeOn(nodes, 'product_translations_name_idx'), 'the NAME arm cannot range inside its index').toBe(false);"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 650,
+      "phase": "phase-4",
+      "signals": ["node-type", "seq-scan"],
+      "kind": "mention",
+      "text": "scannedRelations: nodes.filter((n) => n['Node Type'] === 'Seq Scan').map((n) => n['Relation Name'] ?? '?'),"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 666,
+      "phase": "phase-4",
+      "signals": ["node-type", "seq-scan"],
+      "kind": "mention",
+      "text": "const seq = nodes.filter((n) => n['Node Type'] === 'Seq Scan').map((n) => n['Relation Name'] ?? '?');"
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 668,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["seq"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 29,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "*   THE PER-INVOICE FUNCTION CALL IS GONE. `EXPLAIN (ANALYZE, BUFFERS)` of"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 553,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* `SET search_path` clause cannot be inlined, so `EXPLAIN` of"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 589,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 593,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = (r.rows[0] as Record<string, unknown>)['QUERY PLAN'] as unknown[];"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 875,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// pinned `search_path`, so it cannot be inlined and EXPLAIN sees one"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 878,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["fatTailPlanBefore"],
+      "text": "expect(Object.keys(fatTailPlanBefore.loops)).toContain('customer_ar_outstanding');"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 879,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["fatTailPlanAfter"],
+      "text": "expect(Object.keys(fatTailPlanAfter.loops)).toContain('customer_ar_outstanding');"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 880,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["beforePlan"],
+      "text": "expect(Object.keys(beforePlan.loops).length).toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-ar-setbased-equivalence.test.ts",
+      "line": 881,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["afterPlan"],
+      "text": "expect(Object.keys(afterPlan.loops).length).toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 172,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "planningStatistics,"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 303,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "readonly datcollate: string;"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 338,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: environment.datcollate,"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 350,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["assertWithin"],
+      "text": "function assertWithin(m: Measured, thresholdMs: number, budgetId: string): Diagnostic {"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 531,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "mention",
+      "text": "readonly 'Node Type': string;"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 533,
+      "phase": "cross-phase",
+      "signals": ["index-name"],
+      "kind": "mention",
+      "text": "readonly 'Index Name'?: string;"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 534,
+      "phase": "cross-phase",
+      "signals": ["index-cond"],
+      "kind": "mention",
+      "text": "readonly 'Index Cond'?: string;"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 540,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "/** EXPLAIN every captured statement under its own scope, as `daftar_app`, row security applied (P4-AL-75). */"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 545,
+      "phase": "cross-phase",
+      "signals": ["explain", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await db.scoped<{ 'QUERY PLAN': { Plan: PlanNode }[] }>(c.scope, `EXPLAIN (FORMAT JSON) ${c.text}`, c.params);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 546,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "assertion",
+      "text": "const plan = must(must(r.rows[0])['QUERY PLAN'][0]).Plan;"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 878,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "stats = await planningStatistics();"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1031,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "datcollate: environment.datcollate,"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1046,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "thisRun: { spelling: environment.datcollate, byteOrder: environment.collationIsByteOrder },"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1047,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "spellingsIdentical: environment.datcollate === CI_SERVICE_COLLATION.spelling,"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1142,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["record"],
+      "text": "expect(volume.fatCredits, 'customer credits exist, or the credit half of the reader of record is unmeasured').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1165,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stats"],
+      "text": "expect(Object.keys(stats).length, 'the statistics query found no measured relation at all').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1207,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["record"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1266,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["record"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1267,
+      "phase": "cross-phase",
+      "signals": ["node-type"],
+      "kind": "assertion",
+      "text": "outstanding.nodes.some((n) => n['Node Type'] === 'Function Scan'),"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1268,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["record"],
+      "text": "`${arm}: the reader of record no longer appears as a Function Scan — it has become inlinable, and an index-reach gate on \\`invoices\\` is now assertable:\\n${outstanding.json}`,"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1270,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "record"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1281,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["record", "ratio"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1324,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["assertWithin"],
+      "text": "assertWithin(m, BUDGET.D_BALANCE_P95, 'P4-D');"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1350,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1351,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1394,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect(ratio, 'the owner figure measured zero, so the RLS cost has no denominator').not.toBeNull();"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1395,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1447,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["assertWithin"],
+      "text": "assertWithin("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1459,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["assertWithin"],
+      "text": "assertWithin("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1495,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["report"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1515,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect(ratio, `${depth}: the 1-invoice arm measured zero, so the scaling ratio has no denominator`).not.toBeNull();"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1516,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["ratio"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1536,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["report"],
+      "text": "expect(environment.serverVersionNum, 'the server did not report a version, so nothing below is attributable to one').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1537,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "plan-gate",
+      "via": ["report"],
+      "text": "expect(environment.datcollate.length, 'the server did not report a collation').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-dataset.ts",
+      "line": 715,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* `datcollate`, `datctype`, locale provider, ICU locale, encoding — and"
+    },
+    {
+      "file": "tests/performance/receivables-s4-dataset.ts",
+      "line": 819,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* length: PostgreSQL stores `datcollate` exactly as given and normalises"
+    },
+    {
+      "file": "tests/performance/receivables-s4-dataset.ts",
+      "line": 858,
+      "phase": "cross-phase",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "export async function planningStatistics(): Promise<Record<string, { rows: number; analyzed: string | null }>> {"
+    },
+    {
+      "file": "tests/security/journal-lines-rls-policy.test.ts",
+      "line": 305,
+      "phase": "cross-phase",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const { rows } = await c.query<Record<string, unknown>>(`EXPLAIN (FORMAT JSON, COSTS false) SELECT count(*) FROM journal_lines`);"
+    },
+    {
+      "file": "tests/security/journal-lines-rls-policy.test.ts",
+      "line": 306,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "assertion",
+      "text": "return JSON.stringify(must(rows[0])['QUERY PLAN']);"
+    },
+    {
+      "file": "tests/security/journal-lines-rls-policy.test.ts",
+      "line": 311,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan"],
+      "text": "expect(plan).not.toMatch(/businesses/);"
+    },
+    {
+      "file": "tests/security/journal-lines-rls-policy.test.ts",
+      "line": 312,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan"],
+      "text": "expect(plan).not.toMatch(/SubPlan/);"
+    },
+    {
+      "file": "tests/security/p3c-td18-definer-ownership.test.ts",
+      "line": 552,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "FROM pg_policy pol WHERE pol.polrelid = 'public.catalog_identifiers'::regclass ORDER BY pol.polname COLLATE \"C\"`,"
+    },
+    {
+      "file": "tests/security/p4s4-cross-tenant-command-refusal.test.ts",
+      "line": 250,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "* `datcollate = datctype = en_US.utf8` — 20 passed (20). So the verdict was"
+    },
+    {
+      "file": "tests/security/phase2-s8-gate-tamper.test.ts",
+      "line": 413,
+      "phase": "phase-2",
+      "signals": ["planning-statistics"],
+      "kind": "mention",
+      "text": "planningStatistics: ["
+    },
+    {
+      "file": "tests/security/phase2-s8-gate-tamper.test.ts",
+      "line": 414,
+      "phase": "phase-2",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "{ table: 'accounts', relpages: 0, reltuples: -1, analyzedAt: null },"
+    },
+    {
+      "file": "tests/security/phase2-s8-gate-tamper.test.ts",
+      "line": 415,
+      "phase": "phase-2",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "{ table: 'journal_lines', relpages: 540, reltuples: 21614, analyzedAt: '2026-09-24 05:45:47.519354+00' },"
+    },
+    {
+      "file": "tests/security/policy-helper-inlining.test.ts",
+      "line": 220,
+      "phase": "cross-phase",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "`EXPLAIN (VERBOSE, COSTS OFF) SELECT id FROM businesses WHERE tenant_id = nullif(app_tenant(), '')::uuid`,"
+    },
+    {
+      "file": "tests/security/policy-helper-inlining.test.ts",
+      "line": 222,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = rows.map((r) => (r as unknown as Record<string, string>)['QUERY PLAN']).join('\\n');"
+    },
+    {
+      "file": "tests/security/policy-helper-inlining.test.ts",
+      "line": 226,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan"],
+      "text": "expect(plan, 'app_tenant() is still a per-row function call in the plan').not.toMatch(/app_tenant\\(\\)/);"
+    },
+    {
+      "file": "tests/security/policy-helper-inlining.test.ts",
+      "line": 227,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan"],
+      "text": "expect(plan).toMatch(/current_setting/);"
+    }
+  ]
+}

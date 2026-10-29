@@ -16,3 +16,6 @@ package-lock.json
 *.md
 # SQL migrations are frozen by SHA-256 — never reformatted
 *.sql
+# Agent worktrees the harness creates inside the checkout: full second copies
+# of this repository, never present in CI.
+.claude/

@@ -2,9 +2,14 @@
  * P3-S8 T-01 — THE SIGNED-AUTHORITY MATRIX, EVERY REGISTERED KIND
  * (docs/PHASE_3_S8_CONTRACT.md A-06; PM-44, PM-45, PM-46).
  *
- * Driven by the registry: `OP_KIND_BUILDERS` must hold exactly
- * `registeredOpKinds()`, so a kind registered without a builder — or a
- * builder for a kind nobody registered — fails the first case.
+ * Driven by the registry: `OP_KIND_BUILDERS` must hold exactly the kinds a
+ * PHASE 3 registrant registered (`phase3RegisteredOpKinds()`, the registry's
+ * own `registered_by` column, which `0074` widened so a later phase can
+ * register one), so a Phase 3 kind registered without a builder — or a
+ * builder for a Phase 3 kind nobody registered — fails the first case. The
+ * whole registry is still accounted for: the first case also asserts that the
+ * Phase 3 scope and its complement partition it and that every kind outside
+ * the scope records a well-formed later-phase registrant (P4-AL-88).
  *
  * For every kind, in its own business, the honest command is prepared through
  * the real commands and committed; then rows a–l present it to the entry
@@ -43,7 +48,8 @@ import { attempt, must, ownerClient, seedS3Business, seedS3World, type Outcome, 
 import { expectAccepted, expectRefused } from '../helpers/stock-ledger';
 import { sourceAssertion } from '../helpers/accounting-posting';
 import { OP_KIND_BUILDERS, mintHonest, type Biz, type OpKindBuilder, type PreparedKind, type ResultRow } from '../helpers/op-kind-builders';
-import { PREFIX_DB, prefixCatalogue, registeredOpKinds, runtimePrincipals, truthTables } from '../helpers/phase3-surface';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
+import { PREFIX_DB, opKindRegistrants, phase3RegisteredOpKinds, prefixCatalogue, runtimePrincipals, truthTables } from '../helpers/phase3-surface';
 import { P3C_OPERATION_KINDS } from '../helpers/p3c-migrations';
 import { JOURNAL_AND_LOGS, changedTables, tableDigest, type TableDigest } from '../helpers/table-digest';
 import { createScratchDb, scratchPool, urlOf, type ScratchDb } from '../helpers/scratch-db';
@@ -193,9 +199,33 @@ afterAll(async () => {
 
 describe('T-01 the matrix is driven by the registry', () => {
   it('the builders are exactly the registered kinds; each builder names its consuming routine, which posts nothing; financial = the accounting source types, whose union is the eight post-0052 types plus reversal', async () => {
-    expect(KINDS, 'builders = registry, both ways').toEqual(await registeredOpKinds());
+    // P4-AL-88. This was `KINDS toEqual registeredOpKinds()` — an exact
+    // equality over a registry a later phase populates, and `0074` widened
+    // `registered_by` from `^P3-S[0-9]+$` to `^P[0-9]+-S[0-9]+$` precisely so
+    // that it could. It is scoped by PROVENANCE, the registry's own column and
+    // the estate's existing idiom for this, and kept "and nothing more" by a
+    // partition: the builders here are exactly the kinds a PHASE 3 registrant
+    // registered, both ways, and every registered kind is either one of those
+    // or carries a well-formed later-phase registrant.
+    const phase3Kinds = await phase3RegisteredOpKinds();
+    expect(KINDS, 'builders = the Phase 3 registry, both ways').toEqual(phase3Kinds);
     // Phase 3 corrective (0072): the 26 S8-head kinds plus exactly the corrective kinds.
     expect(KINDS).toHaveLength(26 + P3C_OPERATION_KINDS.length);
+    const registrants = await opKindRegistrants();
+    const all = Object.keys(registrants).sort();
+    const beyond = all.filter((k) => !phase3Kinds.includes(k));
+    expect(
+      phase3Kinds.filter((k) => beyond.includes(k)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect([...phase3Kinds, ...beyond].sort(), 'and together they are the whole registry').toEqual(all);
+    // Not "these exist and that is fine": a kind outside the Phase 3 scope
+    // must carry a registrant of the accepted shape that is not a Phase 3 one,
+    // so its provenance is recorded and reviewable.
+    expect(
+      beyond.filter((k) => !/^P[0-9]+-S[0-9]+$/.test(registrants[k] ?? '') || /^P3-/.test(registrants[k] ?? '')),
+      'every kind beyond the Phase 3 scope records its registrant',
+    ).toEqual([]);
     for (const k of P3C_OPERATION_KINDS) expect(builderOf(k).slice, `${k} is registered by the corrective pass`).toBe('P3-C');
 
     const r = await ownerPool().query<{ sig: string | null; src: string | null; op: string }>(
@@ -219,12 +249,40 @@ describe('T-01 the matrix is driven by the registry', () => {
       const types = async (q: Queryable): Promise<string[]> =>
         (await q.query<{ t: string }>(`SELECT source_type AS t FROM accounting_source_types ORDER BY 1`)).rows.map((x) => x.t);
       const before = new Set(await types(prefix));
-      const added = (await types(ownerPool())).filter((t) => !before.has(t));
+      // P4-AL-88. `added` was the difference between the 0052 prefix and the
+      // WHOLE tree, so "eight after 0052 plus the corrective one" was a claim
+      // about every phase that FOLLOWS Phase 3: `0077` registers `sale` and
+      // `invoice`, and an accepted Phase 3 matrix went red for a reason that
+      // has nothing to do with the signed-authority surface. `accounting_
+      // source_types` carries no provenance column, so the scope cannot be
+      // `registered_by ~ '^P3-'`; it is the ACCEPTED PHASE 3 HEAD instead,
+      // frozen byte for byte by P4-AL-85 so no later phase can enter it. The
+      // nine are still claimed EXACTLY, word for word, and the types a later
+      // phase registers are claimed separately and positively just below.
+      const phase3Head = await createScratchDb('daftar_p3s8_phase3_head', { upTo: PHASE4_INHERITED_PREFIX_END, keys: false });
+      let atPhase3Head: string[];
+      try {
+        atPhase3Head = await types(phase3Head.pool);
+      } finally {
+        await phase3Head.drop();
+      }
+      const added = atPhase3Head.filter((t) => !before.has(t));
       // Phase 3 corrective (0072, TD-16): plus `purchase_residue_write_off`.
       expect(added, 'eight source types registered after 0052, plus the corrective one').toHaveLength(9);
       expect(added).toContain('purchase_residue_write_off');
       const union = [...new Set(KINDS.flatMap((k) => builderOf(k).accountingSourceTypes))].sort();
       expect(union).toEqual([...added, 'reversal'].sort());
+      // The later phases' half, positively, so nothing was merely dropped from
+      // the claim: every source type the LIVE catalogue holds beyond the
+      // accepted head is one no Phase 3 builder claims, and the two scopes
+      // together are still the whole registry.
+      const live = await types(ownerPool());
+      const beyondHead = live.filter((t) => !atPhase3Head.includes(t));
+      expect(
+        beyondHead.filter((t) => union.includes(t)),
+        'no source type a later phase registers is claimed by a Phase 3 builder',
+      ).toEqual([]);
+      expect([...atPhase3Head, ...beyondHead].sort(), 'and the two scopes together are the whole registry').toEqual([...live].sort());
     } finally {
       await prefix.end();
     }

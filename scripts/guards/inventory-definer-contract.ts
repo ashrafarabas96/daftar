@@ -211,6 +211,13 @@ export interface InventoryDefinerReport {
   readonly violations: string[];
   /** Every routine the migrations hand to the inventory principal. */
   readonly transferred: string[];
+  /**
+   * Routine → the migration files that hand it over, in apply order. The same
+   * information `transferred` carries, with the PROVENANCE kept, so a caller
+   * can scope a claim about the handover set to the phase whose files made it
+   * (P4-AL-88) instead of asserting over a set the next phase also grows.
+   */
+  readonly handovers: Readonly<Record<string, readonly string[]>>;
 }
 
 export function checkInventoryDefinerContract(src: InventoryDefinerSources): InventoryDefinerReport {
@@ -373,5 +380,5 @@ export function checkInventoryDefinerContract(src: InventoryDefinerSources): Inv
     }
   }
 
-  return { violations: v, transferred: [...handovers.keys()].sort() };
+  return { violations: v, transferred: [...handovers.keys()].sort(), handovers: Object.fromEntries([...handovers].map(([n, fs]) => [n, [...fs]])) };
 }
