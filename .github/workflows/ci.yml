@@ -19,11 +19,13 @@ on:
 env:
   NODE_VERSION: '24.12.x'
 
-# CI-RUNNER-01 (DR-17). The heavy jobs now run on ONE self-hosted runner with
-# a single job slot, so two runs of the same ref would otherwise queue behind
-# each other for hours. Superseding a run is also the correct behaviour on its
-# own terms: a push that replaces a head makes the older run's result evidence
-# for a tree nobody will merge.
+# Added by CI-RUNNER-01 (DR-17), when the heavy jobs ran on ONE self-hosted
+# runner with a single job slot and two runs of the same ref queued behind each
+# other for hours. DR-48 removed that runner and every job below is
+# GitHub-hosted again, so the six now run in parallel and the queueing reason
+# is gone. The rule stays because its other reason never depended on capacity:
+# a push that replaces a head makes the older run's result evidence for a tree
+# nobody will merge.
 #
 # The key deliberately includes `github.event_name`, so a `push` run and a
 # `pull_request` run NEVER share a group and can never cancel each other.
@@ -58,12 +60,20 @@ jobs:
   # -------------------------------------------------------------------------
   workspaces:
     # CI-RUNNER-01 (DR-17), SECOND ROUND. This job was meant to stay on
-    # GitHub's machines as one of the light ones. It cannot: every
-    # GitHub-hosted job in this repository is refused before a runner is ever
-    # assigned, and the API annotation says why, verbatim —
+    # GitHub's machines as one of the light ones, and in 2026-10 it could not:
+    # while the repository was PRIVATE and the account carried a payment block,
+    # every GitHub-hosted job was refused before a runner was ever assigned,
+    # and the API annotation said why, verbatim —
     #
     #   "The job was not started because recent account payments have failed
     #    or your spending limit needs to be increased."
+    #
+    # None of that holds now. The repository is public, GitHub-hosted minutes
+    # are unmetered, and this job runs on `ubuntu-latest` — so do not read the
+    # paragraph above as a reason to bring a self-hosted runner back. On a
+    # public repository that is the one thing this workflow's decision record
+    # forbids outright, because a fork's pull request would execute untrusted
+    # code on the machine.
     #
     # Measured on run 40419719684: `workspaces` failed 3 seconds in with
     # `runner_name: ""` and zero steps, and because every other job declares
@@ -71,10 +81,12 @@ jobs:
     # card had just moved to the self-hosted runner. Leaving the light jobs on
     # GitHub therefore does not keep them cheap, it stops the whole workflow.
     #
-    # Self-hosted runners are not metered and are not subject to the spending
-    # limit, so moving this job is what makes the rest of the workflow
-    # reachable at all. Not one step changed.
-    runs-on: [self-hosted, daftar-wsl]
+    # That is why CI-RUNNER-01 moved this job to a self-hosted runner, which is
+    # not metered. DR-48 reversed the premise rather than the conclusion: a
+    # PUBLIC repository gets unmetered GitHub-hosted minutes, so the billing
+    # block that made the move necessary cannot recur here, and the job is
+    # hosted again. Not one step changed by either move.
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -181,7 +193,7 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    runs-on: [self-hosted, daftar-wsl]
+    runs-on: ubuntu-latest
     services:
       postgres:
         image: postgres:16
@@ -560,8 +572,9 @@ jobs:
   # -------------------------------------------------------------------------
   web-admin:
     needs: workspaces
-    # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
-    runs-on: [self-hosted, daftar-wsl]
+    # CI-RUNNER-01 moved this to the self-hosted runner for the same measured
+    # reason as `workspaces`; DR-48 moved it back for the same reason too.
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -648,13 +661,15 @@ jobs:
   # -------------------------------------------------------------------------
   android:
     needs: workspaces
-    # CI-RUNNER-01: self-hosted. The Android toolchain is NOT part of the
-    # machine image here: setup-java downloads Temurin 17 and setup-android
-    # downloads platform 35 + build-tools 35.0.0 into the runner's own tool
-    # cache, both without root. Gradle 8.9 is installed on the runner because
-    # `gradle wrapper` below needs a gradle to bootstrap from and only
-    # GitHub's image ships one. Nothing in this job was changed.
-    runs-on: [self-hosted, daftar-wsl]
+    # CI-RUNNER-01 moved this to the self-hosted runner, where the Android
+    # toolchain was NOT part of the machine image: setup-java downloads Temurin
+    # 17 and setup-android downloads platform 35 + build-tools 35.0.0 into the
+    # runner's own tool cache, both without root, and Gradle 8.9 had to be
+    # installed on the machine because `gradle wrapper` below needs a gradle to
+    # bootstrap from and only GitHub's image ships one. DR-48 moved the job
+    # back to that image, so the bootstrap gradle is there again. Nothing in
+    # this job was changed by either move.
+    runs-on: ubuntu-latest
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -752,14 +767,19 @@ jobs:
   # -------------------------------------------------------------------------
   browser:
     needs: workspaces
-    # CI-RUNNER-01 / DR-18: self-hosted. 111 billable minutes on 2026-10-26.
-    # Two steps of this job pull in opposite directions — the Chromium
-    # dependency install wants root, and `embedded-postgres` in the gate
-    # REFUSES to initialise as root — which is why the job could not simply be
-    # moved. It is resolved by removing the root half rather than granting
-    # root: see the install step below. The runner runs as `laptop` (uid 1000),
-    # so the embedded PostgreSQL half is satisfied by construction.
-    runs-on: [self-hosted, daftar-wsl]
+    # CI-RUNNER-01 / DR-18 moved this to the self-hosted runner: 111 billable
+    # minutes on 2026-10-26. Two steps of this job pull in opposite directions
+    # — the Chromium dependency install wants root, and `embedded-postgres` in
+    # the gate REFUSES to initialise as root — which is why the job could not
+    # simply be moved. It was resolved by removing the root half rather than
+    # granting root: see the install step below.
+    #
+    # DR-48 moved the job back here. The `embedded-postgres` half still holds,
+    # but on a DIFFERENT fact: on the self-hosted runner the service ran as
+    # `laptop` (uid 1000); on a GitHub-hosted runner the job runs as `runner`.
+    # Neither is root, which is all that routine requires — so do not read the
+    # old reason as the current one.
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
@@ -893,11 +913,11 @@ jobs:
   # -------------------------------------------------------------------------
   hygiene:
     needs: workspaces
-    # CI-RUNNER-01: self-hosted, for the same measured reason as `workspaces`.
-    # Nothing here needs root: gitleaks runs as a Docker container action and
-    # the runner has Docker. The `permissions:` block above is #14's fix and is
-    # untouched.
-    runs-on: [self-hosted, daftar-wsl]
+    # CI-RUNNER-01 moved this to the self-hosted runner for the same measured
+    # reason as `workspaces`, and DR-48 moved it back. Nothing here needs root:
+    # gitleaks runs as a Docker container action and both machines have Docker.
+    # The `permissions:` block above is #14's fix and is untouched.
+    runs-on: ubuntu-latest
     # gitleaks-action reads the pull request's commit list through the REST API
     # (GET /repos/{owner}/{repo}/pulls/{n}/commits) before it scans anything.
     # This workflow declared no `permissions:` anywhere and the repository's
