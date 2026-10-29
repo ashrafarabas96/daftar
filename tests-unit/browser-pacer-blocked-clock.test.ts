@@ -6,10 +6,17 @@
  *
  * That discount is only honest if the quantity it discounts is a union of
  * blocked intervals. A sum of each wait would exceed wall-clock whenever two
- * requests wait at once - and this gate drives three locale workers through one
- * shared budget, so they wait at once routinely. An over-counted discount is a
- * softened assertion wearing a measurement's clothes, which is worse than no
- * discount at all.
+ * requests wait at once, and a single page waits at once routinely: one
+ * document mount reads several routes, each with its own budget. An
+ * over-counted discount is a softened assertion wearing a measurement's
+ * clothes, which is worse than no discount at all.
+ *
+ * It was written when the gate ran three locales in parallel through one
+ * shared set of budgets, which made overlap the normal case rather than an
+ * occasional one. The same change set then serialised the locales, so the
+ * largest hold in a whole run is now 2ms. The law stays because the reason it
+ * exists does: concurrency within one page is not removed by removing
+ * concurrency between pages.
  *
  * Measured on run 40851309513, the failure that produced all of this: step
  * durations were bimodal - six steps between 19.1s and 23.1s, the
