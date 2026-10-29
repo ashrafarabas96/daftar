@@ -7,14 +7,15 @@ import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/
  * `media.test.ts` already covers what the MEDIA SERVICE refuses (MIME/magic
  * disagreement, a fake image, an unsupported type, a traversal filename, a
  * cross-business attach) and it has an "oversized file -> 413" case. That
- * case does not pin the parser, and the reason is measured, not guessed: the
- * FIRST size limit a request meets on this route is the media SERVICE's
- * `MEDIA_MAX_BYTES` (apps/api/src/config.ts, default 5 MiB; enforced in
- * media.service.ts), not the interceptor's `8 * 1024 * 1024`
- * (catalog.controller.ts). Anything between 5 and 8 MiB therefore dies in the
- * service with the same 413 / MEDIA_TOO_LARGE the parser would produce, so
- * with the default configuration the parser's limit is shadowed and could be
- * deleted without any size test noticing. (media.test.ts:97 is blind for that
+ * case does not pin the parser, and the reason is measured, not guessed: for
+ * any payload UNDER the interceptor's `8 * 1024 * 1024` (catalog.controller.ts)
+ * the first size limit met is the media SERVICE's `MEDIA_MAX_BYTES`
+ * (apps/api/src/config.ts, default 5 MiB; enforced in media.service.ts). Above
+ * 8 MiB the parser is met first, but nothing in the existing suite sends that
+ * much. Anything between 5 and 8 MiB therefore dies in the service with the
+ * same 413 / MEDIA_TOO_LARGE the parser would produce, so with the default
+ * configuration the parser's limit is shadowed and could be deleted without
+ * any size test noticing. (media.test.ts:97 is blind for that
  * reason, and also because it accepts `[400, 413]`.)
  *
  * To pin the parser, this suite lifts the service limit ABOVE the parser's
@@ -30,11 +31,14 @@ import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/
  * between the two cases.
  *
  * KNOWN PRODUCT DEFECT, NOT FIXED HERE (pre-existing, not caused by this
- * diff; track as its own card): a part sent under an unexpected field name
- * makes multer raise `LIMIT_UNEXPECTED_FILE`, which the error filter does not
- * map, so the caller gets a 500 and an `unhandled error` log line. The correct
- * contract is 400 / VALIDATION_FAILED. The wrong-field case below records the
- * reality (refused, never accepted) rather than hiding it.
+ * diff; its own card, "unmapped MulterError"): a part sent under an
+ * unexpected field name makes multer raise `LIMIT_UNEXPECTED_FILE`. That
+ * error never becomes an `HttpException`, so the error filter's existing
+ * 400 -> VALIDATION_FAILED mapping is not reached: the
+ * caller gets a 500 / INTERNAL_ERROR and an `unhandled error` log line. The
+ * correct contract is 400 / VALIDATION_FAILED. ONLY the wrong-field case
+ * below records that reality (refused, never accepted); the no-file-part case
+ * is NOT affected and asserts the real contract exactly.
  */
 describe('T-10 upload limits: the multipart parser refuses before the handler, at its own boundary', () => {
   let t: TestApp;
@@ -101,10 +105,11 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
   it('no file part at all is a validation error that names the field, not a 500', async () => {
     const res = await t.request.post('/v1/catalog/media').set(auth()).field('note', 'no file here');
 
-    // Reality, not the target contract (see the header): today this is a 500
-    // from an unmapped MulterError. What must hold either way is that the part
-    // is refused and never taken as the file.
-    expect(res.status, 'a part under another field name must never be accepted as the upload').toBeGreaterThanOrEqual(400);
+    // No file part exists here at all (only a text field), so multer raises
+    // nothing: the handler runs with no file and throws AppError.validation.
+    // This IS the target contract, measured, so it is asserted exactly.
+    expect(res.status, 'a request with no file part is a 400, never a 500').toBe(400);
+    expect(res.body?.error?.code, 'it travels the product validation contract').toBe('VALIDATION_FAILED');
     expect(res.body?.id, 'no media record may be created').toBeUndefined();
   });
 
