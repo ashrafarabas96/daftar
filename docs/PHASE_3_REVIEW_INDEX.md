@@ -22,7 +22,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | API | 68 | 14 | 2 |
 | Web | 90 | 13 | 31 |
 | Security / gates | 35 | 33 | 7 |
-| CI / release | 16 | 7 | 4 |
+| CI / release | 16 | 7 | 3 |
 | Other production files | 1 | 0 | 0 |
 | Tests (listed separately) | 303 | — | — |
 | Documentation (listed separately) | 36 | — | — |
@@ -320,20 +320,20 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 
 | Path | Slice | Purpose | First checkpoint | Security | Protected by |
 | --- | --- | --- | --- | --- | --- |
-| `.github/workflows/ci.yml` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9, corrective) | The name used to say "DAFTAR Phase 1 CI", which stopped being true at P2-S1 and had been misdescribing itself for seven slices: this workflow runs Phase 1 AND every accepted Phase… | 61b89d6 (S1 closure) | high: workflow | 1: security/phase3-release-prefix |
+| `.github/workflows/ci.yml` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9, corrective) | The name used to say "DAFTAR Phase 1 CI", which stopped being true at P2-S1 and had been misdescribing itself for seven slices: this workflow runs Phase 1 AND every accepted Phase… | 61b89d6 (S1 closure) | high: workflow | 2: tests-unit/test-lane-roster, security/phase3-release-prefix |
 | `.github/workflows/phase2-s8-evidence.yml` | P3-S1 | P2-S8 ACCEPTANCE EVIDENCE — the work that cannot run on every push, run on GitHub anyway, at one exact commit (f §9, §10, §26). | 61b89d6 (S1 closure) | high: workflow | none found by reference |
 | `.github/workflows/phase3-s9-release.yml` | P3-S9 (+corrective) | P3-S9 RELEASE EVIDENCE — the Phase 3 release candidate, proved on GitHub, at one exact commit (docs/PHASE_3_S9_CONTRACT.md §5.2). | d6f1bc6 (S9 candidate) | high: workflow | none found by reference |
 | `package-lock.json` | P3-S1 (+corrective) | The npm lockfile: the exact dependency tree `npm ci` installs. | 61b89d6 (S1 closure) | standard | 2: security/phase2-s8-gate-tamper, security/t10-upgrade-lock-contract |
-| `package.json` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9, corrective) | The root workspace manifest: the workspaces, the `npm run` commands every gate and CI step calls, the dev tooling and the overrides. | 61b89d6 (S1 closure) | standard | 5: integration/embedded-pg-binaries, security/p3c-corrective-gate-tamper, security/phase3-release-gate, security/phase3-s9-evidence (+1) |
+| `package.json` | P3-S1 (+S2, S3, S4, S5, S6, S7, S8, S9, corrective) | The root workspace manifest: the workspaces, the `npm run` commands every gate and CI step calls, the dev tooling and the overrides. | 61b89d6 (S1 closure) | standard | 6: tests-unit/test-lane-roster, integration/embedded-pg-binaries, security/p3c-corrective-gate-tamper, security/phase3-release-gate (+2) |
 | `scripts/export-release.ts` | P3-S9 (+corrective) | Release export (Final Enforcement Directive §70–72; Final Release Blocker 3). | d6f1bc6 (S9 candidate) | standard | 4: security/archive-portability, security/p3c-export-content-scan, security/p3c-phase1-gate-secret-scope, security/release-tree-archive |
 | `scripts/phase1-release-gate.ts` | corrective | PHASE 1 RELEASE GATE (Directive §70–74, §77; Final Release Blockers 3, 5, 7). | not yet (corrective candidate) | high: gate | 5: integration/accounting-guards, integration/release-gate, security/archive-portability, security/p3c-phase1-gate-secret-scope (+1) |
 | `scripts/phase2-release-gate.ts` | P3-S1 | PHASE 2 RELEASE GATE — `npm run gate:phase2:release` | 61b89d6 (S1 closure) | high: gate | 5: security/phase2-release-prefix, security/phase3-release-gate, security/phase3-s9-evidence, security/release-tree-archive (+1) |
-| `scripts/phase2-s9-evidence.ts` | P3-S9 | P2-S9 RELEASE EVIDENCE — the machine-readable record of one release run | d6f1bc6 (S9 candidate) | standard | none found by reference |
+| `scripts/phase2-s9-evidence.ts` | P3-S9 | P2-S9 RELEASE EVIDENCE — the machine-readable record of one release run | d6f1bc6 (S9 candidate) | standard | 1: tests-unit/release-evidence-path-portability |
 | `scripts/phase3-deployed-rehearsal.ts` | P3-S9 (+corrective) | P3-S9 — THE BUSINESS, RUN ON THE DATABASE THE DEPLOYER BUILT (A-10) | d6f1bc6 (S9 candidate) | high: definer | 3: security/p3c-td18-definer-ownership, security/phase3-deployed-rehearsal, security/phase3-release-gate |
 | `scripts/phase3-release-gate.ts` | P3-S9 (+corrective) | PHASE 3 RELEASE GATE — `npm run gate:phase3:release` | d6f1bc6 (S9 candidate) | high: gate | 4: security/phase3-release-docs, security/phase3-release-gate, security/phase3-s9-evidence, security/release-tree-archive |
 | `scripts/phase3-review-index.curated.json` | corrective | The hand-curated purposes the review index generator reads for files whose header and commit subject say too little. | not yet (corrective candidate) | standard | none found by reference |
-| `scripts/phase3-review-index.ts` | corrective | PHASE 3 REVIEW INDEX — `npm run index:phase3:review` / `npm run check:phase3:review-index` | not yet (corrective candidate) | standard | 1: security/p3c-review-index |
-| `scripts/phase3-s9-evidence.ts` | P3-S9 (+corrective) | P3-S9 RELEASE EVIDENCE — the machine-readable record of one release run | d6f1bc6 (S9 candidate) | standard | 2: security/p3c-secret-scan, security/phase3-s9-evidence |
+| `scripts/phase3-review-index.ts` | corrective | PHASE 3 REVIEW INDEX — `npm run index:phase3:review` / `npm run check:phase3:review-index` | not yet (corrective candidate) | standard | 2: tests-unit/release-evidence-path-portability, security/p3c-review-index |
+| `scripts/phase3-s9-evidence.ts` | P3-S9 (+corrective) | P3-S9 RELEASE EVIDENCE — the machine-readable record of one release run | d6f1bc6 (S9 candidate) | standard | 3: tests-unit/release-evidence-path-portability, security/p3c-secret-scan, security/phase3-s9-evidence |
 | `scripts/runner-canary.ts` | P3-S9 | THE VERDICT THE EXIT-CODE CANARY READS, ON ITS OWN (f §3, §24). | d6f1bc6 (S9 candidate) | standard | 3: security/phase2-s8-gate-tamper, security/phase3-release-gate, security/runner-canary |
 | `scripts/test-census.ts` | corrective | TEST CENSUS — `npm run census:tests [-- --json=<file>] [--markdown=<file>]` | not yet (corrective candidate) | standard | 1: security/p3c-review-index |
 

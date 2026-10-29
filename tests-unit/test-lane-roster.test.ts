@@ -182,24 +182,18 @@ describe('the test-lane roster', () => {
   it('names no directory that is gone — a stale row is a lie about coverage', () => {
     const onDisk = new Set(derivedDirs());
     const stale = ROSTER.map((r) => r.dir).filter((d) => !onDisk.has(d));
-    expect(stale, `roster rows whose directory no longer holds any test: ${stale.join(', ')}`).toEqual(
-      [],
-    );
+    expect(stale, `roster rows whose directory no longer holds any test: ${stale.join(', ')}`).toEqual([]);
   });
 
   it('every rostered script exists in the root package.json', () => {
     const s = scripts();
     const missing = ROSTER.filter((r) => !(r.script in s)).map((r) => `${r.dir} -> ${r.script}`);
-    expect(missing, `rostered scripts that the root package.json does not declare: ${missing.join(', ')}`).toEqual(
-      [],
-    );
+    expect(missing, `rostered scripts that the root package.json does not declare: ${missing.join(', ')}`).toEqual([]);
   });
 
   it("every rostered script's command actually reaches its directory", () => {
     const s = scripts();
-    const unreached = ROSTER.filter((r) => !(s[r.script] ?? '').includes(r.reaches)).map(
-      (r) => `${r.script} does not mention ${r.reaches} (for ${r.dir})`,
-    );
+    const unreached = ROSTER.filter((r) => !(s[r.script] ?? '').includes(r.reaches)).map((r) => `${r.script} does not mention ${r.reaches} (for ${r.dir})`);
     expect(unreached, unreached.join('; ')).toEqual([]);
   });
 
@@ -236,10 +230,7 @@ describe('the test-lane roster', () => {
     const orphans = ROSTER.map((r) => r.script)
       .filter((v, i, a) => a.indexOf(v) === i)
       .filter((script) => !reached.has(script))
-      .map(
-        (script) =>
-          `${script} is declared but nothing in ci.yml or scripts/*.ts reaches it, directly or by composition`,
-      );
+      .map((script) => `${script} is declared but nothing in ci.yml or scripts/*.ts reaches it, directly or by composition`);
     expect(orphans, orphans.join('; ')).toEqual([]);
   });
 
@@ -247,9 +238,6 @@ describe('the test-lane roster', () => {
     // `ci.yml` runs `npm test`. A `test:unit` script that exists and is not in
     // that chain is run by nobody, which is the defect this card closes.
     const chain = scripts()['test'] ?? '';
-    expect(
-      chain,
-      'the root `test` script must compose `test:unit`, or the no-database lane never runs in CI',
-    ).toContain('test:unit');
+    expect(chain, 'the root `test` script must compose `test:unit`, or the no-database lane never runs in CI').toContain('test:unit');
   });
 });
