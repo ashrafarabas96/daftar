@@ -176,7 +176,11 @@ export const SCHEMA_FLOOR_REFUSAL = 'Refusing to start — database schema is be
  * `schema_migrations` is owned by `postgres` and granted to `postgres` ALONE —
  * measured, not assumed: `has_table_privilege('daftar_app',
  * 'public.schema_migrations', 'SELECT')` is `false`, no routine exposes it, and
- * `MIGRATION_DATABASE_URL` is withheld from the API runtime on purpose
+ * the deployment-only migration credential is withheld from this runtime on
+ * purpose, and is deliberately NOT NAMED here: `static-guards.ts` rules 3 and
+ * 14 forbid this process from referencing that variable at all, comments
+ * included, and a comment that names it is the first step toward code that
+ * reads it. The guard is right; this sentence obeys it
  * («migration command only; the API runtime never reads it»). So on a real
  * deployment the API's own principal CANNOT read the migration ledger, and a
  * gate that only read the ledger would not fail closed — it would fail
