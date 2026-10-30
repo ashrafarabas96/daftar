@@ -833,6 +833,115 @@ describe('DR-60 — the eight read quals 0086 rewrote isolate one merchant from 
     }
   }, 300_000);
 
+  /**
+   * DR-71 §6 — `customer_ar_open_document_counts` ACROSS THE BOUNDARY, with
+   * B's documents PROVED PRESENT AT THE MOMENT OF THE CALL.
+   *
+   * §5 above already asks this reader for B's customer under A's scope and
+   * requires `[]`. What it does not do — and what DR-71 §6 names — is prove
+   * that B HAD anything to hide at that instant. Its positive control is
+   * taken over A's own figures and over B's AGING, both before the
+   * cross-tenant calls; neither of those says that B's open invoices still
+   * existed, under this reader's own population predicate, when A asked.
+   *
+   * That gap matters because every assertion here is an EMPTINESS claim, and
+   * an emptiness claim has exactly two explanations: the barrier held, or
+   * there was nothing there. The second is not hypothetical in a shared
+   * fixture — a settlement step that closed B's invoices, a `resetData` that
+   * ran between the seed and the call, or a reader whose population predicate
+   * excludes a fully-settled document would each leave B with no counter row
+   * at all, and `toEqual([])` would pass over a boundary nobody tested.
+   *
+   * So this case measures, IN ORDER, inside one window:
+   *
+   *   1. as the OWNER, which bypasses row security: B's open invoices exist,
+   *      counted through the reader's OWN population rule (`outstanding <> 0`)
+   *      rather than a rule this test invents;
+   *   2. as `daftar_app` under B's scope: B's own counters are non-empty AND
+   *      their totals are non-zero — a row of zeros is a presence without
+   *      substance, and `[]` versus `[{0,0}]` is the difference between «the
+   *      barrier held» and «the barrier held over nothing»;
+   *   3. as `daftar_app` under A's scope, with B's arguments: nothing;
+   *   4. and that the connection doing (3) really is `daftar_app`, so the
+   *      emptiness is row security and not a privilege error misread.
+   */
+  it('DR-71 §6 — A reads NONE of B’s open-document counters, with B’s invoices proved present and non-zero at that moment', async () => {
+    const counts = async (c: Client, businessId: string, customerId: string): Promise<readonly { currency_code: string; d: string; k: string }[]> =>
+      (
+        await c.query<{ currency_code: string; d: string; k: string }>(
+          `SELECT currency_code, open_debit_count::text AS d, open_credit_count::text AS k
+             FROM customer_ar_open_document_counts($1::uuid, $2::uuid) ORDER BY 1`,
+          [businessId, customerId],
+        )
+      ).rows;
+
+    // ── 1. B HAS SOMETHING TO HIDE, measured as the owner ────────────────
+    // `invoice_outstanding` over B's open invoices, with the reader's own
+    // `<> 0` population rule (candidate `0084:736`), so the premise is stated
+    // in the same terms the routine states it in.
+    const present = await ownerPool().query<{ n: string }>(
+      `SELECT count(*)::text AS n
+         FROM invoices i
+         JOIN LATERAL invoice_outstanding(i.business_id, ARRAY[i.id]) o ON TRUE
+        WHERE i.business_id = $1 AND i.customer_id = $2 AND i.status = 'open' AND o.outstanding_txn_minor <> 0`,
+      [B.businessId, B.customerId],
+    );
+    const bOpen = BigInt(present.rows[0]?.n ?? '0');
+    expect(
+      bOpen > 0n,
+      `NO SUBJECT — tenant B's customer has no open invoice with a non-zero outstanding amount at the moment of this call, so A reading zero ` +
+        `rows below would be A reading an empty set and would prove nothing about the tenant boundary`,
+    ).toBe(true);
+
+    const asA = await connectAs({ tenantId: A.tenantId, businessId: A.businessId });
+    const asB = await connectAs({ tenantId: B.tenantId, businessId: B.businessId });
+    try {
+      // ── 4. the principal is the merchant runtime role, not a superuser ──
+      // Taken before the emptiness claims: a connection that had landed as a
+      // BYPASSRLS role would read everything, and one that had landed as a
+      // role without EXECUTE would read nothing for a reason that has nothing
+      // to do with tenancy. Either way the `[]` below would be worthless.
+      const who = await asA.query<{ u: string; bypass: boolean }>(
+        `SELECT current_user::text AS u, (SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass`,
+      );
+      expect(who.rows[0]?.u, `the cross-tenant call must be made by the merchant runtime principal`).toBe('daftar_app');
+      expect(who.rows[0]?.bypass, `and that principal must not bypass row security, or the boundary below is not being tested at all`).toBe(false);
+
+      // ── 2. B's OWN counters, non-empty AND non-zero ──────────────────────
+      const bOwn = await counts(asB, B.businessId, B.customerId);
+      expect(
+        bOwn.length > 0,
+        `NO SUBJECT — B reads no open-document counter for its own customer, so this reader returns nothing for B under ANY scope and A's ` +
+          `empty read is not attributable to the boundary`,
+      ).toBe(true);
+      const bTotal = bOwn.reduce((acc, r) => acc + BigInt(r.d) + BigInt(r.k), 0n);
+      expect(bTotal > 0n, `NO SUBJECT — B's own counters are all zero (${JSON.stringify(bOwn)}), so there is no document whose count A could have seen`).toBe(
+        true,
+      );
+
+      // ── 3. THE CLAIM: A's row security over B's arguments ────────────────
+      const leaked = await counts(asA, B.businessId, B.customerId);
+      expect(
+        leaked,
+        `tenant A, holding its own legitimate scope, read tenant B's open-document counters by passing B's business and customer ids. B had ` +
+          `${bOpen} open invoice(s) and ${bTotal} counted document(s) at that moment, so this is a live cross-tenant disclosure of another ` +
+          `merchant's receivable position through customer_ar_open_document_counts.`,
+      ).toEqual([]);
+
+      // And the reciprocal direction, so the result is not an artefact of
+      // which tenant happens to be seeded more heavily.
+      const aOwn = await counts(asA, A.businessId, A.customerId);
+      expect(aOwn.length > 0, `NO SUBJECT — A reads no counter for its own customer, so A's reader is answering nothing under any arguments`).toBe(true);
+      expect(
+        await counts(asB, A.businessId, A.customerId),
+        `tenant B read tenant A's open-document counters, so the boundary holds in one direction only`,
+      ).toEqual([]);
+    } finally {
+      await asA.end();
+      await asB.end();
+    }
+  }, 300_000);
+
   // ── 6. THE SURFACE ITSELF ───────────────────────────────────────────────
   it('row security is ENABLED and FORCED on all four relations, and exactly the eight quals 0086 names are in the subselect form', async () => {
     const rs = await ownerPool().query<{ relname: string; relrowsecurity: boolean; relforcerowsecurity: boolean }>(
