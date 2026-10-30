@@ -92,55 +92,61 @@ The executed refusal is caught by the **chain-position** arm, `h.x <> h.before`
 recurrence*. In that write the conservation identity was **satisfied**; it is
 the position that was impossible.
 
-So the conservation arm — `Σrel <> HALF_EVEN(B·Σa, T)` — has teeth that have
-been shown only **synthetically**, on hand-made arguments such as `B = 333,
-T = 1000`. The suite says so itself, in a case of its own: *the cumulative
-identity has teeth only where `B ≠ T`, and on this head `B = T` — stated,
-measured, and not faked*. That case is recorded on the slice roster for exactly
-that reason: losing it would break no measurement, it would quietly remove the
-disclosure. And it is not an oversight: the project already reasoned about this
-and wrote the reasoning down. `tests/golden-regression/phase4-s4/10-settlement-cross-currency.golden.test.ts`
-has a section headed *one thing this head cannot reach, stated and not faked*,
-which says that the AR dust is non-zero only when the invoice is in a currency
-other than the base, that on this head no invoice can be, and that it therefore
-**measures the pin and reports it as the disclosure** — naming the dead FX
-branch it strands — and proves the dust law synthetically as a red proof rather
-than faking a fixture. It states plainly that it **does not assert the gap is
-correct**. That is the right way to carry a limit, and it is why the arm is
-inference rather than measurement today.
+So the conservation arm — `Σrel <> HALF_EVEN(B·Σa, T)` — was, when this
+document was first written, shown only on synthetic arguments. **DR-73 §2 ruled
+that insufficient and required it exercised live, with the `B ≠ T` invoice
+seeded directly in the test. That is now done, and what it found is worth more
+than a pass.**
 
-### §2.2 — one measured fact that narrows that premise, and one measurement nobody has taken
+### §2.1 — the arm fires, and it is redundant; both are measured
 
-The golden's premise rests on the catalogue pin at `catalog.service.ts:247-252`,
-which is a **creation-time** pin. Two things measured here sit beside it:
+A schema-lawful `B ≠ T` invoice is seeded directly — an FX rate, a sale and an
+invoice carrying the `invoices_rate_shape_ck` triple, with `B` computed by the
+shipped conversion routine rather than typed in. On it, a chain whose positions
+**partition `T` exactly**, with the credit application's released base off by
+**one minor unit**, is refused through the forced trigger with
+`invoice_settlement.settlement_inconsistent`. The chain breaks are `[]` and
+`Σa = T` is measured, so neither the recurrence nor the over-total term can be
+the cause.
 
-- an **update** pins a product's price currency to **its own prior value**, not
-  to the current base (`catalog.service.ts:321`); and
-- **`changeBaseCurrency` does not consult products at all** — read in full at
-  `tenancy.service.ts:443`, its only lock is `financial_started_at` and its only
-  write is `UPDATE businesses SET base_currency`. Zero queries against
-  `products` or `price_currency`.
+Attribution is not by reading. The per-row terms are **knocked out of the live
+body's own text**, and the conservation term then refuses that one minor unit
+**alone** while still **accepting** the lawful chain — so it is not a blanket
+refuser.
 
-The lock is real and does arm: `0045_accounting_post_entry.sql:817` sets
-`financial_started_at = now()` on the first posted entry, and `:365-370` keeps
-it from being unset. So the window is *before any posting*, not *never*. Inside
-that window a product priced in `X`, a base changed to `Y`, and a first credit
-sale are each ordinary operations.
+**And the disclosure, which is the real finding: the arm cannot fire alone.**
+`supplier_ap_release` is exactly `R(X+a) − R(X)`, so per-row-correct releases
+telescope to the identity's value — measured on the seeded invoice's own figures
+— and the mirror knockout shows the **per-row** term refuses the same write.
+Given the recurrence, the conservation term is **redundant**. The suite says so
+in a case of its own rather than letting one shared `RAISE` imply that two
+independent things were proved.
 
-**NOT_MEASURED, and therefore not asserted:** whether such a sale can actually
-be committed, or whether the SQL commit path refuses a non-base currency before
-an invoice row exists. `rate_source` is decided in the command function, not in
-the service, and this decision did not measure it. Until it is measured, the
-premise is **unproven in both directions** — the golden's sentence is not shown
-false, and it is no longer supported by the pin it cites.
+That is also why the arm had never fired against a row: not an oversight, but
+the consequence of a formula under which a chain that satisfies the recurrence
+satisfies the identity too.
 
-**The open question, for the owner, not for this document:** accept the seal
-with the conservation arm resting on the formula being telescoping — which is
-proved independently, and over 252,800 cases with zero counterexamples — or
-open a card that (a) measures whether the commit path admits a non-base
-currency, and if it does, (b) seeds a `B <> T` invoice so the third layer is
-measured live and the golden's disclosure case becomes its live assertion, as
-that file says it should the day a non-base price currency is admitted.
+### §2.2 — what the merchant-facing path still owes
+
+`B ≠ T` is seeded because **no command on this head can create such an
+invoice**, and the suite pins that sentence. The cross-currency golden had
+already reported the same limit, measuring the catalogue pin as its disclosure
+and refusing to fake a fixture.
+
+Measured here, and it narrows that golden's premise: the pin it cites is a
+**creation-time** pin; an **update** pins a product's price currency to its own
+prior value, not to the current base; and the routine that changes the base
+currency **does not consult products at all** — its only lock is the flag
+marking financial activity, its only write the base currency, with zero queries
+against products. The lock is real and arms on the first posted entry, so the
+window is *before any posting*, not *never*.
+
+Whether a sale in that window can actually be **committed** is **NOT_MEASURED**,
+and by DR-73 §2 it is a **follow-up card after the seal**: drive the whole
+command path — change the base currency through the API, then sell — and
+measure whether an invoice row with `rate_source ≠ 'base'` comes into
+existence. Until then the golden's sentence is not shown false, and it is no
+longer supported by the pin it cites.
 
 ## §3 — permanent rule
 
