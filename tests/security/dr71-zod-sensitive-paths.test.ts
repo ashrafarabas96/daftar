@@ -393,14 +393,21 @@ describe('DR-71 s3b. HTTP: money and permission refusals change nothing, and aut
       { roleKeys: [''] },
       { roleKeys: Array.from({ length: 11 }, (_, i) => `r${i}`) },
       { roleKeys: ['owner'], grantAll: true },
-      { grantAll: true, roleKeys: 'owner-SECRET9' },
+      // A STRING where an array is required — and nothing more than that is
+      // asked of the value. The first version of this fixture was shaped like
+      // a credential, and gitleaks' `generic-api-key` rule matched it in the
+      // pull request's commit-range scan. A fixture shaped like a secret trips
+      // a control that exists to catch real ones, so the answer is to reshape
+      // the fixture — never to add it to `.gitleaksignore`, and never to name
+      // the retired value here either, which would leave the match in place.
+      { grantAll: true, roleKeys: 'not-an-array' },
       { roleKeys: [1, 2, 3], extra: 1 },
     ];
     for (const body of bodies.flatMap((b) => [b, reorderKeys(b, 'reverse') as Body])) {
       const res = await patch(`/v1/businesses/current/members/${uid}/roles`, ownerToken, businessId).send(body);
       expect(res.status, JSON.stringify(body)).toBe(400);
       expect(err(res).code).toBe('VALIDATION_FAILED');
-      expect(JSON.stringify(res.body)).not.toMatch(/grantAll|SECRET9|"keys"/);
+      expect(JSON.stringify(res.body)).not.toMatch(/grantAll|not-an-array|"keys"/);
     }
     const after = await t.request.get('/v1/businesses/current/members').set({ Authorization: `Bearer ${ownerToken}`, 'X-Business-Id': businessId });
     expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);

@@ -70,10 +70,31 @@
  */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { assertSchemaFloor, SCHEMA_FLOOR_REFUSAL } from '../../apps/api/src/app/runtime';
+import { assertSchemaFloor, SCHEMA_FLOOR_REFUSAL, schemaGateTargets, type SchemaGateConfig, type SchemaGateReport } from '../../apps/api/src/app/runtime';
 import { migrationOrdinal, REQUIRED_SCHEMA_MIGRATION, schemaFloor } from '../../apps/api/src/config';
 import { createScratchDb, headMigration, migrationFiles, scratchPool, urlOf, type ScratchDb } from '../helpers/scratch-db';
 import { createTestApp, ensurePostgres, ownerPool } from '../helpers/test-app';
+
+/**
+ * The gate's subject is derived from `PROCESS_MODE` (`schemaGateTargets`), so
+ * a caller now has to say which process it speaks for. `merchant-api` holding
+ * the app URL and nothing else resolves to EXACTLY ONE target — the app
+ * database — which is the subject every case below was already written
+ * against. So widening the gate's subject did not widen these cases: each one
+ * still asserts about one database, and `§6` is where the widening itself is
+ * measured.
+ */
+const gateConfig = (url: string | undefined): SchemaGateConfig => ({
+  PROCESS_MODE: 'merchant-api',
+  APP_DATABASE_URL: url,
+  PLATFORM_DATABASE_URL: undefined,
+  IDENTITY_DATABASE_URL: undefined,
+  RESOLVER_DATABASE_URL: undefined,
+  PROVISIONER_DATABASE_URL: undefined,
+  WORKER_DATABASE_URL: undefined,
+  RECONCILER_DATABASE_URL: undefined,
+  isProd: false,
+});
 
 /** The migration the plant stops at: the last one BEFORE the floor this build requires. */
 const STOP_AT = '0083_phase4_ar_outstanding_set_based.sql';
@@ -157,7 +178,7 @@ describe('C1.5 §2 — a database stopped at 0083 is REFUSED, and the same one m
     const db = stopped;
     expect(db, 'the plant').toBeDefined();
     if (db === undefined) return;
-    const err = await assertSchemaFloor({ APP_DATABASE_URL: db.url('postgres') }).then(
+    const err = await assertSchemaFloor(gateConfig(db.url('postgres'))).then(
       () => null,
       (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
     );
@@ -186,7 +207,7 @@ describe('C1.5 §2 — a database stopped at 0083 is REFUSED, and the same one m
     const head = await db.pool.query<{ head: string | null }>(`SELECT max(name) AS head FROM public.schema_migrations`);
     expect(head.rows[0]?.head, 'the database now tops out at the shipped head').toBe(headMigration());
     await expect(
-      assertSchemaFloor({ APP_DATABASE_URL: db.url('postgres') }),
+      assertSchemaFloor(gateConfig(db.url('postgres'))),
       `the gate refused a database at the shipped head ${headMigration()}. It is refusing correct deployments, which means every refusal above ` +
         `proved nothing about the version.`,
     ).resolves.toBe(schemaFloor());
@@ -253,7 +274,7 @@ describe('C1.5 §3 — the APPLICATION refuses to boot, so no route is ever moun
     // head. If this gate refused a correct database, the entire suite would be
     // red rather than this one case. Stated here anyway, so the file carries
     // its own positive control and does not rely on a reader knowing that.
-    await expect(assertSchemaFloor({ APP_DATABASE_URL: urlOf('daftar', 'daftar_app') }), `the gate refuses the real database`).resolves.toBe(schemaFloor());
+    await expect(assertSchemaFloor(gateConfig(urlOf('daftar', 'daftar_app'))), `the gate refuses the real database`).resolves.toBe(schemaFloor());
   }, 60_000);
 });
 
@@ -266,7 +287,7 @@ describe('C1.5 §4 — an unidentifiable schema is refused, never assumed adequa
       await bare.pool.query(`DROP TABLE IF EXISTS public.schema_migrations`);
       const gone = await bare.pool.query<{ present: boolean }>(`SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present`);
       expect(gone.rows[0]?.present, 'the plant is proven applied: the table is gone').toBe(false);
-      const err = await assertSchemaFloor({ APP_DATABASE_URL: bare.url('postgres') }).then(
+      const err = await assertSchemaFloor(gateConfig(bare.url('postgres'))).then(
         () => null,
         (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
       );
@@ -285,7 +306,7 @@ describe('C1.5 §4 — an unidentifiable schema is refused, never assumed adequa
       await pool.query(`DELETE FROM public.schema_migrations`);
       const empty = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM public.schema_migrations`);
       expect(empty.rows[0]?.n, 'the plant is proven applied: the table is empty').toBe('0');
-      const e1 = await assertSchemaFloor({ APP_DATABASE_URL: odd.url('postgres') }).then(
+      const e1 = await assertSchemaFloor(gateConfig(odd.url('postgres'))).then(
         () => null,
         (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
       );
@@ -298,7 +319,7 @@ describe('C1.5 §4 — an unidentifiable schema is refused, never assumed adequa
       await pool.query(`INSERT INTO public.schema_migrations (name, sha256) VALUES ('zzz_hand_rolled.sql', repeat('0', 64))`);
       const planted = await pool.query<{ head: string | null }>(`SELECT max(name) AS head FROM public.schema_migrations`);
       expect(planted.rows[0]?.head, 'the plant is proven applied: the unplaceable name is what max(name) returns').toBe('zzz_hand_rolled.sql');
-      const e2 = await assertSchemaFloor({ APP_DATABASE_URL: odd.url('postgres') }).then(
+      const e2 = await assertSchemaFloor(gateConfig(odd.url('postgres'))).then(
         () => null,
         (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
       );
@@ -355,7 +376,7 @@ describe('C1.5 §5 — the SURFACE half bites where the ledger cannot be read, o
       expect(after.rows[0]?.head, 'the plant is proven applied: the ledger now claims the required migration').toBe(REQUIRED_SCHEMA_MIGRATION);
       expect(migrationOrdinal(after.rows[0]?.head ?? ''), 'and its ordinal is at the floor, so the ordinal half is satisfied').toBe(schemaFloor());
 
-      const err = await assertSchemaFloor({ APP_DATABASE_URL: lying.url('postgres') }).then(
+      const err = await assertSchemaFloor(gateConfig(lying.url('postgres'))).then(
         () => null,
         (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
       );
@@ -381,14 +402,115 @@ describe('C1.5 §5 — the SURFACE half bites where the ledger cannot be read, o
       await early.pool.query(`INSERT INTO public.schema_migrations (name, sha256) VALUES ($1, repeat('0', 64))`, [REQUIRED_SCHEMA_MIGRATION]);
       const absent = await early.pool.query<{ present: boolean }>(`SELECT to_regprocedure('public.invoice_outstanding(uuid,uuid[])') IS NOT NULL AS present`);
       expect(absent.rows[0]?.present, 'the plant is proven applied: the routine is absent entirely').toBe(false);
-      const err = await assertSchemaFloor({ APP_DATABASE_URL: early.url('postgres') }).then(
+      const err = await assertSchemaFloor(gateConfig(early.url('postgres'))).then(
         () => null,
         (e: unknown) => (e instanceof Error ? e : new Error(String(e))),
       );
       expect(err, `a database with no invoice_outstanding at all was accepted`).not.toBeNull();
-      expect(err?.message ?? '', 'the refusal names the absent routine rather than failing later on a null result').toContain('is not in this database');
+      // Three assertions where this used to be one. The refusal must name the
+      // ROUTINE (not fail later on a null result), say the routine is absent
+      // from the CATALOGUE rather than merely wrong, and name WHICH database —
+      // which it can now do, because the gate's subject is a set and a reader
+      // who is told «some database» cannot act on it.
+      const absentMsg = err?.message ?? '';
+      expect(absentMsg, 'the refusal names the absent routine rather than failing later on a null result').toContain('invoice_outstanding(uuid,uuid[])');
+      expect(absentMsg, 'and says it is absent from the catalogue, not merely of the wrong shape').toContain('catalogue');
+      expect(absentMsg, 'and names which of this process’s databases is missing it').toContain('is not in the app database');
     } finally {
       await early.drop();
     }
   }, 300_000);
+});
+
+describe('C1.5 §6 — the gate’s subject is the database THIS PROCESS reads, and it says which half ran', () => {
+  /**
+   * The defect this section exists for. `coreProviders` is composed by five
+   * modules, and the gate used to open `APP_DATABASE_URL` in all five. In
+   * `PROCESS_MODE=reconciler` that variable is not merely absent, it is
+   * FORBIDDEN — `config.ts` fails validation if it is set, in every
+   * environment — and `new Client({ connectionString: undefined })` does not
+   * refuse: `pg` falls back to `PGUSER`/`PGDATABASE`/`PGHOST`. So the gate
+   * either could not connect (and the reconciler could not boot) or it
+   * validated whatever the ambient environment pointed at.
+   *
+   * Both arms are needed and neither alone proves anything. The first could
+   * pass against a gate that ignored its argument entirely; the second could
+   * pass against a gate that refused everything. Together they say the
+   * subject is the reconciler URL and nothing else.
+   */
+  it('in reconciler mode the subject is the reconciler URL, and the app URL is ignored even when present', async () => {
+    const unusable = 'postgresql://nobody:nobody@127.0.0.1:1/does-not-exist';
+    const good = urlOf('daftar', 'daftar_app');
+
+    expect(
+      schemaGateTargets({ ...gateConfig(unusable), PROCESS_MODE: 'reconciler', RECONCILER_DATABASE_URL: good }),
+      `reconciler mode resolved to something other than the reconciler URL alone`,
+    ).toEqual([{ role: 'reconciler', url: good }]);
+
+    // ARM 1 — reconciler URL good, app URL unusable: ACCEPTS, because the app
+    // URL is not this process's subject. Under the old gate this threw.
+    await expect(
+      assertSchemaFloor({ ...gateConfig(unusable), PROCESS_MODE: 'reconciler', RECONCILER_DATABASE_URL: good }),
+      `the gate still reaches for the app URL in reconciler mode`,
+    ).resolves.toBe(schemaFloor());
+
+    // ARM 2 — the converse, which is what stops arm 1 being vacuous: when the
+    // RECONCILER URL is the unusable one, the gate must NOT pass just because
+    // a good app URL happens to be lying around.
+    await expect(
+      assertSchemaFloor({ ...gateConfig(good), PROCESS_MODE: 'reconciler', RECONCILER_DATABASE_URL: unusable }),
+      `the gate passed on a good app URL while its own subject was unreachable`,
+    ).rejects.toThrow();
+  }, 120_000);
+
+  /**
+   * The other half of the same defect: `pg`'s ambient fallback must never be
+   * reached. A mode whose URL is absent has to be REFUSED by name, not
+   * silently connected to whatever `PGHOST` says.
+   */
+  it('a process with no database URL is refused explicitly, naming the ambient fallback it declined', async () => {
+    const err = await assertSchemaFloor({ ...gateConfig(undefined), PROCESS_MODE: 'worker' }).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(err?.message, `an absent URL did not produce an explicit refusal`).toContain(SCHEMA_FLOOR_REFUSAL);
+    expect(err?.message).toContain('identifies no database this process is allowed to read');
+    // Named, so that the next reader cannot mistake this for a connection
+    // failure: the gate declined to connect at all.
+    expect(err?.message).toContain('PGUSER');
+    expect(err?.message).toContain('PGHOST');
+  }, 60_000);
+
+  /**
+   * The operator signal. The ordinal half runs only where this principal may
+   * read the ledger, and on the real database `daftar_app` may not — so a
+   * pass there is the SURFACE guarantee, which is strictly weaker. The gate
+   * used to return its number and say nothing, so the two passes were
+   * indistinguishable.
+   *
+   * The owner arm is the positive control: same gate, same database, a
+   * principal that CAN read the ledger — and the report flips to `enforced`
+   * and carries the head it actually read. Without it, `unreadable` could be
+   * a constant.
+   */
+  it('reports WHICH HALF spoke: unreadable for the app principal, enforced for one that can read the ledger', async () => {
+    const head = await ownerPool().query<{ head: string | null }>(`SELECT max(name) AS head FROM public.schema_migrations`);
+    const live = head.rows[0]?.head ?? null;
+    expect(live, `the shared database has no applied migrations, so this control cannot speak`).not.toBeNull();
+
+    const asApp: SchemaGateReport[] = [];
+    await expect(assertSchemaFloor(gateConfig(urlOf('daftar', 'daftar_app')), (r) => asApp.push(r))).resolves.toBe(schemaFloor());
+    expect(
+      asApp.map((r) => r.role),
+      `the merchant subject is not the app database alone`,
+    ).toEqual(['app']);
+    expect(asApp[0]?.ordinal, `the app principal reported the ordinal half as enforced, but it cannot read the ledger`).toBe('unreadable');
+    expect(asApp[0]?.applied, `a skipped ordinal half still reported a version`).toBeNull();
+    expect(asApp[0]?.surfaces, `the surface half checked nothing, so neither half ran`).toBeGreaterThan(0);
+
+    const asOwner: SchemaGateReport[] = [];
+    await expect(assertSchemaFloor(gateConfig(urlOf('daftar')), (r) => asOwner.push(r))).resolves.toBe(schemaFloor());
+    expect(asOwner[0]?.ordinal, `the owner principal CAN read the ledger, so the ordinal half must have run`).toBe('enforced');
+    expect(asOwner[0]?.applied, `the enforced half did not name the version it compared`).toBe(live);
+  }, 120_000);
 });

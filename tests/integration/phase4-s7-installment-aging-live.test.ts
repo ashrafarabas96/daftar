@@ -350,23 +350,41 @@ afterAll(async () => {
       WHERE n.nspname = 'public' AND c.relname IN ('installment_plans', 'installments')`,
   );
   expect(leftovers.rows[0]?.n, 'the suite left its own relations behind in the shared database').toBe('0');
-  // AND THE SAME QUESTION ASKED OF THE ROUTINES, so that the NEXT function the
-  // specification grows cannot leak in silence the way this one did. The list is
-  // every routine the specification creates EXCEPT `customer_ar_aging`, which is
-  // restored to its predecessor above rather than dropped. A spec that grows a
-  // seventh routine reds HERE, in the file that owes the cleanup, instead of
-  // reddening a security law fifteen checks later in another step.
+  // AND THE SAME QUESTION ASKED OF THE ROUTINES — DERIVED FROM THE
+  // SPECIFICATION, NEVER LISTED BY HAND.
+  //
+  // The first version of this check wrote the five names out, and its comment
+  // promised that «a spec that grows a seventh routine reds HERE». That promise
+  // was FALSE, and the review caught it: a routine with a NEW name is not in a
+  // hand-written `IN (...)`, so `pg_proc` would not return it, the array would
+  // be empty, and the check would pass while the leak went on to redden a
+  // security law fifteen checks later in another step — which is the exact
+  // failure this check was added to end. A claim wider than its evidence is
+  // the defect, not the wording.
+  //
+  // So the set is read out of `SPEC` itself, which this file already has in
+  // hand, minus `customer_ar_aging` — the one routine restored to its
+  // predecessor above rather than dropped. Now the promise is true by
+  // construction: whatever the specification creates is what is asked about.
+  const specRoutines = [...SPEC.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z0-9_]+)/gi)].map((m) => (m[1] ?? '').toLowerCase());
+  const owed = [...new Set(specRoutines)].filter((n) => n !== 'customer_ar_aging').sort();
+  // NON-VACUITY FIRST. If the pattern above ever stops matching — the
+  // specification is reformatted, the file moves, `SPEC` reads empty — then
+  // `owed` is empty, the query below asks about nothing, and the assertion
+  // passes without looking at the database at all. That silent pass is worse
+  // than the defect it replaced, so the floor is asserted before the question
+  // is put. Five is what the specification creates today besides the reader of
+  // record; a sixth is welcome and must be dropped, a fourth means the
+  // derivation broke.
+  expect(owed.length, `the specification's routines could not be derived from SPEC (${owed.length} found: ${owed.join(', ')})`).toBeGreaterThanOrEqual(5);
   const routineLeftovers = await p.query<{ p: string }>(
     `SELECT p.proname AS p FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'public' AND p.proname IN (
-        'installment_plan_active_exclusive', 'installment_plan_fact_assert',
-        'installment_plan_fact_sync', 'installment_plan_fact_verify',
-        'installment_schedule_verify')
-      ORDER BY 1`,
+      WHERE n.nspname = 'public' AND p.proname = ANY($1::text[]) ORDER BY 1`,
+    [owed],
   );
   expect(
     routineLeftovers.rows.map((r) => r.p),
-    'the suite left a routine of the specification behind in the shared database',
+    `the suite left a routine of the specification behind in the shared database (asked about ${owed.length}: ${owed.join(', ')})`,
   ).toEqual([]);
 }, 120_000);
 
