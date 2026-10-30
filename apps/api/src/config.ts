@@ -428,7 +428,18 @@ export function migrationOrdinal(name: string): number | null {
   return Number.isSafeInteger(n) ? n : null;
 }
 
-/** The ordinal this build refuses to start below. */
+/**
+ * The ordinal the schema floor gate COMPARES AGAINST where it can read the
+ * migration ledger.
+ *
+ * It is deliberately not described as «the ordinal this build refuses to start
+ * below», which is what this comment used to say and what is not true on a
+ * real deployment: the API's own principal cannot read `schema_migrations`
+ * there, so the ordinal half of the gate does not run and nothing refuses on
+ * version. What protects that case is the gate's surface half, which pins the
+ * money-read shapes instead — a different and narrower guarantee. See
+ * `assertSchemaFloor` in `app/runtime.ts`.
+ */
 export function schemaFloor(): number {
   const n = migrationOrdinal(REQUIRED_SCHEMA_MIGRATION);
   if (n === null) throw new Error(`REQUIRED_SCHEMA_MIGRATION ${JSON.stringify(REQUIRED_SCHEMA_MIGRATION)} has no leading ordinal`);

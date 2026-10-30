@@ -6,7 +6,7 @@ import type { Request } from 'express';
 import { Client } from 'pg';
 import { migrationOrdinal, REQUIRED_SCHEMA_MIGRATION, schemaFloor, type AppConfig } from '../config';
 import { clientLimiterKey } from '../common/client-ip';
-import { createLogger } from '../infra/logger';
+import { createLogger, type Logger } from '../infra/logger';
 import { Database } from '../infra/database';
 import { InMemoryMetrics, METRICS, type Metrics } from '../infra/metrics';
 import { MemoryRateLimiter, RedisRateLimiter, type RateLimiter } from '../infra/redis';
@@ -123,12 +123,20 @@ export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PRO
 /**
  * C1.5 — THE SCHEMA FLOOR GATE.
  *
- * Resolving this provider is what proves the database is at or above the
- * migration this build was written against. It RETURNS the floor it enforced
- * so that the thing depending on it has something to hold, and it THROWS when
- * the database is behind — which, resolved during `app.init()`, means the
- * process never reaches `app.listen()` (`main.ts:93`) and the API never
- * answers a request.
+ * Resolving this provider is what proves that EVERY DATABASE THIS PROCESS
+ * WILL READ is at or above the migration this build was written against. The
+ * subject is derived from `PROCESS_MODE` and is a set, not a single URL — see
+ * `schemaGateTargets` below, and the defect that sentence used to hide. It
+ * RETURNS the floor it enforced so that the thing depending on it has
+ * something to hold, and it THROWS when a database is behind — which,
+ * resolved during `app.init()`, means the process never reaches
+ * `app.listen()` (`main.ts:93`) and the API never answers a request.
+ *
+ * «The floor it enforced» is a narrower claim than it reads: the ORDINAL is
+ * compared only where this principal may read the migration ledger, which on
+ * a real deployment it may not. Where it cannot, the gate enforces the
+ * money-read SURFACE and says so in the log rather than passing quietly. The
+ * two halves and that limit are set out below.
  *
  * ── WHY HERE, AND NOT SOMEWHERE EARLIER OR LATER ──────────────────────────
  *
@@ -251,73 +259,216 @@ const REQUIRED_SURFACE: readonly { readonly signature: string; readonly result?:
   },
 ];
 
-export async function assertSchemaFloor(config: Pick<AppConfig, 'APP_DATABASE_URL'>): Promise<number> {
-  const floor = schemaFloor();
-  const client = new Client({ connectionString: config.APP_DATABASE_URL });
-  await client.connect();
-  try {
-    // ── 1. THE LEDGER, if this principal may read it ─────────────────────
-    // `to_regclass` first, because `has_table_privilege` raises on a relation
-    // that does not exist, and because an operator reading a bare
-    // «relation does not exist» has to work out for himself that it means the
-    // migrations never ran. The gate says so itself.
-    const access = await client.query<{ present: boolean; may: boolean | null }>(
-      `SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present,
-              CASE WHEN to_regclass('public.schema_migrations') IS NULL THEN NULL
-                   ELSE has_table_privilege(current_user, 'public.schema_migrations', 'SELECT') END AS may`,
-    );
-    if (access.rows[0]?.present !== true)
-      throw new Error(
-        `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but the database has no schema_migrations table, ` +
-          `so no migration has ever been applied to it. Run the migrations before starting the API.`,
-      );
-    if (access.rows[0]?.may === true) {
-      const r = await client.query<{ applied: string | null }>(`SELECT max(name) AS applied FROM public.schema_migrations`);
-      const applied = r.rows[0]?.applied ?? null;
-      if (applied === null)
-        throw new Error(
-          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but schema_migrations is empty. ` +
-            `Run the migrations before starting the API.`,
-        );
-      const at = migrationOrdinal(applied);
-      if (at === null)
-        throw new Error(
-          `${SCHEMA_FLOOR_REFUSAL}: the greatest applied migration is ${JSON.stringify(applied)}, which carries no leading ordinal, so this ` +
-            `build cannot tell whether it is at or above ${REQUIRED_SCHEMA_MIGRATION}. An unidentifiable schema is refused rather than assumed ` +
-            `adequate.`,
-        );
-      if (at < floor)
-        throw new Error(
-          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} (ordinal ${floor}) but the database has only reached ` +
-            `${applied} (ordinal ${at}). Starting would let the API read money through routines and columns that are not there yet. ` +
-            `Run the migrations, then start the API.`,
-        );
-    }
+/**
+ * THE SUBJECT OF THIS GATE: THE DATABASES THE PROCESS ACTUALLY READS.
+ *
+ * `coreProviders` is composed by FIVE modules — `app.module.ts`,
+ * `merchant-api.module.ts`, `platform-api.module.ts`, `reconciler.module.ts`
+ * and `worker.module.ts`. The first version of this gate opened
+ * `APP_DATABASE_URL` and nothing else, which is the wrong subject for three of
+ * them and a GUARANTEED-ABSENT one for the reconciler: `config.ts` fails
+ * validation when `APP_DATABASE_URL` is set while `PROCESS_MODE=reconciler`,
+ * and that block sits above the `NODE_ENV !== 'production'` early return, so
+ * it holds in EVERY environment.
+ *
+ * `new Client({ connectionString: undefined })` does not refuse. `pg`
+ * (`node_modules/pg/lib/connection-parameters.js`) skips parsing when the
+ * string is absent and lets each field fall back to `PGUSER` / `PGDATABASE` /
+ * `PGHOST`. Both outcomes were wrong and neither was what this gate claimed:
+ * with no `PG*` set the connection fails, the gate throws, `Database` is never
+ * constructed and the reconciler process CANNOT BOOT; with `PG*` set, as is
+ * ordinary in a container, the gate validates SOME OTHER DATABASE and resolves
+ * successfully, so `Database` is built behind a check that never looked at the
+ * URL the reconciler reads the ledger through.
+ *
+ * That was measured rather than reasoned. Before this change, three
+ * `.compile()` tests in `tests/security/reconciler-process-isolation.test.ts`
+ * failed with `ECONNREFUSED 127.0.0.1:5432` and `::1:5432` — the DEFAULT port,
+ * while the suite's own database was on another one. The ambient fallback was
+ * not a hypothesis; it was in the failure message.
+ *
+ * So the subject is derived from `PROCESS_MODE`: every distinct URL this
+ * process's own `Database` would open a pool for. It is a SET and not a value,
+ * which is why this returns a list — `merchant-api` owns four pools and `all`
+ * owns up to seven. Duplicates collapse, because privilege separation gives
+ * the roles distinct CREDENTIALS against one database rather than distinct
+ * databases; a URL that did point somewhere else would fail the surface half
+ * and be refused, which is the safe direction.
+ *
+ * This mirrors the ownership decision in `database.ts` — `owns`, and the
+ * dev-only `fallback` that single-process mode applies — and a mirror can
+ * drift. `tests-unit/schema-floor-gate-subject.test.ts` therefore builds BOTH
+ * this map and a real `Database` from the same config and compares the pools
+ * that actually came out, so a change to one and not the other goes red
+ * instead of quietly narrowing what the gate looks at.
+ */
+export type SchemaGateTarget = { readonly role: string; readonly url: string };
 
-    // ── 2. THE SURFACE, on every path ────────────────────────────────────
-    for (const required of REQUIRED_SURFACE) {
-      const s = await client.query<{ oid: string | null; result: string | null }>(
-        `SELECT to_regprocedure($1)::text AS oid,
-                CASE WHEN to_regprocedure($1) IS NULL THEN NULL ELSE pg_get_function_result(to_regprocedure($1)) END AS result`,
-        [required.signature],
+export type SchemaGateConfig = Pick<
+  AppConfig,
+  | 'PROCESS_MODE'
+  | 'APP_DATABASE_URL'
+  | 'PLATFORM_DATABASE_URL'
+  | 'IDENTITY_DATABASE_URL'
+  | 'RESOLVER_DATABASE_URL'
+  | 'PROVISIONER_DATABASE_URL'
+  | 'WORKER_DATABASE_URL'
+  | 'RECONCILER_DATABASE_URL'
+  | 'isProd'
+>;
+
+export function schemaGateTargets(config: SchemaGateConfig): readonly SchemaGateTarget[] {
+  const mode = config.PROCESS_MODE;
+  // Dev/test convenience ONLY for the single-process mode, exactly as
+  // `database.ts` applies it. Separated runtimes never fall back.
+  const fallback = mode === 'all' && !config.isProd ? config.APP_DATABASE_URL : undefined;
+  const considered: readonly (readonly [string, boolean, string | undefined])[] = [
+    ['app', mode === 'all' || mode === 'merchant-api', config.APP_DATABASE_URL],
+    ['platform', mode === 'all' || mode === 'platform-api', config.PLATFORM_DATABASE_URL ?? fallback],
+    [
+      'identity',
+      mode !== 'worker' && mode !== 'reconciler',
+      config.IDENTITY_DATABASE_URL ?? (mode === 'all' ? config.PLATFORM_DATABASE_URL : undefined) ?? fallback,
+    ],
+    ['resolver', mode === 'all' || mode === 'merchant-api', config.RESOLVER_DATABASE_URL ?? fallback],
+    ['worker', mode === 'all' || mode === 'worker', config.WORKER_DATABASE_URL ?? fallback],
+    ['provisioner', mode === 'all' || mode === 'merchant-api', config.PROVISIONER_DATABASE_URL ?? fallback],
+    // No fallback in any mode, matching `database.ts`: reconciliation
+    // authority is configured explicitly as its own principal or it does not
+    // exist.
+    ['reconciler', mode === 'all' || mode === 'reconciler', config.RECONCILER_DATABASE_URL],
+  ];
+  const seen = new Set<string>();
+  const targets: SchemaGateTarget[] = [];
+  for (const [role, owned, url] of considered) {
+    // `owned && url` is the same condition `database.ts`'s `open()` applies: a
+    // URL outside the mode's authority is ignored, and an owned pool with no
+    // URL is simply not opened.
+    if (!owned || url === undefined) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    targets.push({ role, url });
+  }
+  return targets;
+}
+
+/**
+ * WHAT THE GATE SAYS OUT LOUD, AND WHY IT HAS TO.
+ *
+ * The ledger half runs only where this principal may read the migration
+ * ledger, and on a real deployment it may not. Before this change the gate
+ * returned its ordinal and passed SILENTLY in that case, so a PASS meant
+ * either «the version was checked» or «the version could not be checked and
+ * the shapes were» — and nothing distinguished them. An operator could not
+ * tell which of the two guarantees he actually had.
+ *
+ * So every target reports which half spoke, and `coreProviders` logs it:
+ * `info` when the ordinal was enforced, `warn` when it was skipped. A warning
+ * because the remaining guarantee is strictly weaker, not because anything
+ * went wrong.
+ */
+export type SchemaGateReport = {
+  readonly role: string;
+  /** `enforced` — the ordinal was compared. `unreadable` — this principal may not read the ledger, so only the surface half ran. */
+  readonly ordinal: 'enforced' | 'unreadable';
+  /** The greatest applied migration, when the ledger half could read it. */
+  readonly applied: string | null;
+  /** How many required shapes the surface half checked. Always `REQUIRED_SURFACE.length`; that half runs on every path. */
+  readonly surfaces: number;
+};
+
+export async function assertSchemaFloor(config: SchemaGateConfig, report: (r: SchemaGateReport) => void = () => undefined): Promise<number> {
+  const floor = schemaFloor();
+  const targets = schemaGateTargets(config);
+  if (targets.length === 0)
+    throw new Error(
+      `${SCHEMA_FLOOR_REFUSAL}: PROCESS_MODE=${config.PROCESS_MODE} identifies no database this process is allowed to read, so there is ` +
+        `nothing whose schema this gate could check. Refusing explicitly rather than opening a connection with no connection string, which ` +
+        `would fall back to the ambient PGUSER/PGDATABASE/PGHOST and check a database this process never reads. Configure the role URL this ` +
+        `mode requires, then start the API.`,
+    );
+  for (const target of targets) {
+    // `connectionString` is a string here by construction — `schemaGateTargets`
+    // drops every undefined — so there is no path on which `pg` reads the
+    // ambient environment.
+    const client = new Client({ connectionString: target.url });
+    await client.connect();
+    try {
+      // ── 1. THE LEDGER, if this principal may read it ─────────────────────
+      // `to_regclass` first, because `has_table_privilege` raises on a relation
+      // that does not exist, and because an operator reading a bare
+      // «relation does not exist» has to work out for himself that it means the
+      // migrations never ran. The gate says so itself.
+      const access = await client.query<{ present: boolean; may: boolean | null }>(
+        `SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present,
+                CASE WHEN to_regclass('public.schema_migrations') IS NULL THEN NULL
+                     ELSE has_table_privilege(current_user, 'public.schema_migrations', 'SELECT') END AS may`,
       );
-      const row = s.rows[0];
-      if (row === undefined || row.oid === null)
+      if (access.rows[0]?.present !== true)
         throw new Error(
-          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION}, whose ${required.signature} is not in this database's ` +
-            `catalogue — ${required.because}. Run the migrations before starting the API.`,
+          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but the ${target.role} database has no ` +
+            `schema_migrations table, so no migration has ever been applied to it. Run the migrations before starting the API.`,
         );
-      if (required.result !== undefined && row.result !== required.result)
-        throw new Error(
-          `${SCHEMA_FLOOR_REFUSAL}: ${required.signature} is present but returns ${JSON.stringify(row.result)}, and this build reads ` +
-            `${JSON.stringify(required.result)} — ${required.because}. Run the migrations before starting the API.`,
+      const may = access.rows[0]?.may === true;
+      let applied: string | null = null;
+      if (may) {
+        const r = await client.query<{ applied: string | null }>(`SELECT max(name) AS applied FROM public.schema_migrations`);
+        applied = r.rows[0]?.applied ?? null;
+        if (applied === null)
+          throw new Error(
+            `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but the ${target.role} database's ` +
+              `schema_migrations is empty. Run the migrations before starting the API.`,
+          );
+        const at = migrationOrdinal(applied);
+        if (at === null)
+          throw new Error(
+            `${SCHEMA_FLOOR_REFUSAL}: the greatest applied migration in the ${target.role} database is ${JSON.stringify(applied)}, which ` +
+              `carries no leading ordinal, so this build cannot tell whether it is at or above ${REQUIRED_SCHEMA_MIGRATION}. An ` +
+              `unidentifiable schema is refused rather than assumed adequate.`,
+          );
+        if (at < floor)
+          throw new Error(
+            `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} (ordinal ${floor}) but the ${target.role} database ` +
+              `has only reached ${applied} (ordinal ${at}). Starting would let the API read money through routines and columns that are ` +
+              `not there yet. Run the migrations, then start the API.`,
+          );
+      }
+
+      // ── 2. THE SURFACE, on every path ────────────────────────────────────
+      // The list is the MERCHANT money-read shape, and it is checked against
+      // every target rather than only the app one. That is deliberate: the
+      // role URLs address one database with separate credentials, so the
+      // shapes are the same question wherever they are asked — and a URL that
+      // pointed at some other database would fail here, which is the direction
+      // a misconfiguration should fail in. The check reads `pg_catalog` only,
+      // which every role may read, so it does not depend on this principal
+      // holding EXECUTE on the routines it names.
+      for (const required of REQUIRED_SURFACE) {
+        const s = await client.query<{ oid: string | null; result: string | null }>(
+          `SELECT to_regprocedure($1)::text AS oid,
+                  CASE WHEN to_regprocedure($1) IS NULL THEN NULL ELSE pg_get_function_result(to_regprocedure($1)) END AS result`,
+          [required.signature],
         );
+        const row = s.rows[0];
+        if (row === undefined || row.oid === null)
+          throw new Error(
+            `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION}, whose ${required.signature} is not in the ` +
+              `${target.role} database's catalogue — ${required.because}. Run the migrations before starting the API.`,
+          );
+        if (required.result !== undefined && row.result !== required.result)
+          throw new Error(
+            `${SCHEMA_FLOOR_REFUSAL}: ${required.signature} is present in the ${target.role} database but returns ` +
+              `${JSON.stringify(row.result)}, and this build reads ${JSON.stringify(required.result)} — ${required.because}. Run the ` +
+              `migrations before starting the API.`,
+          );
+      }
+      report({ role: target.role, ordinal: may ? 'enforced' : 'unreadable', applied, surfaces: REQUIRED_SURFACE.length });
+    } finally {
+      // Released whatever happened. A gate that leaked a connection on the
+      // refusal path would make a misconfigured deployment exhaust the server's
+      // connection slots while it restarted.
+      await client.end().catch(() => undefined);
     }
-  } finally {
-    // Released whatever happened. A gate that leaked a connection on the
-    // refusal path would make a misconfigured deployment exhaust the server's
-    // connection slots while it restarted.
-    await client.end().catch(() => undefined);
   }
   return floor;
 }
@@ -331,7 +482,24 @@ export function coreProviders(config: AppConfig, seams: RuntimeSeams = {}): Prov
     // counter lives in the merchant runtime and a reconciliation counter in
     // the worker, and neither should have to know which process it is in.
     { provide: METRICS, useFactory: (): Metrics => seams.metrics ?? new InMemoryMetrics() },
-    { provide: SCHEMA_VERSION_GUARD, useFactory: (): Promise<number> => assertSchemaFloor(config) },
+    // The gate is handed the logger so that WHICH HALF RAN reaches the
+    // operator. A pass from the surface half alone is a strictly weaker
+    // guarantee than a pass that compared the ordinal, and until this line
+    // existed the two were indistinguishable: both were silence.
+    {
+      provide: SCHEMA_VERSION_GUARD,
+      useFactory: (log: Logger): Promise<number> =>
+        assertSchemaFloor(config, (r) => {
+          const ordinal =
+            r.ordinal === 'enforced'
+              ? `ENFORCED (greatest applied ${r.applied})`
+              : 'SKIPPED — this principal may not read schema_migrations, so the build version was NOT compared';
+          const line = `schema floor gate: ${r.role} database — ordinal half ${ordinal}; surface half ENFORCED (${r.surfaces} required shapes)`;
+          if (r.ordinal === 'enforced') log.info({ schemaGate: r }, line);
+          else log.warn({ schemaGate: r }, line);
+        }),
+      inject: ['LOGGER'],
+    },
     // `Database` is produced by a factory ONLY so that it can declare the
     // schema gate as a dependency. Nest calls `onModuleInit` on a
     // factory-produced instance exactly as it does on a class provider —
