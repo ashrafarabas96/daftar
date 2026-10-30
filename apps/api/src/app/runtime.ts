@@ -3,7 +3,8 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { AppError } from '@daftar/domain-core';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import type { Request } from 'express';
-import type { AppConfig } from '../config';
+import { Client } from 'pg';
+import { migrationOrdinal, REQUIRED_SCHEMA_MIGRATION, schemaFloor, type AppConfig } from '../config';
 import { clientLimiterKey } from '../common/client-ip';
 import { createLogger } from '../infra/logger';
 import { Database } from '../infra/database';
@@ -119,6 +120,204 @@ export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PRO
   ];
 }
 
+/**
+ * C1.5 — THE SCHEMA FLOOR GATE.
+ *
+ * Resolving this provider is what proves the database is at or above the
+ * migration this build was written against. It RETURNS the floor it enforced
+ * so that the thing depending on it has something to hold, and it THROWS when
+ * the database is behind — which, resolved during `app.init()`, means the
+ * process never reaches `app.listen()` (`main.ts:93`) and the API never
+ * answers a request.
+ *
+ * ── WHY HERE, AND NOT SOMEWHERE EARLIER OR LATER ──────────────────────────
+ *
+ * «Before any money read» has to be STRUCTURAL, because an ordering that
+ * merely happens to hold today is one a later provider can reorder without
+ * anybody noticing. So the gate is wired as a DEPENDENCY OF `Database`
+ * below: every money read in this application goes through `Database`, Nest
+ * cannot construct a provider before its dependencies have resolved, and so
+ * no money read can precede this check — not because it is declared first,
+ * but because the handle every money read needs does not exist until the
+ * check has passed.
+ *
+ * Three sites were considered and rejected:
+ *
+ *   — `loadConfig` (`config.ts`): runs before any pool exists and has no
+ *     database to ask. A guard there could only check that a URL was present.
+ *   — `Database.onModuleInit`: that is where the PRINCIPAL check lives
+ *     (`database.ts:755`, «Refusing to start»), and it is the natural
+ *     neighbour — but it is in a file this lane does not own, and a hook runs
+ *     AFTER the instance it hangs off has been constructed. Construction is
+ *     already far enough along to matter.
+ *   — a route guard or an interceptor: that is the guard this one is not. It
+ *     would run after the application had started, per request, which means
+ *     the first money read has already been served by the time it speaks.
+ *
+ * It opens its OWN short-lived connection rather than borrowing one from
+ * `Database`, for two reasons: `Database` exposes no general query method, and
+ * owning the connection means the gate has no dependency on `Database` at all
+ * and can therefore be `Database`'s dependency without a cycle.
+ *
+ * The comparison is on the ORDINAL of the greatest APPLIED migration, not on a
+ * count of rows and not on a string: see `migrationOrdinal`. A missing
+ * `schema_migrations`, an empty one, or a name without an ordinal are each a
+ * REFUSAL and never a pass — the whole point of the gate is that an
+ * unidentifiable schema is treated as an inadequate one.
+ */
+export const SCHEMA_VERSION_GUARD = Symbol('SCHEMA_VERSION_GUARD');
+
+/** The message every refusal below starts with, so operators and tests name one string. */
+export const SCHEMA_FLOOR_REFUSAL = 'Refusing to start — database schema is behind this build';
+
+/**
+ * THE MONEY-READ SURFACE THIS BUILD REQUIRES, and why the gate needs it at all.
+ *
+ * `schema_migrations` is owned by `postgres` and granted to `postgres` ALONE —
+ * measured, not assumed: `has_table_privilege('daftar_app',
+ * 'public.schema_migrations', 'SELECT')` is `false`, no routine exposes it, and
+ * `MIGRATION_DATABASE_URL` is withheld from the API runtime on purpose
+ * («migration command only; the API runtime never reads it»). So on a real
+ * deployment the API's own principal CANNOT read the migration ledger, and a
+ * gate that only read the ledger would not fail closed — it would fail
+ * ALWAYS, with `42501 permission denied`, and no deployment would ever boot.
+ *
+ * The gate therefore has two halves, and the order matters:
+ *
+ *   1. THE LEDGER, when and only when this principal may read it (a scratch
+ *      database, a migration test, a single-role dev setup). That is the half
+ *      that enforces the ORDINAL and gives the operator the clearest message.
+ *   2. THE SURFACE, always. The shapes below are what the shipped code
+ *      actually reads, checked through `pg_catalog`, which every role may
+ *      read. This half is what protects a real deployment, where half 1 is
+ *      structurally unavailable.
+ *
+ * Neither half fails open: half 1 refuses an absent, empty or unplaceable
+ * ledger rather than skipping it, and half 2 runs on every path.
+ *
+ * ── WHAT THE SURFACE HALF DOES NOT DO ─────────────────────────────────────
+ *
+ * It pins the money-read SHAPE, not every migration. A migration that changed
+ * nothing on this list would pass it. That is a declared limit and not a hole
+ * the gate pretends to cover: the ordinal is half 1's job, and where half 1
+ * cannot run, the honest claim is «the surface the code reads is the surface
+ * the build expects», which is the defect class C1.5 was opened for.
+ *
+ * AND THE LIST STOPS AT 0084. Both remaining migrations of the required range
+ * were examined for a sentinel and NEITHER yields one, by measurement rather
+ * than by omission:
+ *
+ *   — 0085 replaces this very routine set with the set-based recompute, but it
+ *     does so by `CREATE OR REPLACE` over the SAME shape: 0081 already
+ *     declares `customer_collect_payment` with the same twenty-six parameters
+ *     and the same six result columns that 0085 declares and that
+ *     `CUSTOMER_COLLECT_PAYMENT_SQL` calls. What 0085 changes is the BODY, and
+ *     a body is not a shape any caller reads. Pinning that signature would
+ *     LOOK like 0085 coverage while being unable to tell 0084 from 0085 —
+ *     which is a protection claim wider than its evidence, so it is not here.
+ *   — 0086 consists of EIGHT `ALTER POLICY` statements and nothing else: no
+ *     routine, no table, no column. A row-security qual is not a shape the
+ *     code reads; it filters the rows the code reads, and it is invisible to
+ *     every signature and result this list can pin.
+ *
+ * The consequence, stated plainly rather than left to be discovered: on a
+ * deployment where half 1 cannot run, a database stopped at 0084 passes this
+ * gate. What actually holds 0085 and 0086 is CI — the settlement suites for
+ * the recompute, and `tests/security/dr60-rls-tenant-isolation.test.ts`, which
+ * executes the eight quals as two tenants. Those are CI gates, not boot gates.
+ * Closing the remaining two at boot needs either the ordinal half working in
+ * production (a `SELECT` grant or a reader over `schema_migrations`, which is
+ * a migration and so not an execution card's to make) or a catalogue
+ * assertion over `pg_proc.prosrc` and `pg_policy`. The first is the cheaper
+ * and the more honest: it checks the version, which is the actual question.
+ */
+const REQUIRED_SURFACE: readonly { readonly signature: string; readonly result?: string; readonly because: string }[] = [
+  {
+    signature: 'public.invoice_outstanding(uuid,uuid[])',
+    result:
+      'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, ' +
+      'outstanding_base_minor bigint, currency_code text, due_date date, issue_date date)',
+    because:
+      "candidate 0084 APPENDED currency_code, due_date and issue_date to 0083's five-column form. A positional reader against the older form " +
+      'does not fail — it reads the wrong field and reports a number, which is the quietest money defect this gate exists to prevent',
+  },
+  {
+    signature: 'public.customer_ar_open_document_counts(uuid,uuid)',
+    because: 'DR-39: the open-document counters the receivable reads, absent before candidate 0084',
+  },
+];
+
+export async function assertSchemaFloor(config: Pick<AppConfig, 'APP_DATABASE_URL'>): Promise<number> {
+  const floor = schemaFloor();
+  const client = new Client({ connectionString: config.APP_DATABASE_URL });
+  await client.connect();
+  try {
+    // ── 1. THE LEDGER, if this principal may read it ─────────────────────
+    // `to_regclass` first, because `has_table_privilege` raises on a relation
+    // that does not exist, and because an operator reading a bare
+    // «relation does not exist» has to work out for himself that it means the
+    // migrations never ran. The gate says so itself.
+    const access = await client.query<{ present: boolean; may: boolean | null }>(
+      `SELECT to_regclass('public.schema_migrations') IS NOT NULL AS present,
+              CASE WHEN to_regclass('public.schema_migrations') IS NULL THEN NULL
+                   ELSE has_table_privilege(current_user, 'public.schema_migrations', 'SELECT') END AS may`,
+    );
+    if (access.rows[0]?.present !== true)
+      throw new Error(
+        `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but the database has no schema_migrations table, ` +
+          `so no migration has ever been applied to it. Run the migrations before starting the API.`,
+      );
+    if (access.rows[0]?.may === true) {
+      const r = await client.query<{ applied: string | null }>(`SELECT max(name) AS applied FROM public.schema_migrations`);
+      const applied = r.rows[0]?.applied ?? null;
+      if (applied === null)
+        throw new Error(
+          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} but schema_migrations is empty. ` +
+            `Run the migrations before starting the API.`,
+        );
+      const at = migrationOrdinal(applied);
+      if (at === null)
+        throw new Error(
+          `${SCHEMA_FLOOR_REFUSAL}: the greatest applied migration is ${JSON.stringify(applied)}, which carries no leading ordinal, so this ` +
+            `build cannot tell whether it is at or above ${REQUIRED_SCHEMA_MIGRATION}. An unidentifiable schema is refused rather than assumed ` +
+            `adequate.`,
+        );
+      if (at < floor)
+        throw new Error(
+          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION} (ordinal ${floor}) but the database has only reached ` +
+            `${applied} (ordinal ${at}). Starting would let the API read money through routines and columns that are not there yet. ` +
+            `Run the migrations, then start the API.`,
+        );
+    }
+
+    // ── 2. THE SURFACE, on every path ────────────────────────────────────
+    for (const required of REQUIRED_SURFACE) {
+      const s = await client.query<{ oid: string | null; result: string | null }>(
+        `SELECT to_regprocedure($1)::text AS oid,
+                CASE WHEN to_regprocedure($1) IS NULL THEN NULL ELSE pg_get_function_result(to_regprocedure($1)) END AS result`,
+        [required.signature],
+      );
+      const row = s.rows[0];
+      if (row === undefined || row.oid === null)
+        throw new Error(
+          `${SCHEMA_FLOOR_REFUSAL}: this build requires ${REQUIRED_SCHEMA_MIGRATION}, whose ${required.signature} is not in this database's ` +
+            `catalogue — ${required.because}. Run the migrations before starting the API.`,
+        );
+      if (required.result !== undefined && row.result !== required.result)
+        throw new Error(
+          `${SCHEMA_FLOOR_REFUSAL}: ${required.signature} is present but returns ${JSON.stringify(row.result)}, and this build reads ` +
+            `${JSON.stringify(required.result)} — ${required.because}. Run the migrations before starting the API.`,
+        );
+    }
+  } finally {
+    // Released whatever happened. A gate that leaked a connection on the
+    // refusal path would make a misconfigured deployment exhaust the server's
+    // connection slots while it restarted.
+    await client.end().catch(() => undefined);
+  }
+  return floor;
+}
+
 /** Config + logger + Database (pools opened per PROCESS_MODE inside Database). */
 export function coreProviders(config: AppConfig, seams: RuntimeSeams = {}): Provider[] {
   return [
@@ -128,7 +327,27 @@ export function coreProviders(config: AppConfig, seams: RuntimeSeams = {}): Prov
     // counter lives in the merchant runtime and a reconciliation counter in
     // the worker, and neither should have to know which process it is in.
     { provide: METRICS, useFactory: (): Metrics => seams.metrics ?? new InMemoryMetrics() },
-    Database,
+    { provide: SCHEMA_VERSION_GUARD, useFactory: (): Promise<number> => assertSchemaFloor(config) },
+    // `Database` is produced by a factory ONLY so that it can declare the
+    // schema gate as a dependency. Nest calls `onModuleInit` on a
+    // factory-produced instance exactly as it does on a class provider —
+    // measured in `tests-unit/nest-factory-provider-lifecycle.test.ts`,
+    // because if that ever stopped being true this line would silently
+    // disable the DB PRINCIPAL check that lives in that hook
+    // (`database.ts:755`), and a wiring change that switches off a security
+    // check without failing is the worst kind.
+    //
+    // The floor is taken as an argument and checked rather than ignored: an
+    // injected dependency nobody reads is one a later edit drops from the
+    // `inject` array without anything going red.
+    {
+      provide: Database,
+      useFactory: (cfg: AppConfig, floor: number): Database => {
+        if (typeof floor !== 'number') throw new Error(`the schema floor gate did not resolve to an ordinal, so the database handle must not be built`);
+        return new Database(cfg);
+      },
+      inject: ['APP_CONFIG', SCHEMA_VERSION_GUARD],
+    },
     { provide: 'HEALTH_CHECK', useFactory: (db: Database) => () => db.healthCheck(), inject: [Database] },
   ];
 }

@@ -394,6 +394,47 @@ const EnvSchema = z
     }
   });
 
+/**
+ * C1.5 — THE MIGRATION THIS BUILD REQUIRES.
+ *
+ * The highest migration the shipped code assumes is present. It is a
+ * CONSTANT and not a count: counting rows in `schema_migrations` would answer
+ * «how many» when the question is «which», and a database that had 87
+ * migrations of some other lineage would satisfy a count.
+ *
+ * It is pinned here rather than read from `infrastructure/database/migrations`
+ * at run time because a deployed API does not ship the migration directory —
+ * a guard that globbed a folder absent in production would fail open exactly
+ * where it is needed. `schemaFloor` keeps the constant honest: it is asserted
+ * against the shipped migration set by a test, so this cannot quietly fall
+ * behind the DDL the code was written against.
+ */
+export const REQUIRED_SCHEMA_MIGRATION = '0086_phase4_rls_quals_once_per_query.sql';
+
+/**
+ * The ordinal of a migration file name — `0084_…sql` → `84`.
+ *
+ * The comparison is on the ORDINAL and not on the string. Lexicographic order
+ * happens to agree while every prefix is four digits, and agreeing by accident
+ * is not the same as being right: the day a fifth digit arrives, `'10000_…' <
+ * '0999_…'` would read a newer database as older and the guard would refuse a
+ * correct deployment. A name without a leading ordinal is not a migration this
+ * guard can place, and it returns `null` rather than guessing.
+ */
+export function migrationOrdinal(name: string): number | null {
+  const m = /^(\d+)_/.exec(name);
+  if (m?.[1] === undefined) return null;
+  const n = Number.parseInt(m[1], 10);
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+/** The ordinal this build refuses to start below. */
+export function schemaFloor(): number {
+  const n = migrationOrdinal(REQUIRED_SCHEMA_MIGRATION);
+  if (n === null) throw new Error(`REQUIRED_SCHEMA_MIGRATION ${JSON.stringify(REQUIRED_SCHEMA_MIGRATION)} has no leading ordinal`);
+  return n;
+}
+
 export type AppConfig = z.infer<typeof EnvSchema> & { isTest: boolean; isProd: boolean };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
