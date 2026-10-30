@@ -311,6 +311,18 @@ afterAll(async () => {
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_sync()').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_verify()').catch(() => undefined);
   await p.query('DROP FUNCTION IF EXISTS installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)').catch(() => undefined);
+  // THE SIXTH ROUTINE. The specification creates SIX functions; this teardown
+  // dropped four and restored `customer_ar_aging`, and left this one behind —
+  // measured, as the whole of the fifteen `p4s4-internal-definer-inventory`
+  // failures on the decisive run. It is `SECURITY DEFINER` owned by
+  // `daftar_accounting_internal`, so §14 of that law reads it as an
+  // undocumented callable internal authority the moment a later step in the
+  // same `backend` job opens the SAME service container and the SAME `daftar`
+  // database. It is NOT recorded in the internal-definer inventory on purpose:
+  // it belongs to an UNBUILT slice carried by ZERO migrations, so recording it
+  // would claim an internal authority no deployment has. The leak was a
+  // teardown that did not finish, and this is the line that finishes it.
+  await p.query('DROP FUNCTION IF EXISTS installment_plan_active_exclusive()').catch(() => undefined);
   // THE RESTORE IS ASSERTED, NOT HOPED FOR (challenger M8). A `LANGUAGE sql`
   // body supplied as a string literal records NO `pg_depend` edge on the
   // relations it names, so the DROPs above succeed and leave
@@ -338,6 +350,24 @@ afterAll(async () => {
       WHERE n.nspname = 'public' AND c.relname IN ('installment_plans', 'installments')`,
   );
   expect(leftovers.rows[0]?.n, 'the suite left its own relations behind in the shared database').toBe('0');
+  // AND THE SAME QUESTION ASKED OF THE ROUTINES, so that the NEXT function the
+  // specification grows cannot leak in silence the way this one did. The list is
+  // every routine the specification creates EXCEPT `customer_ar_aging`, which is
+  // restored to its predecessor above rather than dropped. A spec that grows a
+  // seventh routine reds HERE, in the file that owes the cleanup, instead of
+  // reddening a security law fifteen checks later in another step.
+  const routineLeftovers = await p.query<{ p: string }>(
+    `SELECT p.proname AS p FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public' AND p.proname IN (
+        'installment_plan_active_exclusive', 'installment_plan_fact_assert',
+        'installment_plan_fact_sync', 'installment_plan_fact_verify',
+        'installment_schedule_verify')
+      ORDER BY 1`,
+  );
+  expect(
+    routineLeftovers.rows.map((r) => r.p),
+    'the suite left a routine of the specification behind in the shared database',
+  ).toEqual([]);
 }, 120_000);
 
 // ═══════════════════════════════════════════════════════════════════════════
