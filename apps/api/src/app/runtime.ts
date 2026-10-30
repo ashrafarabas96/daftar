@@ -202,6 +202,34 @@ export const SCHEMA_FLOOR_REFUSAL = 'Refusing to start — database schema is be
  * the gate pretends to cover: the ordinal is half 1's job, and where half 1
  * cannot run, the honest claim is «the surface the code reads is the surface
  * the build expects», which is the defect class C1.5 was opened for.
+ *
+ * AND THE LIST STOPS AT 0084. Both remaining migrations of the required range
+ * were examined for a sentinel and NEITHER yields one, by measurement rather
+ * than by omission:
+ *
+ *   — 0085 replaces this very routine set with the set-based recompute, but it
+ *     does so by `CREATE OR REPLACE` over the SAME shape: 0081 already
+ *     declares `customer_collect_payment` with the same twenty-six parameters
+ *     and the same six result columns that 0085 declares and that
+ *     `CUSTOMER_COLLECT_PAYMENT_SQL` calls. What 0085 changes is the BODY, and
+ *     a body is not a shape any caller reads. Pinning that signature would
+ *     LOOK like 0085 coverage while being unable to tell 0084 from 0085 —
+ *     which is a protection claim wider than its evidence, so it is not here.
+ *   — 0086 consists of EIGHT `ALTER POLICY` statements and nothing else: no
+ *     routine, no table, no column. A row-security qual is not a shape the
+ *     code reads; it filters the rows the code reads, and it is invisible to
+ *     every signature and result this list can pin.
+ *
+ * The consequence, stated plainly rather than left to be discovered: on a
+ * deployment where half 1 cannot run, a database stopped at 0084 passes this
+ * gate. What actually holds 0085 and 0086 is CI — the settlement suites for
+ * the recompute, and `tests/security/dr60-rls-tenant-isolation.test.ts`, which
+ * executes the eight quals as two tenants. Those are CI gates, not boot gates.
+ * Closing the remaining two at boot needs either the ordinal half working in
+ * production (a `SELECT` grant or a reader over `schema_migrations`, which is
+ * a migration and so not an execution card's to make) or a catalogue
+ * assertion over `pg_proc.prosrc` and `pg_policy`. The first is the cheaper
+ * and the more honest: it checks the version, which is the actual question.
  */
 const REQUIRED_SURFACE: readonly { readonly signature: string; readonly result?: string; readonly because: string }[] = [
   {
