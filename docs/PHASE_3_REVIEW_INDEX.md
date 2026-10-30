@@ -21,7 +21,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | Domain / packages | 45 | 4 | 6 |
 | API | 68 | 14 | 2 |
 | Web | 90 | 13 | 31 |
-| Security / gates | 35 | 33 | 6 |
+| Security / gates | 35 | 33 | 5 |
 | CI / release | 16 | 7 | 3 |
 | Other production files | 1 | 0 | 0 |
 | Tests (listed separately) | 303 | — | — |
@@ -310,7 +310,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `scripts/phase3-s4-gate.ts` | P3-S4 | PHASE 3 SLICE GATE — P3-S4, suppliers, purchases, receiving, landed cost and deficit coverage (docs/PHASE_3_EXECUTION_PLAN.md §6, docs/PHASE_3_S4_CONTRACT.md §7.1). | 43b8370 (S4 freeze) | high: grants, gate | 1: security/phase3-release-scope |
 | `scripts/phase3-s5-gate.ts` | P3-S5 | PHASE 3 SLICE GATE — P3-S5, supplier returns, PPV, supplier credit notes and purchase reversal (docs/PHASE_3_EXECUTION_PLAN.md §7, docs/PHASE_3_S5_CONTRACT.md §7.1). | 5ff7b8b (S5 freeze) | high: grants, gate | none found by reference |
 | `scripts/phase3-s6-gate.ts` | P3-S6 | PHASE 3 SLICE GATE — P3-S6, payment methods and supplier settlement (docs/PHASE_3_EXECUTION_PLAN.md §8, docs/PHASE_3_S6_CONTRACT.md §7.1). | 01dae04 (S6 freeze) | high: grants, gate | 1: security/settlement-s6-no-customer-payments |
-| `scripts/phase3-s7-gate.ts` | P3-S7 | PHASE 3 SLICE GATE — P3-S7, the merchant screens and their reads (docs/PHASE_3_EXECUTION_PLAN.md §8, P3-S7 contract §7.1 as amended by the coordinator rulings and Annex R #14–#16). | a0aee73 (S7 freeze) | high: gate | none found by reference |
+| `scripts/phase3-s7-gate.ts` | P3-S7 | PHASE 3 SLICE GATE — P3-S7, the merchant screens and their reads (docs/PHASE_3_EXECUTION_PLAN.md §8, P3-S7 contract §7.1 as amended by the coordinator rulings and Annex R #14–#16). | a0aee73 (S7 freeze) | high: gate | 1: performance/plan-evidence-contract |
 | `scripts/phase3-s8-gate.ts` | P3-S8 | PHASE 3 SLICE GATE — P3-S8, security, failure injection, reconciliation, concurrency, performance and the rebuild rehearsal (docs/PHASE_3_S8_CONTRACT.md §7.1 as amended by the coo… | 5fcab76 (S8 freeze) | high: definer, grants, gate | 6: integration/phase3-s8-inventory-account-domain, security/phase3-release-gate, security/phase3-release-prefix, security/phase3-s8-gate-tamper (+2) |
 | `scripts/phase3-secret-scan.ts` | corrective | PHASE 3 SECRET HISTORY RANGE SCAN (corrective directive §7) | not yet (corrective candidate) | standard | 2: security/p3c-review-index, security/p3c-secret-scan |
 | `scripts/secret-scan.ts` | corrective | The release's raw-credential content scan, shared by the release export (`scripts/export-release.ts`) and the Phase 1 release gate (`scripts/phase1-release-gate.ts`). | not yet (corrective candidate) | standard | 2: security/p3c-export-content-scan, security/p3c-phase1-gate-secret-scope |

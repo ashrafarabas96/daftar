@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 301,
-    "planGates": 65,
-    "assertions": 22,
-    "files": 47
+    "hits": 428,
+    "planGates": 118,
+    "assertions": 31,
+    "files": 54
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 50,
       "assertions": 11,
-      "mentions": 116
+      "mentions": 119
     },
     "phase-2": {
       "planGates": 0,
@@ -105,9 +105,9 @@
       "mentions": 15
     },
     "phase-4": {
-      "planGates": 9,
-      "assertions": 5,
-      "mentions": 66
+      "planGates": 62,
+      "assertions": 14,
+      "mentions": 128
     },
     "phase-3": {
       "planGates": 6,
@@ -119,7 +119,7 @@
     ".github/workflows/ci.yml": {
       "planGates": 0,
       "assertions": 2,
-      "mentions": 7,
+      "mentions": 8,
       "phase": "cross-phase"
     },
     ".github/workflows/phase2-s8-evidence.yml": {
@@ -133,6 +133,18 @@
       "assertions": 0,
       "mentions": 20,
       "phase": "phase-4"
+    },
+    "apps/api/src/modules/selling/customer-reads.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "apps/api/src/modules/selling/selling-errors.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
     },
     "docs/PHASE_2_PERFORMANCE_BASELINE.md": {
       "planGates": 0,
@@ -188,6 +200,12 @@
       "mentions": 4,
       "phase": "phase-4"
     },
+    "docs/decisions/2026-10-27-phase4-aging-decisions.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "phase-4"
+    },
     "infrastructure/database/migrations/0050_accounting_report_indexes.sql": {
       "planGates": 0,
       "assertions": 0,
@@ -224,6 +242,18 @@
       "mentions": 1,
       "phase": "phase-4"
     },
+    "infrastructure/database/specifications/p4s7-installment-aging.spec.sql": {
+      "planGates": 0,
+      "assertions": 2,
+      "mentions": 14,
+      "phase": "phase-4"
+    },
+    "packages/domain-core/test/phase4-s7-installment-aging.test.ts": {
+      "planGates": 40,
+      "assertions": 3,
+      "mentions": 5,
+      "phase": "phase-4"
+    },
     "scripts/bootstrap-platform-owner.ts": {
       "planGates": 0,
       "assertions": 1,
@@ -247,6 +277,12 @@
       "assertions": 0,
       "mentions": 2,
       "phase": "phase-3"
+    },
+    "scripts/phase4-gate.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 2,
+      "phase": "phase-4"
     },
     "scripts/plan-evidence/discover-plan-claims.ts": {
       "planGates": 0,
@@ -289,6 +325,12 @@
       "assertions": 0,
       "mentions": 19,
       "phase": "cross-phase"
+    },
+    "tests/integration/phase4-s7-installment-fact-db.test.ts": {
+      "planGates": 13,
+      "assertions": 4,
+      "mentions": 40,
+      "phase": "phase-4"
     },
     "tests/integration/read-s7-no-cache.test.ts": {
       "planGates": 6,
@@ -402,7 +444,7 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 377,
+      "line": 597,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -410,7 +452,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 383,
+      "line": 603,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
@@ -418,7 +460,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 398,
+      "line": 618,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -426,7 +468,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 467,
+      "line": 687,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -434,7 +476,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 470,
+      "line": 690,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -442,7 +484,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 472,
+      "line": 692,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -450,7 +492,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 473,
+      "line": 693,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -458,7 +500,15 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 492,
+      "line": 704,
+      "phase": "cross-phase",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "# plan-shape-signalled text. It lives in a workspace, so `npm test` in"
+    },
+    {
+      "file": ".github/workflows/ci.yml",
+      "line": 724,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -466,7 +516,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 495,
+      "line": 727,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -639,6 +689,22 @@
       "signals": ["collation-dependent-range"],
       "kind": "mention",
       "text": "WHERE t.business_id = $1 AND lower(t.name) ^@ $2"
+    },
+    {
+      "file": "apps/api/src/modules/selling/customer-reads.ts",
+      "line": 681,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze"],
+      "kind": "mention",
+      "text": "// measured optimisation — ONLY `EXPLAIN (ANALYZE)` on a real database"
+    },
+    {
+      "file": "apps/api/src/modules/selling/selling-errors.ts",
+      "line": 809,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "// unenforcing index, and on a `Seq Scan` the probe found the row and"
     },
     {
       "file": "docs/PHASE_2_PERFORMANCE_BASELINE.md",
@@ -833,6 +899,14 @@
       "text": "`resetData()`-ed the shared database, so no post-hoc `EXPLAIN (ANALYZE)`"
     },
     {
+      "file": "docs/decisions/2026-10-27-phase4-aging-decisions.md",
+      "line": 507,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "aging body** — one CTE, R-104 — take `EXPLAIN ANALYZE` **before and after**, and use"
+    },
+    {
       "file": "infrastructure/database/migrations/0050_accounting_report_indexes.sql",
       "line": 12,
       "phase": "cross-phase",
@@ -1017,6 +1091,558 @@
       "text": "-- Decomposed with EXPLAIN (ANALYZE, BUFFERS, VERBOSE) on PostgreSQL 16.13 as"
     },
     {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 1551,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "-- missed the row; on a `Seq Scan` the probe found the row the statement had"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 1816,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "-- PRESUPPOSE. `EXPLAIN (COSTS OFF)` of the previous text -- `WHERE"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 1818,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "-- `Index Only Scan using installment_plans_one_active_per_invoice_uq`,"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 1838,
+      "phase": "phase-4",
+      "signals": ["bitmap-plan"],
+      "kind": "mention",
+      "text": "-- source of such an implication. MEASURED: `Bitmap Heap Scan on"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 2301,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "-- ordered item 1, F-2). The previous text's plan was `Index Only Scan"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 2753,
+      "phase": "phase-4",
+      "signals": ["explain", "index-only-scan"],
+      "kind": "assertion",
+      "text": "'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something t"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 3642,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "-- a property of one arm's plan shape."
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 4212,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, third round). The three refusals customer_ar_aging owes once the no-plan arm is keyed on invoices.has_active_installment_plan instead of on a NOT EXISTS through the caller''s row security. It is NOT a visibility guard and the difference is stru"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 4393,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- `RETURNS TABLE` SQL routine is not inlined, so no `EXPLAIN` of a"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 4490,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "-- than a property of one arm's plan shape. The assertion is TOLD the three"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 4900,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "assertion",
+      "text": "'EXPLAIN (COSTS OFF) SELECT pg_catalog.count(*) FILTER (WHERE p.status = ''active'')'"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 5429,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--     the unenforcing index and a `Seq Scan` refused nothing. Since"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 5636,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "--     planned as `Index Only Scan using"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 5733,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "v_plan := v_plan || v_line.\"QUERY PLAN\" || E'\\n';"
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 5737,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: part 9c could not read the plan of the index-independent active-plan count at all -- EXPLAIN raised % (%). The reading that decides whether a guard measuring a partial index is itself answered BY a partial index therefore did not happen, and "
+    },
+    {
+      "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
+      "line": 5742,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 2062,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(sketch).toMatch(/WITH invoice_fact AS \\(/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 3597,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(syncBody, 'the blindable EXISTS came back').not.toMatch(/SELECT EXISTS \\(SELECT 1 FROM public\\.installment_plans p[\\s\\S]{0,200}INTO v_state;/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 3887,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('migration_end_state_invalid');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 3891,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block, `the end-state block never consults ${cat}`).toContain(cat);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 3898,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(mine, `the end-state block does not declare ${name}`).not.toBeNull();"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 3935,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(declared[i]?.sha256, `${c.signature}: the end-state block still carries an unfilled placeholder`).toMatch(/^[0-9a-f]{64}$/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4022,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(sql, `the end-state block never reads ${flag}`).toContain(`x.${flag}`);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4190,
+      "phase": "phase-4",
+      "signals": ["explain", "index-only-scan", "plan-cost"],
+      "kind": "mention",
+      "text": "* `EXPLAIN (COSTS OFF)` of the previous spelling was `Index Only Scan using"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4224,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('EXPLAIN (COSTS OFF)');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4225,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('SET LOCAL enable_seqscan = off');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4234,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/FOR v_ix IN SELECT ic\\.relname FROM pg_index x[\\s\\S]{0,400}?x\\.indpred IS NOT NULL/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4235,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('pg_catalog.strpos(v_plan, v_ix)');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4241,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain(\"v_seqscan := pg_catalog.current_setting('enable_seqscan')\");"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4242,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain(\"pg_catalog.set_config('enable_seqscan', v_seqscan, true)\");"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4246,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain(\"count(*) FILTER (WHERE p.status = ''active'')\");"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4273,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(decl, 'the end-state block declares no c_plan_probe').not.toBeNull();"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4279,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "assertion",
+      "text": "expect(probe.startsWith('EXPLAIN (COSTS OFF) '), `the probe is not an EXPLAIN: ${probe}`).toBe(true);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4280,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "assertion",
+      "text": "const probedQuery = probe.slice('EXPLAIN (COSTS OFF) '.length);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4302,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["probedQuery"],
+      "text": "expect(asQuery, `part 9c does not probe the query ${head} takes`).toBe(probedQuery);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4340,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(code, 'a session setting is still written somewhere in this slice').not.toMatch(/set_config\\('installment\\./);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4343,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('INTO v_writer_tg, v_verify_tg');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4344,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/NOT \\(v_writer_tg < v_verify_tg\\)/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4345,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('installment.migration_end_state_invalid: the ENABLED (tgenabled = O) trigger executing installment_plan_fact_sync');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4441,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('c_routines');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4442,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('p.proname = c_routines[v_i]');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4518,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(sqlCodeOnly(closedBlock), 'the comment body leaked into the code projection').not.toContain('terminated block comment');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4522,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(SPEC.split('/*').length - 1, 'the specification now opens a block comment').toBe(0);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4523,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(SPEC.split('*/').length - 1, 'the specification now closes a block comment').toBe(0);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4530,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "assertion",
+      "text": "expect(sqlCodeOnly('SELECT v.\"QUERY PLAN\" FROM x;')).toContain('\"QUERY PLAN\"');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4556,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* the planner choosing the unenforcing index, and on a `Seq Scan` the probe"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4571,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/FROM pg_index x[\\s\\S]{0,400}?x\\.indrelid = ANY \\(SELECT \\('public\\.' \\|\\| y\\)::regclass FROM unnest\\(c_relations\\) y\\)/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4572,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/NOT \\(x\\.indisvalid AND x\\.indisready AND x\\.indislive\\)/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4573,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('these indexes of the P4-S7 relations are present and NOT ENFORCING');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4578,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/EXECUTE 'REINDEX INDEX public\\.' \\|\\| pg_catalog\\.quote_ident\\(v_ix\\)/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4579,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain(\"count(*) FILTER (WHERE p.status = 'active') INTO v_heap\");"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4580,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('INTO v_served FROM public.installment_plans p WHERE p.status');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4581,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toMatch(/v_heap IS DISTINCT FROM v_served/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4586,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block.indexOf('v_heap IS DISTINCT FROM v_served')).toBeLessThan(block.indexOf(\"EXECUTE 'REINDEX INDEX public.'\"));"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4607,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4613,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect((nine_d.match(/pg_catalog\\.set_config\\('enable_seqscan'/g) ?? []).length, 'part 9d sets enable_seqscan without restoring it on every path').toBe(3);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4619,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect((nine_c.match(/pg_catalog\\.set_config\\('enable_seqscan'/g) ?? []).length, 'part 9c does not restore enable_seqscan on every path').toBe(2);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4626,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(block).toContain('v_verify_tg');"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4707,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "/prosrc\\s*\\^@/,"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4733,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "'p.prosrc COLLATE \"C\" LIKE \\'%token%\\'',"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4737,
+      "phase": "phase-4",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "\"p.prosrc ^@ 'token'\","
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 4754,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "for (const m of matchers) expect(sql, `the shipped block trips ${String(m)}`).not.toMatch(m);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 5815,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(shipped, 'the shipped body has levels after all, so it may clamp a credit too').not.toMatch(/least\\(greatest\\(/);"
+    },
+    {
+      "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
+      "line": 5820,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["block"],
+      "text": "expect(sqlCodeOnly(specAgingBody()), 'the detector is blind, so the absence above means nothing').toMatch(/least\\(greatest\\(/);"
+    },
+    {
       "file": "scripts/bootstrap-platform-owner.ts",
       "line": 45,
       "phase": "cross-phase",
@@ -1087,6 +1713,22 @@
       "signals": ["explain"],
       "kind": "mention",
       "text": "/** P3-S7's migrations: none. Becomes ['0069_…_read_indexes.sql'] only under A-02's exception, with T-17's EXPLAIN attached. */"
+    },
+    {
+      "file": "scripts/phase4-gate.ts",
+      "line": 1007,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "expectRed(`plan shape ${shape}, no Gate line → P4-S5 is a named problem`, analysePlan(`${base}${text}\\n`).problems, /P4-S5 is named in/);"
+    },
+    {
+      "file": "scripts/phase4-gate.ts",
+      "line": 1010,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "name: 'plan shape: a transient mention of a registered slice raises nothing (\"composes s4\", \"P4-S1 and P4-S0\")',"
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
@@ -1170,7 +1812,7 @@
     },
     {
       "file": "tests/browser/flows.ts",
-      "line": 651,
+      "line": 709,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -1353,6 +1995,475 @@
       "text": "return `[plan-evidence] ${label} | server_version_num=${env.serverVersionNum} datcollate=${env.datcollate} datctype=${env.datctype} provider=${env.localeProvider ?? 'n/a'} byteOrder=${env.collationIsByteOrder}${v.authoritative ? '' : ` | ${v.reasons.join('; ')}`}`;"
     },
     {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 622,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `pg_class.relpages` and `reltuples`, which are inputs to a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 1801,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "M['R13_block_sliced'] = END_BLOCK.includes('c_bodies') && END_BLOCK.includes('EXPLAIN (COSTS OFF)') && END_BLOCK.trimEnd().endsWith('$end$;');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2146,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    A `Seq Scan` IT FOUND THE ROW AND NOTHING REFUSED — so whether that"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2309,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [world.businessId, world.invoiceId]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2311,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join('\\n');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2325,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* to `Seq Scan` while every `*_noseq` reading stayed index-served. It could"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2342,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2401,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    relation: round 24 measured one run in thirty where it was a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2678,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2694,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "/** `EXPLAIN (COSTS OFF)` of one statement, with the planner free or forced. */"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2703,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2705,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join(' | ');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2822,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    sequential path but then chooses BETWEEN two indexes on `reltuples`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2825,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    in the same run, reads `relpages = 0` / `reltuples = -1` (the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2827,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `reltuples = 1` HERE in all 65 of its runs, and nothing in this file"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2830,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "//    planner believes the relation empty, prefers an `Index Only Scan` on"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2847,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* One statement under `knobs`, on a connection of its own, with `EXPLAIN`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2857,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const pl = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2859,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return { row: (r.rows[0] ?? {}) as Record<string, unknown>, plan: pl.rows.map((x) => x['QUERY PLAN']).join(' | ') };"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2961,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    recorded `relpages = 1` / `reltuples = 1` here in all 65 runs while"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2964,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    NEVER-VACUUMED SENTINEL `reltuples = -1` instead, the planner falls"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2978,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "await sup.query<{ relpages: number; reltuples: string }>("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2979,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relpages::int AS relpages, c.reltuples::text AS reltuples"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3074,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// `VACUUM` moves `relpages` and `reltuples`, which are exactly the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4284,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* planner choosing the very index that was not enforcing — on a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4297,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* conditional on nothing the planner decides, and a `Seq Scan` refuses"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4366,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* non-vacuity control, on `Aggregate -> Seq Scan on installment_plans p` —"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4395,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4398,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// only thing asked of them is that EXPLAIN ANSWERED AT ALL — true of a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4399,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// `Seq Scan` and of an `Index Only Scan` alike, so it is not a claim about"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4403,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4423,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` anyway, both countings then agreed, and this case received"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4615,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(heapTruth['error'], `the heap-forced EXISTS did not answer: ${String(heapTruth['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4616,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced EXISTS was not planned on the heap, so its value answers another question').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4617,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect((heapTruth['row'] as Record<string, unknown>)['t'], 'the heap-forced EXISTS does not see the two rows that ARE in the heap').toBe('true');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4627,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_bitmapscan` off AND NO `EXPLAIN` BESIDE IT. So no plan of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4633,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    chooses BETWEEN TWO INDEXES on `reltuples` -- and the primary key IS"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4641,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` taken in the SAME transaction, and the plan asserted to"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4653,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// planner a choice BETWEEN TWO INDEXES, and it chooses on `reltuples`:"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4654,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// round 26 measured that one plain `VACUUM` moves `reltuples` to 2 and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4694,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_seqscan` and `enable_bitmapscan` off and NO `EXPLAIN` in the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4710,
+      "phase": "phase-4",
+      "signals": ["explain", "seq-scan"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` in the same transaction, plan asserted `Seq Scan` and both"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4742,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['error'], `the heap-forced pair did not answer: ${String(heapPair['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4743,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(String(heapPair['plan']), 'the heap-forced pair was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4744,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['row']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4756,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "// asked of it is that EXPLAIN ANSWERED and named the relation -- true of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4757,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` and of an `Index Only Scan` alike. IT IS NO LONGER"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4761,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(planFree, 'EXPLAIN did not answer for the free reading').toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4767,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["planForced"],
+      "text": "expect(planForced, 'the index-forced plan is not an index plan').toContain('Index');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4768,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced and index-forced plans are the same plan, so the pair measures nothing').not.toBe("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4792,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `INSERT`s, the `EXPLAIN`s and the `SELECT`s of these readings, and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4916,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['relpages']), 'the constructed base page count is zero, so the planner has no page count to scale from').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4917,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['reltuples']), 'the constructed base tuple count is the never-vacuumed sentinel').toBeGreaterThanOrEqual(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4987,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    back, and a `VACUUM` moves `relpages` AND `reltuples` -- precisely"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4994,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(tailTruthForced['error'], `the heap-forced truth did not answer after the sweep: ${String(tailTruthForced['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4995,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(String(tailTruthForced['plan']), 'the post-sweep heap-forced truth was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 4996,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect((tailTruthForced['row'] as Record<string, unknown>)['t'], 'the sweep changed the state the rest of §R7 reads').toBe('true');"
+    },
+    {
       "file": "tests/integration/read-s7-no-cache.test.ts",
       "line": 94,
       "phase": "cross-phase",
@@ -1416,7 +2527,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 224,
+      "line": 206,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -1424,7 +2535,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 234,
+      "line": 216,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -1432,7 +2543,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 242,
+      "line": 224,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1440,7 +2551,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 246,
+      "line": 228,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -1448,7 +2559,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 248,
+      "line": 230,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "mention",
@@ -1456,7 +2567,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 355,
+      "line": 337,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -1464,7 +2575,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 361,
+      "line": 343,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1472,7 +2583,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 426,
+      "line": 402,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -1480,7 +2591,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 594,
+      "line": 573,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -1488,7 +2599,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 603,
+      "line": 582,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "plan-gate",
@@ -1497,7 +2608,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 604,
+      "line": 583,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "assertion",
@@ -1505,7 +2616,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 606,
+      "line": 585,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "assertion",
@@ -2484,7 +3595,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 531,
+      "line": 539,
       "phase": "cross-phase",
       "signals": ["node-type"],
       "kind": "mention",
@@ -2492,7 +3603,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 533,
+      "line": 541,
       "phase": "cross-phase",
       "signals": ["index-name"],
       "kind": "mention",
@@ -2500,7 +3611,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 534,
+      "line": 542,
       "phase": "cross-phase",
       "signals": ["index-cond"],
       "kind": "mention",
@@ -2508,7 +3619,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 540,
+      "line": 548,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -2516,7 +3627,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 545,
+      "line": 553,
       "phase": "cross-phase",
       "signals": ["explain", "query-plan-json"],
       "kind": "mention",
@@ -2524,7 +3635,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 546,
+      "line": 554,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "assertion",
@@ -2532,7 +3643,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 878,
+      "line": 886,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2540,7 +3651,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1031,
+      "line": 1039,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -2548,7 +3659,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1046,
+      "line": 1054,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -2556,7 +3667,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1047,
+      "line": 1055,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -2564,7 +3675,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1142,
+      "line": 1150,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2573,7 +3684,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1165,
+      "line": 1173,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2582,7 +3693,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1207,
+      "line": 1215,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2591,7 +3702,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1266,
+      "line": 1274,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2600,7 +3711,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1267,
+      "line": 1275,
       "phase": "cross-phase",
       "signals": ["node-type"],
       "kind": "assertion",
@@ -2608,7 +3719,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1268,
+      "line": 1276,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2617,7 +3728,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1270,
+      "line": 1278,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2626,7 +3737,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1281,
+      "line": 1289,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2635,7 +3746,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1324,
+      "line": 1332,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2644,7 +3755,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1350,
+      "line": 1358,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2653,7 +3764,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1351,
+      "line": 1359,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2662,7 +3773,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1394,
+      "line": 1402,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2671,7 +3782,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1395,
+      "line": 1403,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2680,7 +3791,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1447,
+      "line": 1455,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2689,7 +3800,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1459,
+      "line": 1467,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2698,7 +3809,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1495,
+      "line": 1503,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2707,7 +3818,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1515,
+      "line": 1523,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2716,7 +3827,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1516,
+      "line": 1524,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2725,7 +3836,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1536,
+      "line": 1544,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2734,7 +3845,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1537,
+      "line": 1545,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "plan-gate",

@@ -697,6 +697,18 @@ jobs:
       # `required-ci-chain-composition.test.ts` (C-9) asserts this step's
       # presence, command, job, name and the absence of
       # `continue-on-error` / `if:`.
+      # TL-P4-S3-R4, the half the contract below could only REPORT. The S7
+      # reference-model suite asserts on SQL text it derives from the
+      # specification, so the discovery rule classifies those assertions as
+      # plan gates by taint — correctly: they are assertions on
+      # plan-shape-signalled text. It lives in a workspace, so `npm test` in
+      # the `workspaces` job ran it and this job never did, and the contract
+      # below named it unreached. Required CI now executes it HERE too. It
+      # opens no database: 144 cases, measured, from the tree alone — the
+      # root-scoped invocation is what makes the package's own
+      # `include: test/**` resolve, which a root-config run does not.
+      - name: Phase 4 S7 reference-model plan claims (packages/domain-core, no database)
+        run: npx vitest run --root packages/domain-core test/phase4-s7-installment-aging.test.ts
       - name: Plan-evidence contract
         run: npm run plan-evidence:contract
         env:

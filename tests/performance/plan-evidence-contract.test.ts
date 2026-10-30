@@ -342,8 +342,21 @@ function unreachedBy(ciText: string, files: readonly string[]): string[] {
       //
       // A gate script therefore names a suite only in code. `://` is spared so
       // a URL in a comment-stripped line cannot amputate the line itself.
-      scriptSource.push(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1'));
-      for (const g of src.matchAll(/gate:[\w:]+/g)) {
+      const live = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+      scriptSource.push(live);
+      // AND THE COMPOSITION WALK READS THE SAME LIVE TEXT. Stripping comments
+      // from what counts as NAMING a suite, while walking `gate:` out of the
+      // RAW source, left the hole the paragraph above says was closed: a
+      // sentence mentioning `gate:phase4` pulled `scripts/phase4-gate.ts` in,
+      // and THAT script names `pos-s3-budgets.test.ts` in code, because it is
+      // the composite seal gate and carries every slice's roster. So the red
+      // proof below came back green through a comment after all — measured:
+      // deleting the POS step left the file reached via `scripts/phase4-gate.ts`.
+      // The raw walk was also too NARROW: pulling that composite in spent the
+      // depth budget, so `scripts/phase3-s7-gate.ts` — which composes
+      // `phase3-s7-read-budgets.test.ts` in code — was never expanded, and a
+      // suite required CI does execute was reported unreached.
+      for (const g of live.matchAll(/gate:[\w:]+/g)) {
         const body2 = pkg.scripts[g[0]];
         if (body2 !== undefined) addScript(body2, depth + 1);
       }
