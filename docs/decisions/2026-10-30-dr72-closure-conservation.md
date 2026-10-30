@@ -94,7 +94,11 @@ the position that was impossible.
 
 So the conservation arm — `Σrel <> HALF_EVEN(B·Σa, T)` — has teeth that have
 been shown only **synthetically**, on hand-made arguments such as `B = 333,
-T = 1000`. And it is not an oversight: the project already reasoned about this
+T = 1000`. The suite says so itself, in a case of its own: *the cumulative
+identity has teeth only where `B ≠ T`, and on this head `B = T` — stated,
+measured, and not faked*. That case is recorded on the slice roster for exactly
+that reason: losing it would break no measurement, it would quietly remove the
+disclosure. And it is not an oversight: the project already reasoned about this
 and wrote the reasoning down. `tests/golden-regression/phase4-s4/10-settlement-cross-currency.golden.test.ts`
 has a section headed *one thing this head cannot reach, stated and not faked*,
 which says that the AR dust is non-zero only when the invoice is in a currency

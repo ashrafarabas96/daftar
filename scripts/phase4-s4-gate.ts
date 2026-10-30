@@ -2344,6 +2344,34 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'P4-S4 Departure B documented — the customer-side payment-method posting account',
   },
   { suite: 'tests/integration/p4s4-intent-replay.test.ts', title: '§A a replay of a payment whose currency the SERVER resolved' },
+  // DR-72 (amended) §2 made this suite the seal evidence for the closure
+  // decision, so three of its cases are recorded rather than its path alone.
+  // The file carries no top-level `describe(`, so each title names an `it(`
+  // and no case floor applies.
+  //
+  // The first two are the cases the decision names: a refusal BY NAME, and a
+  // negative control that removes the verifier’s effect so the same write is
+  // accepted. Either one alone proves nothing — a refusal with no control
+  // could be any error, and a control with no refusal could be any success.
+  //
+  // The third is recorded for a different reason: it is the file’s own
+  // statement that the cumulative identity has teeth only where B ≠ T, and
+  // that on this head B = T. That sentence is what keeps the limit visible,
+  // and the decision document rests on it. Losing it would not break a
+  // measurement; it would silently remove the disclosure, which is the
+  // failure mode this roster exists to make loud.
+  {
+    suite: 'tests/integration/p4s4-invoice-settlement-chain-cross-relation.test.ts',
+    title: 'THE REFUSAL — one payment allocation and one credit application at the SAME chain position are refused BY NAME',
+  },
+  {
+    suite: 'tests/integration/p4s4-invoice-settlement-chain-cross-relation.test.ts',
+    title: 'NEGATIVE CONTROL — with the verifier’s effect removed the same write is ACCEPTED, and the shipped definition is proved unchanged',
+  },
+  {
+    suite: 'tests/integration/p4s4-invoice-settlement-chain-cross-relation.test.ts',
+    title: 'the cumulative identity has teeth only where B ≠ T, and on this head B = T — stated, measured, and not faked',
+  },
   { suite: 'tests/integration/p4s4-invoice-settlement-chain.test.ts', title: 'P4-S4 the oldest-first chain over an invoice' },
   {
     suite: 'tests/integration/p4s4-nondigested-argument-controls.test.ts',
