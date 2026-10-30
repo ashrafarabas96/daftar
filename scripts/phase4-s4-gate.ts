@@ -2355,11 +2355,19 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   // could be any error, and a control with no refusal could be any success.
   //
   // The third is recorded for a different reason: it is the file’s own
-  // statement that the cumulative identity has teeth only where B ≠ T, and
-  // that on this head B = T. That sentence is what keeps the limit visible,
-  // and the decision document rests on it. Losing it would not break a
-  // measurement; it would silently remove the disclosure, which is the
-  // failure mode this roster exists to make loud.
+  // disclosure about the cumulative identity. It used to say that the identity
+  // has teeth only where B ≠ T and that on this head B = T — which was true
+  // when the suite could not reach that term at all.
+  //
+  // DR-73 §2 ruled the telescoping argument insufficient and required the
+  // conservation arm to be exercised LIVE, so the suite now seeds a B ≠ T
+  // invoice directly and makes that term refuse a live write. The recorded
+  // title therefore changed with it, and what it now keeps visible is the pair
+  // of facts that make the seed necessary rather than lazy: that no COMMAND on
+  // this head can create a B ≠ T invoice, and that the seeds are rolled back,
+  // so the count of such invoices in the committed data must stay at zero.
+  // Losing this case would not break a measurement; it would silently remove
+  // the disclosure, which is the failure mode this roster exists to make loud.
   {
     suite: 'tests/integration/p4s4-invoice-settlement-chain-cross-relation.test.ts',
     title: 'THE REFUSAL — one payment allocation and one credit application at the SAME chain position are refused BY NAME',
@@ -2370,7 +2378,7 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   },
   {
     suite: 'tests/integration/p4s4-invoice-settlement-chain-cross-relation.test.ts',
-    title: 'the cumulative identity has teeth only where B ≠ T, and on this head B = T — stated, measured, and not faked',
+    title: 'the conservation arm is exercised where B ≠ T, and NO COMMAND on this head can create such an invoice — which is why it is seeded',
   },
   { suite: 'tests/integration/p4s4-invoice-settlement-chain.test.ts', title: 'P4-S4 the oldest-first chain over an invoice' },
   {
