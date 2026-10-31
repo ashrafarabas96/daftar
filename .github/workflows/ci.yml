@@ -758,6 +758,76 @@ jobs:
             "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # ── THE PERFORMANCE BUDGETS' NEGATIVE CONTROLS (owner decision DR-74) ──
+      #
+      # A budget that cannot fail is not a budget, and until DR-74 nothing in
+      # this workflow had ever made one fail. The accounting suite carried a
+      # slowdown knob for its B budget alone, never set by CI; the POS suite
+      # carried none at all. So every green tick those budgets ever reported
+      # was green for an unknown reason: a measurement that cannot go red and
+      # a measurement that is passing look exactly alike from here.
+      #
+      # These two steps deliberately slow the measured point of each budget
+      # and REQUIRE THE SUITE TO FAIL. A step that merely runs a suite with a
+      # knob set is not a control — it is a second run.
+      #
+      # And failing is not enough either. A suite whose fixture cannot start,
+      # whose database is unreachable, or that matches no test file also exits
+      # non-zero, and a control satisfied by that would be green while the
+      # budgets it claims to exercise were never evaluated. So each step also
+      # requires the inverted run to have failed ON THE BUDGET'S OWN
+      # ASSERTION, by its pure-ASCII tag — `PERF01-BUDGET-A`, `-B`, `-RATIO`,
+      # `-P4A`, `-P4B`, each pinned in the suite beside the ceiling it guards.
+      #
+      # Neither step touches a ceiling: `60` ms, `15` ms, `150` ms and the
+      # `1.6` ratio are the suites' own and are never raised to obtain a pass.
+      # The knobs are unset in every other step of this job, and inert then.
+      #
+      # Why a shell block rather than a plain `npx vitest run …`:
+      # `tests/performance/plan-evidence-contract.test.ts` proves that deleting
+      # the step which MEASURES `pos-s3-budgets.test.ts` leaves that file
+      # unreached by the required job. A control run — which demands the suite
+      # fail — is not a measurement, and a second plain `npx` step naming the
+      # same file would make that proof come back green with the measurement
+      # gone. The shell form keeps the control honest and the proof's subject
+      # intact; it is also the shape the tampered-migration proof above
+      # already uses, for the same reason: the exit code has to be inverted.
+      - name: Budget negative control — the accounting A and B budgets must be able to fail
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-accounting.log"
+          if npx vitest run tests/performance/accounting-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the SLOWED accounting budgets PASSED — A and B cannot fail, so their green means nothing"; exit 1
+          fi
+          grep -q 'PERF01-BUDGET-A' "$log" || {
+            tail -120 "$log"
+            echo "the slowed run failed, but NOT on budget A's assertion — the control proves nothing about A"; exit 1
+          }
+          grep -q 'PERF01-BUDGET-B' "$log" || {
+            tail -120 "$log"
+            echo "the slowed run failed, but NOT on budget B's assertion — the control proves nothing about B"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          PERF01_NEGATIVE_CONTROL_MS: '200'
+      - name: Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-pos.log"
+          if npx vitest run tests/performance/pos-s3-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the SLOWED POS budgets PASSED — the ratio gate and P4-A/P4-B cannot fail, so their green means nothing"; exit 1
+          fi
+          for tag in PERF01-BUDGET-RATIO PERF01-BUDGET-P4A PERF01-BUDGET-P4B; do
+            grep -q "$tag" "$log" || {
+              tail -120 "$log"
+              echo "the slowed run failed, but NOT on $tag's assertion — the control proves nothing about it"; exit 1
+            }
+          done
+        env:
+          PG_PORT: '5432'
+          POS_PERF_NEGATIVE_CONTROL_MS: '200'
       - name: Database contract from zero (throw-away embedded server; same check as the release gate)
         run: npm run check:db-from-zero
       - name: API build

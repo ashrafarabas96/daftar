@@ -97,6 +97,7 @@ import { openTillSession } from '../helpers/pos-till-sessions';
 import { asMember, must, onboardS3Business, registerActor, type HttpActor, type S3Business } from '../helpers/inventory-commands';
 import { INTERNAL, addWarehouse, setScope } from '../helpers/stock-ledger';
 import { readAs } from '../helpers/merchant-reads';
+import { ThrottlerStorage } from '@nestjs/throttler';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 
 /**
@@ -158,6 +159,66 @@ const VOLUME = { variants: scaled(5_000), warehouses: 3, merchantVariants: scale
 
 const WARMUP = 5;
 const RUNS = 20;
+
+/**
+ * PERF-01, applied to the RATIO GATE by owner decision DR-74.
+ *
+ * The ratio gate divides one p95 by another, so every weakness of a p95
+ * estimator enters it TWICE and the quotient is less stable than either side.
+ * At 20 samples the estimator is `sorted[ceil(0.95 * 20) - 1]`, the 19th of 20
+ * — ONE sample sits above it, so a single stalled read on either magnitude
+ * moves that magnitude's p95 to the stall and the ratio with it. At 200 the
+ * estimator is the 190th of 200 and TEN samples sit above it, so a bounded
+ * handful of stalls no longer decides the verdict.
+ *
+ * `1.6` is untouched, and so is every millisecond ceiling. The counts of the
+ * other `measure` callers are untouched too: the three P4-A latency
+ * measurements and the before-ANALYZE reading answer a different question, and
+ * DR-74 orders the extra samples for the ratio gate's two magnitudes.
+ *
+ * Cost: 2 x (20 warm-ups + 200 reads) instead of 2 x (5 + 20), about ten
+ * seconds on top of a suite that already seeds 5 000 variants.
+ *
+ * AND THE THING THAT MADE THE ORDERED COUNT FAIL THE FIRST TIME, measured:
+ * `httpImports` gives every route handler 300 requests per minute per client
+ * (`runtime.ts`), and two magnitudes of 220 requests on the SAME handler is
+ * 440. The first run of this hardening answered `429` mid-sample and took both
+ * the ratio gate and the P4-A measurement down with it. That is the suite's own
+ * synthetic volume meeting a production limit written for merchants, not a fact
+ * about the read, so `clearRateLimiterWindow` resets the accumulated count
+ * BETWEEN measurements — see it for what that does and does not do.
+ *
+ * Warm-ups are discarded and never enter a statistic; 20 of them put every
+ * pooled connection through the read several times before the clock starts,
+ * which 5 did not.
+ */
+const STABLE_RUNS = 200;
+const STABLE_WARMUP = 20;
+
+/**
+ * NEGATIVE CONTROL ONLY (DR-74). Unset in every normal run, and then inert.
+ *
+ * WHY IT IS SHAPED THE WAY IT IS, because the obvious simplification cannot
+ * fail: the ratio gate compares two magnitudes of the SAME read, so a delay
+ * added to both of them cancels in the quotient and leaves the ratio exactly
+ * where it was. A control that slows "the measurement" uniformly would
+ * therefore be green on a ratio gate that had stopped working. So the knob is
+ * applied PER CALL, and the ratio gate asks for it on the FIFTY-ROW
+ * magnitude only — the numerator — which is the one direction that moves the
+ * quotient. Do not "tidy" this into a blanket delay inside `measure`.
+ *
+ * For the two latency budgets — P4-A and P4-B — the delay is simply inside
+ * their measured windows, where a uniform slowdown is exactly what must push
+ * a p95 past a ceiling.
+ *
+ * `.github/workflows/ci.yml` runs this suite with the knob set and FAILS IF
+ * THE SUITE PASSES, and additionally requires each budget's ASCII tag in the
+ * output: a suite that cannot start also exits non-zero, and a control
+ * satisfied by that would be green for a reason that has nothing to do with
+ * the budgets.
+ */
+const NEGATIVE_CONTROL_MS = Number(process.env['POS_PERF_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
+
 /** Rows inserted per statement while seeding. */
 const BATCH = 500;
 
@@ -397,24 +458,96 @@ async function plansOf(path: string): Promise<{ readonly text: string; readonly 
 interface Measurement {
   readonly name: string;
   readonly budgetMs: number | null;
+  /** How many timed reads the four statistics below were computed from (DR-74). */
+  readonly iterations: number;
   readonly p50: number;
   readonly p95: number;
+  /**
+   * DR-74. p50 and p95 cannot tell a read that is uniformly slower from one
+   * that is normal with a tail, and on a RATIO that distinction is the whole
+   * question — a p95 moved by two stalls is a statement about the host, a p95
+   * moved by the whole distribution is a statement about the query.
+   */
+  readonly p99: number;
   readonly max: number;
   readonly samplesMs: readonly number[];
 }
 
-async function measure(name: string, budgetMs: number | null, path: string): Promise<Measurement> {
-  for (let i = 0; i < WARMUP; i += 1) expect((await readAs(t, owner, A.businessId, path, 'en')).status).toBe(200);
+/**
+ * Warm up, then time `runs` reads of `path`. The warm-ups are discarded and
+ * never enter a statistic, and nothing from `beforeAll` — the seed, the till
+ * session, the ANALYZE — is inside any timed window: the only thing between
+ * the two clock reads is one HTTP read.
+ *
+ * `control` is the DR-74 negative control and is `'none'` everywhere except
+ * where a caller deliberately asks to be slowed. See `NEGATIVE_CONTROL_MS`
+ * for why the ratio gate asks for it on one magnitude only.
+ */
+async function measure(
+  name: string,
+  budgetMs: number | null,
+  path: string,
+  runs = RUNS,
+  warmup = WARMUP,
+  control: 'none' | 'slow' = 'none',
+): Promise<Measurement> {
+  for (let i = 0; i < warmup; i += 1) expect((await readAs(t, owner, A.businessId, path, 'en')).status).toBe(200);
   const samples: number[] = [];
-  for (let i = 0; i < RUNS; i += 1) {
+  for (let i = 0; i < runs; i += 1) {
     const start = process.hrtime.bigint();
+    if (control === 'slow' && NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
     const r = await readAs(t, owner, A.businessId, path, 'en');
     samples.push(Number(process.hrtime.bigint() - start) / 1e6);
     expect(r.status).toBe(200);
   }
   const sorted = [...samples].sort((a, b) => a - b);
   const rank = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.ceil(q * sorted.length) - 1)]);
-  return { name, budgetMs, p50: rank(0.5), p95: rank(0.95), max: must(sorted.at(-1)), samplesMs: samples };
+  return {
+    name,
+    budgetMs,
+    iterations: sorted.length,
+    p50: rank(0.5),
+    p95: rank(0.95),
+    p99: rank(0.99),
+    max: must(sorted.at(-1)),
+    samplesMs: samples,
+  };
+}
+
+/**
+ * Reset the HTTP rate limiter's accumulated count. A HARNESS ARTIFACT IS
+ * REMOVED HERE; NO BUDGET, CEILING OR GUARD IS.
+ *
+ * WHAT IT DOES NOT DO. It does not disable the limiter, skip it, or raise its
+ * limit, and it touches no production file. `ThrottlerGuard` is still a global
+ * guard, every single measured request still goes through it, and that cost is
+ * still inside every timed window — exactly where it belongs, because a
+ * cashier's request pays it too.
+ *
+ * WHAT IT DOES. `ThrottlerStorageService.storage` is a public `Map` of
+ * per-client hit counts. Clearing it between two measurements means each
+ * measurement starts its own count at zero instead of inheriting the previous
+ * measurement's 220 samples. Without it the ordered 200-per-magnitude count is
+ * simply not reachable: 300 per minute per handler minus 440 requests leaves
+ * the second half of the sampling answering `429`, which is the suite throttling
+ * ITSELF — and a ratio computed from two magnitudes where only the second was
+ * throttled would be a statement about the limiter, not about the arms.
+ *
+ * It also makes the two magnitudes COMPARABLE, which matters more than the
+ * count: both now run from a zero count, rather than the ten-row half running
+ * clean and the fifty-row half running against a nearly exhausted allowance.
+ *
+ * It throws rather than skipping if the map cannot be read: a silent no-op here
+ * would hand back `429`s dressed as a missed budget.
+ */
+function clearRateLimiterWindow(where: string): void {
+  const storage = t.app.get<ThrottlerStorage>(ThrottlerStorage);
+  const bag = (storage as unknown as { storage?: unknown }).storage;
+  if (!(bag instanceof Map))
+    throw new Error(`the rate limiter's window could not be read, so ${where} would measure throttling rather than the read (@nestjs/throttler shape changed)`);
+  const cleared = bag.size;
+  bag.clear();
+  console.info('[P4-A] limiter window reset', JSON.stringify({ before: where, clientKeysCleared: cleared }));
 }
 
 /** The same statements on the same rows as the schema owner, who bypasses row security: the RLS COST, never the budget. */
@@ -686,13 +819,41 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     expect(one.length, 'the facts statement and the search statement, and nothing per row').toBe(2);
   });
 
-  /** GATE. Host-independent: the shape of the growth, measured on this host in this run. */
+  /**
+   * GATE. Host-independent: the shape of the growth, measured on this host in
+   * this run.
+   *
+   * DR-74 HARDENING. Both magnitudes are now 200 timed reads behind 20
+   * discarded warm-ups (`STABLE_RUNS`, `STABLE_WARMUP`), and the evidence line
+   * carries p50, p95, p99, max and the iteration count FOR EACH MAGNITUDE
+   * rather than the two p95s and the quotient — a ratio out of ceiling is a
+   * different finding depending on whether one side's whole distribution moved
+   * or just its tail, and the quotient alone cannot say which.
+   *
+   * `1.6` is untouched. Neither magnitude's window contains the seed, the till
+   * session or the ANALYZE: those run in `beforeAll`, and the before-ANALYZE
+   * reading is a separate `budgetMs: null` measurement that is printed and
+   * never asserted against this ceiling.
+   *
+   * The negative control is asked for on the FIFTY-ROW side only. Slowing both
+   * sides equally cancels in the quotient and could not fail; see
+   * `NEGATIVE_CONTROL_MS`.
+   */
   it('GATE: fifty rows cost no more than 1.6× ten rows — the arms terminate early', async () => {
-    const ten = await measure('POS search, 10 rows', null, searchPath('pos-', 10));
-    const fifty = await measure('POS search, 50 rows', null, searchPath('pos-', 50));
+    // Each magnitude from a zero hit count, so neither is throttled and the
+    // two are comparable. 220 requests on one handler is inside the 300/minute
+    // allowance; 440 is not, which is what the ordered count needs this for.
+    clearRateLimiterWindow('the ten-row magnitude');
+    const ten = await measure('POS search, 10 rows', null, searchPath('pos-', 10), STABLE_RUNS, STABLE_WARMUP);
+    clearRateLimiterWindow('the fifty-row magnitude');
+    const fifty = await measure('POS search, 50 rows', null, searchPath('pos-', 50), STABLE_RUNS, STABLE_WARMUP, 'slow');
     const ratio = fifty.p95 / ten.p95;
-    console.info('[P4-A] ratio', JSON.stringify({ p95_10: ten.p95, p95_50: fifty.p95, ratio, ceiling: RATIO_50_OVER_10 }));
-    expect(ratio).toBeLessThanOrEqual(RATIO_50_OVER_10);
+    const stats = (m: Measurement): unknown => ({ iterations: m.iterations, p50: m.p50, p95: m.p95, p99: m.p99, max: m.max });
+    console.info('[P4-A] ratio', JSON.stringify({ tenRows: stats(ten), fiftyRows: stats(fifty), ratio, ceiling: RATIO_50_OVER_10 }));
+    expect(
+      ratio,
+      `PERF01-BUDGET-RATIO ${JSON.stringify({ tenRows: stats(ten), fiftyRows: stats(fifty), ratio, ceiling: RATIO_50_OVER_10 })}`,
+    ).toBeLessThanOrEqual(RATIO_50_OVER_10);
   });
 
   /**
@@ -707,9 +868,16 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
    * query itself, and they do not care how fast the machine is.
    */
   it(`MEASUREMENT: p95 of ${RUNS} warm runs of the 50-row page is within P4-A (${BUDGET.A_POS_SEARCH_P95} ms)`, async () => {
-    const byName = await measure('POS search, 50 rows, name prefix', BUDGET.A_POS_SEARCH_P95, searchPath(NAME_PREFIX, 50));
-    const bySku = await measure('POS search, 50 rows, SKU prefix', BUDGET.A_POS_SEARCH_P95, searchPath('pos-sku-1', 50));
-    const byBarcode = await measure('POS search, one barcode', BUDGET.A_POS_SEARCH_P95, searchPath(oneBarcode, 50));
+    // The ratio gate ahead of this case now spends 440 requests of this
+    // handler's allowance, so this measurement starts from a zero count too —
+    // otherwise P4-A would be measuring `429`s left over from the gate before
+    // it, which is how the first run of the DR-74 hardening failed.
+    clearRateLimiterWindow('the P4-A latency measurement');
+    // The negative control is asked for on all three arms: this is a latency
+    // ceiling, so a uniform slowdown is exactly what must push it past 150 ms.
+    const byName = await measure('POS search, 50 rows, name prefix', BUDGET.A_POS_SEARCH_P95, searchPath(NAME_PREFIX, 50), RUNS, WARMUP, 'slow');
+    const bySku = await measure('POS search, 50 rows, SKU prefix', BUDGET.A_POS_SEARCH_P95, searchPath('pos-sku-1', 50), RUNS, WARMUP, 'slow');
+    const byBarcode = await measure('POS search, one barcode', BUDGET.A_POS_SEARCH_P95, searchPath(oneBarcode, 50), RUNS, WARMUP, 'slow');
     const rlsCost = { name: await ownerCost(searchPath(NAME_PREFIX, 50)) };
 
     const round = (m: Measurement): unknown => ({ ...m, samplesMs: m.samplesMs.map((x) => Math.round(x * 100) / 100) });
@@ -726,7 +894,9 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
     );
 
     for (const m of [byName, bySku, byBarcode]) {
-      expect(m.p95, `${m.name}: p95 ${m.p95.toFixed(1)} ms against P4-A's ${BUDGET.A_POS_SEARCH_P95} ms`).toBeLessThanOrEqual(BUDGET.A_POS_SEARCH_P95);
+      expect(m.p95, `PERF01-BUDGET-P4A ${m.name}: p95 ${m.p95.toFixed(1)} ms against P4-A's ${BUDGET.A_POS_SEARCH_P95} ms`).toBeLessThanOrEqual(
+        BUDGET.A_POS_SEARCH_P95,
+      );
     }
   });
 });
@@ -809,13 +979,25 @@ describe('P4-B — server-side cart recomputation', () => {
     ).rows.map((x) => x.relname);
     expect(present, 'the POS relations P4-B measures are not in the tree').toEqual(['pos_cart_lines', 'pos_till_sessions']);
 
+    // P4-B's recomputation is a different handler from the type-ahead, and 25
+    // requests is far inside the allowance — but the basket is built through
+    // twenty appends and five discount requests on two more handlers, and the
+    // measurement must not be able to inherit an exhausted count from anything
+    // this suite did before it.
+    clearRateLimiterWindow('the P4-B recomputation measurement');
+
     const lineIds = await twentyLineBasket();
     const headers = asMember(owner, A.businessId);
     const subject = `/v1/pos/till-sessions/${must(tillSessionId)}/cart-lines/${must(lineIds[0])}`;
 
-    /** One recomputation of the whole basket, timed, with its line count read back off the answer. */
-    const recompute = async (quantity: string): Promise<{ ms: number; lines: number }> => {
+    /**
+     * One recomputation of the whole basket, timed, with its line count read
+     * back off the answer. `slow` is the DR-74 negative control: inert unless
+     * the knob is set, and off for the warm-ups, which are discarded anyway.
+     */
+    const recompute = async (quantity: string, slow = false): Promise<{ ms: number; lines: number }> => {
       const start = process.hrtime.bigint();
+      if (slow && NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
       const res = await t.request.patch(subject).set(headers).send({ quantity });
       const ms = Number(process.hrtime.bigint() - start) / 1e6;
       expect(res.status, `the recomputation was refused: ${JSON.stringify(res.body)}`).toBe(200);
@@ -825,7 +1007,7 @@ describe('P4-B — server-side cart recomputation', () => {
     for (let i = 0; i < WARMUP; i += 1) await recompute(i % 2 === 0 ? '1' : '2');
     const samples: number[] = [];
     for (let i = 0; i < RUNS; i += 1) {
-      const run = await recompute(i % 2 === 0 ? '1' : '2');
+      const run = await recompute(i % 2 === 0 ? '1' : '2', true);
       // The figure is about TWENTY lines on every single sample, not on average.
       expect(run.lines, 'a sample recomputed a basket of some other size').toBe(20);
       samples.push(run.ms);
@@ -836,15 +1018,21 @@ describe('P4-B — server-side cart recomputation', () => {
     const measured = {
       name: 'POS cart recomputation, 20 lines, 5 discounted, tax zero (OD-03 OPEN)',
       budgetMs: BUDGET.B_POS_CART_P95,
+      iterations: sorted.length,
       p50: rank(0.5),
       p95: rank(0.95),
+      // DR-74: recorded for the same reason the ratio gate records it — a p95
+      // and a p99 that move together are a slower operation, a p99 that moves
+      // alone is a tail.
+      p99: rank(0.99),
       max: must(sorted.at(-1)),
       samplesMs: samples.map((x) => Math.round(x * 100) / 100),
     };
     console.info('[P4-B] budget', JSON.stringify({ lines: 20, discounted: 5, loadavg: loadavg(), measured }));
 
-    expect(measured.p95, `${measured.name}: p95 ${measured.p95.toFixed(1)} ms against P4-B's ${BUDGET.B_POS_CART_P95} ms`).toBeLessThanOrEqual(
-      BUDGET.B_POS_CART_P95,
-    );
+    expect(
+      measured.p95,
+      `PERF01-BUDGET-P4B ${measured.name}: p95 ${measured.p95.toFixed(1)} ms against P4-B's ${BUDGET.B_POS_CART_P95} ms`,
+    ).toBeLessThanOrEqual(BUDGET.B_POS_CART_P95);
   });
 });
