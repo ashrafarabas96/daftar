@@ -168,7 +168,8 @@ export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): 
 
   // ── Half two: the paths themselves. ───────────────────────────────────
   for (const [path, sql] of Object.entries(src.migrations)) {
-    const file = path.split('/').pop() ?? path;
+    // Either separator: the caller keys by `relative()`, which is `\` on Windows.
+    const file = path.split(/[\\/]/).pop() ?? path;
     const frozen = skippedAsFrozen(src.frozen, file);
     for (const routine of parseRoutines(sql)) {
       // A frozen file's bytes may never change, so reporting one here would
@@ -225,7 +226,7 @@ export function findDefinerSearchPathViolations(src: DefinerSearchPathSources): 
   // quietly declines to create the real one. `accounting_post_entry` shipped
   // exactly that before this guard existed.
   for (const [path, sql] of Object.entries(src.migrations)) {
-    const file = path.split('/').pop() ?? path;
+    const file = path.split(/[\\/]/).pop() ?? path;
     if (skippedAsFrozen(src.frozen, file)) continue;
     const schema = stripComments(sql);
     const match = /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(TEMP|TEMPORARY)\b/i.exec(schema);

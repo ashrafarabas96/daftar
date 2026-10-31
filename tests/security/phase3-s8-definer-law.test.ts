@@ -32,10 +32,39 @@
  * path order of `supplier_pay` reversed (clause 1 names it), a routine handed
  * to the migrator (clauses 2 and 7 name it), and PUBLIC given EXECUTE
  * (clause 3 names it).
+ *
+ * ── P4-AL-88: this suite needs no re-expression, and that is a claim ─────
+ *
+ * `phase3Routines()` is the complement of the accepted Phase 2 prefix, so it
+ * reports every routine a LATER phase creates too. Unlike the T-04 surface
+ * equalities, that is exactly what this suite wants, and neither of its two
+ * equalities is a claim about the phase that follows it:
+ *
+ *   - `definerLawViolations(…) toEqual SHIPPED` is an equality over the
+ *     VIOLATOR set, not over the surface. Its right-hand side is the empty
+ *     exception set, so the assertion says "no routine in the complement
+ *     violates any clause" — a law, which grows to cover each new routine the
+ *     moment its migration exists, with no edit here. A Phase 4 routine makes
+ *     it red only by BREAKING the law, which is the intended red.
+ *   - the `replaced` equality at `:157` enumerates the pre-`0052` routines
+ *     whose BODY a later migration changed. A Phase 4 routine that is merely
+ *     NEW cannot enter that set — `replaced` is true only when the routine
+ *     already existed at `0052` — so the list is closed by construction, not
+ *     by a closure rule. A Phase 4 migration that replaced a frozen Phase 1/2
+ *     routine WOULD enter it, and that is a P4-AL-27 / P4-AL-29 violation the
+ *     estate wants red.
+ *
+ * Both of those are PROVED below, with the Phase 4 routines present, in the
+ * `P4-AL-88` block: green when they satisfy the law, and red — named by
+ * clause — when they do not. The requirement the next migration must meet is
+ * written out there.
  */
+import { type PoolClient } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { must } from '../helpers/inventory-commands';
 import {
   ACCOUNTING_INTERNAL,
+  beyondPhase3Routines,
   CATALOG_INTERNAL,
   INVENTORY_INTERNAL,
   lexBody,
@@ -255,4 +284,159 @@ describe('T-05 NEGATIVE CONTROLS — each removed invariant is named by its clau
     const v = await definerLawViolations(scratch.pool);
     expect({ c3: v.c3, c4: v.c4 }).toEqual({ c3: [guard], c4: [guard] });
   });
+});
+
+/**
+ * ── P4-AL-88: the T-05 law reaches a later phase's routines BY CONSTRUCTION ──
+ *
+ * Proved, not asserted, and on the REAL routines the first Phase 4 migration
+ * created in the database these suites run on — discovered here
+ * (`beyondPhase3Routines()`: a routine in the complement whose NAME no
+ * accepted Phase 3 prefix file declares) rather than named, so this block
+ * carries no Phase 4 name.
+ *
+ *   (a) they really are inside `phase3Routines()`, so the law is evaluated
+ *       over them with no edit to this suite, and none of them is `replaced`
+ *       — which is what makes the equality at `:157` closed by construction;
+ *   (b) with the shape the lock requires, every clause is GREEN;
+ *   (c) each clause is RED, and NAMES the routine, when that shape is broken:
+ *       one plant per clause, applied to a real routine of the later phase
+ *       inside a transaction that is always rolled back.
+ *
+ * So the requirement on every later migration is exact, and it is the same
+ * requirement the migrations of `0053`–`0073` already meet:
+ *
+ *   1. every SECURITY DEFINER routine it creates carries
+ *      `SET search_path = pg_catalog, public, pg_temp`, in that order, with
+ *      `pg_temp` named and last (clause 1);
+ *   2. its owner is NOLOGIN and one of the internal principals this suite's
+ *      `internal` set names (clause 2) — an owner outside that set is red
+ *      even when it is NOLOGIN, which is proved below;
+ *   3. `REVOKE ALL ON FUNCTION … FROM PUBLIC` for every routine, definer or
+ *      invoker (clause 3), and a TRIGGER function keeps no EXECUTE grantee
+ *      at all besides its owner (clause 4);
+ *   4. no routine creates or depends on a temporary relation (clause 5) and
+ *      any dynamic SQL is `EXECUTE format('…%I…%L…')` (clause 6);
+ *   5. no DEFINER routine is left owned by the applying principal (clause 7).
+ */
+describe('T-05 P4-AL-88 — the seven clauses reach a later phase’s routines, proved both directions', () => {
+  /** One dedicated owner connection: a plant must be visible to the law that judges it. */
+  let owner: PoolClient;
+
+  beforeAll(async () => {
+    owner = await ownerPool().connect();
+  });
+
+  afterAll(() => {
+    owner.release();
+  });
+
+  /** Run `body` with `plant` applied, always rolled back. */
+  const planted = async (plant: readonly string[], body: () => Promise<void>): Promise<void> => {
+    await owner.query('BEGIN');
+    try {
+      for (const sql of plant) await owner.query(sql);
+      await body();
+    } finally {
+      await owner.query('ROLLBACK').catch(() => undefined);
+    }
+  };
+
+  it('(a) the later phase’s routines are inside phase3Routines(), and none of them is "replaced"', async () => {
+    const beyond = await beyondPhase3Routines();
+    expect(beyond.length, 'no routine beyond the Phase 3 prefix exists, so nothing below proves anything').toBeGreaterThan(0);
+    const sigs = (await phase3Routines()).map((r) => r.sig);
+    for (const r of beyond) expect(sigs, r.sig).toContain(r.sig);
+    // A routine that did not exist at 0052 cannot be a replacement of one, so
+    // the `replaced` list is closed against every later phase by construction.
+    expect(beyond.filter((r) => r.replaced).map((r) => r.sig)).toEqual([]);
+  });
+
+  it('(b) GREEN: every clause is satisfied over the whole complement, the later phase’s routines included', async () => {
+    expect(await definerLawViolations(ownerPool())).toEqual(SHIPPED);
+    // And the later phase brought both kinds into the law's reach: at least
+    // one DEFINER routine (the clauses 1, 2, 7 subjects) and at least one
+    // routine with an EXECUTE grantee (the clause 3 subject).
+    const beyond = (await beyondPhase3Routines()).map((r) => r.sig);
+    const shape = await ownerPool().query<{ definers: number; granted: number }>(
+      `SELECT count(*) FILTER (WHERE p.prosecdef)::int AS definers,
+              count(*) FILTER (WHERE p.proacl IS NOT NULL)::int AS granted
+         FROM pg_proc p WHERE p.oid = ANY (SELECT to_regprocedure('public.' || s) FROM unnest($1::text[]) s)`,
+      [beyond],
+    );
+    expect(shape.rows[0]?.definers ?? 0).toBeGreaterThan(0);
+    expect(shape.rows[0]?.granted ?? 0).toBeGreaterThan(0);
+  });
+
+  it('(c) RED: the pinned path, the owner, the applier and the PUBLIC grant are each named by their clause', async () => {
+    const beyond = await beyondPhase3Routines();
+    const definers = (
+      await ownerPool().query<{ sig: string }>(
+        `SELECT regexp_replace(p.oid::regprocedure::text, '^public\\.', '') AS sig FROM pg_proc p
+          WHERE p.prosecdef AND p.oid = ANY (SELECT to_regprocedure('public.' || s) FROM unnest($1::text[]) s) ORDER BY 1`,
+        [beyond.map((r) => r.sig)],
+      )
+    ).rows.map((x) => x.sig);
+    const probe = must(definers[0], 'a SECURITY DEFINER routine beyond the Phase 3 prefix');
+
+    // Clause 1 — the path order reversed, and the path dropped altogether.
+    await planted([`ALTER FUNCTION ${probe} SET search_path = public, pg_temp, pg_catalog`], async () => {
+      expect((await definerLawViolations(owner)).c1).toEqual([probe]);
+    });
+    await planted([`ALTER FUNCTION ${probe} RESET search_path`], async () => {
+      expect((await definerLawViolations(owner)).c1).toEqual([probe]);
+    });
+
+    // Clauses 2 and 7 — handed to the applying principal.
+    await planted([`ALTER FUNCTION ${probe} OWNER TO daftar_migrator`], async () => {
+      const v = await definerLawViolations(owner);
+      expect({ c2: v.c2, c7: v.c7 }).toEqual({ c2: [probe], c7: [probe] });
+    });
+
+    // Clause 2 — a NOLOGIN owner the law's internal set does not name. This is
+    // the requirement a later migration is most likely to miss: a fresh
+    // `daftar_<domain>_internal` principal is refused although it is NOLOGIN,
+    // because clause 2 names the internal principals it trusts.
+    await planted([`CREATE ROLE daftar_t05_probe_internal NOLOGIN`, `ALTER FUNCTION ${probe} OWNER TO daftar_t05_probe_internal`], async () => {
+      const v = await definerLawViolations(owner);
+      expect({ c2: v.c2, c7: v.c7 }).toEqual({ c2: [probe], c7: [] });
+    });
+
+    // Clauses 3 and 4 — PUBLIC given EXECUTE on a trigger function.
+    const trigger = must(
+      (
+        await ownerPool().query<{ sig: string }>(
+          `SELECT regexp_replace(p.oid::regprocedure::text, '^public\\.', '') AS sig FROM pg_proc p
+            WHERE p.prorettype = 'trigger'::regtype
+              AND p.oid = ANY (SELECT to_regprocedure('public.' || s) FROM unnest($1::text[]) s) ORDER BY 1`,
+          [beyond.map((r) => r.sig)],
+        )
+      ).rows[0],
+      'a trigger function beyond the Phase 3 prefix',
+    ).sig;
+    await planted([`GRANT EXECUTE ON FUNCTION ${trigger} TO PUBLIC`], async () => {
+      const v = await definerLawViolations(owner);
+      expect({ c3: v.c3, c4: v.c4 }).toEqual({ c3: [trigger], c4: [trigger] });
+    });
+
+    // Clause 3 — PUBLIC given EXECUTE on a non-trigger routine of the later
+    // phase: clause 3 alone, which is the shape its read functions have.
+    const reader = must(
+      (
+        await ownerPool().query<{ sig: string }>(
+          `SELECT regexp_replace(p.oid::regprocedure::text, '^public\\.', '') AS sig FROM pg_proc p
+            WHERE NOT p.prosecdef AND p.prorettype <> 'trigger'::regtype
+              AND p.oid = ANY (SELECT to_regprocedure('public.' || s) FROM unnest($1::text[]) s) ORDER BY 1`,
+          [beyond.map((r) => r.sig)],
+        )
+      ).rows[0],
+      'an INVOKER read routine beyond the Phase 3 prefix',
+    ).sig;
+    await planted([`GRANT EXECUTE ON FUNCTION ${reader} TO PUBLIC`], async () => {
+      const v = await definerLawViolations(owner);
+      expect({ c3: v.c3, c4: v.c4 }).toEqual({ c3: [reader], c4: [] });
+    });
+
+    expect(await definerLawViolations(ownerPool())).toEqual(SHIPPED);
+  }, 180_000);
 });

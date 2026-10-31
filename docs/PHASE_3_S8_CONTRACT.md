@@ -821,7 +821,7 @@ All run under `npm run test:integration`, except T-13 (`perf:phase2:s8` runs `te
 - `RECONCILER_S8_COLUMNS`: the §2.2 map.
 - `REQUIRED_SUITE_NAMES`: T-01 … T-18.
 - `TD12_SITES`: the six A-19 sites.
-- `EXPECTED_RULE_COUNT = 23`, S7's count.
+- `EXPECTED_RULE_FLOOR = 23`, S7's count as a FLOOR, not an equality: the live count is derived from `scripts/static-guards.ts` itself, so a later phase that adds rule 24 does not turn this accepted gate red.
 
 **Tenses:**
 
@@ -846,7 +846,7 @@ All run under `npm run test:integration`, except T-13 (`perf:phase2:s8` runs `te
    - `packages/inventory/src` does not define it.
 6. **Suites.** Every `REQUIRED_SUITE_NAMES` file exists (the S6 `SUITE_PATTERN` form, `:159-171`).
 7. **Premortem.** The matrix JSON is complete; the gate runs a static version of T-18, so a missing row fails before any database starts.
-8. **Guards.** `npm run check:guards` prints `PASS (23 rules)`. The gate greps that the extended rules reference `PHASE2_PREFIX_END` (a, b, d) and `INVENTORY_PERIMETER` (c).
+8. **Guards.** `npm run check:guards` prints `PASS (N rules)` with N >= `EXPECTED_RULE_FLOOR` (23); the requirement is the floor, never equality with 23. The gate greps that the extended rules reference `PHASE2_PREFIX_END` (a, b, d) and `INVENTORY_PERIMETER` (c).
 9. **No skip.** No `RELEASE_GATE_SKIP_*` and no `it.skip` or `describe.skip` in any S8 suite.
 
 **Runtime steps, in order:**
@@ -979,7 +979,7 @@ The rulings header above takes precedence over the body wherever they differ.
 | 8 | A-08 counts 151 / 126 / 18 / 7 | Stale (pre-S6-freeze); now 178 `SECURITY DEFINER` tokens incl. comments, single-line `OWNER TO` 124 inventory / 15 accounting | Record counts from the catalogue at S8 start, not in the contract |
 | 9 | TL-3: `provision_actor` **and** `accounting_actor` keep a migrator owner; exempt from clause 7 only | `accounting_actor` is owned by `daftar_accounting_internal` (0045:878; replaced under `SET LOCAL ROLE` 0061:139; asserted 0061:2208) with canonical path (0061:142). `provision_actor` is migrator-owned with path `public, pg_catalog, pg_temp` (0061:225-226). Computed replaced set = exactly {accounting_actor, provision_actor} | Exception set = `{provision_actor(text[])}` only, exempt from clauses **1, 2 and 7**; `accounting_actor` must pass all clauses |
 | 10 | A-18(a): 7 tables escape G-3; add `payment_methods` and `settled` "if S6 has not" | S6 did: `SUPPLIER_TABLE_NAME` incl. `payment_methods|payment_method_*` and `settled` (s7int scripts/guards/no-authoritative-balance.ts:336,339) | 5 escape: `units, unit_names, branch_warehouses, stocktakes, stocktake_lines`; cite :336 not :328 |
-| 11 | static-guards.ts rule lines 281/388/421/446/546; count 23 | s7int: R15 :282, R16 :389, R17 :422, R18 :447, R22 :557, R23 (web-responsive) :574, `PASS (23 rules)` :595. daftar@01dae04 still prints 22 (:567) | `EXPECTED_RULE_COUNT = 23` holds only on the S7-accepted base ✓ |
+| 11 | static-guards.ts rule lines 281/388/421/446/546; count 23 | s7int: R15 :282, R16 :389, R17 :422, R18 :447, R22 :557, R23 (web-responsive) :574, `PASS (23 rules)` :595. daftar@01dae04 still prints 22 (:567) | An equality on the rule count holds only on the S7-accepted base ✓ — and Phase 4 proved it: adding rule 24 made this accepted gate refuse every later tree, so the pin is now `EXPECTED_RULE_FLOOR = 23` with the count derived from `scripts/static-guards.ts` |
 | 12 | Pin 8 `inventory-db-guard.test.ts:185` | :221 (writer-set it) and :458 (rule-22 describe) | Fix |
 | 13 | Helpers `stock-ledger.ts:382/579/588`; `migrationsUpTo` "helper" at migration-upgrade.test.ts:48 | :418 mintFixtureAssertion, :615 installStockFixture, :624 withRolledBackFixture, :298 atCommit; `migrationsUpTo` is file-local (:51) | `phase3-surface.ts` re-implements it (or T extracts it to tests/helpers) |
 | 14 | TD-16 = no stored rebuild swap | TECHNICAL_DEBT.md:24 TD-15 (no settlement reversal), :25 TD-16 (S5 sub-unit AP residue). S7 adds no TD (edits TD-06 only) | Swap debt = **TD-17**; §4.5, A-13, TL-1 text updated |
