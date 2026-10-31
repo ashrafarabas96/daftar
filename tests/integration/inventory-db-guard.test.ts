@@ -1,8 +1,15 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INVENTORY_INVOKER_EXCEPTIONS, checkInventoryDefinerContract, inventoryRoutineDefinitions } from '../../scripts/guards/inventory-definer-contract';
+import {
+  INVENTORY_INVOKER_EXCEPTIONS,
+  INVENTORY_SEARCH_PATH,
+  checkInventoryDefinerContract,
+  inventoryRoutineDefinitions,
+} from '../../scripts/guards/inventory-definer-contract';
 import { checkInventoryWriterAuthority, stockTablesWritten } from '../../scripts/guards/inventory-writer-authority';
+// P4-AL-88: the accepted Phase 3 head, the boundary the handover inventory is scoped to.
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
 
 /**
  * GUARD G-7 — the §D definer contract for daftar_inventory_internal
@@ -49,13 +56,36 @@ function mutate(file: string, from: string | RegExp, to: string): Record<string,
 
 const violations = (migrations: Record<string, string>): string[] => checkInventoryDefinerContract({ migrations }).violations;
 
+/**
+ * THE HANDOVER SET, SPLIT BY THE FILE THAT MADE THE HANDOVER (P4-AL-88).
+ *
+ * `transferred` is an INVENTORY — "these and no others are handed to the
+ * inventory principal" — so asserting it whole was a claim about the phase that
+ * follows: `0075` hands six more routines over and an accepted P3-S8 gate went
+ * red for a reason that has nothing to do with the §D contract. The claim is
+ * scoped by POSITION instead: a routine belongs to the Phase 3 scope when the
+ * FIRST file that hands it over is inside the accepted inherited prefix, which
+ * `0000`-`0073` being frozen byte for byte (P4-AL-85) closes to every later
+ * phase. A later file re-handing a Phase 3 routine cannot move it out of the
+ * scope, and no prefix file can hand a later phase's routine in.
+ */
+function handoverScope(migrations: Record<string, string>): { inScope: string[]; beyond: string[]; all: string[] } {
+  const { transferred, handovers } = checkInventoryDefinerContract({ migrations });
+  const firstHandover = (name: string): string => handovers[name]?.[0] ?? '\uffff';
+  return {
+    inScope: transferred.filter((n) => firstHandover(n) <= PHASE4_INHERITED_PREFIX_END).sort(),
+    beyond: transferred.filter((n) => firstHandover(n) > PHASE4_INHERITED_PREFIX_END).sort(),
+    all: [...transferred].sort(),
+  };
+}
+
 describe('G-7 — the tree as it stands', () => {
   it('accepts the real migrations', () => {
     expect(violations(real())).toEqual([]);
   });
 
   it('sees every routine the migrations hand to the inventory principal, including the two asserted exceptions', () => {
-    const { transferred } = checkInventoryDefinerContract({ migrations: real() });
+    const { inScope, beyond, all } = handoverScope(real());
     // P3-S3 appends thirty routines (0061: the bridge, completeness, freeze,
     // header, value and archive guards and the allocator; 0062: the seven
     // entry routines and their four helpers), all DEFINER — no new exception.
@@ -75,7 +105,10 @@ describe('G-7 — the tree as it stands', () => {
     // the reversal's unsettled guard; 0068: the seven entry routines and the
     // credit-note writer, R-73), all DEFINER — no new exception. 0067's owner
     // replacement of the credit-note guard (A-12) adds a definition, not a name.
-    expect(transferred).toEqual(
+    // P4-AL-88: the list below is the one that stood here, name for name; it
+    // is now asserted over the routines the ACCEPTED PHASE 3 PREFIX hands
+    // over, and the handovers a later phase makes are judged beside it.
+    expect(inScope).toEqual(
       [
         'branch_warehouses_keep_home',
         'inventory_adjust_stock',
@@ -228,6 +261,94 @@ describe('G-7 — the tree as it stands', () => {
       ].sort(),
     );
     expect([...INVENTORY_INVOKER_EXCEPTIONS].sort()).toEqual(['product_variants_10_base_variant_authority', 'products_10_inventory_config_authority']);
+
+    // The partition, so "and nothing more" is still said about the Phase 3
+    // scope: the two halves are disjoint and together they are the WHOLE
+    // handover set — nothing is quietly dropped from judgement.
+    expect(
+      inScope.filter((n) => beyond.includes(n)),
+      'the two halves are disjoint',
+    ).toEqual([]);
+    expect([...inScope, ...beyond].sort(), 'and together they are the whole handover set').toEqual(all);
+    // And the later phase's half is judged POSITIVELY, not tolerated: every
+    // routine it hands over is really defined, every definition of it is
+    // SECURITY DEFINER with the pinned path, and none of them is smuggled in
+    // as an asserted INVOKER exception (§D; the exceptions are the two above).
+    const defs = inventoryRoutineDefinitions(real());
+    const beyondProblems = beyond.flatMap((name) => {
+      const own = defs.filter((d) => d.name === name);
+      if (own.length === 0) return [`${name}: handed over but no migration defines it`];
+      return own.flatMap((d) => [
+        ...(d.securityDefiner ? [] : [`${d.file}: ${name} is handed to the inventory principal but is not SECURITY DEFINER`]),
+        ...((d.searchPath ?? '')
+          .split(',')
+          .map((x) => x.trim().replaceAll('"', ''))
+          .join(',') === INVENTORY_SEARCH_PATH.join(',')
+          ? []
+          : [`${d.file}: ${name} pins ${d.searchPath ?? 'no search_path'}, not ${INVENTORY_SEARCH_PATH.join(', ')}`]),
+      ]);
+    });
+    expect(beyondProblems, 'every handover a later phase makes satisfies §D 1, 2 and 5').toEqual([]);
+    expect(
+      beyond.filter((n) => INVENTORY_INVOKER_EXCEPTIONS.includes(n)),
+      'and none of them claims an asserted INVOKER exception',
+    ).toEqual([]);
+  });
+
+  /**
+   * P4-AL-88 — the re-expression proved in both directions. The green one is
+   * the case above, which runs with `0075` on disk handing six routines over.
+   * This is the red one, and each case breaks the PHASE 3 half of the claim in
+   * a real prefix file and requires the scoped list to notice.
+   */
+  it('P4-AL-88 — the scoped handover inventory is red when the Phase 3 half is wrong', () => {
+    const asIs = handoverScope(real());
+    expect(asIs.beyond.length, 'a later phase really hands routines over — which is what forced the scoping').toBeGreaterThan(0);
+    expect(asIs.inScope.length, 'and the Phase 3 half is not empty').toBeGreaterThan(100);
+
+    // (a) A Phase 3 handover REMOVED from a prefix file: the scoped list loses
+    //     that name, so the exact equality above is red. Scoping cannot hide a
+    //     routine the prefix stopped handing over.
+    const dropped = handoverScope(mutate(F62, 'ALTER FUNCTION inventory_bridge_source_lines(TEXT, UUID) OWNER TO daftar_inventory_internal;\n', ''));
+    expect(dropped.inScope).not.toEqual(asIs.inScope);
+    expect(asIs.inScope.filter((n) => !dropped.inScope.includes(n))).toEqual(['inventory_bridge_source_lines']);
+
+    // (b) A handover ADDED to a prefix file: it lands in the Phase 3 half, not
+    //     the later one, so the exact equality is red. A new authority cannot
+    //     be slipped into the frozen prefix and pass as a successor's.
+    const added = handoverScope(
+      mutate(
+        F62,
+        'ALTER FUNCTION inventory_fixed_text(NUMERIC, INTEGER) OWNER TO daftar_inventory_internal;',
+        'ALTER FUNCTION inventory_fixed_text(NUMERIC, INTEGER) OWNER TO daftar_inventory_internal;\nALTER FUNCTION inventory_smuggled_guard() OWNER TO daftar_inventory_internal;',
+      ),
+    );
+    expect(added.inScope.filter((n) => !asIs.inScope.includes(n))).toEqual(['inventory_smuggled_guard']);
+    expect(added.beyond, 'and the later phase’s half is untouched by it').toEqual(asIs.beyond);
+
+    // (c) A LATER phase's handover cannot be moved into the Phase 3 half, and
+    //     removing one leaves the Phase 3 half exactly as it was — which is
+    //     what "says nothing about the phase that follows" means here.
+    const successorGone = handoverScope(
+      mutate('0075_phase4_customers_invoices_numbering.sql', /ALTER FUNCTION customers_no_delete\(\) OWNER TO daftar_inventory_internal;\n/, ''),
+    );
+    expect(successorGone.inScope, 'the Phase 3 half is indifferent to the successor').toEqual(asIs.inScope);
+    expect(asIs.beyond.filter((n) => !successorGone.beyond.includes(n))).toEqual(['customers_no_delete']);
+
+    // (d) And the partition never loses a name: every routine the tree hands
+    //     over is in exactly one half, in each of the trees above.
+    for (const [label, scope] of [
+      ['as it stands', asIs],
+      ['a Phase 3 handover removed', dropped],
+      ['a handover smuggled into the prefix', added],
+      ['a successor handover removed', successorGone],
+    ] as const) {
+      expect([...scope.inScope, ...scope.beyond].sort(), label).toEqual(scope.all);
+      expect(
+        scope.inScope.filter((n) => scope.beyond.includes(n)),
+        label,
+      ).toEqual([]);
+    }
   });
 
   it('reads EVERY definition of a transferred routine: inventory_configure_product is defined in 0055 and replaced in 0060 as the principal', () => {
@@ -263,7 +384,31 @@ describe('G-7 — the tree as it stands', () => {
         .filter((d) => stockTablesWritten(d.body ?? '').length > 0)
         .map((d) => `${d.file}: ${d.name}`),
     );
-    expect(report.writers.filter((w) => stockWriters.has(w))).toEqual([
+    /**
+     * ── P4-AL-88 ───────────────────────────────────────────────────────────
+     *
+     * "the ONLY stock writers are these" is an inventory, so asserting it
+     * whole was a claim about the phase that follows: `0078` adds
+     * `sale_bridge_commit`, the one writer of `stock_source_bridge_sale`, and
+     * an accepted P3-S8 claim went red for a writer that is the design
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by POSITION, the same shape `handoverScope` above uses: a writer
+     * belongs to the Phase 3 scope when the FILE that defines it is inside the
+     * accepted inherited prefix, which `0000`-`0073` being frozen byte for
+     * byte (P4-AL-85) closes to every later phase. The ORIGINAL list below is
+     * unchanged, entry for entry.
+     *
+     * `report.violations` is asserted EMPTY above and is unscoped, so the real
+     * authority law — every writer of the truth set opens with the assertion —
+     * already reaches `0078`'s writers as a law. What is scoped here is only
+     * the enumeration, and the later phases' half is then asserted separately
+     * and positively just below.
+     */
+    const inPrefix = (w: string): boolean => w.slice(0, w.indexOf(':')) <= PHASE4_INHERITED_PREFIX_END;
+    const scopedStockWriters = report.writers.filter((w) => stockWriters.has(w) && inPrefix(w));
+    const beyondStockWriters = report.writers.filter((w) => stockWriters.has(w) && !inPrefix(w));
+    expect(scopedStockWriters).toEqual([
       `${F60}: inventory_apply_stock_movements`,
       `${F62}: inventory_bridge_source_lines`,
       // P3-S4 (0063/0064)
@@ -279,6 +424,15 @@ describe('G-7 — the tree as it stands', () => {
       // P3-S6 (0067/0068)
       `${F68}: supplier_credit_note_consume`,
     ]);
+    // The successor's half, positively and completely. A later phase's stock
+    // writer is a DEFINER routine owned by the inventory principal that opens
+    // with the assertion — which `report.violations` above already proves of
+    // every writer — and the two scopes together are every stock writer in the
+    // tree, so nothing can be dropped from the claim by falling between them.
+    expect(beyondStockWriters.length, 'the beyond-prefix scope is empty, so the claim below says nothing').toBeGreaterThan(0);
+    expect([...scopedStockWriters, ...beyondStockWriters].sort(), 'the two scopes together are every stock writer the guard found').toEqual(
+      report.writers.filter((w) => stockWriters.has(w)).sort(),
+    );
   });
 
   it('rule 22 (P3-S8 A-04, pin 8): the writers of the truth set are every entry routine and asserted helper, each opening with the assertion, and the one exception is the home-branch maintainer', () => {
@@ -292,7 +446,19 @@ describe('G-7 — the tree as it stands', () => {
     for (const t of ['inventory_assertion_keys', 'inventory_assertion_uses', 'audit_events', 'outbox_events']) expect(report.truthTables, t).not.toContain(t);
     expect(report.exempt).toEqual(['0056_inventory_branch_warehouses.sql: warehouses_home_branch_maintain']);
     const F56 = '0056_inventory_branch_warehouses.sql';
-    expect(report.writers).toEqual([
+    /**
+     * P4-AL-88, the same treatment as the case above and for the same reason:
+     * `0078` adds `sale_commit` and `sale_bridge_commit` to the writers of the
+     * truth set. Scoped by the DEFINING FILE's position in the accepted
+     * inherited prefix; the list below is unchanged entry for entry. The
+     * authority law itself — `report.violations` — is asserted empty and
+     * unscoped above, so every later writer is held to "opens with the
+     * assertion" as a law rather than by appearing in this enumeration.
+     */
+    const inPrefixFile = (w: string): boolean => w.slice(0, w.indexOf(':')) <= PHASE4_INHERITED_PREFIX_END;
+    const scopedWriters = report.writers.filter(inPrefixFile);
+    const beyondWriters = report.writers.filter((w) => !inPrefixFile(w));
+    expect(scopedWriters).toEqual([
       `${F55}: inventory_configure_product`,
       `${F56}: structure_associate_warehouse_branch`,
       `${F56}: structure_dissociate_warehouse_branch`,
@@ -333,6 +499,13 @@ describe('G-7 — the tree as it stands', () => {
       // with the assertion; it writes its own document, no stock table.
       `${F72}: purchase_write_off_residue`,
     ]);
+    // The successor's half, positively and completely.
+    expect(beyondWriters.length, 'the beyond-prefix scope is empty, so the claim below says nothing').toBeGreaterThan(0);
+    expect([...scopedWriters, ...beyondWriters].sort(), 'the two scopes together are every writer of the truth set').toEqual([...report.writers].sort());
+    // And the exemption stays a CLOSED list over the whole tree, unscoped: a
+    // later phase may add writers, never a second routine excused from opening
+    // with the assertion. That is the security claim, so it is not scoped.
+    expect(report.exempt, 'no later phase has excused a second writer from the assertion').toHaveLength(1);
   });
 });
 

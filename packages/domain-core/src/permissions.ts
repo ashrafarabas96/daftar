@@ -66,6 +66,26 @@ export const PERMISSIONS = [
   'suppliers.view',
   'suppliers.manage',
   'suppliers.pay',
+  // Phase 4 — sales, customers, receivables and settlement (P4-AL-36). A closed
+  // set of twelve, PLURAL-prefixed because Phase 3 chose plural for the mirror
+  // business-document domains (`purchases.*`/`suppliers.*` above); four
+  // canonical documents naming `sale.create` singular are corrected, not
+  // followed (P4-AL-36). Every first segment is a single lowercase word, so
+  // every key also satisfies the frozen operation-code regex
+  // `^[a-z]+(\.[a-z_]+)+$` (`0054:53`, duplicated at `0054:229`) — which is
+  // why `customer_payment.*` was never a candidate shape.
+  'sales.view',
+  'sales.create',
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'customers.view',
+  'customers.manage',
+  'payments.collect',
+  'payments.reverse',
+  'refunds.approve',
+  'receivables.view',
+  'installments.manage',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -107,6 +127,21 @@ export const SENSITIVE_PERMISSIONS = [
   'purchases.return',
   'suppliers.manage',
   'suppliers.pay',
+  // Phase 4 (P4-AL-37): "sensitive" is value-moving OUTSIDE the normal
+  // operating flow, not "everything except a read". Selling for cash and taking
+  // the money for it ARE the normal flow, so `sales.view`, `sales.create`,
+  // `payments.collect`, `customers.view`, `customers.manage` and
+  // `receivables.view` are ordinary. Discounting, voiding, returning goods,
+  // approving a refund, reversing a payment and rescheduling a debt each move
+  // value outside that flow, so all six are sensitive — and under the
+  // `OD-P4-01` OPTION A ruling (2026-09-30) none of them may be a DEFAULT of
+  // any built-in role, the cashier and the manager included.
+  'sales.void',
+  'sales.return',
+  'sales.discount',
+  'payments.reverse',
+  'refunds.approve',
+  'installments.manage',
 ] as const satisfies readonly Permission[];
 export function isSensitivePermission(p: Permission): boolean {
   return (SENSITIVE_PERMISSIONS as readonly string[]).includes(p);
@@ -144,9 +179,39 @@ export const BUILTIN_ROLE_PERMISSIONS: Record<BuiltinRoleKey, readonly Permissio
     'inventory.view',
     'purchases.view',
     'suppliers.view',
+    // Phase 4 (P4-AL-35, P4-AL-37, `OD-P4-01` OPTION A): APPENDED — exactly the
+    // six ORDINARY Phase 4 keys, and no sensitive Phase 4 key. The Phase 1 and
+    // Phase 3 lists above are the accepted sets and are not altered, reordered
+    // or trimmed.
+    //
+    // P4-AL-35's own matrix marks the manager `sales.discount` and
+    // `sales.return` with a default tick. Both keys are sensitive by P4-AL-37,
+    // and the `OD-P4-01` TECH LEAD RULING of 2026-09-30 forbids
+    // `sales.discount` "and any other sensitive permission" as a default "for
+    // the cashier and for any built-in role". The ruling is the later and more
+    // specific instrument, so both keys are delegations here, not defaults.
+    'sales.view',
+    'sales.create',
+    'customers.view',
+    'customers.manage',
+    'payments.collect',
+    'receivables.view',
   ],
   // P3-AL-38: the cashier gains no Phase 3 permission.
-  cashier: ['catalog.view'],
+  //
+  // Phase 4 (`OD-P4-01` TECH LEAD RULING 2026-09-30, OPTION A): the cashier's
+  // FIRST financial authority, and it is the narrowest thing a till needs —
+  // read the sales surface, commit a sale, see who the customer is, and take
+  // the money. Four ORDINARY keys, APPENDED after the accepted
+  // `['catalog.view']`, which is not altered.
+  //
+  // Deliberately NOT here, each by the ruling: `sales.discount`, `sales.void`,
+  // `sales.return`, `refunds.approve`, `payments.reverse` and
+  // `installments.manage` (sensitive, delegation only); and
+  // `receivables.view`, which is ordinary but is the second half of a CREDIT
+  // sale (P4-AL-35) — a till that may sell on credit is a commercial decision
+  // the merchant delegates, not a default this registry invents.
+  cashier: ['catalog.view', 'sales.view', 'sales.create', 'customers.view', 'payments.collect'],
 };
 
 /** Server-loaded role row (from business_roles + role_permissions). Untrusted until wrapped. */

@@ -107,7 +107,13 @@ describe('mintDomainPostingAssertion (A-06)', () => {
   });
 
   it('refuses every Phase-2-native source and any source no domain owns, before minting', () => {
-    for (const sourceType of [...NATIVE_SOURCE_TYPES, 'sale', 'stocktake', 'inventory_transfer', '']) {
+    // P4-S2: `sale` left this list because it became a real domain source
+    // type with a real writer (`sale-posting.ts`), which is exactly what
+    // `TL-P4-S1-R1` requires of a registered type. It is replaced here by two
+    // names that are still not source types — a stock movement kind and a
+    // Phase 4 operation code — so the claim this loop makes (a name that is
+    // not a domain source buys no authority) keeps a subject.
+    for (const sourceType of [...NATIVE_SOURCE_TYPES, 'purchase_reversal', 'sale.commit', 'stocktake', 'inventory_transfer', '']) {
       const { minter, claims } = minterSpy();
       expect(codeOf(() => mintDomainPostingAssertion(minter, command({ sourceType }), ACTOR))).toBe('accounting.assertion_wrong_source');
       expect(claims).toHaveLength(0);
@@ -126,6 +132,20 @@ describe('mintDomainPostingAssertion (A-06)', () => {
       'supplier_credit_allocation', // P3-S6 (0067/0068)
       'supplier_refund', // P3-S6 (0067/0068)
       'purchase_residue_write_off', // Phase 3 corrective (0072, TD-16)
+      // P4-S2 (0077): the COGS entry and the revenue entry of a sale. `invoice`
+      // is P4-S2's rather than P4-S1's by Tech Lead ruling `TL-P4-S1-R1`.
+      'sale',
+      'invoice',
+      // P4-S4 (0081, a CANDIDATE migration): the two settlement reducers and
+      // the customer credit. The credit is a source in its own right and not a
+      // tail on an allocation entry, because a payment that allocates nothing
+      // has no allocation entry for its surplus leg to ride on. None of the
+      // three is reversible: reversal is P4-S6's, and `0081` deliberately puts
+      // all three in the generic guard's plain refusal arm with no
+      // `purchase`-style escape.
+      'customer_payment_allocation',
+      'customer_credit_application',
+      'customer_credit',
     ]);
     expect(isDomainSourceType('inventory_adjustment')).toBe(true);
     expect(isDomainSourceType('manual_adjustment')).toBe(false);
@@ -187,8 +207,11 @@ describe('AccountingEngine.post refuses a domain-owned source (TL-10)', () => {
     expect(mint).not.toHaveBeenCalled();
     expect(claims).toHaveLength(0);
     expect(seen).toHaveLength(0);
-    // A source nobody owns yet still posts through the generic path, as before.
-    await engine.post(command({ sourceType: 'sale' }), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    // A source nobody owns yet still posts through the generic path, as
+    // before. P4-S2: this used `sale`, which is now a domain source with a
+    // real writer (`TL-P4-S1-R1`). `period_close` is a source type no phase
+    // has registered, so the generic arm keeps a subject.
+    await engine.post(command({ sourceType: 'period_close' }), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
     expect(seen).toHaveLength(1);
     mint.mockRestore();
   });
@@ -305,7 +328,12 @@ describe('mintDomainReversalAssertion (A-06, R-B2a)', () => {
       'negative_inventory_cost_adjustment',
       'manual_adjustment',
       'opening_balance',
+      // P4-S2: both Phase 4 sale source types are domain sources and NEITHER
+      // is reversible by the generic workflow. A sale is corrected by a
+      // return or a void — a new auditable document — never by mirroring its
+      // entry (P4-AL-24, P4-AL-46).
       'sale',
+      'invoice',
       'supplier_payment', // P3-S6 (0067/0068): §7.3 row 20, not reversible (TL-2)
       'supplier_credit_allocation', // P3-S6 (0067/0068)
       'supplier_refund', // P3-S6 (0067/0068)

@@ -19,6 +19,7 @@ import {
   type PostCommand,
   type PostingFixture,
 } from '../helpers/accounting-posting';
+import { readInheritedHead } from '../helpers/phase4-inherited-scope';
 
 /**
  * MATRIX — P2-S4 SOURCE AUTHORITY (directive §16-§21, §38, §39, §53).
@@ -116,10 +117,72 @@ describe('an assertion is bound to every claim it names (§38, §39)', () => {
     // settlement source types, in sort position; nothing else was added.
     // Phase 3 corrective (0072, TD-16): `post` also owns
     // `purchase_residue_write_off`, in sort position; nothing else was added.
-    const pairs = await ownerPool().query<{ operation_kind: string; source_type: string }>(
-      `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
+    /**
+     * ── P4-AL-88 ─────────────────────────────────────────────────────────
+     *
+     * This was an exact equality over the WHOLE of
+     * `accounting_operation_kinds`, which made it a claim about every phase
+     * that follows: registering a source type and pairing it with an
+     * operation kind is precisely what a later phase's migration does, and
+     * `0077` registers `('post','sale')` and `('post','invoice')`. An
+     * accepted P2-S4 matrix therefore went red for the registry doing its job
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Unlike `inventory_operation_kinds`, this registry carries NO provenance
+     * column (`0046:86-93`), and neither does `accounting_source_types`
+     * (`0042:51-57`) — so the `registered_by ~ '^P3-'` idiom is not available
+     * here. The scope is the other one the estate already owns
+     * (`tests/security/phase3-s8-signed-authority-matrix.test.ts:262`): a
+     * database built to the ACCEPTED PHASE 3 HEAD
+     * (`PHASE4_INHERITED_PREFIX_END`, frozen byte for byte by P4-AL-85, so no
+     * later phase can enter it), read as data. The twelve pairs below are
+     * claimed against it EXACTLY and word for word, and a pair the accepted
+     * head registered that has since VANISHED is named too.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY, with the
+     * property this case is actually about — tight pairing: every pair beyond
+     * the accepted head names a source type registered in
+     * `accounting_source_types`, and across BOTH scopes no source type is
+     * owned by two operation kinds, which is the "one owner per source
+     * identity" UNIQUE stated as a claim rather than trusted. A CLOSURE
+     * assertion states that the two scopes together are the whole live
+     * registry.
+     */
+    const atHead = await readInheritedHead(async (q) =>
+      (
+        await q.query<{ operation_kind: string; source_type: string }>(
+          `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
+        )
+      ).rows.map((r) => ({ operation_kind: r.operation_kind, source_type: r.source_type })),
     );
-    expect(pairs.rows).toEqual([
+    const key = (r: { operation_kind: string; source_type: string }): string => `${r.operation_kind}:${r.source_type}`;
+    const live = (
+      await ownerPool().query<{ operation_kind: string; source_type: string }>(
+        `SELECT operation_kind, source_type FROM accounting_operation_kinds ORDER BY operation_kind, source_type`,
+      )
+    ).rows;
+    const headKeys = atHead.map(key);
+    const liveKeys = live.map(key);
+    expect(
+      headKeys.filter((k) => !liveKeys.includes(k)),
+      'no pair the accepted head registered has been removed',
+    ).toEqual([]);
+    const beyond = liveKeys.filter((k) => !headKeys.includes(k));
+    expect([...headKeys, ...beyond].sort(), 'and the two scopes together are the whole live registry').toEqual([...liveKeys].sort());
+    const registeredTypes = new Set(
+      (await ownerPool().query<{ t: string }>(`SELECT source_type::text AS t FROM accounting_source_types`)).rows.map((x) => x.t),
+    );
+    expect(
+      beyond.filter((k) => !registeredTypes.has(k.slice(k.indexOf(':') + 1))),
+      'a pair beyond the accepted head names a registered accounting source type',
+    ).toEqual([]);
+    const owners = new Map<string, string[]>();
+    for (const r of live) owners.set(r.source_type, [...(owners.get(r.source_type) ?? []), r.operation_kind]);
+    expect(
+      [...owners].filter(([, kinds]) => kinds.length !== 1).map(([t, kinds]) => `${t}: ${kinds.join(',')}`),
+      'every source type, in either scope, is owned by exactly one operation kind',
+    ).toEqual([]);
+    expect(atHead).toEqual([
       { operation_kind: 'post', source_type: 'inventory_adjustment' },
       { operation_kind: 'post', source_type: 'inventory_opening' },
       { operation_kind: 'post', source_type: 'manual_adjustment' },

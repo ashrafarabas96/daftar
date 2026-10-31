@@ -13,6 +13,8 @@ import {
   resolverDbUrl,
   workerDbUrl,
 } from '../helpers/test-app';
+import { inheritedPrefixRoutines } from '../helpers/phase4-inherited-scope';
+import { lexBody } from '../helpers/phase3-surface';
 import {
   appClient,
   dbPayload,
@@ -633,28 +635,121 @@ describe('the §D inventory definer contract (P3-AL-54 §D)', () => {
   });
 
   it('EXECUTE grantees are exactly the §H matrix, and nobody for every routine it does not name', async () => {
-    const actual = Object.fromEntries((await owned()).map((x) => [x.sig, x.grantees]));
+    /**
+     * ── P4-AL-88 ───────────────────────────────────────────────────────────
+     *
+     * "nobody for every routine it does not name" was an exact equality over
+     * EVERY routine this principal owns, which made it a claim about the
+     * phase that follows: `0077` adds `inventory_sale_cost_base_minor` and
+     * grants EXECUTE to `daftar_accounting_internal` — the cross-domain cost
+     * read the revenue posting needs — so an accepted §D contract went red
+     * for a grant that is the design
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by the ROUTINE'S OWN NAME, read from the accepted prefix's
+     * digest-verified text (`inheritedPrefixRoutines()`), because a routine
+     * is not separable by the relation it touches. The matrix is applied
+     * UNCHANGED over that scope and still carries BOTH halves of its claim: a
+     * routine the matrix names has exactly its grantees, and a routine of the
+     * accepted prefix the matrix does NOT name has nobody. A tampered prefix
+     * empties the scope, which makes this red rather than vacuous, and the
+     * matrix's own surface is checked to lie inside the scope so no entry can
+     * fall out of the claim silently.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY: a grantee
+     * on a routine beyond the accepted prefix is `daftar_app` — the one
+     * runtime credential the signed-command surface uses — or a NOLOGIN
+     * internal principal. Never PUBLIC and never another runtime login role,
+     * which is the shadowing leak this file exists to refuse; and the
+     * "PUBLIC may execute none of them" and "no runtime role holds EXECUTE
+     * through a membership either" cases above are UNSCOPED, so they reach
+     * these routines as laws already.
+     */
+    const prefixRoutines = inheritedPrefixRoutines();
+    expect(prefixRoutines.size, 'the digest-verified prefix routine reader came back empty').toBeGreaterThan(0);
+    const rows = await owned();
+    const nameOf = (sig: string): string => sig.slice(0, sig.indexOf('(')).toLowerCase();
+    const inScope = rows.filter((x) => prefixRoutines.has(nameOf(x.sig)));
+    const beyond = rows.filter((x) => !prefixRoutines.has(nameOf(x.sig)));
+    expect(inScope.length + beyond.length, 'the two scopes together are every routine this principal owns').toBe(rows.length);
+    expect(
+      Object.keys(EXECUTE_MATRIX).filter((sig) => !prefixRoutines.has(nameOf(sig))),
+      'every routine the §H matrix names is declared by the accepted prefix, so no entry falls out of the claim',
+    ).toEqual([]);
+    const actual = Object.fromEntries(inScope.map((x) => [x.sig, x.grantees]));
     const expected = Object.fromEntries(Object.keys(actual).map((sig) => [sig, [...(EXECUTE_MATRIX[sig] ?? [])]]));
     expect(actual).toEqual(expected);
+    const nologinInternal = new Set(
+      (
+        await ownerPool().query<{ g: string }>(`SELECT rolname::text AS g FROM pg_roles WHERE NOT rolcanlogin AND rolname LIKE 'daftar\\_%\\_internal'`)
+      ).rows.map((x) => x.g),
+    );
+    expect(
+      beyond.flatMap((x) => x.grantees.filter((g) => g !== 'daftar_app' && !nologinInternal.has(g)).map((g) => `${x.sig} → ${g}`)),
+      'a grantee on a routine beyond the accepted prefix is daftar_app or a NOLOGIN internal principal',
+    ).toEqual([]);
   });
 
   it('no runtime role holds EXECUTE through a membership either', async () => {
+    // P4-AL-88. `EXECUTE_MATRIX` is a frozen declaration of the ACCEPTED
+    // PREFIX's routines, so comparing an effective privilege against it is an
+    // exact-equality inventory and NOT the sentence this case is named after.
+    // The §H case above says these two cases are unscoped and "reach these
+    // routines as laws already" — true of the PUBLIC one, and NOT true here,
+    // because a matrix miss on a beyond-prefix routine is reported as a leak.
+    // `0078` makes that visible: `sale_commit` is granted to `daftar_app`
+    // directly, exactly as C-09 and the `purchase_receive` precedent require,
+    // and this case called it a leak.
+    //
+    // So the original law is kept WORD FOR WORD in scope, and the beyond half
+    // asserts what the case is actually about — MEMBERSHIP, as opposed to a
+    // direct grant: a runtime role may hold EXECUTE on a routine beyond the
+    // prefix only when that role is itself a named grantee. An effective
+    // privilege with no direct grant behind it came through a role
+    // membership, which is the leak, and the §H case above independently
+    // confines who a beyond-prefix grantee may be.
+    const prefixRoutines = inheritedPrefixRoutines();
+    const nameOf = (sig: string): string => sig.slice(0, sig.indexOf('(')).toLowerCase();
     const leaks: string[] = [];
+    const indirect: string[] = [];
     for (const x of await owned()) {
+      const inPrefix = prefixRoutines.has(nameOf(x.sig));
       for (const role of RUNTIME_ROLES) {
         const r = await ownerPool().query<{ e: boolean }>(`SELECT has_function_privilege($1, $2::regprocedure, 'EXECUTE') AS e`, [role, x.sig]);
-        const allowed = (EXECUTE_MATRIX[x.sig] ?? []).includes(role);
-        if (r.rows[0]?.e !== allowed) leaks.push(`${role} ${allowed ? 'lacks' : 'holds'} EXECUTE on ${x.sig}`);
+        const effective = r.rows[0]?.e === true;
+        if (inPrefix) {
+          const allowed = (EXECUTE_MATRIX[x.sig] ?? []).includes(role);
+          if (effective !== allowed) leaks.push(`${role} ${allowed ? 'lacks' : 'holds'} EXECUTE on ${x.sig}`);
+        } else if (effective && !x.grantees.includes(role)) {
+          indirect.push(`${role} holds EXECUTE on ${x.sig} with no direct grant, so it came through a membership`);
+        }
       }
     }
     expect(leaks).toEqual([]);
+    expect(indirect, 'a runtime role reaches a routine beyond the accepted prefix only through a grant made to it by name').toEqual([]);
   });
 
   it('no body builds SQL at run time or creates a session relation', async () => {
+    // The recogniser reads CODE, not text — `lexBody` strips `--` comments
+    // and string literals first, as `phase3-s8-operation-kinds` already does
+    // for the same reason. Scanning raw `prosrc` made a routine guilty of
+    // dynamic SQL for saying the word "execute" in a comment about privileges
+    // (`0078`'s `sale_commit`, explaining that an advisory lock is one PUBLIC
+    // may execute). A law that reads its own prose is a law about its prose,
+    // and this one is about what the body DOES.
     const off = (await owned())
-      .filter((x) => /\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(x.src) || /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(x.src))
+      .filter((x) => {
+        const { code } = lexBody(x.src);
+        return /\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(code) || /\bCREATE\s+(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\b/i.test(code);
+      })
       .map((x) => x.sig);
     expect(off).toEqual([]);
+    // NON-VACUITY: the lexer must not have emptied the bodies it judges. A
+    // recogniser that returns '' for every routine would pass this law in
+    // silence, which is the vacuous-pass failure mode the estate refuses.
+    const planted = 'BEGIN EXECUTE $q$SELECT 1$q$; END';
+    expect(/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(lexBody(planted).code), 'the lexer still sees a real EXECUTE').toBe(true);
+    expect(/\bEXECUTE\b(?!\s+FUNCTION\b)/i.test(lexBody('-- execute\nBEGIN NULL; END').code), 'and does not see one in a comment').toBe(false);
     expect(new Set((await owned()).map((x) => x.language))).toEqual(new Set(['plpgsql', 'sql']));
   });
 

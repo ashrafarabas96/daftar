@@ -134,6 +134,31 @@ const MINOR_TYPE = /^(BIGINT|INT8)\b/i;
  */
 const QTY_CLASSIFIER = /_(sign|kind|type|code|status|name)$/;
 
+/**
+ * ── P4-S1: the pin covers the word `quantity`, not only `qty` (P4-AL-15b) ──
+ *
+ * The quantity pin matched `qty_delta`, `on_hand`, `*_qty` and `qty_*` and
+ * nothing else, so a bare `quantity NUMERIC(18,2)` on `invoice_items` produced
+ * NO finding while `unit_cost_base_minor NUMERIC(20,4)` beside it was caught.
+ * `P4-AL-15b` cites this very pin as the reason Phase 4 quantities are
+ * `quantity NUMERIC(18,4)` — so the lock's own DDL vocabulary was opting out of
+ * the guard it cites, and the pin would have been decorative on every Phase 4
+ * line table.
+ *
+ * The fix is the pin, not the column name: renaming a Phase 4 quantity to
+ * `*_qty` to get inside the existing pattern would leave the word `quantity`
+ * unguarded for the next phase to walk through. `quantity`, `*_quantity`,
+ * `quantity_*` and the plural `quantities` forms now sit inside the pin at the
+ * accepted precision, with the same classifier exemption a `qty_*` name gets
+ * (`quantity_kind` is TEXT by design, as `qty_sign` is).
+ *
+ * This moves no Phase 2/3 verdict, and that is measured rather than assumed:
+ * `infrastructure/database/migrations` declares 980 columns, 525 of them on a
+ * watched relation, and NOT ONE of them names a quantity in the word form. The
+ * added pattern matches the empty set today.
+ */
+const QUANTITY_WORD = /(^|_)quantit(y|ies)($|_)/;
+
 export interface InventoryTypePin {
   readonly describe: string;
   readonly column: (name: string) => boolean;
@@ -144,8 +169,14 @@ export interface InventoryTypePin {
 /** Which columns carry which exact type. A column matched by no pin is left to the float check alone. */
 export const INVENTORY_TYPE_PINS: readonly InventoryTypePin[] = [
   {
-    describe: 'a quantity (qty_delta, on_hand, *_qty, qty_*)',
-    column: (c) => c === 'qty_delta' || c === 'on_hand' || c.endsWith('_qty') || (c.startsWith('qty_') && !QTY_CLASSIFIER.test(c)),
+    describe: 'a quantity (qty_delta, on_hand, *_qty, qty_*, quantity, *_quantity, quantity_*)',
+    column: (c) =>
+      c === 'qty_delta' ||
+      c === 'on_hand' ||
+      c.endsWith('_qty') ||
+      (c.startsWith('qty_') && !QTY_CLASSIFIER.test(c)) ||
+      // P4-S1 (P4-AL-15b): the word form, with the `qty_*` classifier exemption.
+      (QUANTITY_WORD.test(c) && !QTY_CLASSIFIER.test(c)),
     type: QTY_TYPE,
     expected: 'NUMERIC(18,4)',
   },
