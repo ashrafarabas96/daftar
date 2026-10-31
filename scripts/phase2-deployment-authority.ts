@@ -84,6 +84,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from 'pg';
+import { BUILTIN_ROLE_PERMISSIONS, isSensitivePermission, type Permission } from '../packages/domain-core/src/permissions';
 import { runMigrations } from '../apps/api/src/infra/migrate';
 import { stripComments } from './guards/sql-schema';
 import { PHASE2_PREFIX_END } from './phase2-prefix';
@@ -992,14 +993,40 @@ async function caseG(db: string): Promise<void> {
     const owner = await perms(seed.owner);
     const phase3 = ['inventory.', 'purchases.', 'suppliers.'];
     record('8b.3 the owner holds all eleven Phase 3 permissions', owner.filter((p) => phase3.some((x) => p.startsWith(x))).length === 11, owner.join(', '));
+    /**
+     * P4-S1 (P4-AL-88): 8b.4 and 8b.5 asserted a role's WHOLE persisted set by
+     * string equality, which made them claims that no later phase ever grants
+     * a default. `0076`'s audited Phase 4 backfill broke both by existing.
+     *
+     * The Phase 3 claim each one makes is kept EXACTLY, with the Phase 4
+     * namespaces filtered out, and the Phase 4 half is added as its own
+     * positive check against the registry the provisioning writer itself
+     * inserts — so this script carries no hand-copied Phase 4 key list and a
+     * key granted by default that the registry does not give that role is a
+     * FAIL rather than a widened string.
+     */
+    const PHASE4_NS = ['sales.', 'customers.', 'payments.', 'refunds.', 'receivables.', 'installments.'];
+    const isPhase4Key = (p: string): boolean => PHASE4_NS.some((x) => p.startsWith(x));
     const manager = await perms(seed.manager);
     record(
-      '8b.4 the manager gained exactly the three view keys and kept what it had',
-      manager.join(',') === ['catalog.view', 'inventory.view', 'purchases.view', 'suppliers.view', 'warehouse.manage'].join(','),
+      '8b.4 the manager gained exactly the three view keys and kept what it had, outside Phase 4',
+      manager.filter((p) => !isPhase4Key(p)).join(',') === ['catalog.view', 'inventory.view', 'purchases.view', 'suppliers.view', 'warehouse.manage'].join(','),
       manager.join(', '),
     );
     const cashier = await perms(seed.cashier);
-    record('8b.5 the cashier gained nothing', cashier.join(',') === 'catalog.view', cashier.join(', '));
+    record('8b.5 the cashier gained nothing outside Phase 4', cashier.filter((p) => !isPhase4Key(p)).join(',') === 'catalog.view', cashier.join(', '));
+    for (const [label, role, held] of [
+      ['8b.6 the manager', 'manager', manager],
+      ['8b.7 the cashier', 'cashier', cashier],
+    ] as const) {
+      const defaults: string[] = [...BUILTIN_ROLE_PERMISSIONS[role]].filter(isPhase4Key).sort();
+      const p4 = held.filter(isPhase4Key).sort();
+      record(
+        `${label} holds no Phase 4 key its registry default does not give it, and no sensitive one`,
+        p4.every((k) => defaults.includes(k)) && !p4.some((k) => isSensitivePermission(k as Permission)),
+        `held: ${p4.join(', ') || '<none>'} | registry default: ${defaults.join(', ') || '<none>'}`,
+      );
+    }
     const custom = await perms(seed.custom);
     record('8b.6 the custom role is unchanged', custom.join(',') === 'catalog.view', custom.join(', '));
   } finally {

@@ -435,7 +435,28 @@ describe('AL-01 — the binding is deferred in BOTH directions', () => {
   });
 
   it('an unregistered source_type is refused', async () => {
-    await expect(post({ sourceType: 'sale' }, balancedLines())).rejects.toThrow(/journal_entries_source_type_fkey|source_type/);
+    /**
+     * P4-AL-88. The subject used to be the literal `'sale'`, chosen because
+     * `accounting_source_types` did not hold it. `0077` registers `sale` (and
+     * `invoice`), so the literal stopped being unregistered: the post was
+     * refused by the `sale` entry's own completeness rule
+     * (`accounting.selling_detail_missing`) instead of by the source-type
+     * foreign key, and this accepted P2 claim went red for a reason that has
+     * nothing to do with the closed source registry.
+     *
+     * The CLAIM is unchanged — an unregistered source_type is refused, and by
+     * the registry — and nothing is relaxed. What is re-expressed is the
+     * SUBJECT: the unregistered type is DISCOVERED from the registry rather
+     * than written down, so no later slice's registration can take it away.
+     */
+    const free = await ownerPool().query<{ t: string }>(
+      `SELECT t AS t FROM unnest($1::text[]) AS t
+        WHERE NOT EXISTS (SELECT 1 FROM accounting_source_types s WHERE s.source_type = t) ORDER BY 1 LIMIT 1`,
+      [['al01_probe_one', 'al01_probe_two', 'al01_probe_three', 'al01_probe_four']],
+    );
+    const sourceType = free.rows[0]?.t;
+    expect(sourceType, 'every candidate source type is registered, so this proof has no subject').toBeDefined();
+    await expect(post({ sourceType: sourceType as string }, balancedLines())).rejects.toThrow(/journal_entries_source_type_fkey|source_type/);
   });
 });
 

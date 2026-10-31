@@ -877,6 +877,28 @@ describe('Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
     'warehouse.manage',
     'warehouse.view',
   ];
+  /**
+   * P4-S1: the Phase 4 keys of P4-AL-36, so the assertions below can say which
+   * phase each key belongs to instead of folding every later phase into the
+   * accepted Phase 1 list. The six the manager holds by default are the
+   * ORDINARY ones; the six sensitive ones are delegations, never defaults, for
+   * the manager as for every built-in role (`OD-P4-01` TECH LEAD RULING).
+   */
+  const PHASE4 = [
+    'customers.manage',
+    'customers.view',
+    'installments.manage',
+    'payments.collect',
+    'payments.reverse',
+    'receivables.view',
+    'refunds.approve',
+    'sales.create',
+    'sales.discount',
+    'sales.return',
+    'sales.view',
+    'sales.void',
+  ];
+  const MANAGER_PHASE4 = ['customers.manage', 'customers.view', 'payments.collect', 'receivables.view', 'sales.create', 'sales.view'];
   let onboarded = '';
 
   const perms = async (business: string, key: string): Promise<string[]> =>
@@ -922,8 +944,30 @@ describe('Phase 3 permissions (P3-AL-38, P3-AL-53)', () => {
     expect(PHASE3.filter((p) => !owner.includes(p))).toEqual([]);
   });
 
-  it('…the manager holds exactly its accepted Phase 1 set plus the three view keys', async () => {
-    expect(await perms(onboarded, 'manager')).toEqual([...MANAGER_PHASE1, 'inventory.view', 'purchases.view', 'suppliers.view'].sort());
+  /**
+   * P4-S1: re-expressed per phase. This asserted the manager's WHOLE persisted
+   * set against the Phase 1 list plus the three Phase 3 views, so every later
+   * phase's defaults had to be folded into a list called "Phase 1" or the
+   * assertion broke. It is now one claim per phase, and the whole set is still
+   * pinned by exact equality — as the union of the three claims, which is
+   * strictly more specific because a failure now names the phase.
+   */
+  it('…the manager holds exactly its accepted Phase 1 set, the three Phase 3 views, and the six ORDINARY Phase 4 keys', async () => {
+    const manager = await perms(onboarded, 'manager');
+    expect(
+      manager.filter((p) => !PHASE3.includes(p) && !PHASE4.includes(p)),
+      'the Phase 1 half',
+    ).toEqual([...MANAGER_PHASE1].sort());
+    expect(
+      manager.filter((p) => PHASE3.includes(p)),
+      'the Phase 3 half',
+    ).toEqual(['inventory.view', 'purchases.view', 'suppliers.view']);
+    expect(
+      manager.filter((p) => PHASE4.includes(p)),
+      'the Phase 4 half',
+    ).toEqual([...MANAGER_PHASE4].sort());
+    // And the whole set, so nothing is admitted that no phase above claims.
+    expect(manager).toEqual([...MANAGER_PHASE1, 'inventory.view', 'purchases.view', 'suppliers.view', ...MANAGER_PHASE4].sort());
   });
 
   it('…and the cashier holds no Phase 3 permission', async () => {

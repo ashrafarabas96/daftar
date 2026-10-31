@@ -32,6 +32,8 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, describe, expect, it } from 'vitest';
 import { MIGRATIONS_DIR, runMigrations } from '../../apps/api/src/infra/migrate';
+import { PHASE4_INHERITED_PREFIX_END } from '../../scripts/phase4-prefix';
+import { phase3RegistryViolations, phase3Registrants, registryRowsOf, registryTagsOf, withoutRegistryRows } from '../helpers/phase3-scope-drift';
 import {
   ACCOUNTING_ASSERTION_KEY_B64,
   ACCOUNTING_ASSERTION_KID,
@@ -201,13 +203,49 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
         ).rows
           .map((x) => x.t)
           .sort();
+      // P4-AL-88. `protectedRows()` digests `audit_events`, the estate's one
+      // audit relation, and that is a relation a LATER PHASE legitimately
+      // appends to: a Phase 4 permission migration writes one structural
+      // record per business it changed, and this accepted Phase 3 suite went
+      // red for a reason that has nothing to do with the P3-S6 upgrade. The equality is
+      // re-expressed by SCOPE, not loosened. Every row of every OTHER
+      // relation in the digest is still claimed exactly, word for word, and
+      // the audit records are claimed separately and positively below: none
+      // removed, none rewritten, and every one added written by no actor.
+      const nonAudit = (rows: readonly string[]): string[] => rows.filter((t) => !t.startsWith('audit:'));
+      const auditIn = (rows: readonly string[]): string[] => rows.filter((t) => t.startsWith('audit:'));
       const before = await protectedRows();
       expect(before.filter((t) => t.startsWith('pur:')).length, 'the checkpoint holds two received purchases').toBe(2);
       expect(before.filter((t) => t.startsWith('ret:')).length, 'and one return').toBe(1);
       const registriesBefore = await registries();
 
-      const applied = await runMigrations(scratchUrl);
-      expect(applied, 'exactly the S6 migrations apply').toEqual(migrationsAfter(FROZEN));
+      // P4-AL-88, re-expressed as the accepted TWO-STEP shape rather than by a
+      // narrowing vocabulary. The upgrade stops at the ACCEPTED PHASE 3 HEAD —
+      // `0000`-`0073`, frozen byte for byte by P4-AL-85, so no later phase can
+      // enter that scope — and EVERY assertion below is the one that was here,
+      // word for word, against the state at that head. The migrations beyond it
+      // are applied in a step of their own, further down, which carries the
+      // disjointness half: not "whatever a successor did is fine", but that a
+      // successor did not reach back into the scope P3-S6 owns.
+      const toPhase3Head = migrationsUpTo(PHASE4_INHERITED_PREFIX_END);
+      let applied: string[];
+      try {
+        applied = await runMigrations(scratchUrl, toPhase3Head);
+      } finally {
+        rmSync(toPhase3Head, { recursive: true, force: true });
+      }
+      expect(applied, 'exactly the S6 migrations apply').toEqual(migrationsAfter(FROZEN).filter((f) => f <= PHASE4_INHERITED_PREFIX_END));
+      // P4-AL-88. `applied` is every migration that exists past this test's
+      // frozen checkpoint, so the literal enumeration below was an exact
+      // equality over a set a LATER PHASE populates: the first Phase 4
+      // migration entered it and an accepted Phase 3 suite went red for a
+      // reason that has nothing to do with the P3-S6 upgrade. It is re-expressed by
+      // SCOPE, not loosened. The equality above is discovery-based and grows
+      // on its own, so it stays exactly as it was. The enumeration keeps its
+      // full force over the ACCEPTED PHASE 3 PREFIX — frozen byte for byte by
+      // P4-AL-85, so no later phase can enter that scope — and what lies
+      // beyond it is claimed separately and positively, by discovery, so
+      // "and nothing more" is still said about every file that applied.
       expect(applied).toEqual([
         ...S6_MIGRATIONS,
         // P3-S8 (0069): reconciler column grants and the R-B1a guard; no registry row
@@ -218,9 +256,28 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
 
       // Everything as it was, plus the three accounting source types 0067 adds (A-05).
       // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
-      expect(await protectedRows()).toEqual(
-        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
-      );
+      const afterRows = await protectedRows();
+      const atPhase3Head = [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort();
+      expect(nonAudit(afterRows)).toEqual(nonAudit(atPhase3Head));
+
+      // The audit records. Nothing the checkpoint held was removed or
+      // rewritten, and every record the migrations ADDED is one NO ACTOR
+      // wrote — which is what a migration's own record looks like
+      // (`0076:217-219`) and what the record of a business action never is.
+      // Read from the table, so no slice's action name is named here and a
+      // later slice's structural record needs no edit to this test.
+      expect(
+        auditIn(before).filter((t) => !auditIn(afterRows).includes(t)),
+        'a migration removed or rewrote an audit record',
+      ).toEqual([]);
+      const addedAuditIds = auditIn(afterRows)
+        .filter((t) => !auditIn(before).includes(t))
+        .map((t) => t.split(':')[1] ?? '');
+      expect(
+        (await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM audit_events WHERE id = ANY ($1::uuid[]) AND actor_user_id IS NULL`, [addedAuditIds]))
+          .rows[0]?.n,
+        'every audit record the migrations added is one no actor wrote',
+      ).toBe(String(addedAuditIds.length));
 
       // The registries: the checkpoint's rows plus exactly S6's (§2.8, A-05): no stock source type, no mapping.
       const after = await registries();
@@ -286,12 +343,42 @@ describe('T-17 the P3-S6 upgrade matrix', () => {
         live.release();
       }
 
+      // ── BEYOND the accepted Phase 3 head: the disjointness half ─────────
+      //
+      // What the migrations past the accepted head CREATE is the next phase's
+      // business, and this test claims nothing about it. What they may not do
+      // is reach back into the scope P3-S6 owns.
+      const registriesAtPhase3Head = await registries();
+      const beyond = await runMigrations(scratchUrl);
+      expect(beyond, 'beyond the accepted head, exactly the files that follow it').toEqual(migrationsAfter(PHASE4_INHERITED_PREFIX_END));
+      const afterBeyond = await protectedRows();
+      // The declarative registries come OUT of this equality — a migration of
+      // ANY phase may add a row to one, which is what `0074`'s widening exists
+      // to let it do — and are claimed immediately below instead. NARROWED, not
+      // loosened: every row of every other relation is still claimed exactly,
+      // word for word, against the list pinned at the accepted head. The
+      // registries are DISCOVERED from the catalogue (no business dimension plus
+      // a registration column), never listed; `src` is this digest's own
+      // abbreviation for the relation the discovery found.
+      const registryTags = await registryTagsOf(pool, { src: 'accounting_source_types' });
+      const scoped = (rows: readonly string[]): string[] => withoutRegistryRows(nonAudit(rows), registryTags);
+      expect(scoped(afterBeyond), 'the migrations beyond the accepted head did not reach into the Phase 3 scope').toEqual(scoped(atPhase3Head));
+      expect(registryRowsOf(atPhase3Head, registryTags).length, 'the digest carries registry rows, so this narrowing is about something').toBeGreaterThan(0);
+      expect(
+        registryRowsOf(atPhase3Head, registryTags).filter((r) => !registryRowsOf(afterBeyond, registryTags).includes(r)),
+        'a migration beyond the accepted head removed or rewrote a registry row',
+      ).toEqual([]);
+      expect(phase3RegistryViolations(registriesAtPhase3Head, await registries()), 'and no Phase 3 registry row was removed, rewritten or added').toEqual([]);
+      expect(phase3Registrants(registriesAtPhase3Head).length, 'and the Phase 3 half of the registries is not empty').toBeGreaterThan(0);
+      expect((await pool.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows, 'and the stock-source discovery still reports no gap').toEqual([]);
+
       // A second run applies nothing.
       expect(await runMigrations(scratchUrl)).toEqual([]);
-      // Phase 3 corrective (0072): and the one the TD-16 write-off adds.
-      expect(await protectedRows()).toEqual(
-        [...before, 'src:supplier_payment:9', 'src:supplier_credit_allocation:10', 'src:supplier_refund:11', ...P3C_SOURCE_TYPE_ROWS].sort(),
-      );
+      const rerun = await protectedRows();
+      expect(nonAudit(rerun)).toEqual(nonAudit(afterBeyond));
+      // 0076's own promise: a second application writes no permission row and
+      // therefore no audit row (`0076:30-32`).
+      expect(auditIn(rerun)).toEqual(auditIn(afterBeyond));
     } finally {
       await pool.end();
       await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);

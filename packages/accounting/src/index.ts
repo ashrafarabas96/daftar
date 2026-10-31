@@ -15,3 +15,4 @@ export * from './rounding';
 export * from './reports';
 export * from './reconciliation';
 export * from './domain-posting';
+export * from './sale-posting';
