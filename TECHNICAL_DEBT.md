@@ -84,3 +84,130 @@
   future-dated instalments shows its credit against the document's age. This is the reference model's
   behaviour and DR-23 adopts the model, so it is **decided** — recorded here only because it is an
   unusual sight in an aging report and a reader may take it for a defect.
+
+### Open after the Phase 4 seal (2026-10-31, merge commit `58d24469739a2bc36346676637281f7a8951171b`)
+
+These are the follow-ups the seal explicitly does not close. None of them is an
+accounting, security or data-integrity **defect** — those are fixed and never
+registered. Each is either coverage not yet written, a limit of the tooling, or
+behaviour that is intended and recorded so it is not mistaken for a gap.
+
+**TD-23 — the eleven moderate advisories are untriaged.** `npm audit
+--audit-level=high` exits **0** on the sealed tree and `--audit-level=moderate`
+exits **1** reporting **11 moderate** advisories. The accurate statement is
+therefore **zero high and zero critical**, never "zero vulnerabilities": the
+zero is produced by the threshold and not by the tree, and the second command is
+the positive control proving the eleven are really there. *Why it is debt and
+not a defect:* the release gate is the high/critical threshold and it passes.
+*Repayment:* triage each advisory by **affected path actually used**, not by
+published severity — a generically moderate advisory can be high *here* if its
+path touches money or tenant isolation, and a generically high one can be
+irrelevant if the path is never reached. The card carries its own non-vacuity
+check: `--audit-level=moderate` must still exit non-zero, or the eleven are not
+where we think they are.
+
+**TD-24 — the request throttler counts per process, and must be settled before
+any launch.** The limiter holds its counters in process memory, so **each
+replica counts its own allowance**: the effective production limit is the stated
+limit multiplied by the replica count, and that count changes under autoscaling.
+A written policy of "N requests per client per minute" therefore becomes a
+ceiling the operator cannot state. This surfaced because the hardened
+measurement itself tripped the production limit — two magnitudes of 220 requests
+against one handler's allowance of 300 a minute — and the fix clears the counter
+between measurements. **That reset depends on the store being in process, and
+nothing in the tree pins it**, so moving to a shared store would break it
+silently and the returned rate-limit answers would read as a performance
+regression rather than as a changed store. *Repayment:* decide the store, or
+state explicitly and where an operator will see it that the limit is per
+replica; then add a law that pins the store or makes the reset fail loudly when
+it changes. **This one is not deferrable past a launch.**
+
+**TD-25 — the two budget negative controls are silent on success.** They invert
+the exit code and additionally require each budget's tag in the output, so a
+suite that cannot start fails them rather than satisfying them, and both ran in
+the decisive run for the first time ever at 109 and 85 seconds. But they
+redirect the suite's output to a file and check tags with quiet greps, so **their
+logs hold no evidence of their own** and the outcome must be deduced from the
+inversion plus the duration. The deduction is sound; the record is not
+self-describing. *Repayment:* have each step print the assertion it matched. A
+control that proves something and records nothing is one refactor away from
+proving nothing silently.
+
+**TD-26 — closure of the carrying base is a writer's obligation, not a
+constraint.** The outstanding reader computes the transaction figure from one sum
+and the base figure from a different sum, and nothing enforces across rows that
+the base shares total the authoritative base figure at the moment the
+transaction figure closes. Two hypotheses were tested and discarded: exchange
+differences do **not** leak into the base, because realized FX is isolated in
+its own column. *Repayment, in the owner's settled order:* first **measure** on a
+real database whether mixed signs, or a zero transaction figure with a non-zero
+base, are reachable by lawful operations — partial payments at different rates, a
+refund, a reversal. If reachable, fix the release algorithm by the **remainder
+method**, so the closing payment releases exactly what is left. **Do not add a
+constraint forbidding the sign:** a credit note and an overpayment both produce a
+lawful negative outstanding figure, and the golden suites assert exactly that, so
+such a constraint would reject lawful states and hide the defect instead of
+removing it.
+
+**TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
+exists and is enforced before any decode, and it is **not** redundant with the
+imaging library's own default: measured by experiment, the library at its
+defaults decodes a decompression bomb while an explicit pixel limit refuses it,
+and the project's bound is strictly tighter than the library default. The new
+unit suite pins it, with a negative control. What is missing is the same refusal
+exercised **through the HTTP surface**: that suite asserts the error object's
+status rather than a response. *A specific trap is recorded with this card:* an
+existing integration case covers the **magic-byte** refusal on the same path
+with the same code and the same status, so **reading it as cover for the
+dimension refusal would be an empty pass.**
+
+**TD-28 — `B ≠ T` through the sale path.** The conservation laws are exercised
+where the invoice is in the business base currency and the payment is not. An
+overpayment on a **non-base invoice** is not reachable today: product creation
+refuses a price currency that is not the base currency, and product update
+refuses any change to a product's price currency at all. So this card stays open
+for a **structural** reason rather than for want of measurement, and it will
+become testable only when a non-base-priced document becomes representable.
+
+### Also open, recorded earlier and unchanged by the seal
+
+**CRLF-PARSE** — the review-index parser slices the last character off every
+line, so under a CRLF checkout it reports every row stale. Measured: the same
+commit reports 620 problems in a CRLF tree and `PASS (full)` in an LF tree, so
+`main`'s index is not stale and nothing is blocked. The repayment is a parser
+that accepts both endings, a test over the same text with each, and
+`.gitattributes` forcing `eol=lf` on generated files.
+
+**DR-13-MIG** — two migrations below the frozen line still carry, in live code,
+the retired aging guard that DR-13 replaced, so aging correctness on a database
+that stops before the fixing migration is not what the current rule says. The
+accepted migrations are frozen, so this is recorded rather than edited.
+
+**DR-21-PRESENT** — the open-invoice page still reports no age for a document
+with no stated due date, while the aging report ages it from its issue date. The
+page therefore hides the age of a debt the report acknowledges. Changing it
+changes a number the merchant sees, so it needs the owner's decision and a
+double review.
+
+**CARRY-CONSERVATION-R81** — the routine's own comment states that the base
+shares total the authoritative base figure exactly, and a pinned case records a
+mixed-sign pair where they do not. The case asserts **inequality**, so it goes
+red if the law ever becomes true, and its failure message names this card. Its
+reachability is unmeasured.
+
+**POS-CART-ROSTER** — a cart law derives its code roster from raw text without
+stripping comments, so a prose mention inflates the set by one. The direction is
+safe — the law checks one extra code and passes — but a prose name that later
+becomes a real code with a different status would turn it into a false failure,
+which is how a law gets disabled.
+
+**TZ-PORTABILITY** — a concurrency suite reads a `DATE` column through a driver
+that converts it at the host's local midnight, so the assertion fails on any
+host east of UTC. CI runs on UTC and the runner was matched to UTC, so the
+symptom is invisible there; the fix is to read the column as text and to run the
+suite under three zones.
+
+**BUILD-ORDER** — the root build script builds workspaces alphabetically, so a
+clean tree fails on a library that an application needs before it exists. The
+repayment is a single source of build order shared with CI rather than a second
+copy of the list.
