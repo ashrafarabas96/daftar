@@ -198,11 +198,16 @@ const STABLE_WARMUP = 20;
 /**
  * NEGATIVE CONTROL ONLY (DR-74). Unset in every normal run, and then inert.
  *
- * WHY IT IS SHAPED THE WAY IT IS, because the obvious simplification cannot
- * fail: the ratio gate compares two magnitudes of the SAME read, so a delay
- * added to both of them cancels in the quotient and leaves the ratio exactly
- * where it was. A control that slows "the measurement" uniformly would
- * therefore be green on a ratio gate that had stopped working. So the knob is
+ * WHY IT IS SHAPED THE WAY IT IS, because the obvious simplification is worse
+ * than no control at all: the ratio gate compares two magnitudes of the SAME
+ * read, and a delay added to both does NOT cancel in the quotient — it adds
+ * the same constant to numerator and denominator, which drags the ratio
+ * TOWARDS 1. On this suite's own measured figures that is
+ * `(31.278 + 200) / (16.228 + 200) = 1.07` against a ceiling of `1.6`: a
+ * uniform delay would not merely fail to redden the gate, it would turn a
+ * measured 1.927 FAILURE GREEN. The reason is arithmetic, not luck, which is
+ * why no amount of care in choosing the delay rescues that shape. So the knob
+ * is
  * applied PER CALL, and the ratio gate asks for it on the FIFTY-ROW
  * magnitude only — the numerator — which is the one direction that moves the
  * quotient. Do not "tidy" this into a blanket delay inside `measure`.
@@ -836,8 +841,9 @@ describe(`P4-A — the POS type-ahead (scale ${SCALE}, ${SCALE === 1 ? 'acceptan
    * never asserted against this ceiling.
    *
    * The negative control is asked for on the FIFTY-ROW side only. Slowing both
-   * sides equally cancels in the quotient and could not fail; see
-   * `NEGATIVE_CONTROL_MS`.
+   * sides equally drags the ratio towards 1: it cannot redden this gate, and
+   * it would mask a real failure. See `NEGATIVE_CONTROL_MS` for the
+   * arithmetic.
    */
   it('GATE: fifty rows cost no more than 1.6× ten rows — the arms terminate early', async () => {
     // Each magnitude from a zero hit count, so neither is throttled and the

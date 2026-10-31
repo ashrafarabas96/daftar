@@ -37,7 +37,12 @@ decode.** At `9abb381f`, in `apps/api/src/modules/catalog/media.service.ts`:
 | 59 | `if (dims.width > MAX_DIMENSION \|\| dims.height > MAX_DIMENSION)` → `AppError('MEDIA_INVALID', 'Image dimensions exceed limits', 400)` |
 | 67 | the **first** `sharp()` call |
 
-So the refusal at 59 precedes the first decoder call at 67. The "if not" branch
+So the refusal at 59 precedes the first decoder call at 67.
+Line numbers in this document were measured at `9abb381f` and are navigational:
+every constant and every refusal above is pinned in the test by its **content**
+(`MAX_DIMENSION = 6000` as a string, the error code, the status), never by a
+line, so an insertion upstream rots the reference here and not the guard.
+ The "if not" branch
 of DR-75 §1 does not fire, and **no second limit was added** — the owner's
 instruction, and the right call independently: a second ceiling in a second
 place is a second thing to keep in step.
@@ -66,10 +71,10 @@ are the same code and the same status**:
 
 | # | Line | Refusal | Code / status |
 | --- | --- | --- | --- |
-| 1 | 38 | empty buffer | `VALIDATION_FAILED` 400 |
+| 1 | 39 | empty buffer | `VALIDATION_FAILED` 400 |
 | 2 | 40 | over `MEDIA_MAX_BYTES` | `MEDIA_TOO_LARGE` 413 |
-| 3 | 42 | MIME not in `ALLOWED_MIME` | `MEDIA_INVALID` 415 |
-| 4 | 47–54 | `image-size` cannot parse it | `MEDIA_INVALID` 400 |
+| 3 | 44 | MIME not in `ALLOWED_MIME` | `MEDIA_INVALID` 415 |
+| 4 | 48–54 | `image-size` cannot parse it | `MEDIA_INVALID` 400 |
 | 5 | 56–58 | magic MIME ≠ declared MIME | `MEDIA_INVALID` 400 |
 | 6 | **59** | **a side exceeds `MAX_DIMENSION`** | **`MEDIA_INVALID` 400** |
 
@@ -260,7 +265,7 @@ File 10 carries **15** `NO SUBJECT` guards in total.
   "payment currency ≠ invoice currency". What is **not** reachable is an
   overpayment on an invoice in a **non-base** currency: a product's
   `price_currency` is pinned to the business base currency by
-  `catalog.service.ts:249-252` (measured: it *refuses* a `priceCurrency` that
+  `catalog.service.ts:247-251` (measured: it *refuses* a `priceCurrency` that
   is not the base), so every invoice carries `rate_source = 'base'`
   and `source_to_base_rate = 1`, hence `B = T`. File 10 does not paper over
   this — `:679` measures the pin and reports it as a disclosure, names the dead
@@ -299,7 +304,13 @@ Added: `tests-unit/dr75-media-dimension-bound.test.ts`, this document.
 `apps/api/src/modules/catalog/media.service.ts` was mutated **transiently** for
 the two DR-55 plants and restored byte-for-byte (`sha256` equal to pristine,
 `git diff --numstat` 0 lines). No migration, no workflow, no performance suite
-and no golden suite was touched.
+and no golden suite was touched **by this card**.
+
+That last sentence is true of DR-75 and false of the range this document is
+pushed in, so it is worth separating: the batch that carries this document also
+carries DR-74, which adds 70 lines to `.github/workflows/ci.yml` and changes
+both performance suites. DR-75 touched neither. A reader checking the claim
+against `git diff c41bbfd5..HEAD` would otherwise find it contradicted.
 
 Exit codes on `9abb381f` plus this change: `test:unit` **0** (9 files, 73
 tests) · `typecheck` **0** (0 `error TS`) · `lint` **0** · `format` **0**.
