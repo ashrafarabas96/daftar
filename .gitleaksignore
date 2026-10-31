@@ -55,7 +55,7 @@ tree:tests/security/accounting-observability-redaction.test.ts:generic-api-key:4
 tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
 
 # DR-73 §1. A ROLE NAME, NEVER A CREDENTIAL, AND ALREADY CORRECTED AT THE HEAD.
-# The flagged line is `{ grantAll: true, roleKeys: 'owner-SECRET9' },` — a
+# The flagged line assigns a ROLE NAME to `roleKeys` — `owner-` and a
 # fixture whose value is a ROLE NAME with a marker suffix, handed to a schema
 # that must REJECT it because a string sits where an array is required. It was
 # never a key, it opened nothing, and no system ever accepted it. At the head
@@ -69,3 +69,17 @@ tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
 # The same line, carried by the merge commit that brought it onto the candidate.
 # line-sha256 47d504318a05644336289d916ba8a4c5d8d062e8c8c191e28c8ce4a6b8694b84
 4d3ff823847f59161a78b56ee40075391c9b3ab8:tests/security/dr71-zod-sensitive-paths.test.ts:generic-api-key:396
+
+# DR-73 §1, second order. Quoting the flagged line in the two files above put
+# the same high-entropy token into THIS file and into the decision note, so the
+# range scan found it at the commit that added them. Both are now redacted at
+# the head, which is why no later commit repeats the finding; these two entries
+# cover the one commit that still carries the quotation in history. Neither is
+# a credential: one is a comment in an allowlist, the other a fenced example in
+# a decision note, and both quote a fixture a schema must reject.
+# line-sha256 9f6c12d19c9955611f6ebf002baa13c30f49724efac6cb94848f47db3e7e0688
+7f1d798ec72b6078ae5fcaa75359bb9e6b27f9ee:.gitleaksignore:generic-api-key:58
+
+# The same quotation, in the decision note that explains the exception.
+# line-sha256 f7efa50dce9305f25f2882979dbdc00ea637e08403e09ef48699232b538c0bb8
+7f1d798ec72b6078ae5fcaa75359bb9e6b27f9ee:docs/decisions/2026-10-30-dr73-secret-scan-range-pin.md:generic-api-key:14

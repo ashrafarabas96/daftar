@@ -11,8 +11,14 @@ tests/security/dr71-zod-sensitive-paths.test.ts:396   rule generic-api-key
 The line, read from git at both commits, is:
 
 ```ts
-{ grantAll: true, roleKeys: 'owner-SECRET9' },
+{ grantAll: true, roleKeys: 'owner-<marker>' },
 ```
+
+The marker above is redacted on purpose: quoting the token verbatim here put it
+into this note and into `.gitleaksignore`, and the range scan duly found it at
+the commit that added them — recorded as two further pinned entries, for the
+same reason and by the same mechanism. A note explaining an exception must not
+re-create the finding it explains.
 
 **It is a role name, not a secret.** It is a fixture handed to a schema that
 must **reject** it, because a string sits where an array is required; the value
