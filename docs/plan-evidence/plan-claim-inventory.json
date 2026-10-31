@@ -88,8 +88,8 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 428,
-    "planGates": 118,
+    "hits": 429,
+    "planGates": 119,
     "assertions": 31,
     "files": 54
   },
@@ -105,7 +105,7 @@
       "mentions": 15
     },
     "phase-4": {
-      "planGates": 62,
+      "planGates": 63,
       "assertions": 14,
       "mentions": 128
     },
@@ -387,7 +387,7 @@
       "phase": "cross-phase"
     },
     "tests/performance/pos-s3-budgets.test.ts": {
-      "planGates": 9,
+      "planGates": 10,
       "assertions": 4,
       "mentions": 21,
       "phase": "phase-4"
@@ -2527,7 +2527,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 206,
+      "line": 220,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -2535,7 +2535,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 216,
+      "line": 230,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2543,7 +2543,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 224,
+      "line": 238,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -2551,7 +2551,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 228,
+      "line": 242,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -2559,7 +2559,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 230,
+      "line": 244,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "mention",
@@ -2567,7 +2567,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 337,
+      "line": 351,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2575,7 +2575,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 343,
+      "line": 357,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -2583,7 +2583,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 402,
+      "line": 416,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2591,7 +2591,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 573,
+      "line": 593,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2599,7 +2599,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 582,
+      "line": 602,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "plan-gate",
@@ -2608,7 +2608,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 583,
+      "line": 603,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "assertion",
@@ -2616,7 +2616,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 585,
+      "line": 605,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "assertion",
@@ -3205,7 +3205,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 146,
+      "line": 147,
       "phase": "phase-4",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -3213,7 +3213,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 147,
+      "line": 148,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -3221,7 +3221,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 175,
+      "line": 241,
       "phase": "phase-4",
       "signals": ["node-type"],
       "kind": "mention",
@@ -3229,7 +3229,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 177,
+      "line": 243,
       "phase": "phase-4",
       "signals": ["index-name"],
       "kind": "mention",
@@ -3237,7 +3237,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 178,
+      "line": 244,
       "phase": "phase-4",
       "signals": ["index-cond"],
       "kind": "mention",
@@ -3245,7 +3245,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 334,
+      "line": 400,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3253,7 +3253,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 385,
+      "line": 451,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -3261,7 +3261,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 390,
+      "line": 456,
       "phase": "phase-4",
       "signals": ["explain", "query-plan-json"],
       "kind": "mention",
@@ -3269,7 +3269,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 391,
+      "line": 457,
       "phase": "phase-4",
       "signals": ["query-plan-json"],
       "kind": "assertion",
@@ -3277,7 +3277,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 444,
+      "line": 582,
       "phase": "phase-4",
       "signals": ["index-scan", "index-only-scan", "bitmap-plan"],
       "kind": "mention",
@@ -3285,7 +3285,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 447,
+      "line": 585,
       "phase": "phase-4",
       "signals": ["node-type", "index-name"],
       "kind": "mention",
@@ -3293,7 +3293,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 452,
+      "line": 590,
       "phase": "phase-4",
       "signals": ["index-cond", "index-name"],
       "kind": "assertion",
@@ -3301,7 +3301,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 504,
+      "line": 642,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3309,7 +3309,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 505,
+      "line": 643,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3317,7 +3317,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 507,
+      "line": 645,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3326,7 +3326,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 508,
+      "line": 646,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3335,7 +3335,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 524,
+      "line": 662,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3343,7 +3343,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 530,
+      "line": 668,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -3351,7 +3351,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 543,
+      "line": 681,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -3359,7 +3359,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 560,
+      "line": 698,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3368,7 +3368,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 561,
+      "line": 699,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3377,7 +3377,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 572,
+      "line": 710,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3386,7 +3386,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 574,
+      "line": 712,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -3394,7 +3394,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 587,
+      "line": 725,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3402,7 +3402,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 602,
+      "line": 740,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3410,7 +3410,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 603,
+      "line": 741,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3418,7 +3418,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 604,
+      "line": 742,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3426,7 +3426,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 632,
+      "line": 770,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -3434,7 +3434,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 634,
+      "line": 772,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3443,7 +3443,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 645,
+      "line": 783,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3452,7 +3452,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 646,
+      "line": 784,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3461,7 +3461,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 650,
+      "line": 788,
       "phase": "phase-4",
       "signals": ["node-type", "seq-scan"],
       "kind": "mention",
@@ -3469,7 +3469,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 666,
+      "line": 804,
       "phase": "phase-4",
       "signals": ["node-type", "seq-scan"],
       "kind": "mention",
@@ -3477,11 +3477,20 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 668,
+      "line": 806,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
       "via": ["seq"],
+      "text": "expect("
+    },
+    {
+      "file": "tests/performance/pos-s3-budgets.test.ts",
+      "line": 859,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stats"],
       "text": "expect("
     },
     {
