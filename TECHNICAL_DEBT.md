@@ -172,13 +172,51 @@ existing integration case covers the **magic-byte** refusal on the same path
 with the same code and the same status, so **reading it as cover for the
 dimension refusal would be an empty pass.**
 
-**TD-28 — `B ≠ T` through the sale path.** The conservation laws are exercised
-where the invoice is in the business base currency and the payment is not. An
-overpayment on a **non-base invoice** is not reachable today: product creation
-refuses a price currency that is not the base currency, and product update
-refuses any change to a product's price currency at all. So this card stays open
-for a **structural** reason rather than for want of measurement, and it will
-become testable only when a non-base-priced document becomes representable.
+**TD-28 — `B ≠ T` through the sale path: CLOSED by measurement, and its
+premise was wrong.** *This entry previously said an invoice in a currency other
+than the business base was unreachable, and justified it by two refusals —
+product creation rejecting a non-base `priceCurrency`, and product update
+refusing to change one. Those refusals are real; the inference from them was
+not, and it is withdrawn.* Changing the **business base currency** leaves an
+existing product's `price_currency` behind it, and the lock that prevents that
+change (`financial_started_at`) arms at the **first posted entry** — so the
+window is "before the first posting", not "never". A second base change after a
+posting is refused `409 BASE_CURRENCY_LOCKED`, which is the real shape of the
+restriction and the reason the stronger claim looked true.
+
+*Measured end to end through the API*, in
+`tests/integration/receivables-s4-fx-closure.test.ts` (8 cases, 8 passed): the
+base changed `ILS → USD` while `financial_started_at` was null; the product's
+`price_currency` stayed `ILS` under a `USD` base with **no row written by
+hand**; a credit sale committed an `ILS` invoice with `T = 3000`, `B = 721`;
+three payments on three dates at `0.2650 / 0.2750 / 0.2350`. At closure
+`outstanding_txn_minor = 0` **and** `outstanding_base_minor = 0`, state `paid`,
+and `Σ rel = 96 + 289 + 336 = 721`, equal to the invoice's **stored**
+`total_base_minor` — an absolute value, not an identity between two sums
+computed the same way. The realized difference is confined to
+`realized_fx_gain_loss_minor`, `+10 / +41 / −7` per leg (both signs), summing to
+`44 = 765 − 721`; the ledger moved `fx_gain` and `fx_loss` by that amount and
+left `rounding` unmoved, and AR went `721 → 0`.
+
+*So this is closed, not deferred:* the state is reachable **and** conservation
+holds on it. Two negative controls were run and restored byte-for-byte: forcing
+the domestic FX branch reddens seven named cases — and the **database** refuses
+with `sale.state_changed`, because `sale_commit` cross-checks the service's FX
+snapshot, so a service that takes the wrong branch cannot commit a sale at all;
+and replacing the telescoping release with a per-leg conversion is refused at
+**leg 2** with `customer_payment.settlement_changed` (409).
+
+*What remains, and it is not this card's premise:* **this suite has never run in
+CI.** Its evidence is one local run against a UTF-8 `postgres:16` container. A CI
+pass means nothing unless the `Integration + security tests` step's output names
+`receivables-s4-fx-closure.test.ts` with its cases passing — if the file were
+renamed, filtered or dropped, that step would report success with its subject
+absent, which is the one way it could look green without exercising anything.
+
+*One guarantee stronger than anything this register previously named:*
+`payment_allocations_realized_ck` (`0081:336`) makes the realized figure
+**definitionally** the residual, so a leak of exchange difference into the
+carrying base is not representable rather than merely refused.
 
 ### Also open, recorded earlier and unchanged by the seal
 
