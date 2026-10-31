@@ -133,21 +133,32 @@ self-describing. *Repayment:* have each step print the assertion it matched. A
 control that proves something and records nothing is one refactor away from
 proving nothing silently.
 
-**TD-26 — closure of the carrying base is a writer's obligation, not a
-constraint.** The outstanding reader computes the transaction figure from one sum
-and the base figure from a different sum, and nothing enforces across rows that
-the base shares total the authoritative base figure at the moment the
-transaction figure closes. Two hypotheses were tested and discarded: exchange
-differences do **not** leak into the base, because realized FX is isolated in
-its own column. *Repayment, in the owner's settled order:* first **measure** on a
-real database whether mixed signs, or a zero transaction figure with a non-zero
-base, are reachable by lawful operations — partial payments at different rates, a
-refund, a reversal. If reachable, fix the release algorithm by the **remainder
-method**, so the closing payment releases exactly what is left. **Do not add a
-constraint forbidding the sign:** a credit note and an overpayment both produce a
-lawful negative outstanding figure, and the golden suites assert exactly that, so
-such a constraint would reject lawful states and hide the defect instead of
-removing it.
+**TD-26 — reaching a state the enforcement permits but the accounting does not
+want.** *This entry replaces an earlier one that described the closing of the
+carrying base as unenforced by the schema. That description was wrong, and it is
+withdrawn rather than quoted, because a sentence about money that is wrong
+should not stay quotable.* Measured at
+`58d24469739a2bc36346676637281f7a8951171b`: the telescoping identity
+`Sigma rel = HALF_EVEN(B · Sigma amount, T)` (`0081:38`, `:777`, `:1330`, the
+last of which states that this is what makes `outstanding_base = 0` exactly when
+the last reducer closes the invoice); `invoice_settlement_verify` (`0081:691`);
+**three deferred constraint triggers** that call it at commit —
+`payments_complete` (`:1276`), `payment_allocations_value_complete` (`:1282`),
+`customer_credit_applications_value_complete` (`:1291`), each `DEFERRABLE
+INITIALLY DEFERRED`; and `payment_allocations_invoice_uq` (`:326`) with
+`payment_allocations_level_uq` (`:334`). So a commit that leaves an invoice
+unbalanced is **refused at commit time**, and all of it ran in run
+`41213587774`.
+
+*Why it is debt and not a defect:* the enforcement holds; what is unmeasured is
+whether a lawful sequence can reach a state it permits and the accounting does
+not want — mixed signs, or a zero transaction figure with a non-zero base.
+*Repayment:* measure that on a real database first — partial payments at
+different rates, a refund, a reversal — and if reachable, fix the release
+algorithm by the **remainder method** so the closing payment releases exactly
+what is left. **Do not add a constraint forbidding the sign:** a credit note and
+an overpayment both produce a lawful negative outstanding figure and the golden
+suites assert exactly that, so such a constraint would reject lawful states.
 
 **TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
 exists and is enforced before any decode, and it is **not** redundant with the
