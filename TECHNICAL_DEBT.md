@@ -179,30 +179,41 @@ external review found them internally contradictory. They are withdrawn rather
 than quoted, because a sentence about money that is wrong should not stay
 quotable.**
 
-1. **"a zero transaction figure with a non-zero base" — struck as malformed.** It
-   contradicts the closure law this same card states: with
-   `Sigma rel = HALF_EVEN(B · Sigma amount, T)`, `Sigma amount = 0` ⇒
-   `Sigma rel = 0` ⇒ the released base is zero too. For the invoice as a whole
-   the state is **excluded by the law**, not permitted by it. The law binds the
-   **sum**, so only the per-row path remains open.
+1. **"a zero transaction figure with a non-zero base" — struck as malformed, and
+   the first attempt at striking it was itself wrong (DR-82).** That attempt
+   inferred, from closure, that no amount had been applied. **Closure means the
+   opposite: everything was applied.** With `T` the invoice total in the
+   transaction currency, `B` its stored base value, `amount` the amounts applied
+   and `rel` the base released:
+   `outstanding_txn = T - Σ amount = 0` ⇒ `Σ amount = T` ⇒
+   `Σ rel = HALF_EVEN(B*T, T) = B` ⇒ `outstanding_base = B - Σ rel = 0`.
+   **So the transaction side closing forces the base side to close**, and a
+   closed invoice cannot carry a non-zero base. The law binds the **sum**, so
+   only the per-row path remains open. Pinned in
+   `tests/integration/receivables-s4-fx-closure.test.ts` at `:495`, `:525`,
+   `:545` and `:497`/`:499`.
 2. **"a credit note and an overpayment both produce a lawful negative outstanding
    figure" — withdrawn as false for the overpayment, and unmeasured for the
-   credit note.** `12-overpayment-customer-credit.golden.test.ts:386`, `:401`
+   credit note.** `12-overpayment-customer-credit.golden.test.ts:453`, `:460`
    measure the opposite: the surplus becomes a **customer credit** and the
    invoice's outstanding is **exactly zero and never negative**. **No test in
    this repository exhibits a negative invoice balance.** ⇒ the flat instruction
    **"do not add a constraint forbidding the sign" falls with the claim it rested
    on**, and this card now argues **neither for nor against** such a constraint.
    Either direction needs a measured case naming the test and the figures.
-3. **"fix by the remainder method" — withdrawn as already built.** `0081:1330`
-   states the telescoping identity is what makes `outstanding_base = 0` exactly
-   when the last reducer closes the invoice ⇒ the identity **is** the remainder
-   method, and the closing payment already releases precisely what is left.
+3. **The prescribed remedy is withdrawn, and no replacement is named (DR-82).**
+   This card previously ordered the release be fixed "by the remainder method" if
+   the sign path proved reachable. That is **deleted**, for two measured reasons:
+   it prescribed a repair for a behaviour **nobody has observed**, and **DR-72
+   had already withdrawn the remainder method** — so the card was re-proposing a
+   withdrawn remedy.
 
-*Repayment, restated:* measure the **per-row sign path** on a real database —
-partial payments at different rates, a refund, a reversal — and **if it proves
-reachable, keep the telescoping identity and constrain the path**, rather than
-re-implementing a release that already satisfies the remainder.
+*Repayment, restated:* **measure the per-row sign path first** on a real database
+— partial payments at different rates, a refund, a reversal. **Then let the
+result determine the correction, subject to preserving the conservation
+identity.** **No remedy is named here**: naming one before the measurement is a
+guess with a procedure attached, and the earlier wording of this line did exactly
+that.
 
 **TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
 exists and is enforced before any decode, and it is **not** redundant with the
@@ -302,6 +313,33 @@ TD-28 named. *Repayment:* a roster test of the shape
 this suite is reached by the lane `ci.yml` runs, **with a negative control that
 proves the guard fires when the suite is removed** — without which the roster is
 itself an empty pass. ⇒ "it runs" becomes enforced rather than observed once.
+
+**TD-31 — mail delivery is not exercised end to end, for want of a TLS
+fixture.** Three things are unproven: a **successful** end-to-end send, the
+**envelope as it goes on the wire**, and **non-ASCII address handling**. The
+current suite cannot produce them because it has no TLS fixture, and the ability
+to relax transport security is a constructor argument reachable only from tests,
+with a test pinning that production never passes it. *Why it is debt and not a
+defect:* nothing measured shows mail misbehaving — this is **absent coverage,
+declared rather than inferred safe**. *Repayment:* a TLS fixture, then the three
+assertions above, the non-ASCII one named explicitly so it cannot be quietly
+dropped. **Not a merge blocker** (DR-82).
+
+**TD-32 — no verification binds each plan-shape claim to a gate.** The claim
+inventory is counted, and the counts are sound: the parent holds **428** claims
+and the child **429**, genuinely new **1**, genuinely removed **0**. **But those
+figures support exactly one statement — that no item was deleted from the
+inventory — and not the broader one that "no claim lost its gate"**, which would
+require checking that each claim is still *bound* to a gate that can fail on it.
+**No such verification was ever run**, and no command or result for one exists
+(DR-81, DR-82). *Why it is debt and not a defect:* a claim silently unbound from
+its gate is how a requirement stops being enforced while the inventory still
+lists it — but nothing measured shows that has happened. *Repayment:* a check
+that, for every entry in the inventory, names the gate that would fail without
+it, **with a negative control that unbinds one claim and is shown to fire.**
+Until then, **the only sound wording is "no item was deleted from the
+inventory"**, and any broader phrasing is to be treated as withdrawn. **Not a
+merge blocker** (DR-82).
 
 ### Also open, recorded earlier and unchanged by the seal
 
