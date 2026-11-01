@@ -125,13 +125,33 @@ it changes. **This one is not deferrable past a launch.**
 **TD-25 — the two budget negative controls are silent on success.** They invert
 the exit code and additionally require each budget's tag in the output, so a
 suite that cannot start fails them rather than satisfying them, and both ran in
-the decisive run for the first time ever at 109 and 85 seconds. But they
-redirect the suite's output to a file and check tags with quiet greps, so **their
-logs hold no evidence of their own** and the outcome must be deduced from the
-inversion plus the duration. The deduction is sound; the record is not
-self-describing. *Repayment:* have each step print the assertion it matched. A
-control that proves something and records nothing is one refactor away from
-proving nothing silently.
+the decisive run for the first time ever. But they redirect the suite's output to
+a file and check tags with quiet greps, so **their logs hold no evidence of their
+own.**
+
+**⚠️ Two corrections to this card (DR-81, 2026-11-01), from the same external
+review.**
+
+1. **The duration inference is deleted, not softened.** This card read the
+   durations (109 s and 85 s) as part of a sound deduction that the controls ran
+   their sample loops. **That does not follow, and the log cannot repair it** —
+   measured on run `41248454929`, whose two control steps occupy
+   `00:56:24Z → 00:58:08Z` and `00:58:08Z → 00:59:30Z`, a search of those windows
+   for a sample count returns **zero lines** (the `200 samples` lines sit at
+   `00:59:39Z`, after both windows close, in a later step). ⇒ **the sample count
+   is not recoverable from the log**, and a duration is equally consistent with
+   completed loops and with a slow start. What is proven is the inverted exit
+   code plus tag presence, and nothing more.
+2. **The controls match the tag, and only the tag.** They match **neither the
+   budget's name, nor the measured value, nor the ceiling** ⇒ **any** failure of
+   that assertion, for **any** reason, satisfies them. So they prove *"this
+   assertion can fail"*, **not** *"this budget can detect an exceedance"*, and
+   must not be read as the second.
+
+*Repayment:* have each step print the assertion it matched, **and match each
+budget's own exceedance message — budget name, measured value, ceiling — rather
+than its tag alone.** A control that proves something and records nothing is one
+refactor away from proving nothing silently.
 
 **TD-26 — reaching a state the enforcement permits but the accounting does not
 want.** *This entry replaces an earlier one that described the closing of the
@@ -152,13 +172,37 @@ unbalanced is **refused at commit time**, and all of it ran in run
 
 *Why it is debt and not a defect:* the enforcement holds; what is unmeasured is
 whether a lawful sequence can reach a state it permits and the accounting does
-not want — mixed signs, or a zero transaction figure with a non-zero base.
-*Repayment:* measure that on a real database first — partial payments at
-different rates, a refund, a reversal — and if reachable, fix the release
-algorithm by the **remainder method** so the closing payment releases exactly
-what is left. **Do not add a constraint forbidding the sign:** a credit note and
-an overpayment both produce a lawful negative outstanding figure and the golden
-suites assert exactly that, so such a constraint would reject lawful states.
+not want — **the per-row sign path before closure**.
+
+**⚠️ Three claims this card carried are withdrawn (DR-81, 2026-11-01), after an
+external review found them internally contradictory. They are withdrawn rather
+than quoted, because a sentence about money that is wrong should not stay
+quotable.**
+
+1. **"a zero transaction figure with a non-zero base" — struck as malformed.** It
+   contradicts the closure law this same card states: with
+   `Sigma rel = HALF_EVEN(B · Sigma amount, T)`, `Sigma amount = 0` ⇒
+   `Sigma rel = 0` ⇒ the released base is zero too. For the invoice as a whole
+   the state is **excluded by the law**, not permitted by it. The law binds the
+   **sum**, so only the per-row path remains open.
+2. **"a credit note and an overpayment both produce a lawful negative outstanding
+   figure" — withdrawn as false for the overpayment, and unmeasured for the
+   credit note.** `12-overpayment-customer-credit.golden.test.ts:386`, `:401`
+   measure the opposite: the surplus becomes a **customer credit** and the
+   invoice's outstanding is **exactly zero and never negative**. **No test in
+   this repository exhibits a negative invoice balance.** ⇒ the flat instruction
+   **"do not add a constraint forbidding the sign" falls with the claim it rested
+   on**, and this card now argues **neither for nor against** such a constraint.
+   Either direction needs a measured case naming the test and the figures.
+3. **"fix by the remainder method" — withdrawn as already built.** `0081:1330`
+   states the telescoping identity is what makes `outstanding_base = 0` exactly
+   when the last reducer closes the invoice ⇒ the identity **is** the remainder
+   method, and the closing payment already releases precisely what is left.
+
+*Repayment, restated:* measure the **per-row sign path** on a real database —
+partial payments at different rates, a refund, a reversal — and **if it proves
+reachable, keep the telescoping identity and constrain the path**, rather than
+re-implementing a release that already satisfies the remainder.
 
 **TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
 exists and is enforced before any decode, and it is **not** redundant with the
@@ -206,17 +250,58 @@ snapshot, so a service that takes the wrong branch cannot commit a sale at all;
 and replacing the telescoping release with a per-leg conversion is refused at
 **leg 2** with `customer_payment.settlement_changed` (409).
 
-*What remains, and it is not this card's premise:* **this suite has never run in
-CI.** Its evidence is one local run against a UTF-8 `postgres:16` container. A CI
-pass means nothing unless the `Integration + security tests` step's output names
-`receivables-s4-fx-closure.test.ts` with its cases passing — if the file were
-renamed, filtered or dropped, that step would report success with its subject
-absent, which is the one way it could look green without exercising anything.
+*What remained was that the suite had not run in CI — **and that is now closed by
+measurement (DR-81, 2026-11-01).*** The statement "this suite has never run in
+CI" was true only of the decisive run, and necessarily so: **the file does not
+exist at that commit.** Measured against a positive control, so an empty result
+cannot pass for a negative — `git cat-file -e 58d24469:tests/integration/receivables-s4-fx-closure.test.ts`
+⇒ **EXIT 128**; the same on `1aff66c6` ⇒ **EXIT 0**; `58d24469:package.json`
+⇒ **EXIT 0** (the probe works). On the PR head `1aff66c6`, run `41248454929`, the
+`Integration + security` step's output **names the file with its cases passing**,
+which is exactly the standard this card demanded:
+
+```
+22:42:21.57Z  ✓ tests/integration/receivables-s4-fx-closure.test.ts (8 tests) 1475ms
+23:01:53.29Z  Test Files  358 passed (358)      Tests  6626 passed (6626)
+```
+
+`358 − 357 = 1` file and `6626 − 6618 = 8` tests against the decisive run's
+totals ⇒ **the delta is precisely this suite**, so the naming is corroborated by
+arithmetic and not by a tick alone. **What must not be done is to attribute that
+run to the sealed commit.** The residue is not missing execution but a missing
+guard, carried as **TD-30** below.
 
 *One guarantee stronger than anything this register previously named:*
 `payment_allocations_realized_ck` (`0081:336`) makes the realized figure
 **definitionally** the residual, so a leak of exchange difference into the
 carrying base is not representable rather than merely refused.
+
+**TD-29 — overpayment on an invoice whose own currency is not the base is
+uncovered.** In both golden suites that carry cross-currency settlement the
+**invoice** is in the business base currency and only the **payment** is not; and
+`receivables-s4-fx-closure.test.ts`, which does drive a non-base invoice, closes
+it **exactly**, so no surplus arises. ⇒ the combination **non-base invoice + an
+overpayment on it** is exercised nowhere. *Why it is debt and not a defect:*
+nothing measured shows it misbehaving — it is **declared uncovered rather than
+inferred safe**, which is the opposite of the reasoning error TD-28 withdrew.
+*Repayment:* extend the FX closure suite with an overpaying leg on the `ILS`
+invoice under the `USD` base, asserting the invoice closes at exactly zero, the
+surplus becomes a customer credit carried at its own rate, and conservation holds
+in the payment's currency and in base. **Money card ⇒ owner `daftar-finance`, and
+a second review is required.**
+
+**TD-30 — nothing keeps the FX closure suite in the CI lane.** TD-28 above
+establishes that `tests/integration/receivables-s4-fx-closure.test.ts` **does**
+run in CI, reached by `test:integration` (`vitest run tests/integration
+tests/security tests/guards`) through the root config's
+`include: ['tests/**/*.test.ts']`. But that is an observation of one run, not an
+enforced property: **if the file were renamed, moved out of the glob or filtered,
+the step would report success with its subject absent** — the very failure mode
+TD-28 named. *Repayment:* a roster test of the shape
+`tests-unit/test-lane-roster.test.ts` already uses for the unit lane, asserting
+this suite is reached by the lane `ci.yml` runs, **with a negative control that
+proves the guard fires when the suite is removed** — without which the roster is
+itself an empty pass. ⇒ "it runs" becomes enforced rather than observed once.
 
 ### Also open, recorded earlier and unchanged by the seal
 
