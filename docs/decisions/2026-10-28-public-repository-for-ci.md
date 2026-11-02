@@ -24,8 +24,10 @@ explained why they used to say something else. `[self-hosted, daftar-wsl]` →
 and `hygiene`. Measured against `main`: 44 lines added and 32 removed, of which
 **12 are code — the six `runs-on:` lines, replaced — and 64 are comment.**
 
-Nothing else needed changing, and that is a property of the file rather than
-luck: every self-hosted-specific step is already guarded at runtime by
+No other **code** needed changing — the 64 comment lines above are the rest of
+the diff, and they are this file's own subject matter rather than an exception
+to it. That the code side stops at six lines is a property of the file rather
+than luck: every self-hosted-specific step is already guarded at runtime by
 `runner.environment`, not by the job label. On a hosted runner the
 work-folder purge skips itself, and the Chromium install takes the
 `--with-deps` arm that needs passwordless sudo.
@@ -55,8 +57,11 @@ fails it); that script does not exist on this branch at all — it lives on the
 Phase 4 lineage, where this file will eventually be read; and the marker count
 is 70, not 53. Nothing here licenses renaming or re-wording a gate step.
 
-The marker count is also unchanged by every way of counting it: 53 `- name:`,
-13 `- uses:` and 4 unnamed `- run:` — 70 in total, identical before and after.
+The marker count is unchanged, and the three classes below are exhaustive
+rather than merely the three that came to mind: a YAML parser over both
+`46fa30ce` (before) and `e2263f39` (after) reports **70 steps** in each, of
+which **53 carry a `name:`, 13 are a bare `- uses:` and 4 are a bare `- run:`**
+— and **zero** are anything else, so nothing is being counted twice or missed.
 Saying "53 steps" would be wrong; 53 is the named-step count.
 
 **No gate, assertion, threshold, timeout or `--max-warnings 0` is altered by
@@ -112,8 +117,11 @@ Reverse checklist, in order:
 
 ## What was measured before the flip
 
-Full history of every ref that becomes public — 77 branches, 1,569 commits,
-52 MB — scanned by gitleaks and by trufflehog. Findings were read one by one
+Full history of every ref that becomes public — 77 branches, 1,569 commits —
+scanned twice, by gitleaks and by trufflehog. Each tool reported its own size
+and they are not interchangeable: gitleaks walked **49 MB** of history with
+`--log-opts="--all --full-history"`, trufflehog **21,988 chunks / 52 MB**. One
+figure attributed to both scans would describe neither. Findings were read one by one
 rather than counted: all were test fixtures, UUID literals, migration content
 hashes, placeholder DSNs whose hosts are the literals `db` and `host`, and one
 deliberate `sk_live_` sentinel that exists so a redaction test has something
