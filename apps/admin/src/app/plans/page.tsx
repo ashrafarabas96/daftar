@@ -4,6 +4,7 @@ import type { PlanDto, PlanVersionDiffDto, PlanVersionDto } from '@daftar/shared
 import { Badge, Button, Dialog, Switch, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { ApiError } from '@/lib/client';
 import { createPlan, createPlanVersion, diffPlanVersions, listPlans, publishPlanVersion, sunsetPlanVersion, updateDraftPlanVersion } from '@/lib/admin-api';
+import { useT } from '@/lib/i18n';
 import { Shell } from '../Shell';
 
 /**
@@ -12,6 +13,7 @@ import { Shell } from '../Shell';
  * Sunset → next Version. Published versions are immutable (DB-enforced).
  */
 export default function PlansPage() {
+  const t = useT();
   const [plans, setPlans] = useState<PlanDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -34,7 +36,7 @@ export default function PlansPage() {
       setPlans((await listPlans()).items);
       setError(null);
     } catch (e) {
-      setError(e instanceof ApiError ? e.code : 'Failed to load plans');
+      setError(e instanceof ApiError ? e.code : t('plans.error.loadFailed'));
     }
   }
   useEffect(() => {
@@ -64,7 +66,7 @@ export default function PlansPage() {
       setEditor(null);
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.code : 'Save failed');
+      setError(e instanceof ApiError ? e.code : t('plans.error.saveFailed'));
     } finally {
       setBusy(false);
     }
@@ -80,7 +82,7 @@ export default function PlansPage() {
       setPlanName('');
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.code : 'Create failed');
+      setError(e instanceof ApiError ? e.code : t('plans.error.createFailed'));
     } finally {
       setBusy(false);
     }
@@ -92,17 +94,17 @@ export default function PlansPage() {
       await (action === 'publish' ? publishPlanVersion(v.id) : sunsetPlanVersion(v.id));
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.code : `${action} failed`);
+      setError(e instanceof ApiError ? e.code : t(action === 'publish' ? 'plans.error.publishFailed' : 'plans.error.sunsetFailed'));
     }
   }
 
   const stateBadge = (s: PlanVersionDto['state']) =>
     s === 'PUBLISHED' ? (
-      <Badge tone="success">PUBLISHED (immutable)</Badge>
+      <Badge tone="success">{t('plans.state.published')}</Badge>
     ) : s === 'DRAFT' ? (
-      <Badge tone="warning">DRAFT</Badge>
+      <Badge tone="warning">{t('plans.state.draft')}</Badge>
     ) : (
-      <Badge tone="neutral">SUNSET</Badge>
+      <Badge tone="neutral">{t('plans.state.sunset')}</Badge>
     );
 
   const versions = plans.flatMap((p) => p.versions.map((v) => ({ ...v, planName: p.name })));
@@ -110,8 +112,8 @@ export default function PlansPage() {
   return (
     <Shell active="plans">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ fontFamily: typography.fontFamily.base, margin: 0 }}>Plans</h1>
-        <Button onClick={() => setPlanOpen(true)}>New plan</Button>
+        <h1 style={{ fontFamily: typography.fontFamily.base, margin: 0 }}>{t('plans.title')}</h1>
+        <Button onClick={() => setPlanOpen(true)}>{t('plans.new')}</Button>
       </div>
       {error ? (
         <p role="alert" style={{ color: colors.semantic.danger }}>
@@ -122,17 +124,21 @@ export default function PlansPage() {
         <Table
           rows={versions}
           columns={[
-            { key: 'plan', header: 'Plan', render: (v) => `${v.planName} (${v.planKey})` },
-            { key: 'version', header: 'Version', render: (v) => `v${v.version}` },
-            { key: 'state', header: 'State', render: (v) => stateBadge(v.state) },
-            { key: 'trial', header: 'Trial days', align: 'end', render: (v) => v.trialDays },
+            { key: 'plan', header: t('common.col.plan'), render: (v) => `${v.planName} (${v.planKey})` },
+            { key: 'version', header: t('common.col.version'), render: (v) => `v${v.version}` },
+            { key: 'state', header: t('common.col.state'), render: (v) => stateBadge(v.state) },
+            { key: 'trial', header: t('plans.col.trialDays'), align: 'end', render: (v) => v.trialDays },
             {
               key: 'summary',
-              header: 'Features / limits',
+              header: t('plans.col.featuresLimits'),
               render: (v) =>
-                `${Object.values(v.features).filter(Boolean).length}/${Object.keys(v.features).length} on · ${Object.entries(v.limits)
-                  .map(([k, n]) => `${k}=${n === -1 ? '∞' : n}`)
-                  .join(', ')}`,
+                t('plans.summary', {
+                  on: Object.values(v.features).filter(Boolean).length,
+                  total: Object.keys(v.features).length,
+                  limits: Object.entries(v.limits)
+                    .map(([k, n]) => `${k}=${n === -1 ? '∞' : n}`)
+                    .join(', '),
+                }),
             },
             {
               key: 'actions',
@@ -142,26 +148,26 @@ export default function PlansPage() {
                 <span style={{ display: 'inline-flex', gap: spacing[1], flexWrap: 'wrap' }}>
                   {v.version > 1 ? (
                     <Button size="sm" variant="ghost" onClick={() => void diffPlanVersions(v.planKey, v.version - 1, v.version).then(setDiff)}>
-                      Diff
+                      {t('plans.action.diff')}
                     </Button>
                   ) : null}
                   {v.state === 'DRAFT' ? (
                     <>
                       <Button size="sm" variant="secondary" onClick={() => openEditor({ mode: 'edit', version: v })}>
-                        Edit draft
+                        {t('plans.action.editDraft')}
                       </Button>
                       <Button size="sm" variant="primary" onClick={() => void transition(v, 'publish')}>
-                        Publish
+                        {t('plans.action.publish')}
                       </Button>
                     </>
                   ) : null}
                   {v.state === 'PUBLISHED' ? (
                     <Button size="sm" variant="ghost" onClick={() => void transition(v, 'sunset')}>
-                      Sunset
+                      {t('plans.action.sunset')}
                     </Button>
                   ) : null}
                   <Button size="sm" variant="ghost" onClick={() => openEditor({ mode: 'clone', planKey: v.planKey, base: v })}>
-                    Clone → next version
+                    {t('plans.action.clone')}
                   </Button>
                 </span>
               ),
@@ -172,25 +178,23 @@ export default function PlansPage() {
 
       <Dialog
         open={planOpen}
-        title="Create plan"
+        title={t('plans.create.title')}
         onClose={() => setPlanOpen(false)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setPlanOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button loading={busy} disabled={!/^[a-z][a-z0-9_-]{1,31}$/.test(planKey) || planName.trim().length < 2} onClick={() => void savePlan()}>
-              Create plan (v1 draft)
+              {t('plans.create.submit')}
             </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}>
-          <TextField label="Plan key (a-z, 0-9, -, _)" value={planKey} onChange={setPlanKey} required />
-          <TextField label="Display name" value={planName} onChange={setPlanName} required />
-          <p style={{ margin: 0, color: colors.neutral[500], fontSize: typography.size.sm }}>
-            The plan starts with an empty DRAFT v1. Edit its features, limits and trial days, then publish.
-          </p>
+          <TextField label={t('plans.create.keyLabel')} value={planKey} onChange={setPlanKey} required />
+          <TextField label={t('plans.create.displayName')} value={planName} onChange={setPlanName} required />
+          <p style={{ margin: 0, color: colors.neutral[500], fontSize: typography.size.sm }}>{t('plans.create.note')}</p>
         </div>
       </Dialog>
 
@@ -198,29 +202,29 @@ export default function PlansPage() {
         open={!!editor}
         title={
           editor?.mode === 'clone'
-            ? `Clone ${editor.planKey} v${editor.base.version} → new DRAFT`
-            : `Edit DRAFT v${editor?.mode === 'edit' ? editor.version.version : ''}`
+            ? t('plans.editor.cloneTitle', { planKey: editor.planKey, version: editor.base.version })
+            : t('plans.editor.editTitle', { version: editor?.mode === 'edit' ? editor.version.version : '' })
         }
         onClose={() => setEditor(null)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setEditor(null)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button loading={busy} onClick={() => void saveEditor()}>
-              {editor?.mode === 'clone' ? 'Create draft' : 'Save draft'}
+              {editor?.mode === 'clone' ? t('plans.editor.createDraft') : t('plans.editor.saveDraft')}
             </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4], fontFamily: typography.fontFamily.base }}>
-          <TextField label="Trial days" value={trialDays} onChange={setTrialDays} inputMode="numeric" />
-          <h3 style={{ margin: 0, fontSize: typography.size.md }}>Features</h3>
+          <TextField label={t('plans.editor.trialDays')} value={trialDays} onChange={setTrialDays} inputMode="numeric" />
+          <h3 style={{ margin: 0, fontSize: typography.size.md }}>{t('plans.editor.features')}</h3>
           {Object.entries(features).map(([key, enabled]) => (
             <Switch key={key} label={key} checked={enabled} onChange={(v) => setFeatures({ ...features, [key]: v })} />
           ))}
           <div style={{ display: 'flex', gap: spacing[2], alignItems: 'flex-end' }}>
-            <TextField label="Add feature key" value={newFeatureKey} onChange={setNewFeatureKey} />
+            <TextField label={t('plans.editor.addFeatureKey')} value={newFeatureKey} onChange={setNewFeatureKey} />
             <Button
               size="sm"
               variant="secondary"
@@ -230,15 +234,15 @@ export default function PlansPage() {
                 setNewFeatureKey('');
               }}
             >
-              Add
+              {t('common.add')}
             </Button>
           </div>
-          <h3 style={{ margin: 0, fontSize: typography.size.md }}>Limits (-1 = unlimited)</h3>
+          <h3 style={{ margin: 0, fontSize: typography.size.md }}>{t('plans.editor.limits')}</h3>
           {Object.entries(limits).map(([key, value]) => (
             <TextField key={key} label={key} value={value} onChange={(v) => setLimits({ ...limits, [key]: v })} inputMode="numeric" />
           ))}
           <div style={{ display: 'flex', gap: spacing[2], alignItems: 'flex-end' }}>
-            <TextField label="Add limit key" value={newLimitKey} onChange={setNewLimitKey} />
+            <TextField label={t('plans.editor.addLimitKey')} value={newLimitKey} onChange={setNewLimitKey} />
             <Button
               size="sm"
               variant="secondary"
@@ -248,34 +252,24 @@ export default function PlansPage() {
                 setNewLimitKey('');
               }}
             >
-              Add
+              {t('common.add')}
             </Button>
           </div>
         </div>
       </Dialog>
 
-      <Dialog open={!!diff} title="Version diff preview" onClose={() => setDiff(null)}>
+      <Dialog open={!!diff} title={t('plans.diff.title')} onClose={() => setDiff(null)}>
         {diff ? (
           <div style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>
-            <p style={{ color: colors.neutral[500] }}>
-              {diff.planKey}: v{diff.fromVersion} → v{diff.toVersion}
-            </p>
-            {diff.trialDays.changed ? (
-              <p>
-                Trial days: {diff.trialDays.from} → {diff.trialDays.to}
-              </p>
-            ) : null}
+            <p style={{ color: colors.neutral[500] }}>{t('plans.diff.range', { planKey: diff.planKey, from: diff.fromVersion, to: diff.toVersion })}</p>
+            {diff.trialDays.changed ? <p>{t('plans.diff.trialDays', { from: String(diff.trialDays.from), to: String(diff.trialDays.to) })}</p> : null}
             {diff.features.map((f) => (
-              <p key={f.key}>
-                Feature {f.key}: {String(f.from)} → {String(f.to)}
-              </p>
+              <p key={f.key}>{t('plans.diff.feature', { key: f.key, from: String(f.from), to: String(f.to) })}</p>
             ))}
             {diff.limits.map((l) => (
-              <p key={l.key}>
-                Limit {l.key}: {String(l.from)} → {String(l.to)}
-              </p>
+              <p key={l.key}>{t('plans.diff.limit', { key: l.key, from: String(l.from), to: String(l.to) })}</p>
             ))}
-            {!diff.trialDays.changed && diff.features.length === 0 && diff.limits.length === 0 ? <p>No changes between versions.</p> : null}
+            {!diff.trialDays.changed && diff.features.length === 0 && diff.limits.length === 0 ? <p>{t('plans.diff.noChanges')}</p> : null}
           </div>
         ) : null}
       </Dialog>
