@@ -13,8 +13,8 @@ import {
   Table,
   Tabs,
   TextField,
-  colors,
   spacing,
+  textColors,
   typography,
 } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
@@ -160,7 +160,7 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
       </div>
       {limit ? <PlanLimitState title={t('team.limitReached')} upgradeLabel={t('nav.plan')} onUpgrade={() => router.push(`/${locale}/plan`)} /> : null}
       {error ? (
-        <p role="alert" style={{ color: colors.semantic.danger, fontFamily: typography.fontFamily.base }}>
+        <p role="alert" style={{ color: textColors.danger, fontFamily: typography.fontFamily.base }}>
           {error}
         </p>
       ) : null}
@@ -292,7 +292,7 @@ export default function TeamPage({ params }: { params: Promise<{ locale: Locale 
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[3], fontFamily: typography.fontFamily.base }}>
-          <p style={{ margin: 0, fontSize: typography.size.sm, color: colors.neutral[500] }}>{t('team.role')}</p>
+          <p style={{ margin: 0, fontSize: typography.size.sm, color: textColors.secondary }}>{t('team.role')}</p>
           {roles.map((r) => (
             <Checkbox
               key={r.key}

@@ -1,7 +1,7 @@
 'use client';
 import { use, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Card, Combobox, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Button, Card, Combobox, TextField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ensureSession, setCurrentBusinessId } from '@/lib/client';
 import { checkSlugAvailability, completeOnboarding, getCountries, getCurrencies } from '@/lib/merchant-api';
@@ -112,7 +112,7 @@ export default function OnboardingPage({ params }: { params: Promise<{ locale: L
             error={slugState === 'taken' ? t('onboarding.slugTaken') : undefined}
           />
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+            <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
               {error}
             </p>
           ) : null}
