@@ -512,15 +512,22 @@ export function toBase(amountMinor: bigint, rateR10: bigint, exponent = 2, baseE
  * `rel − conv_R(a)`, the AR dust, as a function of the figures that produce
  * it, so the law can be exercised on synthetic inputs.
  *
- * It exists as its own function because on THIS head no invoice of this estate
- * can produce a non-zero one: a product's `price_currency` is pinned to the
- * business base currency by the catalogue authority
- * (`apps/api/src/modules/catalog/catalog.service.ts:247-252`, §36–37), so
- * every invoice has `source_to_base_rate = 1` and `B = T`, and `rel` and
- * `conv_R(a)` are both `a`. An assertion that the dust line is PRESENT would
- * therefore be an assertion nobody can make true, and a red proof over
- * synthetic `(B, T, R)` is the honest substitute. See the cross-currency
- * golden's disclosure case.
+ * It exists as its own function because no invoice OF THIS ESTATE produces a
+ * non-zero one: a product's `price_currency` is pinned to the business base
+ * currency by the catalogue authority
+ * (`apps/api/src/modules/catalog/catalog.service.ts:247`, §36–37) and cannot
+ * later be changed (`:321`), so every invoice here has
+ * `source_to_base_rate = 1` and `B = T`, and `rel` and `conv_R(a)` are both
+ * `a`. A synthetic red proof is therefore the right instrument HERE.
+ *
+ * CORRECTED (DR-79): this comment used to add that a live assertion would be
+ * "an assertion nobody can make true". That is measured false. Changing the
+ * business base currency before the first posted entry leaves an existing
+ * product's `price_currency` behind it, and
+ * `tests/integration/receivables-s4-fx-closure.test.ts` now asserts a non-zero
+ * AR dust on a live invoice, driven through the API. The synthetic proof stays
+ * because it exercises the law over figures this estate cannot produce; it is
+ * no longer a substitute for something impossible.
  */
 export function arDust(
   totalBaseMinor: bigint,
