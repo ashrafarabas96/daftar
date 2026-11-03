@@ -1036,6 +1036,13 @@ jobs:
         run: |
           set -euo pipefail
           boot=$(mktemp -d)
+          # Gradle 9.8.2 refuses a directory that contains no settings file:
+          # "Directory '/tmp/...' does not contain a Gradle build", measured on
+          # run 41630023714. An EMPTY settings file makes it a valid build whose
+          # subproject count is zero, which is precisely the property this
+          # bootstrap needs -- a build Gradle will accept, with nothing in it
+          # for 9.8.2 to configure.
+          : > "$boot/settings.gradle.kts"
           gradle --project-dir "$boot" wrapper --gradle-version 8.9 --distribution-type bin
           test -f "$boot/gradlew"
           cp -R "$boot/gradle" "$boot/gradlew" "$boot/gradlew.bat" apps/android/
