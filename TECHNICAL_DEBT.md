@@ -392,3 +392,41 @@ suite under three zones.
 clean tree fails on a library that an application needs before it exists. The
 repayment is a single source of build order shared with CI rather than a second
 copy of the list.
+
+**PERF01-BUDGET-A-FLAKE** — the Tier 1 performance budget `PERF01-BUDGET-A`
+("a post() in an open transaction") fails on the hosted runner against a subject
+that is unchanged, and it has now failed on two attempts of the same head, so it
+is recorded as unstable rather than closed as a one-off. `budgetMs = 15` with
+200 iterations in every measurement; the assertion is at
+`tests/performance/accounting-budgets.test.ts:450`.
+
+Three measurements on head `70ff3183`, run `41633542110` (`pull_request`):
+
+| attempt | step | p50 | p95 | p99 | max |
+|---|---|---|---|---|---|
+| 1 | 32 `Phase 2 slice gate — P2-S8` | 2.932622 | **18.667873** | 139.460972 | 179.848311 |
+| 2 | 34 `Phase 4 slice gate — P4-S1` | 3.074405 | **27.089370** | 299.026479 | 311.189017 |
+| 2 | 34 `Phase 4 slice gate — P4-S1` | 3.051940 | **31.313703** | 97.196990 | 264.166733 |
+
+The step that failed moved between attempts: step 32 failed on attempt 1 and
+**passed** on attempt 2 (15:11:39–15:23:30), while step 34, which composes the
+Phase 3 corrective gate and measures the same budget again, failed twice. The
+subject of the failure is one assertion throughout; only its location moved.
+
+The head carries **no code change at all**: measured with
+`git diff --name-status 4d65304f..70ff3183`, the only files touched are
+`TECHNICAL_DEBT.md` and
+`docs/decisions/2026-11-01-dr81-postseal-report-corrections.md`, and the same
+code is green on `main` at `4d65304f` (run `41531741433`, `push`, attempt 1,
+six jobs `success`). A p50 near 3 ms beside a p99 between 97 and 299 ms in the
+same sample is tail latency on the runner, not a regression in the subject —
+and attempt 2's backend job took 2 h 29 min against roughly an hour and a half
+on attempt 1, which is a second reading of the same contention.
+
+The repayment is to find the source of the variance — whether the warm-up is too
+short for a p95 estimator at 200 iterations, or the measurement competes with
+other jobs on the same machine — and to make the reading stable enough that a
+single sample is evidence. **Raising `budgetMs`, or any timeout, is forbidden
+(DR-41 / DR-74)**, and this card is not a licence to do so. A re-run is a second
+measurement, not a remedy; two failed attempts on one head retire the "one-off"
+reading, and a third run would add nothing this analysis does not owe.
