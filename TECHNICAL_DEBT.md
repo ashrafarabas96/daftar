@@ -264,10 +264,19 @@ and replacing the telescoping release with a per-leg conversion is refused at
 *What remained was that the suite had not run in CI — **and that is now closed by
 measurement (DR-81, 2026-11-01).*** The statement "this suite has never run in
 CI" was true only of the decisive run, and necessarily so: **the file does not
-exist at that commit.** Measured against a positive control, so an empty result
-cannot pass for a negative — `git cat-file -e 58d24469:tests/integration/receivables-s4-fx-closure.test.ts`
+exist in the tree that run executed.** **That tree is not `58d24469`** — the run's
+own log reads `HEAD is now at 34d212d4 Merge 181e4081… into b4fc7b90…`, so it
+executed the merge `34d212d4`, whose `head_sha` is the candidate `181e4081`. The
+absence is therefore measured on the executed tree, each probe with a positive
+control: the suite is **HTTP 404** on `34d212d4` and on `181e4081`, against
+`package.json` ⇒ **HTTP 200** on both
+(`gh api -i "repos/…/contents/<suite>?ref=34d212d4"`). A local probe on
+`34d212d4` would have been a **false negative** — that commit is not an object in
+a normal clone, so `git cat-file -e` returns `EXIT 128` there for *every* path,
+`package.json` included. The local probe on the sealed commit agrees and is kept
+as a third reading — `git cat-file -e 58d24469:tests/integration/receivables-s4-fx-closure.test.ts`
 ⇒ **EXIT 128**; the same on `1aff66c6` ⇒ **EXIT 0**; `58d24469:package.json`
-⇒ **EXIT 0** (the probe works). On the PR head `1aff66c6`, run `41248454929`, the
+⇒ **EXIT 0** (the probe works) — **but the absence no longer rests on it.** On the PR head `1aff66c6`, run `41248454929`, the
 `Integration + security` step's output **names the file with its cases passing**,
 which is exactly the standard this card demanded:
 
