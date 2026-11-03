@@ -1067,39 +1067,35 @@ jobs:
           # for every project, from a callback registered before the plugin's own.
           # `:app` configures with the same shape, so its line is the control.
           cat > /tmp/probe.init.gradle <<'PROBE_EOF'
-          gradle.addProjectEvaluationListener(new ProjectEvaluationListener() {
-            void beforeEvaluate(Project p) { }
-            void afterEvaluate(Project p, ProjectState s) {
-              println "PROBE2 ${p.path} evalFailure=" + (s.failure == null ? "none" : s.failure.toString())
-            }
-          })
           gradle.allprojects { p ->
             p.afterEvaluate {
-              def f = p.buildFile
-              def bytes = f.exists() ? f.bytes : new byte[0]
-              def txt = new String(bytes, "UTF-8")
-              def md = java.security.MessageDigest.getInstance("SHA-256")
-              println "PROBE2 ${p.path} projectDir=${p.projectDir}"
-              println "PROBE2 ${p.path} buildFile=${f} exists=${f.exists()} bytes=${bytes.length}"
-              println "PROBE2 ${p.path} buildFileSha256=" + md.digest(bytes).encodeHex()
-              println "PROBE2 ${p.path} hasAndroidBlock=" + txt.contains("android {") + " hasCompileSdkLine=" + txt.contains("compileSdk = 35")
               def ext = p.extensions.findByName('android')
-              if (ext == null) { println "PROBE2 ${p.path} ext=NULL"; return }
-              try { println "PROBE2 ${p.path} compileSdk=${ext.compileSdk}" } catch (Throwable t) { println "PROBE2 ${p.path} compileSdk read-failed " + t.message }
-              try { println "PROBE2 ${p.path} compileSdkVersionLegacy=${ext.compileSdkVersion}" } catch (Throwable t) { println "PROBE2 ${p.path} legacy read-failed " + t.message }
-              try { println "PROBE2 ${p.path} namespace=${ext.namespace}" } catch (Throwable t) { println "PROBE2 ${p.path} namespace read-failed " + t.message }
+              if (ext == null) { println "PROBE3 ${p.path} ext=NULL"; return }
+              println "PROBE3 ${p.path} extClass=" + ext.getClass().name + "@" + Integer.toHexString(System.identityHashCode(ext))
+              p.extensions.extensionsSchema.each { s ->
+                println "PROBE3 ${p.path} schema name=${s.name} publicType=${s.publicType}"
+              }
+              ['compileSdk', 'compileSdkVersion', 'namespace', 'buildToolsVersion'].each { n ->
+                try { println "PROBE3 ${p.path} ${n}=" + ext."$n" }
+                catch (Throwable t) { println "PROBE3 ${p.path} ${n} read-failed " + t.message }
+              }
+              try { println "PROBE3 ${p.path} defaultConfig.minSdk=" + ext.defaultConfig.minSdk }
+              catch (Throwable t) { println "PROBE3 ${p.path} defaultConfig read-failed " + t.message }
+              try { println "PROBE3 ${p.path} compileOptions.source=" + ext.compileOptions.sourceCompatibility }
+              catch (Throwable t) { println "PROBE3 ${p.path} compileOptions read-failed " + t.message }
+              def txt = new String(p.buildFile.bytes, "UTF-8")
+              println "PROBE3 ${p.path} idx(*/)=" + txt.indexOf("*/") + " idx(android {)=" + txt.indexOf("android {") + " idx(compileSdk = 35)=" + txt.indexOf("compileSdk = 35")
             }
           }
           PROBE_EOF
+          echo "### jvm: $(java -version 2>&1 | head -1), file.encoding from gradle.properties is explicit"
           echo "### probe invocation -- its own exit code is NOT the gate"
           set +e
           ./gradlew -I /tmp/probe.init.gradle :offline-kernel:tasks --no-daemon > /tmp/probe.txt 2>&1
           prc=$?
           set -e
           echo "### probe rc=$prc, bytes: $(wc -c < /tmp/probe.txt)"
-          { grep -n "PROBE2 " /tmp/probe.txt || echo "NO PROBE2 LINES -- the probe itself never ran"; } | head -60
-          echo "### the first failure the probe itself reported, if any"
-          { grep -nE "FAILURE:|What went wrong|Caused by|not specified|Script compilation" /tmp/probe.txt || echo "no failure line matched"; } | head -25
+          { grep -n "PROBE3 " /tmp/probe.txt || echo "NO PROBE3 LINES -- the probe itself never ran"; } | head -80
           echo "### the real invocation; rc is re-raised, nothing swallowed"
           set +e
           ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace > /tmp/gradle.txt 2>&1
@@ -1108,8 +1104,9 @@ jobs:
           echo "### gradlew rc=$rc, bytes: $(wc -c < /tmp/gradle.txt)"
           { grep -nE "compileSdk|^BUILD |tests completed" /tmp/gradle.txt || true; } | head -20
           if [ "$rc" -ne 0 ]; then
-            echo "### last 25 lines"
-            tail -25 /tmp/gradle.txt
+            echo "### the failure block, and the first frames under it"
+            sed -n '1,40p' /tmp/gradle.txt
+            { grep -n "at com.android" /tmp/gradle.txt || true; } | head -12
           fi
           exit "$rc"
       # CI-VARIANT-TASKS. A green Android build is not evidence that a test
