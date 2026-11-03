@@ -98,3 +98,91 @@ jobs:
           done
         env:
           PG_PORT: '5432'
+  perf01-after-load:
+    runs-on: ubuntu-latest
+    # The same service the `backend` job uses, so the storage path under test
+    # is the one the failure happened on.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.x'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Create DAFTAR database + DB roles
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 -> latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Runner facts and the service's durability settings
+        run: |
+          echo "nproc=$(nproc)"
+          cat /proc/cpuinfo | grep -m1 'model name' || true
+          free -m | head -2
+          df -h / /home/runner | tail -2
+      - name: LOAD PHASE - the kind of work that precedes the measurement in the backend job
+        run: |
+          set -u
+          echo "load starting $(date -u +%H:%M:%SZ)"
+          node_modules/.bin/vitest run tests/integration || echo "load phase exit $? (it asserts nothing here)"
+          echo "load done $(date -u +%H:%M:%SZ)"
+          psql postgres://postgres:postgres@localhost:5432/daftar -c "select pg_size_pretty(pg_database_size('daftar')) as db_size"
+          psql postgres://postgres:postgres@localhost:5432/daftar -c "select checkpoints_timed, checkpoints_req, buffers_checkpoint from pg_stat_bgwriter" || true
+        env:
+          PG_PORT: '5432'
+      - name: IO probe - durable commit versus plain round trip
+        run: node .github/diagnostics/perf01-io-probe.cjs
+        env:
+          PROBE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: The budgets suite, three times, alone in this job
+        run: |
+          set -u
+          for i in 1 2 3; do
+            echo "=== diagnosis run $i, started $(date -u +%H:%M:%SZ)"
+            if node_modules/.bin/vitest run tests/performance/accounting-budgets.test.ts; then
+              echo "run $i: SUITE PASSED"
+            else
+              echo "run $i: SUITE FAILED (expected while diagnosing; this job asserts nothing)"
+            fi
+            node -e "
+              const ev = require('./release/phase2-s8-performance-tier1.json');
+              for (const m of ev.measurements) {
+                if (!m.name.startsWith('A post')) continue;
+                const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+                console.log('run ${i} A: n=' + m.iterations + ' p50=' + m.p50.toFixed(3) +
+                  ' p95=' + m.p95.toFixed(3) + ' p99=' + m.p99.toFixed(3) +
+                  ' max=' + m.max.toFixed(3) + ' over=' + over + '/' + m.iterations);
+                console.log('run ${i} A samples: ' + JSON.stringify(m.samplesMs));
+              }
+            "
+          done
+        env:
+          PG_PORT: '5432'
