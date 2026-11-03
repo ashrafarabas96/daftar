@@ -34,7 +34,8 @@ package app.daftar.offline
  * it is stated rather than hidden: an attacker holding the database file learns
  * HOW MANY operations are pending and in which state, and learns nothing about
  * what any of them says. Encrypting the whole file instead — SQLCipher — is
- * owner decision OD-P7-01, still open. This file does not pre-empt it: the
+ * owner decision OD-P7-01, which the owner deferred to P7-04 on 2026-10-29 —
+ * a date, not an open question. This file does not pre-empt it: the
  * cipher is one seam, and moving to a whole-file cipher replaces how
  * [EncryptedQueueStore] is constructed and nothing else.
  */
