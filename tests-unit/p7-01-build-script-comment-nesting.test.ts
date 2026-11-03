@@ -107,13 +107,23 @@ function scanCommentDepth(src: string): Scan {
   return { depth, openerLines };
 }
 
-function gradleScripts(dir: string): string[] {
+/**
+ * Every file the Kotlin compiler reads in this build, not only the build
+ * scripts. The first measurement of this defect stopped at `*.gradle.kts`,
+ * which was narrower than the defect: the same glob, copied into the same
+ * prose, had also commented out the tail of `SyncEnvelope.kt`, and the android
+ * job named it the moment the module began to configure --
+ * `Expecting a top level declaration` at the line below the KDoc, and
+ * `Unresolved reference 'ENVELOPE_VERSION'` where a declaration inside the dead
+ * region was used. A guard narrower than the mechanism reads as a pass.
+ */
+function kotlinSources(dir: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(dir)) {
     if (name === 'build' || name === '.gradle' || name === 'node_modules') continue;
     const p = join(dir, name);
-    if (statSync(p).isDirectory()) out.push(...gradleScripts(p));
-    else if (name.endsWith('.gradle.kts')) out.push(p);
+    if (statSync(p).isDirectory()) out.push(...kotlinSources(p));
+    else if (name.endsWith('.kt') || name.endsWith('.kts')) out.push(p);
   }
   return out;
 }
@@ -146,26 +156,24 @@ describe('P7-01: the comment-depth count can tell the two cases apart', () => {
   });
 });
 
-describe("P7-01: every Gradle Kotlin script in the Android build closes its comments", () => {
-  const scripts = gradleScripts(ANDROID);
+describe('P7-01: every Kotlin file in the Android build closes its comments', () => {
+  const scripts = kotlinSources(ANDROID);
 
   /**
    * A count over an empty list is zero failures and no measurement (RULE-11,
-   * RULE-18). The three scripts are the root, `:app` and `:offline-kernel`.
+   * RULE-18). Three build scripts -- the root, `:app` and `:offline-kernel` --
+   * plus the kernel's own sources and suites.
    */
-  it('the scan found scripts to scan', () => {
-    expect(scripts.length).toBeGreaterThanOrEqual(3);
+  it('the scan found files to scan', () => {
+    expect(scripts.length).toBeGreaterThanOrEqual(30);
   });
 
-  it.each(scripts.map((p) => [p.slice(p.indexOf('apps')), p] as const))(
-    '%s closes every comment it opens',
-    (_label, path) => {
-      const src = readFileSync(path, 'utf8');
-      expect(src.length).toBeGreaterThan(0);
-      const scan = scanCommentDepth(src);
-      expect({ path: _label, depth: scan.depth, openerLines: scan.openerLines }).toMatchObject({
-        depth: 0,
-      });
-    },
-  );
+  it.each(scripts.map((p) => [p.slice(p.indexOf('apps')), p] as const))('%s closes every comment it opens', (_label, path) => {
+    const src = readFileSync(path, 'utf8');
+    expect(src.length).toBeGreaterThan(0);
+    const scan = scanCommentDepth(src);
+    expect({ path: _label, depth: scan.depth, openerLines: scan.openerLines }).toMatchObject({
+      depth: 0,
+    });
+  });
 });
