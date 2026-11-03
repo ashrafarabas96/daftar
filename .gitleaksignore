@@ -83,3 +83,79 @@ tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
 # The same quotation, in the decision note that explains the exception.
 # line-sha256 f7efa50dce9305f25f2882979dbdc00ea637e08403e09ef48699232b538c0bb8
 7f1d798ec72b6078ae5fcaa75359bb9e6b27f9ee:docs/decisions/2026-10-30-dr73-secret-scan-range-pin.md:generic-api-key:14
+
+# P7-GITLEAKS (DR-67 item 3). Six `generic-api-key` findings, every one of them
+# an idempotency key in a Kotlin unit test -- a UUID v4 literal assigned to a
+# `private val` inside a test class. Confirmed as synthetic test fixtures, not
+# credentials, by the wave manager, which is the confirmation DR-67 item 3
+# requires before anything here may be muted.
+#
+# Measured, not relayed: gitleaks 8.24.3 (archive and binary digests equal to
+# the ones scripts/phase3-secret-scan.ts pins) over 4d65304f..cee6cb89 scanned
+# 872,341 bytes with empty stderr and reported exactly these six and nothing
+# else; a positive control over the whole P7 history returned 14 findings, so
+# the scanner was demonstrably not blind when it returned six. Each flagged
+# line was then read from its committed blob: 60 bytes, a UUID v4, entropy
+# 3.90-4.02.
+#
+# Pinned per commit AND per path, with no pattern, no rule-wide and no
+# path-wide mute, so a new finding anywhere -- including a real key added to
+# one of these same files tomorrow -- is still reported. Four of the six live
+# in files promoted byte-identically from 9ae37881, where editing a single byte
+# would break the 27/27 sha256 match that is P7-01's evidence the kernel was
+# moved rather than rewritten; that is why the fixtures are muted here instead
+# of being changed.
+#
+# Three of the entries share one line-sha256 because the line's text is
+# character-for-character identical in those files. Expected, not an error: the
+# fingerprint discriminates by path.
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test.
+# line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+c2f51ccbed7cc08157cd71f8b9437787618009c5:apps/android/offline-kernel/src/test/java/app/daftar/offline/PersistenceCrashSafetyTest.kt:generic-api-key:50
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test.
+# line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+f492b57965d10acd1317ca9bc62c3cd6f3e4ba00:apps/android/offline-kernel/src/test/java/app/daftar/offline/SyncEnvelopeTest.kt:generic-api-key:30
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted byte-identically from 9ae37881.
+# line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+53349db1703070e425dcfc72b6260265f4d9b231:apps/android/offline-kernel/src/test/java/app/daftar/offline/CrashSafetyTest.kt:generic-api-key:15
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted byte-identically from 9ae37881.
+# line-sha256 393b8a424c7de7026d41b0acc1fab2de6d39df6fb444ad36eb008c808ddf08cf
+53349db1703070e425dcfc72b6260265f4d9b231:apps/android/offline-kernel/src/test/java/app/daftar/offline/ScopeAndSchemaTest.kt:generic-api-key:20
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted byte-identically from 9ae37881.
+# line-sha256 d126918578c03fb35ff9735f7e91376ec2a59c24e08afcc2a90641776918a31e
+53349db1703070e425dcfc72b6260265f4d9b231:apps/android/offline-kernel/src/test/java/app/daftar/offline/RecoveryTest.kt:generic-api-key:19
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted byte-identically from 9ae37881.
+# line-sha256 60fca9755ebb30a2790d4b1e1d3b4b338de2f5f9b7d7545b5974065ca9070b57
+53349db1703070e425dcfc72b6260265f4d9b231:apps/android/offline-kernel/src/test/java/app/daftar/offline/ReentryAndRetentionTest.kt:generic-api-key:36
+
+# The same six for the extracted-tree scan. scripts/phase3-secret-scan.ts reads
+# a `tree:` entry only when the line's own sha256 still equals the value its
+# reason records, so a changed line loses its exception instead of keeping it.
+# gitleaks itself reads a three-part line as a global any-commit ignore, which
+# is why these carry the `tree:` prefix: that makes them four-part lines naming
+# a commit called "tree", which never matches, so they stay inert for the
+# gitleaks-action step and apply only to tree findings.
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test. line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/PersistenceCrashSafetyTest.kt:generic-api-key:50
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test. line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/SyncEnvelopeTest.kt:generic-api-key:30
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted from 9ae37881. line-sha256 0558953b7a18bff04729dc170f81169955b1cc5401b93194f8b5e66a2045c18a
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/CrashSafetyTest.kt:generic-api-key:15
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted from 9ae37881. line-sha256 393b8a424c7de7026d41b0acc1fab2de6d39df6fb444ad36eb008c808ddf08cf
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/ScopeAndSchemaTest.kt:generic-api-key:20
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted from 9ae37881. line-sha256 d126918578c03fb35ff9735f7e91376ec2a59c24e08afcc2a90641776918a31e
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/RecoveryTest.kt:generic-api-key:19
+
+# Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted from 9ae37881. line-sha256 60fca9755ebb30a2790d4b1e1d3b4b338de2f5f9b7d7545b5974065ca9070b57
+tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/ReentryAndRetentionTest.kt:generic-api-key:36
