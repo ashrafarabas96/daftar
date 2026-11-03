@@ -1053,62 +1053,7 @@ jobs:
           # reproduce the very failure this step exists to remove.
           ./gradlew --version | tee /tmp/gradlew-version.txt
           grep -qx 'Gradle 8.9' /tmp/gradlew-version.txt
-          # DIAGNOSTIC round 2, bounded. Round 1 (run 41646314287) settled WHICH
-          # file Gradle reads, so that question is closed: the digest it printed,
-          # 5efe44153f029ba927296de8e12a07f853f4a63acce999ad4b4420857514d863, is
-          # the digest of the committed blob at HEAD; the --info log named
-          # apps/android/offline-kernel/build.gradle.kts as the build file and the
-          # repository path as the project dir; and `cat -A` showed `compileSdk =
-          # 35$` in it. The file is therefore neither a copy nor generated, and the
-          # question moves to what AGP sees. The error is raised from
-          # BasePlugin.createAndroidTasks inside afterEvaluate, which reads the
-          # `android` extension, so this init script prints that extension -- its
-          # class, its identity, the jar it was loaded from, and its compileSdk --
-          # for every project, from a callback registered before the plugin's own.
-          # `:app` configures with the same shape, so its line is the control.
-          cat > /tmp/probe.init.gradle <<'PROBE_EOF'
-          gradle.allprojects { p ->
-            p.afterEvaluate {
-              def ext = p.extensions.findByName('android')
-              if (ext == null) { println "PROBE3 ${p.path} ext=NULL"; return }
-              println "PROBE3 ${p.path} extClass=" + ext.getClass().name + "@" + Integer.toHexString(System.identityHashCode(ext))
-              p.extensions.extensionsSchema.each { s ->
-                println "PROBE3 ${p.path} schema name=${s.name} publicType=${s.publicType}"
-              }
-              ['compileSdk', 'compileSdkVersion', 'namespace', 'buildToolsVersion'].each { n ->
-                try { println "PROBE3 ${p.path} ${n}=" + ext."$n" }
-                catch (Throwable t) { println "PROBE3 ${p.path} ${n} read-failed " + t.message }
-              }
-              try { println "PROBE3 ${p.path} defaultConfig.minSdk=" + ext.defaultConfig.minSdk }
-              catch (Throwable t) { println "PROBE3 ${p.path} defaultConfig read-failed " + t.message }
-              try { println "PROBE3 ${p.path} compileOptions.source=" + ext.compileOptions.sourceCompatibility }
-              catch (Throwable t) { println "PROBE3 ${p.path} compileOptions read-failed " + t.message }
-              def txt = new String(p.buildFile.bytes, "UTF-8")
-              println "PROBE3 ${p.path} idx(*/)=" + txt.indexOf("*/") + " idx(android {)=" + txt.indexOf("android {") + " idx(compileSdk = 35)=" + txt.indexOf("compileSdk = 35")
-            }
-          }
-          PROBE_EOF
-          echo "### jvm: $(java -version 2>&1 | head -1), file.encoding from gradle.properties is explicit"
-          echo "### probe invocation -- its own exit code is NOT the gate"
-          set +e
-          ./gradlew -I /tmp/probe.init.gradle :offline-kernel:tasks --no-daemon > /tmp/probe.txt 2>&1
-          prc=$?
-          set -e
-          echo "### probe rc=$prc, bytes: $(wc -c < /tmp/probe.txt)"
-          { grep -n "PROBE3 " /tmp/probe.txt || echo "NO PROBE3 LINES -- the probe itself never ran"; } | head -80
-          echo "### the real invocation; rc is re-raised, nothing swallowed"
-          set +e
-          ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace > /tmp/gradle.txt 2>&1
-          rc=$?
-          set -e
-          echo "### gradlew rc=$rc, bytes: $(wc -c < /tmp/gradle.txt)"
-          { grep -nE "compileSdk|^BUILD |tests completed" /tmp/gradle.txt || true; } | head -20
-          if [ "$rc" -ne 0 ]; then
-            echo "### the failure block, and the first frames under it"
-            sed -n '1,40p' /tmp/gradle.txt
-            { grep -n "at com.android" /tmp/gradle.txt || true; } | head -12
-          fi
-          exit "$rc"
+          ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
       # CI-VARIANT-TASKS. A green Android build is not evidence that a test
       # ran. `lint testDebugUnitTest assembleDebug` name no project, so Gradle
       # runs them in whichever subproject HAS them, and it is not an error for
