@@ -1053,7 +1053,33 @@ jobs:
           # reproduce the very failure this step exists to remove.
           ./gradlew --version | tee /tmp/gradlew-version.txt
           grep -qx 'Gradle 8.9' /tmp/gradlew-version.txt
-          ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
+          # DIAGNOSTIC, bounded on purpose. Run 41636499507 removed the original
+          # P7-CI-GRADLE defect -- :offline-kernel is configured at last -- and
+          # configuring it fails on its own content:
+          #   A problem occurred configuring project ':offline-kernel'.
+          #   > compileSdkVersion is not specified. Please add it to build.gradle
+          # while the committed build file sets `compileSdk = 35` inside its
+          # `android {}` block. Both cannot be true of one file, so the first
+          # thing to establish is WHICH file Gradle reads. This prints that file
+          # as the runner sees it, with its digest, and keeps the --info output
+          # to the lines that name the project, so the log stays readable. It
+          # never swallows the failure: rc is re-raised.
+          echo "### build file as the runner sees it"
+          sha256sum offline-kernel/build.gradle.kts
+          sed -n '24,32p' offline-kernel/build.gradle.kts | cat -A
+          ls -la offline-kernel/
+          set +e
+          ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace --info > /tmp/gradle-info.txt 2>&1
+          rc=$?
+          set -e
+          echo "### gradlew rc=$rc, info bytes: $(wc -c < /tmp/gradle-info.txt)"
+          echo "### lines naming the project or the SDK (first 60)"
+          { grep -nE "offline-kernel|compileSdk|Evaluating project|build file" /tmp/gradle-info.txt || true; } | head -60
+          if [ "$rc" -ne 0 ]; then
+            echo "### last 40 lines"
+            tail -40 /tmp/gradle-info.txt
+          fi
+          exit "$rc"
       # CI-VARIANT-TASKS. A green Android build is not evidence that a test
       # ran. `lint testDebugUnitTest assembleDebug` name no project, so Gradle
       # runs them in whichever subproject HAS them, and it is not an error for
