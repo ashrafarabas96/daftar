@@ -36,7 +36,7 @@ package app.daftar.offline
  */
 
 /** The schema version of the envelope itself, negotiated with the server. */
-const ENVELOPE_VERSION: Int = 1
+const val ENVELOPE_VERSION: Int = 1
 
 /**
  * What leaves the device. Every field is frozen at capture and re-sent
