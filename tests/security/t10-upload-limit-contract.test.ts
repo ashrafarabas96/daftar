@@ -8,7 +8,7 @@ import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/
  * disagreement, a fake image, an unsupported type, a traversal filename, a
  * cross-business attach) and it has an "oversized file -> 413" case. That
  * case does not pin the parser, and the reason is measured, not guessed: for
- * any payload UNDER the interceptor's `8 * 1024 * 1024` (catalog.controller.ts)
+ * any payload UNDER the interceptor's `8 * 1024 * 1024` (MEDIA_UPLOAD_LIMITS.fileSize, media-upload-limits.ts)
  * the first size limit met is the media SERVICE's `MEDIA_MAX_BYTES`
  * (apps/api/src/config.ts, default 5 MiB; enforced in media.service.ts). Above
  * 8 MiB the parser is met first, but nothing in the existing suite sends that
@@ -30,22 +30,23 @@ import { createTestApp, resetData, uniqueEmail, type TestApp } from '../helpers/
  * The payloads are deliberately not images, so size is the only difference
  * between the two cases.
  *
- * KNOWN PRODUCT DEFECT, NOT FIXED HERE (pre-existing, not caused by this
- * diff; its own card, "unmapped MulterError"): a part sent under an
- * unexpected field name makes multer raise `LIMIT_UNEXPECTED_FILE`. That
- * error never becomes an `HttpException`, so the error filter's existing
- * 400 -> VALIDATION_FAILED mapping is not reached: the
- * caller gets a 500 / INTERNAL_ERROR and an `unhandled error` log line. The
- * correct contract is 400 / VALIDATION_FAILED. ONLY the wrong-field case
- * below records that reality (refused, never accepted); the no-file-part case
- * is NOT affected and asserts the real contract exactly.
+ * FORMER PRODUCT DEFECT, FIXED BY DR-71 / DR-64 (kept as history, because the
+ * wrong-field case below used to record the defect and now asserts the fix):
+ * a part sent under an unexpected field name makes multer raise
+ * `LIMIT_UNEXPECTED_FILE`, whose message ('Unexpected file field') the
+ * framework's message-keyed translation did not match, so the caller got a 500
+ * / INTERNAL_ERROR and an `unhandled error` log line. The route now owns its
+ * parser and maps by `err.code` (media-upload.interceptors.ts); the case
+ * below asserts 400 / VALIDATION_FAILED exactly. The limits themselves
+ * (files, fields, parts, fieldSize) and their controls live in
+ * tests/security/dr71-multipart-limits.test.ts.
  */
 describe('T-10 upload limits: the multipart parser refuses before the handler, at its own boundary', () => {
   let t: TestApp;
   let token: string;
   let businessId: string;
 
-  const LIMIT = 8 * 1024 * 1024; // catalog.controller.ts: FileInterceptor('file', { limits: { fileSize: ... } })
+  const LIMIT = 8 * 1024 * 1024; // MEDIA_UPLOAD_LIMITS.fileSize (apps/api/src/modules/catalog/media-upload-limits.ts)
   // The service limit, lifted above LIMIT so the parser is the first limit met (see header).
   const SERVICE_LIMIT = 2 * LIMIT;
 
@@ -114,15 +115,15 @@ describe('T-10 upload limits: the multipart parser refuses before the handler, a
   });
 
   it('a part under the wrong field name is not silently accepted as the file', async () => {
-    // `FileInterceptor('file', …)` binds one field name. A part sent under any
+    // the route's parser (MediaMultipartInterceptor) binds one field name. A part sent under any
     // other name must leave the handler with no file — the same refusal as
     // sending none, never an upload the caller did not ask for.
     const res = await t.request.post('/v1/catalog/media').set(auth()).attach('attachment', noise(64), { filename: 'x.png', contentType: 'image/png' });
 
-    // Reality, not the target contract (see the header): today this is a 500
-    // from an unmapped MulterError. What must hold either way is that the part
-    // is refused and never taken as the file.
-    expect(res.status, 'a part under another field name must never be accepted as the upload').toBeGreaterThanOrEqual(400);
+    // DR-64: this was a 500 from an unmapped MulterError; it is now the target
+    // contract, asserted exactly, and the part is still never taken as the file.
+    expect(res.status, 'a part under another field name is a client error, never a 500').toBe(400);
+    expect(res.body?.error?.code).toBe('VALIDATION_FAILED');
     expect(res.body?.id, 'no media record may be created').toBeUndefined();
   });
 

@@ -35,15 +35,23 @@ const line = (over: Partial<PostingLineCommand> = {}): PostingLineCommand => ({
 
 /**
  * A command on the GENERIC posting path, which means a source type this slice
- * does not own. `sale` stands in for the operational source a later phase
- * will register: `post` exists for that caller, and since the round-three
- * correction it refuses the three Phase-2-native types by name, so a generic
- * command can no longer be written as `manual_adjustment` even in a test.
+ * does not own. `period_close` stands in for the operational source a later
+ * phase will register: `post` exists for that caller, and since the
+ * round-three correction it refuses the three Phase-2-native types by name, so
+ * a generic command can no longer be written as `manual_adjustment` even in a
+ * test.
+ *
+ * P4-S2: this stand-in used to be `sale`, which stopped being a source "this
+ * slice does not own" the moment P4-S2 registered it with a real writer, a
+ * binding, a journal shape and a deferred completeness validator
+ * (`TL-P4-S1-R1`). `period_close` is named by `0042:63-65` as an operational
+ * source that belongs to the phase that owns it and is registered nowhere, so
+ * the generic arm of `post` keeps a subject that cannot quietly become owned.
  */
 const command = (over: Partial<PostingCommand> = {}): PostingCommand => ({
   tenantId: TENANT,
   businessId: BUSINESS,
-  sourceType: 'sale',
+  sourceType: 'period_close',
   sourceId: SOURCE,
   entryDate: '2026-03-14',
   lines: [line(), line({ account: { kind: 'system', systemKey: 'owner_equity' }, side: 'C' })],
@@ -273,7 +281,7 @@ describe('the engine binds authority to the payload (§27, §54)', () => {
 
   it('still posts a source this slice does not own', async () => {
     const { port, seen } = capturingPort();
-    await engineWith(port).post(command({ sourceType: 'sale' }), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
+    await engineWith(port).post(command({ sourceType: 'period_close' }), { actorUserId: ACTOR, branchScope: { mode: 'all' } });
     expect(seen).toHaveLength(1);
   });
 

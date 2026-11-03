@@ -72,6 +72,149 @@ export function catalogFacts(dicts: Readonly<Record<Locale, Readonly<Record<stri
   return { keys, foreign: { ar: foreignFor('ar'), en: [], tr: foreignFor('tr') } };
 }
 
+/**
+ * ── The merchant-language vocabulary, written once (T-17; P4-S1, P4-AL-52) ──
+ *
+ * These two patterns were literals inside the in-page program, the tax words
+ * spelled twice. They are now module constants, injected into the program
+ * below, so the words exist in exactly one place and a test can match the very
+ * pattern the page matches.
+ *
+ * `ACCT_JARGON_SOURCE` is unchanged, character for character, from the Phase 3
+ * `acctRe`. It is word-bounded (`\b…\b`), it includes the bare `tax`, `taxes`,
+ * `vat`, `vergi`, `kdv` and the Arabic stem `ضريب`, and it drives the
+ * **`jargon`** rule. `TAX_WORD_SOURCE` is unchanged from the Phase 3 `taxRe`
+ * and drives the narrower **`tax-control`** rule over form controls.
+ *
+ * Phase 4 inherits both exactly as they stand (P4-AL-52), and that inheritance
+ * has a consequence P4-AL-44 accepts rather than works around: because the
+ * `jargon` rule forbids the WORD, **no Phase 4 screen renders a tax field while
+ * sales tax is structurally zero**. `invoices.tax_minor` exists with
+ * `CHECK (tax_minor = 0)`, the journal shape has the tax line's place, and the
+ * invoice template's tax row arrives with the Country Pack that closes
+ * `OD-03` — at which point these words move from `jargon` into `tax-control`,
+ * which is an edit to an accepted gate and needs `OD-P4-11`'s authorisation.
+ */
+export const ACCT_JARGON_SOURCE = String.raw`\b(debit|credit|ledger|journal|cogs|ppv|valuation|carrying|posting|accrual|payable|receivable|chart of accounts|accounting|tax|taxes|vat|borç kaydı|alacak kaydı|yevmiye|muhasebe|defteri kebir|vergi|kdv)\b|مدين|دائن|قيد يومية|القيود|دفتر الأستاذ|الذمم|ذمم دائنة|محاسب|ضريب|ضرائب|القيمة المضافة`;
+export const TAX_WORD_SOURCE = String.raw`tax|vat|vergi|kdv|ضريب|ضرائب|القيمة المضافة`;
+
+/** The `jargon` rule's pattern: every accounting and tax word a merchant may never see. */
+export const ACCT_JARGON_RE = new RegExp(ACCT_JARGON_SOURCE, 'i');
+/** The `tax-control` rule's pattern: the OD-03 boundary over a field's own words. */
+export const TAX_WORD_RE = new RegExp(TAX_WORD_SOURCE, 'i');
+
+/**
+ * The two language rules as ONE program, over text and field descriptors that
+ * the page collects for it.
+ *
+ * It is a string for the same reason `INSPECT` is (see the file header), and it
+ * is a SEPARATE string so a test can `eval` it and drive the identical program
+ * from Node with planted text and planted descriptors — no browser, no stack,
+ * and no second copy of the rules to drift from this one.
+ */
+export const LANGUAGE_RULES = String.raw`(args) => {
+  const acctRe = new RegExp(${JSON.stringify(ACCT_JARGON_SOURCE)}, 'i');
+  const taxRe = new RegExp(${JSON.stringify(TAX_WORD_SOURCE)}, 'i');
+  const issues = [];
+  const jargon = [...new Set(String(args.text).split(/\n+/).filter((l) => acctRe.test(l)).map((l) => l.trim().slice(0, 60)))];
+  if (jargon.length) issues.push({ kind: 'jargon', detail: jargon.slice(0, 4).join(' | ') });
+  const taxControls = [];
+  for (const d of args.descriptors) {
+    if (taxRe.test(d.desc)) taxControls.push(d.tag + ' "' + d.desc.trim().slice(0, 40) + '"');
+  }
+  if (taxControls.length) issues.push({ kind: 'tax-control', detail: taxControls.slice(0, 4).join(' | ') });
+  return issues;
+}`;
+
+/**
+ * WHERE the two rules look, as its own program.
+ *
+ * Phase 3 read `document.body.innerText` and seven selectors. That misses a
+ * field a screen names only in an attribute, and it misses every element that
+ * presents a field without being an `<input>` — an invoice's tax column is a
+ * `<th>` and its tax total an `<output>`. P4-S1 widens the collection; neither
+ * pattern above changes.
+ *
+ * The added surfaces are headings and readouts, never prose. `<td>`, `<dd>`,
+ * `<li>`, `<summary>` and `<button>` are deliberately left out, because
+ * `TAX_WORD_RE` is a substring match and "Reactivate the supplier…" contains
+ * `vat` — six accepted Phase 3 strings do, and they render as messages and
+ * buttons.
+ *
+ * The widening cannot move a Phase 3 verdict, and that is measured:
+ * `apps/web/src` renders no `<th>`, `<output>`, `<dt>`, `<legend>`,
+ * `<optgroup>` or `<datalist>` at all and uses only the roles alert, status and
+ * radiogroup; none of the catalog keys used in a `placeholder`, `title` or
+ * `aria-label` matches either pattern; and the only catalog values that match
+ * `ACCT_JARGON_RE` are `accounting.*` ones, which no merchant screen may render.
+ * So the widening matches the empty set on every accepted
+ * ar/en/tr × phone/tablet/desktop run (`OD-P4-11`: the Phase 3 browser equality
+ * is not modified), and the first thing it will ever match is a Phase 4 tax
+ * field.
+ *
+ * It takes a `{ bodyText, querySelectorAll }` document view rather than the
+ * global `document`, so a test can drive the identical program over a handful of
+ * planted elements.
+ */
+export const COLLECT_LANGUAGE_INPUT = String.raw`(doc) => {
+  const FIELD_SURFACES = 'input, select, option, optgroup, datalist, textarea, label, output, th, dt, legend,'
+    + ' [role=switch], [role=radio], [role=spinbutton], [role=combobox], [role=columnheader], [role=rowheader]';
+  const accessible = [];
+  for (const el of doc.querySelectorAll('[aria-label], [placeholder], [title], [alt]')) {
+    for (const a of ['aria-label', 'placeholder', 'title', 'alt']) { const v = el.getAttribute(a); if (v) accessible.push(v.trim()); }
+  }
+  for (const el of doc.querySelectorAll('option, optgroup')) {
+    const v = (el.getAttribute('label') || el.textContent || '').trim();
+    if (v) accessible.push(v);
+  }
+  const descriptors = [];
+  for (const el of doc.querySelectorAll(FIELD_SURFACES)) {
+    const own = el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? '' : el.textContent || '';
+    const desc = (el.getAttribute('name') || '') + ' ' + el.id + ' ' + (el.getAttribute('aria-label') || '')
+      + ' ' + (el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('title') || '') + ' ' + (el.getAttribute('label') || '') + ' ' + own;
+    descriptors.push({ tag: el.tagName.toLowerCase(), desc });
+  }
+  return { text: [doc.bodyText].concat(accessible).join('\n'), descriptors };
+}`;
+
+/** The document view `COLLECT_LANGUAGE_INPUT` needs: the body's text, and CSS lookup. */
+export interface DocumentView {
+  readonly bodyText: string;
+  readonly querySelectorAll: (selector: string) => readonly ElementView[];
+}
+
+/** The element surface `COLLECT_LANGUAGE_INPUT` reads. */
+export interface ElementView {
+  readonly tagName: string;
+  readonly id: string;
+  readonly textContent: string | null;
+  readonly getAttribute: (name: string) => string | null;
+}
+
+/** One field surface the `tax-control` rule inspects: the element's tag, and every word the element gives a merchant. */
+export interface FieldDescriptor {
+  readonly tag: string;
+  readonly desc: string;
+}
+
+/** The `jargon` and `tax-control` rules, run in Node on the same program the page runs. */
+export function languageIssues(text: string, descriptors: readonly FieldDescriptor[]): Issue[] {
+  const run = new Function(`return (${LANGUAGE_RULES});`)() as (args: { text: string; descriptors: readonly FieldDescriptor[] }) => Issue[];
+  return run({ text, descriptors });
+}
+
+/** What the page would feed the rules for one document, run in Node on the same program the page runs. */
+export function collectLanguageInput(doc: DocumentView): { text: string; descriptors: FieldDescriptor[] } {
+  const run = new Function(`return (${COLLECT_LANGUAGE_INPUT});`)() as (d: DocumentView) => { text: string; descriptors: FieldDescriptor[] };
+  return run(doc);
+}
+
+/** Collection and rules together: exactly what the in-page inspector reports for `jargon` and `tax-control`. */
+export function languageIssuesForDocument(doc: DocumentView): Issue[] {
+  const input = collectLanguageInput(doc);
+  return languageIssues(input.text, input.descriptors);
+}
+
 /** The in-page inspector. `args`: { locale, keys, foreign, touchMin }. */
 const INSPECT = String.raw`(args) => {
   const { locale, keys, foreign, touchMin } = args;
@@ -203,17 +346,12 @@ const INSPECT = String.raw`(args) => {
     if (hits.length) add('untranslated', 'English text in a ' + locale + ' page: ' + hits.slice(0, 5).map((h) => '"' + h.slice(0, 50) + '"').join(', '));
   }
 
-  // No accounting words, no tax control (the Phase 3 screens' language rule, T-17).
-  const acctRe = /\b(debit|credit|ledger|journal|cogs|ppv|valuation|carrying|posting|accrual|payable|receivable|chart of accounts|accounting|tax|taxes|vat|borç kaydı|alacak kaydı|yevmiye|muhasebe|defteri kebir|vergi|kdv)\b|مدين|دائن|قيد يومية|القيود|دفتر الأستاذ|الذمم|ذمم دائنة|محاسب|ضريب|ضرائب|القيمة المضافة/i;
-  const jargon = [...new Set(text.split(/\n+/).filter((l) => acctRe.test(l)).map((l) => l.trim().slice(0, 60)))];
-  if (jargon.length) add('jargon', jargon.slice(0, 4).join(' | '));
-  const taxRe = /tax|vat|vergi|kdv|ضريب|ضرائب|القيمة المضافة/i;
-  const taxControls = [];
-  for (const el of document.querySelectorAll('input, select, option, textarea, label, [role=switch], [role=radio]')) {
-    const s = (el.getAttribute('name') || '') + ' ' + el.id + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' ? '' : el.textContent || '');
-    if (taxRe.test(s)) taxControls.push(el.tagName.toLowerCase() + ' "' + s.trim().slice(0, 40) + '"');
-  }
-  if (taxControls.length) add('tax-control', taxControls.slice(0, 4).join(' | '));
+  // No accounting words, no tax control (the Phase 3 screens' language rule,
+  // T-17), which every Phase 4 screen inherits unchanged (P4-AL-52). Both the
+  // collection and the rules are the module programs above, so what the page
+  // checks and what a test checks cannot drift apart.
+  const langInput = (${COLLECT_LANGUAGE_INPUT})({ bodyText: text, querySelectorAll: (sel) => document.querySelectorAll(sel) });
+  for (const issue of (${LANGUAGE_RULES})(langInput)) add(issue.kind, issue.detail);
 
   return { issues, scrollWidth: de.scrollWidth, dir: de.dir, lang: de.lang };
 }`;

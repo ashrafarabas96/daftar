@@ -122,9 +122,23 @@ const STABLE_WARMUP = 20;
 
 /**
  * NEGATIVE CONTROL ONLY. Unset in every normal run, and then inert. When set
- * to a number of milliseconds it delays every measured B iteration by that
- * much, so the p95 <= 60 ms assertion MUST go red. It exists to prove the
- * hardened measurement can still fail; it never relaxes anything.
+ * to a number of milliseconds it delays every measured iteration of BOTH
+ * hardened budgets — A and B — by that much, so `p95 <= 15 ms` and
+ * `p95 <= 60 ms` MUST both go red. It exists to prove the hardened
+ * measurement can still fail; it never relaxes anything.
+ *
+ * It covered B alone until DR-74, and nothing in CI ever set it, so the only
+ * evidence that a hardened budget could still fail was one local run of one
+ * of the two. A control nothing exercises is a control nobody has seen work.
+ * `.github/workflows/ci.yml` now runs this suite with the knob set and FAILS
+ * IF THE SUITE PASSES, and it also requires both tags below in the output —
+ * a suite that cannot start also exits non-zero, and a control satisfied by
+ * that would be green for a reason that has nothing to do with the budgets.
+ *
+ * The delay sits at the head of the measured window, where the operation's
+ * own cost sits, so the red is the budget's own assertion missing its own
+ * ceiling. Nothing about the ceiling, the iteration count or the warm-up
+ * changes when it is set.
  */
 const NEGATIVE_CONTROL_MS = Number(process.env['PERF01_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
 
@@ -415,6 +429,9 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
         'A post() in an open transaction',
         BUDGET.A_POST_P95,
         async () => {
+          // The negative control, in the same place B carries it: inside the
+          // measured window, at its head. Inert unless the knob is set.
+          if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
           const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
           await c.query('BEGIN');
           await postAs(assertionFor(command, userId), command, {}, c);
@@ -427,7 +444,10 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
         STABLE_ITERATIONS,
         STABLE_WARMUP,
       );
-      expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+      // The tag is pure ASCII and stable, and the CI negative control greps
+      // for it: an inverted run must fail on THIS assertion, not on a fixture
+      // that could not reach the budget at all.
+      expect(m.p95, `PERF01-BUDGET-A ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.A_POST_P95);
     } finally {
       await c.end();
     }
@@ -460,7 +480,7 @@ describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
       STABLE_ITERATIONS,
       STABLE_WARMUP,
     );
-    expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+    expect(m.p95, `PERF01-BUDGET-B ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
   }, 900_000);
 });
 

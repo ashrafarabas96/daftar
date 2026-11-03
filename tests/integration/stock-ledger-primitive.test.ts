@@ -261,7 +261,29 @@ describe('the request itself: shape, kind, scope and identity', () => {
 
   it('inventory.movement_kind_unknown for an unregistered kind; control: once registered and mapped in-transaction, the same kind is accepted', async () => {
     await withRolledBackFixture(async (c) => {
-      for (const kind of ['sale', 'Purchase', 'purchase ', 'fixture_receipt']) {
+      /**
+       * P4-AL-88. The first of the four cases used to be the literal `'sale'`,
+       * chosen because `stock_movement_kinds` did not hold it. `0077`
+       * registers `sale` with `qty_sign = 'negative'`, so the literal stopped
+       * being an unregistered kind: the request was refused as
+       * `inventory.quantity_sign_invalid` — correctly — and an accepted P3-S2
+       * claim went red for a reason that has nothing to do with the closed
+       * kind registry.
+       *
+       * No case is dropped and the expected refusal is unchanged. The
+       * unregistered kind is DISCOVERED from the registry instead of written
+       * down, so no later slice's registration can take it away, and the
+       * other three cases (wrong case, trailing space, a kind registered only
+       * later in this very test) stand exactly as they were.
+       */
+      const free = await c.query<{ k: string }>(
+        `SELECT k AS k FROM unnest($1::text[]) AS k
+          WHERE NOT EXISTS (SELECT 1 FROM stock_movement_kinds m WHERE m.movement_kind = k) ORDER BY 1 LIMIT 1`,
+        [['primitive_probe_one', 'primitive_probe_two', 'primitive_probe_three', 'primitive_probe_four']],
+      );
+      const unregistered = free.rows[0]?.k;
+      expect(unregistered, 'every candidate movement kind is registered, so this case has no subject').toBeDefined();
+      for (const kind of [unregistered as string, 'Purchase', 'purchase ', 'fixture_receipt']) {
         await refused(c, [req(K1, kind, '1', { unitCost: '1' })], 'inventory.movement_kind_unknown', kind);
       }
       await scratch(c, async () => {

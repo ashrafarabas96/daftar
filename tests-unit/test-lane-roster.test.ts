@@ -89,6 +89,19 @@ const ROSTER: readonly Row[] = [
     why: 'security suites, run in the same lane as integration',
   },
   {
+    dir: 'tests/guards',
+    script: 'test:integration',
+    reaches: 'tests/guards',
+    // This directory exists on the Phase 4 lineage and not on `main`, so the
+    // roster arrived here without a row for it and this law failed by name on
+    // the merge that brought the roster in - which is what it is for. The
+    // suites are guards over migrations, contracts and money readers; they sit
+    // under `tests/**`, so `tests/helpers/global-setup.ts` gives them a live
+    // PostgreSQL, which is why the integration lane runs them and the unit
+    // lane cannot.
+    why: 'Phase 4 guard suites over migrations, contracts and money readers, against a live database',
+  },
+  {
     dir: 'tests/golden-regression',
     script: 'test:golden',
     reaches: 'tests/golden-regression',

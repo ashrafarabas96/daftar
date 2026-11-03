@@ -14,21 +14,21 @@
 | TD-05 | Platform-console MFA not implemented | ASVS V4.3 partial; console is behind the internal ALB + SSO/VPN in the reference architecture | Depends on deployment controls | Phase 15 (production hardening) — earlier if the console is exposed outside the internal network | open |
 | TD-06 | No automated **browser** viewport run (phone/tablet × ar/en/tr); SSR 360px structural checks exist since P3-S7 (`apps/web/test`, T-15/T-16) | Layouts are fluid and token-based; the S7 screens are rendered in CI as SSR markup at 360px in ar/en/tr (widths, touch targets, table markup, direction), but no browser lays them out | A regression only a real layout engine shows (overflow from content, wrapping) is caught by review, not CI | Playwright screenshot job per locale/breakpoint in a later UI phase | **closed for the Phase 3 merchant web in the Phase 3 corrective pass** (2026-09-28): `npm run gate:browser` (`tests/browser/`) builds and starts the web app through its production entry against the real API and a fresh database, and drives the Phase 3 routes and flows in ar/en/tr at 360×640, 768×1024 and 1280×800 in Chromium, asserting no overflow, no raw key, no console error, a present tr string and the Tajawal face; a planted defect of each kind turns it red (`--plant=all`), it runs in CI and keeps its screenshots as artefacts. **Still open:** the Android device matrix (TD-03) and web screens added by later phases, which must join the gate in the phase that adds them |
 | TD-07 | `provisioning_assertion_uses.used_at` has no index; the opportunistic cleanup (`DELETE … WHERE used_at < now() - interval '1 hour'`) scans the table | The table holds at most the assertions of the last hour — a few rows per provisioning transaction — so no cost is measurable today. Adding a migration for a speculative optimisation during final closure is forbidden by the closure directive | None measured | Measure the table's size and the cleanup plan under production-shaped load; add an index in a normal (non-closure) migration only if the measurement justifies it. **Target (re-dated in the Phase 3 corrective pass, 2026-09-28):** Phase 15 production hardening, or earlier if a measurement shows a cost. The Phase 2 target was stale | open |
-| TD-08 | `main` has no GitHub branch protection / ruleset: required status checks, force-push block and deletion block are not configured | Not a code defect and not a Phase 1 regression — the sandbox's egress proxy refuses every repository-settings write (`403 Repository settings writes are not permitted through this proxy` and `403 Write access to this GitHub API path is not permitted through this proxy`), and the token already holds `admin: true`, so no grantable permission changes it. Recorded as `MAIN_PROTECTION_EXTERNAL_BLOCKER` | `main` currently accepts a direct push or a force-push from anyone with write access; CI still runs on every push and pull request, so a bad change is visible, just not blocked | Repository owner configures it once in GitHub: Settings → Branches → Add rule for `main` → require a pull request, require the five checks (workspaces, backend, web-admin, android, hygiene), block force pushes and deletions, leave admin bypass enabled for emergency recovery | open (external; recorded again at Phase 3 baseline — it does not block P3-S0) |
+| TD-08 | `main` has no GitHub branch protection / ruleset: required status checks, force-push block and deletion block are not configured | Not a code defect and not a Phase 1 regression — the sandbox's egress proxy refuses every repository-settings write (`403 Repository settings writes are not permitted through this proxy` and `403 Write access to this GitHub API path is not permitted through this proxy`), and the token already holds `admin: true`, so no grantable permission changes it. Recorded as `MAIN_PROTECTION_EXTERNAL_BLOCKER` | `main` currently accepts a direct push or a force-push from anyone with write access; CI still runs on every push and pull request, so a bad change is visible, just not blocked | Repository owner configures it once in GitHub: Settings → Branches → Add rule for `main` → require a pull request, require the six checks (workspaces, backend, web-admin, android, hygiene, browser — the six jobs `DAFTAR CI` runs today), block force pushes and deletions, leave admin bypass enabled for emergency recovery | open (external; recorded again at the Phase 4 baseline `6fc505d`. The repository shows no ruleset today and the branch-protection API is not reachable from this tooling, so the state is unverified from here rather than known to be configured — do not read this row as a claim that protection is in place. Until it is set externally the compensating policy is mandatory: no direct push to `main`, every change through a pull request, merge only after the required CI, no force push to `main`, no deletion of `main`. It does not block P4-S0) |
 | TD-09 | The refusal of a FUTURE-dated journal entry lives in the three posting commands (`accounting.entry_date_in_future`, migrations 0045/0046/0047), not in a schema constraint. Raw SQL by the schema owner can insert an entry dated in the future | Not a security or data-integrity defect and not reachable by any application path: every writer of the journal goes through a command, `daftar_app` holds no INSERT on `journal_entries`, and the raw-SQL matrix (`tests/security/accounting-raw-sql-invariants.test.ts`) asserts BOTH halves — the commands refuse it and the schema does not. It is a missing layer of defence in depth, discovered by P2-S8's raw-SQL matrix, not a hole in the wall | None reachable today; a future migration that writes the journal directly, or a new trusted routine, would not inherit the rule | **Repayment shape decided in P3-S0 (`docs/PHASE_3_ARCHITECTURE_LOCK.md` P3-AL-36): a `BEFORE INSERT` trigger on `journal_entries`, not a CHECK constraint.** A CHECK states a timeless row invariant, and `entry_date <= CURRENT_DATE` is a statement about the **moment of insertion**, so a row that was legal when written stays legal forever — something a CHECK cannot express. Its truth value would change underneath committed rows, so `ALTER TABLE … VALIDATE CONSTRAINT`, a `pg_dump` reload or any later revalidation could reject data the database itself accepted. And the rule is “not in the future **in the business's own timezone**”, which requires reading `businesses.timezone`; a CHECK may not read another table at all, which settles the mechanism on its own. (An earlier wording claimed PostgreSQL refuses `CURRENT_DATE` in a CHECK outright. **That is wrong and is withdrawn** — measured on PostgreSQL 16, `CHECK (d <= CURRENT_DATE)` is accepted at `CREATE TABLE`; PostgreSQL only *assumes* immutability and warns about the consequences. The decision rests on semantics and the cross-table dependency, not on a parser restriction.) The trigger instead resolves the BUSINESS's timezone, computes the current civil date there, refuses a future `entry_date` with the same stable `accounting.entry_date_in_future` the commands already raise, and carries no financial values in its message. `0049_accounting_periods.sql` already attaches `accounting_period_guard` to `journal_entries` the same way, so the pattern is precedented and no frozen byte changes. The command-level checks REMAIN — this is defence in depth beneath them, not a replacement. **Target: P3-S1, the first authorized schema slice of Phase 3.** The boundary while it is open is exact: the only principal that could insert such a row is the schema owner, which is the DEPLOYMENT credential — a credential no service loads, that appears in no runtime connection URL, and whose holder can already alter the schema at will. There is no runtime path to this, so leaving it open permits no corruption a deployment credential could not cause anyway | **CLOSED by `0058_accounting_entry_date_guard.sql`**, accepted with P3-S1 at `f1cc4c4` and frozen (the `BEFORE INSERT` trigger, `SECURITY DEFINER` owned by `daftar_accounting_internal`; the raw-SQL matrix asserts both halves refuse) |
 | TD-10 | Accounting assertions are signed with a symmetric HMAC whose secret is held by the merchant API process (`ACCOUNTING_ASSERTION_KEY`); the KMS review (`docs/PHASE_2_KMS_SIGNER_REVIEW.md`) did not close the boundary | Not a defect: the current design is the one that was accepted, and the review's own conclusion is that moving HMAC signing behind a KMS does not remove the secret from the trust boundary — it moves it from the API process to PostgreSQL. Only asymmetric signing removes it, and `pgcrypto` cannot verify Ed25519, so the change is a redesign, not a configuration | A process compromise that reads the API's environment can mint assertions until the `kid` is retired | Escalated to the Tech Lead as a design decision: adopt asymmetric assertion signing (sign in the API or a signer service, verify in the database with a public key), which needs a verification primitive PostgreSQL does not ship today. **Tech Lead decision for Phase 3, recorded 2026-09-25 (`docs/PHASE_3_ARCHITECTURE_LOCK.md` P3-AL-37): KEEP the currently accepted symmetric HMAC design. `ACCOUNTING_ASSERTION_KEY` remains EXCLUSIVE to `merchant-api` — not the worker, not `platform-api`, no second signer — because Phase 3 introduces no second signing process and all Phase 3 financial posting happens inside `merchant-api`'s accepted trust boundary. The accepted database verifier is NOT redesigned during Phase 3. This decision does not close the debt and must not be read as closing it: nothing about the boundary was solved, only bounded. Any future phase that would expose assertion signing to a second process must reopen TD-10 for architectural review BEFORE doing so.** The original repayment remains: adopt asymmetric assertion signing when a verification primitive exists. The boundary while it is open is exact: an attacker must already be executing inside the merchant API process, where they can read `ACCOUNTING_ASSERTION_KEY` from the environment. That is not a runtime authority escalation — a process that can read the key can already call the posting command with the API's own credential — and it permits no corruption of what is already written, because the journal is append-only and every entry carries its own fingerprint. Rotating the `kid` retires every assertion minted with the stolen key | open (decision, P2-S8 review; Phase 3 boundary decided 2026-09-25, debt NOT closed) |
 | TD-11 | Row-level security made the whole-business trial balance miss budget C. **The first diagnosis — a correlated `EXISTS` evaluated per row on `journal_lines` — was refuted by re-measurement at acceptance scale and is withdrawn.** Removing that subplan changed 118 828 shared blocks into 118 827 and made the report no faster. The two real causes, each measured on its own: (1) `app_bypass()`, `app_tenant()` and `app_business()` carried `SET search_path`, and PostgreSQL's `inline_function()` refuses to inline any function with a SET clause, so each was a call per row — the identical `current_setting` took 45.8 ms unwrapped and 215.3 ms wrapped, over 104 478 rows; (2) `tenant_id::text = app_tenant()` compares an expression, for which there are no statistics, so the planner estimated 522 rows out of 104 478 and chose a nested loop on that estimate | Never a security or data-integrity defect: the boundary was correct throughout and the accounting answer was byte-identical at every stage of the correction | Trial balance was ~34x slower than the same read with no policy applied, and the cost grew with the business's line count | **FIXED in `0052`**, authorized by the Tech Lead on 2026-09-24 and FROZEN on acceptance of P2-S8 at `0acf1650…72ad84`: the three helpers replaced with SQL-standard bodies marked `PARALLEL SAFE` (so no `search_path` is needed rather than merely absent), and six policies across `journal_lines`, `journal_entries` and `accounts` comparing the column instead of a cast of it. The scope is six and not one because every partial state measured SLOWER than no change at all. Measured 1 289.9 ms p50 / 118 827 blocks → **152.0 ms p50 / 213.7 p95 / 4 379 blocks**. Evidence and the explicit retraction: `docs/PHASE_2_PERFORMANCE_BASELINE.md` §5.3 | CLOSED by 0052 (accepted and frozen; `frozenThrough` = `0052_accounting_journal_lines_rls_performance.sql`) |
 | TD-12 | The accounting and provisioning key-separation checks (`apps/api/src/config.ts` `ACCOUNTING_ASSERTION_KEY` vs `PROVISIONING_ASSERTION_KEY`, `accounting-assertion.minter.ts`, `scripts/install-accounting-key.ts`) compare decoded **bytes**, and HMAC-SHA-256 treats `K` and `K‖0x00` — or a key over 64 bytes and its SHA-256 digest — as one key. Found by the P3-S1 independent security review (Low #1) | Not reachable at runtime: it needs an operator to configure two keys that differ only by trailing zero bytes, which no key-generation procedure produces. The same finding was **fixed** for the inventory key inside P3-S1 (`hmacKeysEquivalent` in `@daftar/inventory`, used by `config.ts`, the inventory minter and `scripts/install-inventory-key.ts`). The accounting/provisioning pair was left as is because it is accepted Phase 2 surface pinned by the permanent P2-S3 gate (`scripts/phase2-s3-gate.ts:412` reads its comparison shape), and P3-S1 is not authorized to change it | One careless operator could make one secret mint in both the accounting and provisioning domains | Move `hmacKeysEquivalent` to a shared package and use it for every pair of assertion keys, updating the P2-S3 gate's shape check in the same commit, when the Tech Lead authorizes it. **Affected future slice:** any slice that adds an assertion-key domain or edits key validation; no Phase 3 slice depends on it. **Non-blocking for P3-S1** because the inventory key — the only key P3-S1 introduced — is already separated by effective key | **closed in P3-S8** (`@daftar/accounting` `effectiveHmacKey`/`hmacKeysEquivalent`, RFC 2104 effective key; every key-pair site uses it: `config.ts` A↔P, I↔P, I↔A, both minters and the three install scripts; the P2-S3 gate's key-separation check evolved in the same slice; T-15a/b/c prove `K`/`K‖0x00` and a 65-byte key against its digest refused, and a planted `.equals(` turns `gate:phase2:s3` red) |
 | TD-13 | The opportunistic prune of expired assertion uses in the **frozen** `provisioning_assertion_consume` path (`0038_provisioning_assertions.sql:135`) and the accounting posting path (`0045_accounting_post_entry.sql:233`) is a plain `DELETE`, which row-locks every expired use it touches, so a consuming transaction left open makes other consumers of the same domain, in any tenant, wait until it ends. Found by the P3-S1 independent security review (Low #2) | Bounded: every application path that consumes an assertion is a short, single-command transaction, and the wait lasts only until that transaction ends; the first deleter removes the expired rows and later consumers find nothing to lock. The inventory domain's copy of the pattern was **fixed** inside P3-S1 (`0054`: only the winner of `pg_try_advisory_xact_lock` prunes; a permanent test shows a second tenant is not blocked and fails when the old `DELETE` is restored). The two older copies live in frozen migrations, so changing them needs a new migration replacing accepted Phase 2 functions | Latency coupling between tenants under a long-held consuming transaction; no data effect | A later authorized migration replaces both functions with the same advisory-lock guard (or moves hygiene to a periodic job), with the same non-blocking test. **Affected future slice:** P3-S3 and P3-S4, the first Phase 3 slices that consume accounting assertions at volume. **Non-blocking for P3-S1** because P3-S1's own consumer is fixed and P3-S1 adds no accounting or provisioning consumer | **closed in P3-S3** (`0061_inventory_movement_sources.sql`: `accounting_actor` and `provision_actor` prune only under `pg_try_advisory_xact_lock`; owner, definer, search path and ACL proved unchanged; `tests/integration/inventory-s3-prune.test.ts` shows a second consumer is not blocked, and the restored plain `DELETE` blocks with 55P03) |
 | TD-14 | The `daftar_platform` credential may install an assertion key of its choosing (`*_assertion_key_install`), and a holder of both that credential and `daftar_app` can therefore mint any assertion; `platform-api` mode does not refuse an `APP_DATABASE_URL`. Re-installing an existing `kid` also tells the caller whether a guessed secret matches (`*.assertion_key_conflict`). Informational findings of the P3-S1 security review | By design of the accepted key-install model (P3-AL-55, and the accounting model before it): installing a key is an operator act, and no single runtime credential can forge. The oracle only matters for a low-entropy key, and every key is ≥ 32 random bytes | Two credentials held together are one signing authority | Consider refusing `APP_DATABASE_URL` in `platform-api` mode, and a constant answer on `kid` conflict, in a hardening slice. **Affected future slice:** a hardening slice (Phase 15 or earlier by Tech Lead decision). **Non-blocking for P3-S1** because it is the accepted key-install model of P3-AL-55 and no single runtime credential can forge **narrowed in the Phase 3 corrective pass** (2026-09-28): `platform-api` refuses `APP_DATABASE_URL` in production (`6aa5792`, ALLOW/DENY tests), and `0070` makes `provision_assertion_key_install` write-once (the same bytes again is a no-op; different bytes, or a retired kid, is `PROV:KEY_CONFLICT`), so the platform can no longer replace an active key or reinstate a retired one. **Remaining boundary, exact:** (1) installing a new kid is still an operator act of the platform credential, so a holder of both the platform and the app credential is one signing authority — the accepted model of P3-AL-55; (2) the conflict answer still says whether guessed bytes equal an installed kid's, which matters only for a key below the ≥ 32 random bytes every install script enforces. Target: Phase 15 production hardening | open (narrowed) |
-| TD-15 | Phase 3 has no reversal of a supplier payment, credit allocation or refund (P3-S6 contract TL-2). A generic Phase 2 reversal of an S6 entry is refused (`accounting.reversal_source_domain_owned`), because it would leave the allocation row standing and AP counted twice. PM-12's stated recovery ("reverse the offending allocation through the atomic reversal path") therefore has no path in Phase 3 | Not a defect: the lock (P3-AL-28, P3-AL-31) asks for no settlement reversal, and refusing the generic reversal is what keeps AP exact. It is a missing correction workflow, not a hole in an invariant | A mistaken supplier payment or allocation stays posted; the merchant corrects it only by a later slice | Add `supplier.reverse_payment` (the DM §7 `reverse_payment_allocation` shape), releasing the allocation and posting the Phase 2 reversal in one transaction. **Affected future slice:** owned no later than the Phase 4 settlement and customer-payment work, which brings the twin (Tech Lead, Phase 3 corrective directive §14, 2026-09-28). **Non-blocking for P3-S6** because no Phase 3 must-prove requires it and the refusal is tested | open (P3-S6 TL-2) |
+| TD-15 | Phase 3 has no reversal of a supplier payment, credit allocation or refund (P3-S6 contract TL-2). A generic Phase 2 reversal of an S6 entry is refused (`accounting.reversal_source_domain_owned`), because it would leave the allocation row standing and AP counted twice. PM-12's stated recovery ("reverse the offending allocation through the atomic reversal path") therefore has no path in Phase 3 | Not a defect: the lock (P3-AL-28, P3-AL-31) asks for no settlement reversal, and refusing the generic reversal is what keeps AP exact. It is a missing correction workflow, not a hole in an invariant | A mistaken supplier payment or allocation stays posted; the merchant corrects it only by a later slice | Add `supplier.reverse_payment` (the DM §7 `reverse_payment_allocation` shape), releasing the allocation and posting the Phase 2 reversal in one transaction. **Affected future slice:** owned no later than the Phase 4 settlement and customer-payment work, which brings the twin (Tech Lead, Phase 3 corrective directive §14, 2026-09-28). **Ownership fixed in P4-S0 (Tech Lead, 2026-09-30):** TD-15 is no longer optional — a named Phase 4 slice must close the supplier payment / allocation reversal in one atomic transaction that keeps AP exact, and Phase 4 may not close with TD-15 unowned. See `docs/PHASE_4_ARCHITECTURE_LOCK.md`. **Non-blocking for P3-S6** because no Phase 3 must-prove requires it and the refusal is tested | open (P3-S6 TL-2) |
 | TD-16 | A frozen P3-S5 partial return can leave a purchase with a sub-unit AP residue: `0066` releases `least(C, O)` and leaves `O − ap` under no residue rule, so with a pilot currency (TRY in an ILS business at 0.11) 1 kurus can remain that converts to 0 agora (P3-S5 review L2, P3-S6 review M1, `0067` R-69 (b)). On such a purchase every settlement path refuses: pay or allocate `0 < a ≤ O` → `…amount_below_base_unit`; `a > O` → `…amount_exceeds_outstanding`; a return of the remaining goods → `supplier_return.amount_below_base_unit`; a reversal → `purchase_reversal.returned` | Not a hole in an invariant: AP stays exact in txn and base, and no command can post a base-0 line (0042, 0043). P3-S6 never creates such a residue itself (R-77, R-78) | The purchase stays open for an amount below one base unit; it cannot be closed from the merchant UI | A bounded write-off command (`purchase.write_off_residue`) that clears a txn-only residue whose base conversion is 0, posting nothing in base and recording the txn release, behind `suppliers.pay`. **Affected future slice:** Phase 4 or a Phase 3 corrective slice authorized by the Tech Lead. **Non-blocking for P3-S6**: the residue is reachable only through a pilot-currency partial return, the refusals are stable and tested (`settlement-s6-residue`) | **closed in the Phase 3 corrective pass** by `0072_purchase_sub_unit_residue.sql` (2026-09-28): R-95 refuses any supplier return that would leave `0 < outstandingTxn` with `outstandingBase = 0` (`supplier_return.residue_below_base_unit`), so no Phase 3 path creates a new residue; R-96 `purchase.write_off_residue` (`POST /v1/purchases/:id/residue-write-off`, `suppliers.pay`) closes an existing residue only when it converts to 0 base minor units, idempotently, dated no earlier than the purchase's last AP release, posting Dr AP / Cr FX gain when a base remainder of the line exists and no entry otherwise; the purchase screen offers it as “Close the leftover amount”. `0065`–`0068` are unchanged. Proof: `tests/integration/p3c-td16-residue-closure.test.ts` (the 0.11 TRY-in-ILS reproduction RED on the old head), in `gate:phase3:corrective` |
 | TD-17 | There is no stored stock rebuild swap. A cache row that disagrees with its movements is repaired by a rehearsed incident migration (`infrastructure/database/procedures/stock-rebuild-swap.sql.template`: a `DO` block under `SET LOCAL ROLE daftar_inventory_internal` that locks the key, folds, updates the four columns in one statement and re-verifies), never by a runtime command (P3-S8 contract A-13, TL-1) | A stored routine that writes `stock_levels` would either need its own operation kind and a runtime path to a cache writer no merchant command needs, or be a permanent exception to the signed-writer law S8 makes exact | A drifted key waits for a reviewed migration instead of an operator command; R-INV-02 and `inventory_stock_verify` detect it; T-09 rehearses detect, swap and re-verify at scale | Add an instantiation script that validates the key UUIDs, and a gate check that any migration carrying `SET LOCAL ROLE daftar_inventory_internal` plus `UPDATE stock_levels` equals the template modulo its key rows (S8 review I-6); a runtime rebuild would need its own registered kind (L:1992). **Target (set in the Phase 3 corrective pass, 2026-09-28):** Phase 15 production hardening, before the first production incident runbook is adopted | open (P3-S8 contract A-13) |
 | TD-18 | Four pre-Phase-3 `SECURITY DEFINER` routines are owned by whoever applies the migrations, because `0037`–`0039` create them without `OWNER TO`: `catalog_identifiers_sync()`, `provision_actor(text[])`, `provision_assertion_key_install(text, bytea)`, `provision_assertion_key_retire(text)`. On CI the superuser owns them and bypasses row-level security; on a deployed database `daftar_migrator` owns them and row-level security binds them. Three of them (`0038:59`, `0038:69`, `0039:59`) pin `search_path = public, pg_catalog` without naming `pg_temp`, so PostgreSQL searches `pg_temp` first for tables; `provision_actor` was corrected in `0061`. Found by the P3-S9 deployed rehearsal and security review (SR-3, SR-4) | Not reachable: no runtime role and not `PUBLIC` holds `TEMPORARY` (deployment matrix 11.4, 11.9, 11.10, both builds), CREATE on `public` is the deployer's alone, and every production path through the four passes on the deployed build (`docs/PHASE_3_S9_RELEASE.md` §5). The deployed build is the stricter one, so the CI difference fails closed | A path through these routines that works on CI and fails in production is caught only by the deployed rehearsal's pinned suites, not by the per-push suites | A forward migration, under a Tech Lead directive, that hands the four to a NOLOGIN internal owner and sets `search_path = pg_catalog, public, pg_temp`; and a CI test database built as `daftar_migrator`. Until then `APPLIER_OWNED_DEFINERS` pins the four (deployment matrix 10b, rehearsal 7.3). **Affected future slice:** the first slice that touches catalogue identifiers or provisioning. **Non-blocking for Phase 3**: the defence is TEMP = 0 for every runtime principal, which two gates assert | **closed in the Phase 3 corrective pass** by `0070_definer_ownership_hardening.sql` (2026-09-28): the four routines are owned by the NOLOGIN internal roles `daftar_catalog_internal` and `daftar_provisioning_internal`, carry `search_path = pg_catalog, public, pg_temp` with every relation schema-qualified, PUBLIC EXECUTE revoked and only `daftar_platform` granted the three provisioning routines; 13 further definers had the same path pinned, and `check:deployment-authority` 10b.5/10b.6 asserts that no SECURITY DEFINER routine is owned by the applier and every one names `pg_temp` last. Proof: `tests/security/p3c-td18-definer-ownership.test.ts` (RED with an owner reverted to the applier), the deployment matrix and the deployed rehearsal on both builds |
 | TD-19 | The web BFF calls the API without the client's address: `apps/web/src/app/api/auth/refresh/route.ts`, `…/auth/login/route.ts` and the proxy route set no `X-Forwarded-For`, so the API's per-IP limits (`auth.service.ts:36` refresh 60, `:23` login 30, per 5 minutes) count every user behind one web server as one client. The refresh route also turns any API failure, a 429 included, into a 401 and deletes the refresh cookie. Found by the P3-S9 real-browser pass, which was logged out at the 61st page load of a 5-minute window; a direct probe returned 429 `RATE_LIMITED` | Phase 1 code, outside the Phase 3 screens; no data effect. The API already resolves the client address through `TRUSTED_PROXIES` (`apps/api/src/common/client-ip.ts`), so the defect is only that the BFF does not supply it | In a deployment where the web server calls the API directly, about 60 page loads across all users in 5 minutes log every user out, and 30 logins lock out login for everyone | The BFF forwards the client address (`X-Forwarded-For`), the deployment lists the web server in `TRUSTED_PROXIES`, and the refresh route answers a 429 as a retryable failure without deleting the cookie; a test drives 61 refreshes through the BFF. **Affected future slice:** before any deployment with real users; a Tech Lead decision, since it changes Phase 1 auth code. **Non-blocking for Phase 3**: no Phase 3 surface is involved | **closed in the Phase 3 corrective pass** (2026-09-28): web and admin start through `server.mts`, which appends the peer address to `X-Forwarded-For` and stamps the upstream call with a boot secret; `lib/bff-upstream.ts` forwards the chain only with that stamp, so a client cannot spoof it; the API's `clientIp()`/`TRUSTED_PROXIES` stay the authority, the per-route allowance is keyed by `clientIp()` (IPv6 by /64), and production refuses `TRUST_PROXY=true`. Refresh answers 429 and 503 as retryable and keeps the cookie; only 400/401 clear it. Proof: two clients behind one BFF keep separate allowances, 61 refreshes RED before the fix, spoofed XFF refused, in `gate:phase3:corrective`. The lost-answer refresh case is TD-21 |
 | TD-20 | Two small interface items from the P3-S9 real-browser pass: (1) once a business's single inventory opening is posted, Adjust still offers "Starting stock", which the server then refuses with "Starting stock was already recorded for this item" although the rule is per business; (2) the default warehouse created at onboarding is named "Main warehouse" in English in every business, the Arabic one included (`0038:258`, frozen) | Cosmetic; the server refuses correctly and no data is affected | A merchant sees an option that cannot succeed, and an English warehouse name in an Arabic business | Hide or disable Starting stock once the business's opening exists, with a message that names the per-business rule; name the default warehouse through the catalog in the business's locale (a forward migration or a rename at onboarding). **Affected future slice:** the next merchant-UX slice. **Non-blocking for Phase 3** | **closed in the Phase 3 corrective pass** (2026-09-28): `GET /v1/inventory/access` returns `openingPosted`, and Adjust shows Starting stock disabled with the per-business rule once the opening exists; `0073_default_warehouse_locale_name.sql` names a new business's default warehouse in its locale and renames an existing default only while it still carries the untouched English name. Proof: `p3c-inventory-access-opening`, `p3c-td20-default-warehouse-name`, the web tests and the browser gate in ar/en/tr |
 | TD-21 | Refresh after a lost answer: when the connection to the API drops after the API has rotated the refresh token, the BFF sees no response (`fetch` rejects), cannot tell it from an unreachable API, and keeps the cookie; the next refresh presents the already-consumed token, trips reuse detection and ends the session. Found by the Phase 3 corrective BFF review (L-1) | Not a security defect: reuse detection fails closed, which is the safe direction, and no token is accepted twice. It is a usability cost of the strict rotation model | A user whose connection drops at exactly that moment is logged out and signs in again | A short grace window in the API for the immediately previous token of the same family (answering it with the already-issued successor once), with its own reuse test; a change to accepted Phase 1 auth semantics, so a Tech Lead decision. **Target:** Phase 15 production hardening, or earlier if field reports show it | open (Phase 3 corrective review L-1) |
-| TD-22 | Two Visual North Star shortfalls from the Phase 3 corrective browser review that belong to the design system, not to a screen: (1) the design-system button's radius and height are below the tokens in the design document; (2) the published Tajawal subsets (`@fontsource/tajawal` arabic and latin, U+0000–00FF plus U+0131) do not cover the Turkish letters ğ, ş and İ, so the browser draws those in a fallback face; OD-06 names Inter as the companion | A design-system decision, not a defect: every Phase 3 screen passes the browser gate in ar/en/tr with no overflow and a readable fallback | Buttons slightly smaller than the design document draws them, while every target stays at or above the `TOUCH_TARGET` token the browser gate enforces; mixed faces inside a Turkish word | Align the button tokens and adopt the OD-06 companion face in one design-system change with the browser gate re-run. **Target:** the next design-system slice, before Phase 6 storefront | open (decision) |
+| TD-22 | Two Visual North Star shortfalls from the Phase 3 corrective browser review that belong to the design system, not to a screen: (1) the design-system button's radius and height are below the tokens in the design document; (2) the published Tajawal subsets (`@fontsource/tajawal` arabic and latin, U+0000–00FF plus U+0131) do not cover the Turkish letters ğ, ş and İ, so the browser draws those in a fallback face; OD-06 names Inter as the companion | A design-system decision, not a defect: every Phase 3 screen passes the browser gate in ar/en/tr with no overflow and a readable fallback | Buttons slightly smaller than the design document draws them, while every target stays at or above the `TOUCH_TARGET` token the browser gate enforces; mixed faces inside a Turkish word | Align the button tokens and adopt the OD-06 companion face in one design-system change with the browser gate re-run. **Target:** the next design-system slice, before Phase 6 storefront. **Bound in P4-S0 (2026-09-30):** Phase 4 is that next design-system slice, so TD-22 is bound to the Phase 4 UX slice; see `docs/PHASE_4_ARCHITECTURE_LOCK.md` | open (decision) |
 
 ## Closed during the Phase 1 closure (were defects, fixed — listed for traceability, not debt)
 
@@ -45,3 +45,341 @@
 ## Deferred decisions (not debt — see docs/DAFTAR_OPEN_DECISIONS.md)
 
 - OD-02 WhatsApp provider · OD-03 country tax rules · OD-04 payment gateways · OD-07 currency revaluation.
+
+## Phase 4 money cards and decisions (tracked record — DR-24)
+
+> **This section is not debt and nothing in it is accepted as debt.** The register above
+> forbids recording accounting, security or data-integrity defects, because those are fixed
+> immediately (Master §137) — and the first row below was fixed, not accepted. DR-24 (owner,
+> 2026-10-27) nevertheless requires every money card and every code-touching decision to have
+> a record in a **tracked** file inside the PR that carries it: `.local-context/` is notes
+> only, and a comment in tracked code pointing at an untracked note is a pointer nobody who
+> clones this repository can follow — which is itself how a money defect goes quiet. So this
+> is that tracked record: the card, the decision that settled it, what was changed, and what
+> is still unmeasured.
+>
+> **هذا القسم ليس دينًا تقنيًا.** هو السجل المتتبَّع الذي يفرضه DR-24 لبطاقات المال وقراراتها،
+> ويذكر صراحةً ما لم يُقَس بعد.
+
+| Card | Decision | What it was | Resolution | What is still NOT measured |
+|---|---|---|---|---|
+| `OVERPAY-AGING` | **DR-23** (owner, 2026-10-27): a credit balance arising from an overpayment never leaves the aging report — it appears **explicitly as a customer credit, a visible negative value**, never clamped and never folded into zero, and **the bands total net receivables exactly** | An invoice under an **active** installment plan with a **negative** outstanding (an overpayment) contributed **nothing** to `customer_ar_aging`. `installment_schedule_verify()` holds `down + Σ instalments = total` by strict equality, so `schedule_total = total` always; the body's levels are `least(greatest(c, paid), total)`, so when `paid > total` every level collapses to `total`. Arm (a)'s consecutive differences were then all zero and `declared_end = total` zeroed arm (b)'s residual — so the customer's credit left the report **by omission rather than by payment**, and the bands stopped totalling the authoritative outstanding. Reachable with **no guard weakened**: the invoice total is immutable and a payment does not touch `installments` (total 1000, schedule 1000, paid 1200 ⇒ `O = −200`) | **Fixed**, not registered. The deviant artefact was the **specification's** body (`infrastructure/database/specifications/p4s7-installment-aging.spec.sql`), which replaces `0084`'s `customer_ar_aging` under the same signature; `0084`'s own body has no plan arm, no levels and nothing to clamp, so it needed no change (measured by `dr23_7`). DR-23 ruled the **reference model** correct and the body deviant, so the body now carries the model's totality arm as its `degenerate` CTE — `oi.outstanding_txn_minor <= 0 OR oi.total_txn_minor <= 0 OR oi.total_base_minor <= 0` — gated at `active_plan` with a `NOT EXISTS` over that CTE, so the schedule arms are structurally unable to run for such an invoice, and arm (d) emits the **authoritative** pair at the document's own date `coalesce(due_date, issue_date)`. The four arms now partition the open invoices by two bits of the invoice's own row. The pinned body digest in the end-state block moved with it | **The INSTALLED routine's behaviour: NOT_RUN.** Nothing executes SQL without PostgreSQL, and every suite under `tests/**` loads it through an unconditional `ensurePostgres()`. The evidence today is the **model**, executed (`dr23_1`–`dr23_4`), and the body's **text**, judged over code with comments blanked (`dr23_5`–`dr23_7`, `dr23_6` the negative control). The live assertion owed is the same fixture asked of the installed function and expected to answer `−5 000`, plus the band total on a mixed-sign portfolio — owed by the seal run (DR-26), not implied here. The number of documents affected in any existing data is **UNKNOWN**: it needs a query for invoices with an active plan and a negative outstanding. <br><br>**A limit the phrase "never clamped" does not reach — and it is more than a footnote, so it has its own entry below as `CARRY-CONSERVATION-R81`:** a row with `outstanding_base_minor < 0` while `outstanding_txn_minor > 0` is **not** routed to arm (d) — all three disjuncts are about the transaction figure and the two totals — so it takes the schedule arms, where the carrying share is **re-derived** by `supplier_ap_release` and need not equal the authoritative figure. **Measured** on the reference model: a row carrying `txn +10, base -10` reports `base +8`, and `dr23_13` now **pins that figure** so the word "measured" here is reproducible rather than recalled. The reference model carries the **same** condition, so there is **no model/body divergence** and nothing here deviates from the ruling — the finding is **pre-existing and not attributable to this card**. **Its reachability is NOT_MEASURED:** whether `invoice_outstanding` can produce that sign pairing at all needs a database. <br><br>**S-17 (DECIDED by DR-30, 2026-10-27) — does a TERMLESS credit balance age from the issue date at all?** DR-21 governs an amount that is *due*, and a credit balance is not due, so this placement was implemented with no decision over it. **DR-30 settles it:** the governing principle is that **no debt leaves the aging report except by payment**, an amount ages from `coalesce(due_date, issue_date)`, and a **scheduled instalment ages from its own due date**. The reading consistent with that principle is adopted — and that is the reading already implemented (`coalesce(due_date, issue_date)`, consistent with arm (c) and with the reference model). `dr23_8` and `dr23_9` pin it, and their failure messages now name **DR-30** as the rule in force, with DR-21 and DR-13 as the placement rules it rests on, instead of announcing a rule as broken — the pattern `dr23_13` already uses. **Nothing changed in any assertion, figure or band when DR-30 was recorded:** it adopted the behaviour as implemented, which is why this is a record and not a repair. What DR-30 does **not** settle: how a credit is *presented* (S-18, below, closed by DR-27) and whether `invoice_count` is additive (**S-19 stays open**, and is DR-29’s subject). <br><br>**S-18 (DECIDED by DR-27, 2026-10-27) — what does “explicitly as a customer credit” mean in the output?** DR-23 requires the credit to appear explicitly. This implementation renders it as a **negative value inside an aging band**, not as a separate presentation line or its own field: the invoice is counted in that band’s `invoice_count`, and a band total may itself be negative. **DR-27 settles it:** the credit **stays in its own document’s band (by that document’s date) as a visible negative value, as in standard accounting aging reports**, with the overall net unchanged from DR-23. ⇒ the negative value inside the band **is** the explicit presentation; no separate presentation line is owed, and a band whose TOTAL is negative is acceptable output — which is what `dr23_4` measures. DR-27 also forbids any **automatic** allocation of a credit to other invoices: applying it is an explicit merchant action, recorded as an allocation entry, and belongs to card `PAY-ALLOC` after the seal. So the implemented rendering is decided, not merely implemented — and the questions DR-27 leaves standing are not S-18’s. <br><br>**THE DELIVERABLE DR-27 ENDS WITH IS NOW MET — and it was owed at the moment this row first said «DECIDED».** DR-27 closes with «ويُضاف اختبار يُثبت أن موقع الدائن في الخانة لا يتغيّر بالتبويب» — a test proving that the credit's position in its band does not change with bucketing. That test was not written while this row already recorded the decision as settled; an independent review of PR #24 raised the omission and the owner confirmed the finding (`OWNER_DECISIONS_AR.md`, **DR-27 «مستحقّ مؤكَّد»**, 2026-10-27). Recording a decision while silently dropping its deliverable is how a requirement disappears, so the deliverable is named here rather than assumed. **The test:** `packages/domain-core/test/phase4-s7-installment-aging.test.ts`, block «DR-27 a credit's position in its band is a function of its own document, not of the bucketing», cases `dr27_0` through `dr27_5`. It first states the property in a form that can be falsified — for a credit on document D, the band, the transaction amount, the carrying amount and the date the projection SAYS it placed D at are a function of D's own date and D's own value and of nothing else — and then pins the three «nothing else» clauses: (1) **not the other documents, and not their order** (`dr27_1`: the same credit asked alone and asked inside a portfolio gives the identical contribution, including with a debt in the credit's own band, with a debt above 2^53 in that band, and with the documents processed in reverse); (2) **not the bands' totals** (`dr27_2`: adding the credit changes EXACTLY its own band, by exactly its own figures, on both the transaction and the carrying side, and no other band by one minor unit — this is the clause an oldest-first automatic allocation breaks while leaving the NET identical, so no conservation law can see it and a difference law can); (3) **not the choice of thresholds** (`dr27_3`: a hand-written table of seven sets — the standard set, the same set permuted, coarser, coarsest, finer, a threshold ON the credit's own age where `>` is strict, and a threshold beyond it — under each of which the amount, the carrying amount and the reported date are unchanged and the band is the one the credit's own age earns, computed by hand rather than by a second call to the banding function). `dr27_4` is the **converse**, without which all three are satisfied by a projection that answers one band for every credit: the credit's OWN date must move it, over every standard boundary, on each side and ON it, inside a portfolio held fixed. `dr27_5` is the **positive control** — under the retired pre-DR-13 placement rule, reached through the `termlessFallback` policy knob and therefore needing no edit to any file, the same credit in the same portfolio lands in band 1 with no date at all. **No existing assertion, figure or band was changed; the block is additive.** **What it does NOT establish, stated rather than implied:** the INSTALLED SQL body is not executed — there is no database in this package — so the live assertion remains owed by the seal run (DR-26) and is **NOT_RUN**; the two wrong implementations DR-27 is actually about, a credit **allocated across bands** and a credit **moved by a neighbour**, are expressible through no policy knob, so they are planted by hand and the plant with its named failure belongs to this card's evidence rather than to a committed case; and **`invoiceCount` is asserted nowhere in the block**, because whether that counter is additive across bands is **S-19, which stays OPEN** as DR-29's subject and must not be decided here by accident. ⇒ **DR-27 has no part left unmet in this repository's own tests.** What remains for it is the live run above, and the merchant-initiated application of a credit, which DR-27 itself defers to card `PAY-ALLOC` after the seal. <br><br>**S-19 (OPEN FOR THE OWNER) — is `invoice_count` additive across bands?** One termless invoice under an active plan is counted in two bands under DR-21. **The money is partitioned, not duplicated** — `dr23_4` asserts that on both the transaction and the carrying side — but the document IDENTITY is repeated. This does not contradict the warning the project already carries: the routine’s own `COMMENT` in `infrastructure/database/specifications/p4s7-installment-aging.spec.sql` states that "an invoice may now appear in SEVERAL buckets, so `invoice_count` is `count(DISTINCT invoice_id)` and the sum of `invoice_count` over the buckets may exceed the number of open invoices", and the consumer note beside it says the same. So the **behaviour** is documented; what **no decision** states is whether that counter is contractually **non-additive**, which is what a client summing it would need to be told. |
+| `DR-13-MIG` | DR-03 freezes `0080`–`0086` as candidates; `frozenThrough` stays `0079` | `0075:809` and `0083:394` still carry, in live code, `WHERE i.due_date IS NOT NULL AND (p_as_of - i.due_date) > t.threshold` — the guard DR-13 retired. The end state is sound because `0084` drops the routine and recreates it with `coalesce(due_date, issue_date)`, **but any database applied only as far as `0083` carries the money defect** | **Open.** Outside this card's ownership (migrations, frozen as candidates by DR-03). The condition is to be stated explicitly in the deployment document, or handled if `0080`–`0086` are unfrozen | Whether any environment is sitting at `0083` or below: **UNKNOWN** |
+| `DR-21-PRESENT` | Pending owner — it changes a figure the merchant reads | `apps/api/src/modules/selling/customer-reads.ts:488` is `CASE WHEN o.due_date IS NULL THEN NULL ELSE ($3::date - o.due_date) END AS days_past_due`, so a termless invoice shows in the `over-90` band of the aging report and as `—` on the open-invoice page. By DR-21 the debt **is** overdue and is measured from the issue date, so the page hides an age the report asserts | **Open.** Outside this card's ownership. Likely repair `$3::date - coalesce(o.due_date, o.issue_date)`, by owner decision | Not measured against a database |
+| `CARRY-CONSERVATION-R81` | None yet — it needs one. Proposed owner `daftar-finance`, **double review required** (money) | **A breach of the carrying-amount conservation law the routine itself asserts.** The aging routine’s `COMMENT` in `infrastructure/database/specifications/p4s7-installment-aging.spec.sql` states that each row’s carrying share is taken through `supplier_ap_release`, "the canonical cumulative carrying-value law (R-61, R-81)", so that the base shares "likewise total `outstanding_base_minor` EXACTLY". On one input they do not. A row whose TRANSACTION outstanding is positive while its CARRYING outstanding is negative is not degenerate — the totality arm’s three disjuncts are about the transaction figure and the two totals — so it takes the schedule arms, the carrying share is re-derived over a window the law assumes positive, and the reported figure is `+8` against an authoritative `-10`: **opposite in sign**, not a rounding difference | **Open, and deliberately not repaired here.** It is **pre-existing and NOT attributable to `OVERPAY-AGING`**: the reference model carries the **same** condition as the SQL body, so there is no model/body divergence to choose between, and the behaviour predates the totality arm entirely. Repairing it means deciding what a negative carrying amount MEANS in a carrying-value release — an accounting question, not a programming one. What this card did do is **pin** today’s answer: `dr23_13` in `packages/domain-core/test/phase4-s7-installment-aging.test.ts` asserts the `+8`, states in its title that it records an asymmetry rather than approving it, and tells the repairing card to rewrite it. Two plants were measured against it: adding `outstandingBaseMinor < 0` to the arm’s condition, and shifting the re-derived share by one minor unit — each made it red **by name** | **Reachability: NOT_MEASURED.** Whether `invoice_outstanding` can produce a positive transaction outstanding beside a negative carrying one needs a database: it is computed from the reducer set and carries no `CHECK`, so nothing in the schema forbids it, and nothing measured shows it occurring. **The effect on any existing data is UNKNOWN** for the same reason |
+
+### Accounting questions this section raises and does not decide
+
+- **A net-zero customer is present in one reader and absent from the other.** `customer_ar_outstanding`
+  (`0084`) ends `HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0`, so a customer whose credits
+  exactly offset their debts returns **no row at all** from the receivable reader — while
+  `customer_ar_aging` has no such `HAVING` and still reports the offsetting bands, which now net to
+  zero rather than one of them vanishing. Both readers are internally consistent with DR-23 and with
+  each other's totals; what differs is **presence**. Whether a customer at net zero should disappear
+  from the receivable list while still appearing in the aging report is a presentation decision about
+  a figure the merchant reads, so it belongs to the owner and is **not** settled here. It is the same
+  family as `DR-21-PRESENT` and was measured, not inferred.
+- **A credit under a plan is aged by the DOCUMENT and not by the schedule.** The totality arm places
+  the whole credit in one band at `coalesce(due_date, issue_date)`, so an overpaid invoice with
+  future-dated instalments shows its credit against the document's age. This is the reference model's
+  behaviour and DR-23 adopts the model, so it is **decided** — recorded here only because it is an
+  unusual sight in an aging report and a reader may take it for a defect.
+
+### Open after the Phase 4 seal (2026-10-31, merge commit `58d24469739a2bc36346676637281f7a8951171b`)
+
+These are the follow-ups the seal explicitly does not close. None of them is an
+accounting, security or data-integrity **defect** — those are fixed and never
+registered. Each is either coverage not yet written, a limit of the tooling, or
+behaviour that is intended and recorded so it is not mistaken for a gap.
+
+**TD-23 — the eleven moderate advisories are untriaged.** `npm audit
+--audit-level=high` exits **0** on the sealed tree and `--audit-level=moderate`
+exits **1** reporting **11 moderate** advisories. The accurate statement is
+therefore **zero high and zero critical**, never "zero vulnerabilities": the
+zero is produced by the threshold and not by the tree, and the second command is
+the positive control proving the eleven are really there. *Why it is debt and
+not a defect:* the release gate is the high/critical threshold and it passes.
+*Repayment:* triage each advisory by **affected path actually used**, not by
+published severity — a generically moderate advisory can be high *here* if its
+path touches money or tenant isolation, and a generically high one can be
+irrelevant if the path is never reached. The card carries its own non-vacuity
+check: `--audit-level=moderate` must still exit non-zero, or the eleven are not
+where we think they are.
+
+**TD-24 — the request throttler counts per process, and must be settled before
+any launch.** The limiter holds its counters in process memory, so **each
+replica counts its own allowance**: the effective production limit is the stated
+limit multiplied by the replica count, and that count changes under autoscaling.
+A written policy of "N requests per client per minute" therefore becomes a
+ceiling the operator cannot state. This surfaced because the hardened
+measurement itself tripped the production limit — two magnitudes of 220 requests
+against one handler's allowance of 300 a minute — and the fix clears the counter
+between measurements. **That reset depends on the store being in process, and
+nothing in the tree pins it**, so moving to a shared store would break it
+silently and the returned rate-limit answers would read as a performance
+regression rather than as a changed store. *Repayment:* decide the store, or
+state explicitly and where an operator will see it that the limit is per
+replica; then add a law that pins the store or makes the reset fail loudly when
+it changes. **This one is not deferrable past a launch.**
+
+**TD-25 — the two budget negative controls are silent on success.** They invert
+the exit code and additionally require each budget's tag in the output, so a
+suite that cannot start fails them rather than satisfying them, and both ran in
+the decisive run for the first time ever. But they redirect the suite's output to
+a file and check tags with quiet greps, so **their logs hold no evidence of their
+own.**
+
+**⚠️ Two corrections to this card (DR-81, 2026-11-01), from the same external
+review.**
+
+1. **The duration inference is deleted, not softened.** This card read the
+   durations (109 s and 85 s) as part of a sound deduction that the controls ran
+   their sample loops. **That does not follow, and the log cannot repair it** —
+   measured on run `41248454929`, whose two control steps occupy
+   `00:56:24Z → 00:58:08Z` and `00:58:08Z → 00:59:30Z`, a search of those windows
+   for a sample count returns **zero lines** (the `200 samples` lines sit at
+   `00:59:39Z`, after both windows close, in a later step). ⇒ **the sample count
+   is not recoverable from the log**, and a duration is equally consistent with
+   completed loops and with a slow start. What is proven is the inverted exit
+   code plus tag presence, and nothing more.
+2. **The controls match the tag, and only the tag.** They match **neither the
+   budget's name, nor the measured value, nor the ceiling** ⇒ **any** failure of
+   that assertion, for **any** reason, satisfies them. So they prove *"this
+   assertion can fail"*, **not** *"this budget can detect an exceedance"*, and
+   must not be read as the second.
+
+*Repayment:* have each step print the assertion it matched, **and match each
+budget's own exceedance message — budget name, measured value, ceiling — rather
+than its tag alone.** A control that proves something and records nothing is one
+refactor away from proving nothing silently.
+
+**TD-26 — reaching a state the enforcement permits but the accounting does not
+want.** *This entry replaces an earlier one that described the closing of the
+carrying base as unenforced by the schema. That description was wrong, and it is
+withdrawn rather than quoted, because a sentence about money that is wrong
+should not stay quotable.* Measured at
+`58d24469739a2bc36346676637281f7a8951171b`: the telescoping identity
+`Sigma rel = HALF_EVEN(B · Sigma amount, T)` (`0081:38`, `:777`, `:1330`, the
+last of which states that this is what makes `outstanding_base = 0` exactly when
+the last reducer closes the invoice); `invoice_settlement_verify` (`0081:691`);
+**three deferred constraint triggers** that call it at commit —
+`payments_complete` (`:1276`), `payment_allocations_value_complete` (`:1282`),
+`customer_credit_applications_value_complete` (`:1291`), each `DEFERRABLE
+INITIALLY DEFERRED`; and `payment_allocations_invoice_uq` (`:326`) with
+`payment_allocations_level_uq` (`:334`). So a commit that leaves an invoice
+unbalanced is **refused at commit time**, and all of it ran in run
+`41213587774`.
+
+*Why it is debt and not a defect:* the enforcement holds; what is unmeasured is
+whether a lawful sequence can reach a state it permits and the accounting does
+not want — **the per-row sign path before closure**.
+
+**⚠️ Three claims this card carried are withdrawn (DR-81, 2026-11-01), after an
+external review found them internally contradictory. They are withdrawn rather
+than quoted, because a sentence about money that is wrong should not stay
+quotable.**
+
+1. **"a zero transaction figure with a non-zero base" — struck as malformed, and
+   the first attempt at striking it was itself wrong (DR-82).** That attempt
+   inferred, from closure, that no amount had been applied. **Closure means the
+   opposite: everything was applied.** With `T` the invoice total in the
+   transaction currency, `B` its stored base value, `amount` the amounts applied
+   and `rel` the base released:
+   `outstanding_txn = T - Σ amount = 0` ⇒ `Σ amount = T` ⇒
+   `Σ rel = HALF_EVEN(B*T, T) = B` ⇒ `outstanding_base = B - Σ rel = 0`.
+   **So the transaction side closing forces the base side to close**, and a
+   closed invoice cannot carry a non-zero base. The law binds the **sum**, so
+   only the per-row path remains open. Pinned in
+   `tests/integration/receivables-s4-fx-closure.test.ts` at `:495`, `:525`,
+   `:545` and `:497`/`:499`.
+2. **"a credit note and an overpayment both produce a lawful negative outstanding
+   figure" — withdrawn as false for the overpayment, and unmeasured for the
+   credit note.** `12-overpayment-customer-credit.golden.test.ts:453`, `:460`
+   measure the opposite: the surplus becomes a **customer credit** and the
+   invoice's outstanding is **exactly zero and never negative**. **No test in
+   this repository exhibits a negative invoice balance.** ⇒ the flat instruction
+   **"do not add a constraint forbidding the sign" falls with the claim it rested
+   on**, and this card now argues **neither for nor against** such a constraint.
+   Either direction needs a measured case naming the test and the figures.
+3. **The prescribed remedy is withdrawn, and no replacement is named (DR-82).**
+   This card previously ordered the release be fixed "by the remainder method" if
+   the sign path proved reachable. That is **deleted**, for two measured reasons:
+   it prescribed a repair for a behaviour **nobody has observed**, and **DR-72
+   had already withdrawn the remainder method** — so the card was re-proposing a
+   withdrawn remedy.
+
+*Repayment, restated:* **measure the per-row sign path first** on a real database
+— partial payments at different rates, a refund, a reversal. **Then let the
+result determine the correction, subject to preserving the conservation
+identity.** **No remedy is named here**: naming one before the measurement is a
+guess with a procedure attached, and the earlier wording of this line did exactly
+that.
+
+**TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
+exists and is enforced before any decode, and it is **not** redundant with the
+imaging library's own default: measured by experiment, the library at its
+defaults decodes a decompression bomb while an explicit pixel limit refuses it,
+and the project's bound is strictly tighter than the library default. The new
+unit suite pins it, with a negative control. What is missing is the same refusal
+exercised **through the HTTP surface**: that suite asserts the error object's
+status rather than a response. *A specific trap is recorded with this card:* an
+existing integration case covers the **magic-byte** refusal on the same path
+with the same code and the same status, so **reading it as cover for the
+dimension refusal would be an empty pass.**
+
+**TD-28 — `B ≠ T` through the sale path: CLOSED by measurement, and its
+premise was wrong.** *This entry previously said an invoice in a currency other
+than the business base was unreachable, and justified it by two refusals —
+product creation rejecting a non-base `priceCurrency`, and product update
+refusing to change one. Those refusals are real; the inference from them was
+not, and it is withdrawn.* Changing the **business base currency** leaves an
+existing product's `price_currency` behind it, and the lock that prevents that
+change (`financial_started_at`) arms at the **first posted entry** — so the
+window is "before the first posting", not "never". A second base change after a
+posting is refused `409 BASE_CURRENCY_LOCKED`, which is the real shape of the
+restriction and the reason the stronger claim looked true.
+
+*Measured end to end through the API*, in
+`tests/integration/receivables-s4-fx-closure.test.ts` (8 cases, 8 passed): the
+base changed `ILS → USD` while `financial_started_at` was null; the product's
+`price_currency` stayed `ILS` under a `USD` base with **no row written by
+hand**; a credit sale committed an `ILS` invoice with `T = 3000`, `B = 721`;
+three payments on three dates at `0.2650 / 0.2750 / 0.2350`. At closure
+`outstanding_txn_minor = 0` **and** `outstanding_base_minor = 0`, state `paid`,
+and `Σ rel = 96 + 289 + 336 = 721`, equal to the invoice's **stored**
+`total_base_minor` — an absolute value, not an identity between two sums
+computed the same way. The realized difference is confined to
+`realized_fx_gain_loss_minor`, `+10 / +41 / −7` per leg (both signs), summing to
+`44 = 765 − 721`; the ledger moved `fx_gain` and `fx_loss` by that amount and
+left `rounding` unmoved, and AR went `721 → 0`.
+
+*So this is closed, not deferred:* the state is reachable **and** conservation
+holds on it. Two negative controls were run and restored byte-for-byte: forcing
+the domestic FX branch reddens seven named cases — and the **database** refuses
+with `sale.state_changed`, because `sale_commit` cross-checks the service's FX
+snapshot, so a service that takes the wrong branch cannot commit a sale at all;
+and replacing the telescoping release with a per-leg conversion is refused at
+**leg 2** with `customer_payment.settlement_changed` (409).
+
+*What remained was that the suite had not run in CI — **and that is now closed by
+measurement (DR-81, 2026-11-01).*** The statement "this suite has never run in
+CI" was true only of the decisive run, and necessarily so: **the file does not
+exist at that commit.** Measured against a positive control, so an empty result
+cannot pass for a negative — `git cat-file -e 58d24469:tests/integration/receivables-s4-fx-closure.test.ts`
+⇒ **EXIT 128**; the same on `1aff66c6` ⇒ **EXIT 0**; `58d24469:package.json`
+⇒ **EXIT 0** (the probe works). On the PR head `1aff66c6`, run `41248454929`, the
+`Integration + security` step's output **names the file with its cases passing**,
+which is exactly the standard this card demanded:
+
+```
+22:42:21.57Z  ✓ tests/integration/receivables-s4-fx-closure.test.ts (8 tests) 1475ms
+23:01:53.29Z  Test Files  358 passed (358)      Tests  6626 passed (6626)
+```
+
+`358 − 357 = 1` file and `6626 − 6618 = 8` tests against the decisive run's
+totals ⇒ **the delta is precisely this suite**, so the naming is corroborated by
+arithmetic and not by a tick alone. **What must not be done is to attribute that
+run to the sealed commit.** The residue is not missing execution but a missing
+guard, carried as **TD-30** below.
+
+*One guarantee stronger than anything this register previously named:*
+`payment_allocations_realized_ck` (`0081:336`) makes the realized figure
+**definitionally** the residual, so a leak of exchange difference into the
+carrying base is not representable rather than merely refused.
+
+**TD-29 — overpayment on an invoice whose own currency is not the base is
+uncovered.** In both golden suites that carry cross-currency settlement the
+**invoice** is in the business base currency and only the **payment** is not; and
+`receivables-s4-fx-closure.test.ts`, which does drive a non-base invoice, closes
+it **exactly**, so no surplus arises. ⇒ the combination **non-base invoice + an
+overpayment on it** is exercised nowhere. *Why it is debt and not a defect:*
+nothing measured shows it misbehaving — it is **declared uncovered rather than
+inferred safe**, which is the opposite of the reasoning error TD-28 withdrew.
+*Repayment:* extend the FX closure suite with an overpaying leg on the `ILS`
+invoice under the `USD` base, asserting the invoice closes at exactly zero, the
+surplus becomes a customer credit carried at its own rate, and conservation holds
+in the payment's currency and in base. **Money card ⇒ owner `daftar-finance`, and
+a second review is required.**
+
+**TD-30 — nothing keeps the FX closure suite in the CI lane.** TD-28 above
+establishes that `tests/integration/receivables-s4-fx-closure.test.ts` **does**
+run in CI, reached by `test:integration` (`vitest run tests/integration
+tests/security tests/guards`) through the root config's
+`include: ['tests/**/*.test.ts']`. But that is an observation of one run, not an
+enforced property: **if the file were renamed, moved out of the glob or filtered,
+the step would report success with its subject absent** — the very failure mode
+TD-28 named. *Repayment:* a roster test of the shape
+`tests-unit/test-lane-roster.test.ts` already uses for the unit lane, asserting
+this suite is reached by the lane `ci.yml` runs, **with a negative control that
+proves the guard fires when the suite is removed** — without which the roster is
+itself an empty pass. ⇒ "it runs" becomes enforced rather than observed once.
+
+**TD-31 — mail delivery is not exercised end to end, for want of a TLS
+fixture.** Three things are unproven: a **successful** end-to-end send, the
+**envelope as it goes on the wire**, and **non-ASCII address handling**. The
+current suite cannot produce them because it has no TLS fixture, and the ability
+to relax transport security is a constructor argument reachable only from tests,
+with a test pinning that production never passes it. *Why it is debt and not a
+defect:* nothing measured shows mail misbehaving — this is **absent coverage,
+declared rather than inferred safe**. *Repayment:* a TLS fixture, then the three
+assertions above, the non-ASCII one named explicitly so it cannot be quietly
+dropped. **Not a merge blocker** (DR-82).
+
+**TD-32 — no verification binds each plan-shape claim to a gate.** The claim
+inventory is counted, and the counts are sound: the parent holds **428** claims
+and the child **429**, genuinely new **1**, genuinely removed **0**. **But those
+figures support exactly one statement — that no item was deleted from the
+inventory — and not the broader one that "no claim lost its gate"**, which would
+require checking that each claim is still *bound* to a gate that can fail on it.
+**No such verification was ever run**, and no command or result for one exists
+(DR-81, DR-82). *Why it is debt and not a defect:* a claim silently unbound from
+its gate is how a requirement stops being enforced while the inventory still
+lists it — but nothing measured shows that has happened. *Repayment:* a check
+that, for every entry in the inventory, names the gate that would fail without
+it, **with a negative control that unbinds one claim and is shown to fire.**
+Until then, **the only sound wording is "no item was deleted from the
+inventory"**, and any broader phrasing is to be treated as withdrawn. **Not a
+merge blocker** (DR-82).
+
+### Also open, recorded earlier and unchanged by the seal
+
+**CRLF-PARSE** — the review-index parser slices the last character off every
+line, so under a CRLF checkout it reports every row stale. Measured: the same
+commit reports 620 problems in a CRLF tree and `PASS (full)` in an LF tree, so
+`main`'s index is not stale and nothing is blocked. The repayment is a parser
+that accepts both endings, a test over the same text with each, and
+`.gitattributes` forcing `eol=lf` on generated files.
+
+**DR-13-MIG** — two migrations below the frozen line still carry, in live code,
+the retired aging guard that DR-13 replaced, so aging correctness on a database
+that stops before the fixing migration is not what the current rule says. The
+accepted migrations are frozen, so this is recorded rather than edited.
+
+**DR-21-PRESENT** — the open-invoice page still reports no age for a document
+with no stated due date, while the aging report ages it from its issue date. The
+page therefore hides the age of a debt the report acknowledges. Changing it
+changes a number the merchant sees, so it needs the owner's decision and a
+double review.
+
+**CARRY-CONSERVATION-R81** — the routine's own comment states that the base
+shares total the authoritative base figure exactly, and a pinned case records a
+mixed-sign pair where they do not. The case asserts **inequality**, so it goes
+red if the law ever becomes true, and its failure message names this card. Its
+reachability is unmeasured.
+
+**POS-CART-ROSTER** — a cart law derives its code roster from raw text without
+stripping comments, so a prose mention inflates the set by one. The direction is
+safe — the law checks one extra code and passes — but a prose name that later
+becomes a real code with a different status would turn it into a false failure,
+which is how a law gets disabled.
+
+**TZ-PORTABILITY** — a concurrency suite reads a `DATE` column through a driver
+that converts it at the host's local midnight, so the assertion fails on any
+host east of UTC. CI runs on UTC and the runner was matched to UTC, so the
+symptom is invisible there; the fix is to read the column as text and to run the
+suite under three zones.
+
+**BUILD-ORDER** — the root build script builds workspaces alphabetically, so a
+clean tree fails on a library that an application needs before it exists. The
+repayment is a single source of build order shared with CI rather than a second
+copy of the list.

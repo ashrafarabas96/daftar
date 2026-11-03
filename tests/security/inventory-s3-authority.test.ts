@@ -383,7 +383,45 @@ describe('the migration end state holds', () => {
     expect((await q.query(`SELECT * FROM inventory_stock_source_guard_gaps()`)).rows).toEqual([]);
     // P3-S6 (0067/0068): the S6 guard discovery is empty too (§2.3).
     expect((await q.query(`SELECT * FROM supplier_settlement_guard_gaps()`)).rows).toEqual([]);
-    const kinds = (await q.query<{ op_code: string }>(`SELECT op_code FROM inventory_operation_kinds ORDER BY op_code`)).rows.map((r) => r.op_code);
+    /**
+     * ── P4-AL-88 ─────────────────────────────────────────────────────────
+     *
+     * The two registry reads below were ABSOLUTE — `ORDER BY op_code` over
+     * the whole of `inventory_operation_kinds` and of
+     * `inventory_operation_movement_kinds`, each compared by one `toEqual`
+     * against a literal. That is a closure rule ("these registries contain
+     * nothing else, ever") and not an invariant, and `0077` — which registers
+     * `sale.commit` and maps it to the `sale` movement kind, both as `P4-S2`
+     * — turns it red although nothing about the P3-S3 authority changed
+     * (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by the registries' OWN provenance column, `registered_by ~
+     * '^P3-'`, which is the estate's established idiom for exactly this
+     * (`assertMigrationState`, `tests/helpers/stock-ledger.ts:661-692`) and
+     * which `0074` widened the CHECK to make possible. The literals are
+     * unchanged, entry for entry: a MISSING Phase 3 registration is still
+     * red, and an EXTRA row mislabelled with Phase 3 provenance is still red,
+     * so the scoping cannot be dodged by relabelling a later phase's row.
+     *
+     * The later phases' half is then claimed SEPARATELY AND POSITIVELY —
+     * every beyond-scope row records a well-formed later-phase registrant, so
+     * its provenance is reviewable — and a CLOSURE assertion states that the
+     * two halves together are the whole registry, so nothing can be merely
+     * dropped from the claim.
+     */
+    const PHASE3_REGISTRANT = /^P3-/;
+    const LATER_REGISTRANT = /^P[0-9]+-S[0-9]+$/;
+    const kindRows = (await q.query<{ op: string; by: string }>(`SELECT op_code AS op, registered_by AS by FROM inventory_operation_kinds ORDER BY op_code`))
+      .rows;
+    const kinds = kindRows.filter((r) => PHASE3_REGISTRANT.test(r.by)).map((r) => r.op);
+    const beyondKinds = kindRows.filter((r) => !PHASE3_REGISTRANT.test(r.by));
+    expect(
+      beyondKinds.filter((r) => !LATER_REGISTRANT.test(r.by)),
+      'every operation kind beyond the Phase 3 scope records a well-formed later-phase registrant',
+    ).toEqual([]);
+    expect([...kinds, ...beyondKinds.map((r) => r.op)].sort(), 'and the two halves are the whole operation-kind registry').toEqual(
+      kindRows.map((r) => r.op).sort(),
+    );
     expect(kinds).toEqual(
       [
         ...S3_KINDS.map((k: S3Kind) => OP_OF[k]),
@@ -414,9 +452,29 @@ describe('the migration end state holds', () => {
         ...P3C_OPERATION_KINDS,
       ].sort(),
     );
-    const maps = (await q.query<{ m: string }>(`SELECT op_code || '→' || movement_kind AS m FROM inventory_operation_movement_kinds ORDER BY 1`)).rows.map(
-      (r) => r.m,
-    );
+    // The same scoping, the same provenance column, for the op→kind mapping.
+    // (This assertion never ran once the kinds equality above went red: a
+    // failing assertion aborts its test body, so `sale.commit→sale` was a
+    // break hiding behind another break.)
+    const mapRows = (
+      await q.query<{ m: string; by: string }>(
+        `SELECT op_code || '→' || movement_kind AS m, registered_by AS by FROM inventory_operation_movement_kinds ORDER BY 1`,
+      )
+    ).rows;
+    const maps = mapRows.filter((r) => PHASE3_REGISTRANT.test(r.by)).map((r) => r.m);
+    const beyondMaps = mapRows.filter((r) => !PHASE3_REGISTRANT.test(r.by));
+    expect(
+      beyondMaps.filter((r) => !LATER_REGISTRANT.test(r.by)),
+      'every op→kind row beyond the Phase 3 scope records a well-formed later-phase registrant',
+    ).toEqual([]);
+    expect([...maps, ...beyondMaps.map((r) => r.m)].sort(), 'and the two halves are the whole op→kind registry').toEqual(mapRows.map((r) => r.m).sort());
+    // Every beyond-scope mapping names an operation kind that is itself
+    // registered: the two registries cannot drift apart outside the scope.
+    const registeredKinds = new Set(kindRows.map((r) => r.op));
+    expect(
+      beyondMaps.filter((r) => !registeredKinds.has(r.m.split('→')[0] ?? '')),
+      'every op→kind row beyond the scope names a registered operation kind',
+    ).toEqual([]);
     expect(maps).toEqual(
       [
         'inventory.adjust→adjustment',

@@ -57,6 +57,8 @@ import {
   type Queryable,
   type StockBusiness,
 } from '../helpers/stock-ledger';
+import { phase4InheritedPrefixRelations } from '../../scripts/guards/no-authoritative-balance';
+import { inheritedPrefixTriggers, splitByTriggerProvenance } from '../helpers/phase4-inherited-scope';
 
 let biz: StockBusiness;
 let K1: Key;
@@ -258,7 +260,47 @@ describe('T-02 — the live grant matrix (P:154)', () => {
     // and the coverage header `negative\_%`; nothing else does.
     // P3-S5 (0065/0066, §2.2): the two S5 bridges match `stock\_%`; the five S5
     // documents (`supplier_%`, `purchase_%`) match neither pattern.
-    expect(r.rows.map((x) => x.relname)).toEqual(
+    /**
+     * ── P4-AL-88 ───────────────────────────────────────────────────────────
+     *
+     * The discovery is a NAME PATTERN, so it finds the ledger relations of
+     * every phase, and the equality over it was a closure rule — "no later
+     * phase adds a `stock_%` relation" — not an invariant. `0077`'s
+     * `stock_source_bridge_sale` matches `stock\_%` and turned an accepted
+     * P3-S2 claim red (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoped by POSITION — which accepted prefix created the relation, read
+     * from the digest-verified files by `phase4InheritedPrefixRelations()`;
+     * `0000`–`0073` is frozen byte for byte (P4-AL-85), so a later phase
+     * cannot enter it. The equality is unchanged, name for name: a MISSING
+     * ledger relation is still red, and an unaccounted relation inside the
+     * scope is still red. An emptied (tampered) prefix reader empties the
+     * scope, which makes the equality red rather than vacuous.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY: a ledger
+     * relation the discovery finds beyond the accepted prefix is a SOURCE
+     * BRIDGE — `stock_source_bridge_<t>` for a `t` the closed source registry
+     * holds — which is the one ledger relation shape a later phase may add,
+     * and whose structural guards `inventory_stock_source_guard_gaps()` is the
+     * estate's report on. A CLOSURE assertion states that the two halves
+     * together are the whole discovery, so nothing escapes between them.
+     */
+    const prefixRelations = phase4InheritedPrefixRelations();
+    expect(prefixRelations.size, 'the digest-verified prefix reader came back empty').toBeGreaterThan(0);
+    const found = r.rows.map((x) => x.relname);
+    const inScope = found.filter((t) => prefixRelations.has(t));
+    const beyondLedger = found.filter((t) => !prefixRelations.has(t));
+    expect(
+      inScope.filter((t) => beyondLedger.includes(t)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect([...inScope, ...beyondLedger].sort(), 'and together they are the whole discovery').toEqual([...found].sort());
+    const registeredTypes = new Set((await ownerPool().query<{ t: string }>(`SELECT source_type::text AS t FROM stock_source_types`)).rows.map((x) => x.t));
+    expect(
+      beyondLedger.filter((t) => !t.startsWith('stock_source_bridge_') || !registeredTypes.has(t.slice('stock_source_bridge_'.length))),
+      'a ledger relation beyond the accepted prefix is a source bridge for a registered source type',
+    ).toEqual([]);
+    expect(inScope).toEqual(
       [
         ...S2_RELATIONS,
         ...S3_BRIDGES,
@@ -857,11 +899,38 @@ describe('T-16 — primitive authority (P:168)', () => {
       // Control first: with the mapping present the same call writes.
       expectAccepted(await tryApply(c, biz, [req(K1, 'purchase', '1', { unitCost: '1' })]), 'mapping present');
       await c.query(`DELETE FROM inventory_operation_movement_kinds WHERE op_code LIKE 'fixture.%'`);
+      /**
+       * ── P4-AL-88 ─────────────────────────────────────────────────────────
+       *
+       * "the end-of-migration state" was read as an ABSOLUTE equality over
+       * the whole of `inventory_operation_movement_kinds` — a closure rule,
+       * not an invariant, and `0077`'s `sale.commit → sale` row (registered
+       * `P4-S2`) turns it red although nothing about the fixture op's mapping
+       * changed (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+       *
+       * Scoped by the registry's own provenance column, `registered_by ~
+       * '^P3-'`; the literal is unchanged, row for row. What this case
+       * actually needs — that the FIXTURE op has no mapping left — is now
+       * asserted directly and over the WHOLE registry, which is stronger
+       * than inferring it from an equality that happened to omit it.
+       */
+      const rows = (
+        await c.query<{ r: string; by: string }>(
+          `SELECT op_code || ':' || movement_kind AS r, registered_by AS by FROM inventory_operation_movement_kinds ORDER BY op_code, movement_kind`,
+        )
+      ).rows;
+      // The fixture op is gone from the whole registry, not merely from a scope.
       expect(
-        (
-          await c.query<{ r: string }>(`SELECT op_code || ':' || movement_kind AS r FROM inventory_operation_movement_kinds ORDER BY op_code, movement_kind`)
-        ).rows.map((x) => x.r),
-      ).toEqual([
+        rows.filter((x) => x.r.startsWith('fixture.')),
+        'no mapping is left for the fixture op',
+      ).toEqual([]);
+      const beyondRows = rows.filter((x) => !/^P3-/.test(x.by));
+      expect(
+        beyondRows.filter((x) => !/^P[0-9]+-S[0-9]+$/.test(x.by)),
+        'every op→kind row beyond the Phase 3 scope records a well-formed later-phase registrant',
+      ).toEqual([]);
+      expect([...rows.filter((x) => /^P3-/.test(x.by)), ...beyondRows].length, 'and the two halves are the whole registry').toBe(rows.length);
+      expect(rows.filter((x) => /^P3-/.test(x.by)).map((x) => x.r)).toEqual([
         ...S3_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
         // P3-S4 (0063/0064)
         ...S4_OPERATION_MOVEMENT_KINDS.map(([op, kind]) => `${op}:${kind}`),
@@ -919,9 +988,55 @@ describe('§2.4 — the complete S2 trigger set, from pg_trigger', () => {
     );
     const migratorOwner = must(r.rows.find((x) => x.tg === 'stock_levels_retain')).owner;
     expect(migratorOwner).not.toBe(INTERNAL);
+    /**
+     * ── P4-AL-88: a trigger claim a RELATION name cannot scope ────────────
+     *
+     * The trigger set was asserted over the S2 relations ABSOLUTELY, which
+     * made it a claim about every phase that follows: a later phase may
+     * legitimately put a guard on a relation the accepted prefix created, and
+     * `0077` does exactly that — `stock_binding_requires_sale` on
+     * `stock_source_bindings`, the binding-side guard its new `sale` source
+     * type is REQUIRED to have by `inventory_stock_source_guard_gaps()`. So an
+     * accepted P3-S2 equality went red for a guard whose absence would have
+     * been a defect (`[[daftar-a-closure-rule-is-not-an-invariant]]`).
+     *
+     * Scoping by relation is therefore not available here: the relation is
+     * inside the accepted prefix and the trigger is not. The separable part
+     * is the TRIGGER'S OWN NAME, and the accepted prefix declares it in
+     * digest-verified text — `splitByTriggerProvenance()`, the twin of
+     * `phase3PrefixRoutines()`'s idiom. A guard is outside the scope only when
+     * a migration PAST the accepted head declares it; one NO migration
+     * declares — a hand-planted intruder — stays inside, where the row list
+     * below names it. A tampered prefix empties the reader, which makes this
+     * equality red rather than vacuous.
+     *
+     * The row list below is unchanged, field for field: a guard the accepted
+     * prefix declares that is MISSING, mis-owned, no longer DEFINER, no
+     * longer deferred or of the wrong `tgtype` is still red.
+     *
+     * The later phases' half is claimed SEPARATELY AND POSITIVELY: a guard a
+     * later phase puts on one of these relations must be a deferred,
+     * enabled, SECURITY DEFINER constraint trigger owned by the internal
+     * principal — which is precisely the shape every binding-side guard in
+     * the list below has, and the shape `0059-E`'s gap report requires. A
+     * CLOSURE assertion states that the two halves are the whole catalogue.
+     */
+    expect(inheritedPrefixTriggers().size, 'the digest-verified prefix trigger reader came back empty').toBeGreaterThan(0);
+    const { inScope: scopedTriggers, beyond: beyondTriggers } = splitByTriggerProvenance(r.rows, (x) => x.tg);
+    expect(
+      scopedTriggers.map((x) => x.tg).filter((t) => beyondTriggers.some((y) => y.tg === t)),
+      'the two scopes are disjoint',
+    ).toEqual([]);
+    expect(scopedTriggers.length + beyondTriggers.length, 'and together they are the whole trigger catalogue of these relations').toBe(r.rows.length);
+    expect(
+      beyondTriggers
+        .filter((x) => !(x.constraint && x.deferrable && x.deferred && x.enabled === 'O' && x.secdef && x.owner === INTERNAL))
+        .map((x) => `${x.rel}.${x.tg}`),
+      'a guard a later phase adds to these relations is a deferred, enabled, DEFINER constraint trigger owned by the internal principal',
+    ).toEqual([]);
     // tgtype bits: ROW 1, BEFORE 2, INSERT 4, DELETE 8, UPDATE 16.
     const invoker = { enabled: 'O', constraint: false, deferrable: false, deferred: false, owner: migratorOwner, secdef: false };
-    expect(r.rows).toEqual(
+    expect(scopedTriggers).toEqual(
       [
         { tg: 'negative_deficit_coverages_append_only', rel: 'negative_deficit_coverages', fn: 'stock_ledger_append_only()', type: 1 + 2 + 8 + 16, ...invoker },
         {

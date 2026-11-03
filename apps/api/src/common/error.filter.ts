@@ -7,6 +7,18 @@ import { RateLimitError, RateLimiterUnavailableError } from '../infra/redis';
 import { getContext } from '../infra/request-context';
 import type { Logger } from '../infra/logger';
 import { inventoryRefusal, parseDatabaseInventoryCode } from '../modules/inventory/inventory-errors';
+import {
+  installmentRemedyReference,
+  isInstallmentInternalInvariant,
+  isSellingCode,
+  isSellingInternalInvariant,
+  parseDatabaseContention,
+  parseDatabaseInstallmentInternalCode,
+  parseDatabaseSellingCode,
+  parseDatabaseSellingInternalCode,
+  sellingRefusal,
+  transactionContentionRefusal,
+} from '../modules/selling/selling-errors';
 
 /**
  * Error architecture (§29): the backend returns a STABLE ERROR CODE + requestId
@@ -109,8 +121,158 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         return;
       }
     }
+    // P4-S2 (TL-P4-S2-R5). The KNOWN Phase 4 selling surface, in two halves,
+    // and NEITHER of them is an authorization denial.
+    //
+    // (A) A PUBLIC selling code — `sale.*`, `invoice.*`, `customer.*` — gets
+    //     the status the stable registry already assigns it, through
+    //     `sellingRefusal`, the one selling mapping. There is no second
+    //     status table here on purpose: the registry classifies idempotency
+    //     conflicts as 409, current-state conflicts by their own entry,
+    //     payload problems as 400/422, permission problems as 403 and a
+    //     missing target as 404, so those come out right by construction. A
+    //     code whose registered status is wrong is fixed in the registry.
+    //
+    //     The services translate these themselves; this catches the ones a
+    //     trigger raises on a path that does not — the `sale.immutable` and
+    //     `invoice.immutable` guards, `customer.not_deletable` — so the typed
+    //     code and its status still reach the client.
+    //
+    // (B) An INTERNAL Phase 4 invariant — `selling.*` — is a violated
+    //     structural law, NOT a merchant refusal and not an authorization
+    //     denial: «An internal invariant failure is not an authorization
+    //     denial.» It becomes 500 with the generic body, and the invariant's
+    //     name goes to the LOG beside the request id, where the engineer who
+    //     has to fix it is reading. The registry is explicit (there is no
+    //     `selling.*` wildcard) because most `selling.*` raises are
+    //     migration-time end-state assertions no request can reach.
+    //
+    //     The body carries the generic envelope alone — `INTERNAL_ERROR`, the
+    //     safe sentence and the request id, with NO `details`. SQL, the
+    //     routine's message after the colon, an amount, a journal entry id,
+    //     an assertion body and a stack never leave the process, and the
+    //     invariant vocabulary is not part of the merchant contract either:
+    //     no `error.selling.*` entry exists in any of the three catalogues,
+    //     so a client that received one could render nothing from it.
+    //
+    // Both sit BEFORE the historical `P0001` fallback and change nothing
+    // about it: an UNKNOWN `P0001` is not redesigned here (it keeps the
+    // accepted Phase 1-3 rendering until it is separately audited), and
+    // `42501` is still 403.
+    if (pg.code === 'P0001') {
+      const selling = parseDatabaseSellingCode(exception);
+      if (selling !== null && isSellingCode(selling)) {
+        const e = sellingRefusal(selling);
+        body(e.code, e.message, e.httpStatus, e.details);
+        return;
+      }
+      const invariant = parseDatabaseSellingInternalCode(exception);
+      if (invariant !== null && isSellingInternalInvariant(invariant)) {
+        this.logger.error({ requestId, invariant }, 'phase 4 selling invariant violated');
+        body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
+        return;
+      }
+      //     AND THE P4-S7 INSTALLMENT INVARIANTS, on the same contract and for
+      //     the same reason (`TL-P4-COORD-R46`, F-4). Until this branch existed
+      //     every `installment.*` refusal fell to the `403 Access denied`
+      //     below — including the three that
+      //     `GET /v1/customers/:customerId/receivable/aging` can raise through
+      //     `customer_ar_aging`, a read with no authorization question in it,
+      //     so the answer named a cause that cannot apply. The registry is
+      //     explicit: the migration-time end-state codes of that same prefix
+      //     are NOT in it and keep the unaudited rendering.
+      //
+      //     AND THE LOG CARRIES THE NAME AND A STATIC REMEDY REFERENCE --
+      //     NEVER THE MESSAGE (`TL-P4-COORD-R69` §1 and ordered item 1,
+      //     which NARROWS `TL-P4-COORD-R63` item 4, F15-5).
+      //
+      //     THE RULE EARLIER IN THIS FILE GOVERNS THIS LINE, AND IT STANDS.
+      //     `error.filter.ts:151-153` -- this file's own rule, whose range is
+      //     DERIVED and compared against this citation by the guard suite
+      //     rather than typed and left to drift (`TL-P4-COORD-R72` item 2,
+      //     F17-3) -- says «SQL, THE ROUTINE'S MESSAGE AFTER THE COLON, AN
+      //     AMOUNT, a journal entry id, an assertion body and a stack never
+      //     leave the process». A LOG LINE LEAVES THE PROCESS -- that is what
+      //     a log is for -- so «never leaves the process» governs what is
+      //     logged here, and `R69` refuses the amendment that would have let
+      //     the message through: a slice may not relax an estate boundary to
+      //     deliver its own ordered repair.
+      //
+      //     WHAT ROUND 16 LOGGED AND WHY IT IS GONE. It logged the refusal's
+      //     FIRST LINE, under `refusal`. The first line IS the routine's
+      //     message after the colon, and it is not generic: EIGHT of the
+      //     thirteen registered `installment.*` names have a `RAISE` that
+      //     substitutes `business_id` plus an invoice or plan UUID into that
+      //     line, and `installment.schedule_incomplete`'s two-cause line
+      //     substitutes TWO AMOUNTS. So the round-16 field emitted exactly
+      //     the artefacts this file's own rule names, and its comment
+      //     reasoned entirely about the BODY. The field is removed.
+      //
+      //     WHAT IS LOGGED NOW. The invariant NAME and `remedy`: a STATIC
+      //     reference, `installmentRemedyReference()`'s value, a function of
+      //     the name ALONE -- identical for every occurrence of that
+      //     invariant, with no identifier, no amount, no count and no
+      //     fragment of the message in it. THE DYNAMIC MESSAGE NOW LEAVES THE
+      //     PROCESS IN NEITHER THE BODY NOR THE LOG.
+      //
+      //     AND THE PROSE IS NOT LOST, WHICH IS WHAT `R63` ITEM 4 WAS FOR: it
+      //     lives where the reference points -- section 3b of
+      //     `p4s7-installment-aging.spec.sql`, the operator's remedy index,
+      //     one anchored entry per registered invariant, carrying the two
+      //     causes and the data-modifying-CTE spelling in full. The operator
+      //     reads a name and an anchor and follows it; nothing about the
+      //     particular refusal is needed to find the remedy, because the
+      //     remedy is a property of the invariant and not of the row.
+      //
+      //     THE BODY IS UNCHANGED AND MUST STAY UNCHANGED: 500,
+      //     `INTERNAL_ERROR`, the generic sentence, no `details`, and the
+      //     invariant vocabulary is in no localization catalogue.
+      //
+      //     THE GUARD IS PINNED ON THE HALF THAT CAN FAIL. Round 16's case
+      //     pinned `schedule_incomplete`, the one registered message whose
+      //     first line carries no identifier, and asserted the sentence was
+      //     PRESENT in the log -- the half that cannot exhibit the class.
+      //     `tests/guards/p4s7-installment-filter-contract.test.ts` now
+      //     DERIVES, out of the specification, which registered invariants
+      //     substitute an identifier, pins the case on one of those, and
+      //     asserts the identifiers and the message appear NOWHERE in the log
+      //     line or the body while the reference does.
+      const installment = parseDatabaseInstallmentInternalCode(exception);
+      if (installment !== null && isInstallmentInternalInvariant(installment)) {
+        const remedy = installmentRemedyReference(installment);
+        this.logger.error({ requestId, invariant: installment, remedy }, 'phase 4 installment invariant violated');
+        body('INTERNAL_ERROR', 'Internal error', HttpStatus.INTERNAL_SERVER_ERROR);
+        return;
+      }
+    }
     if (pg.code === '42501' || pg.code === 'P0001') {
       body('FORBIDDEN', 'Access denied', HttpStatus.FORBIDDEN);
+      return;
+    }
+    // ── A TRANSACTION-MANAGER OUTCOME IS NOT A DEFECT AND NOT AN OUTAGE
+    //    (`TL-P4-COORD-R59` ordered item 2, F14-2).
+    //
+    // `40001` (serialization failure) and `40P01` (deadlock detected) reached
+    // the `unhandled error` branch below and were answered **`500
+    // INTERNAL_ERROR` with no code and no retry contract**, with the whole
+    // `pg` error object -- its `detail`, its SQL and the process ids of the
+    // other backend -- written to the log as an unexplained fault. Both are
+    // MEASURED on the P4-S7 plan path: a `40P01` arises on ONE invoice from
+    // two ordinary operations, and `40001` is the correct answer to every
+    // plan race at `REPEATABLE READ` and `SERIALIZABLE`.
+    //
+    // They are NOT invariant violations and are deliberately not in either
+    // `installment.*`/`selling.*` registry — the specification's section
+    // 3a-ter says so in terms. What they are is a conflict over concurrent
+    // access, with nothing partially committed, and the one fact a caller
+    // needs is that it may take the request again. So: `409 CONFLICT`, the
+    // machine word for which contention it was, `retryable: true`, and the
+    // SQLSTATE in the LOG and not in the body.
+    const contention = parseDatabaseContention(exception);
+    if (contention !== null) {
+      this.logger.error({ requestId, sqlstate: contention.sqlstate, contention: contention.contention }, 'transaction contention');
+      const e = transactionContentionRefusal(contention.contention);
+      body(e.code, e.message, e.httpStatus, e.details);
       return;
     }
     this.logger.error({ err: exception, requestId }, 'unhandled error');

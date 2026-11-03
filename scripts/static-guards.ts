@@ -13,17 +13,21 @@ import {
   checkStockCacheShape,
   discoverAccountingTables,
   discoverInventoryTables,
+  discoverSalesTables,
   discoverSupplierTables,
   findAuthoritativeBalanceColumns,
   findAuthoritativeInventoryColumns,
+  findAuthoritativeSalesColumns,
   findAuthoritativeSupplierColumns,
   findForbiddenInventoryRelations,
   isForbiddenBalanceTable,
   isForbiddenInventoryTable,
+  isForbiddenSalesTable,
   isForbiddenSupplierTable,
 } from './guards/no-authoritative-balance';
 import { findFloatRateColumns, findInventoryNumericViolations } from './guards/no-float-rate';
 import { findDefinerSearchPathViolations } from './guards/definer-search-path';
+import { findSelfCaptureViolations, selfCaptureSurface } from './guards/migration-self-capture';
 import { findReadSurfaceViolations, readSurfaceFiles } from './guards/read-surface';
 import { findPostingSurfaceViolations } from './guards/posting-surface';
 import { checkInventoryDefinerContract, INVENTORY_INVOKER_EXCEPTIONS } from './guards/inventory-definer-contract';
@@ -333,9 +337,27 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   // `units`, `unit_names`, `branch_warehouses`, `stocktakes` and
   // `stocktake_lines` are watched too. The wiring below is unchanged.
   const inventoryWatched = discoverInventoryTables(schema);
+  // P4-S1: the complement arm returns every relation the accepted Phase 2
+  // prefix did not create and that is not a supplier/purchase/payment-method
+  // table — so from the first Phase 4 migration it also returns the sales-side
+  // relations. A finding on `invoices.paid_minor` reported under the
+  // stock-inventory citation sends the reader to P3-AL-49, which is about the
+  // stock ledger and says nothing about a receivable. The decision that governs
+  // a stored receivable, paid total or outstanding total is P4-AL-06, so the
+  // CITATION is chosen here, at the call site. Deliberately not in the finding:
+  // `BalanceColumnFinding` is asserted with `toEqual` by three accepted
+  // integration suites, and a new field would turn them red for no gain.
+  const SALES_SIDE_RELATION =
+    /^(customers?|customer_(?!.*\bmethod\b)[a-z0-9_]+|invoices?|invoice_[a-z0-9_]+|sales?|sale_[a-z0-9_]+|payments|payment_allocations|payment_reversals|allocation_reversals|refunds?|credit_notes?|credit_note_[a-z0-9_]+|installments?|installment_[a-z0-9_]+|pos_[a-z0-9_]+)$/;
   for (const f of migrations) {
     for (const hit of findAuthoritativeInventoryColumns(readFileSync(f, 'utf8'), inventoryWatched)) {
-      fail('no-authoritative-balance', f, `${hit.table}.${hit.column} claims storage authority over a derived stock quantity (G-3/P3-AL-49)`);
+      fail(
+        'no-authoritative-balance',
+        f,
+        SALES_SIDE_RELATION.test(hit.table)
+          ? `${hit.table}.${hit.column} claims storage authority over a derived receivable, paid total or outstanding total — the journal and the documents are the truth, and no Phase 4 relation stores it (G-3/P4-AL-06)`
+          : `${hit.table}.${hit.column} claims storage authority over a derived stock quantity (G-3/P3-AL-49)`,
+      );
     }
   }
   for (const table of inventoryWatched) {
@@ -387,6 +409,41 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   for (const table of SUPPLIER_AUTHORITY_TABLES) {
     if (!supplierWatched.includes(table)) {
       fail('no-authoritative-balance', 'infrastructure/database/migrations', `${table} does not exist — the supplier half of G-3 is watching nothing`);
+    }
+  }
+
+  // P4-S1 (P4-AL-06, plan action 2): the third arm. Its surface is every
+  // stored relation the accepted INHERITED prefix (0000-0073) did not create,
+  // so a Phase 4 relation is watched the day it is written, under any name.
+  // The complement arm above reaches those relations today only because it is
+  // anchored on the Phase 2 prefix; this arm states the cover instead of
+  // inheriting it, and the pairs it would report twice are reported once.
+  // No "the arm is watching nothing" assertion belongs here: no Phase 4
+  // migration exists yet, and a gate may never say "nothing after N".
+  const salesWatched = discoverSalesTables(schema);
+  const reported = new Set<string>();
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeInventoryColumns(readFileSync(f, 'utf8'), inventoryWatched)) reported.add(`${hit.table}.${hit.column}`);
+    for (const hit of findAuthoritativeSupplierColumns(readFileSync(f, 'utf8'), supplierWatched)) reported.add(`${hit.table}.${hit.column}`);
+  }
+  for (const f of migrations) {
+    for (const hit of findAuthoritativeSalesColumns(readFileSync(f, 'utf8'), salesWatched)) {
+      if (reported.has(`${hit.table}.${hit.column}`)) continue;
+      fail(
+        'no-authoritative-balance',
+        f,
+        `${hit.table}.${hit.column} claims storage authority over a derived receivable, debt or stock quantity (G-3/P4-AL-06)`,
+      );
+    }
+  }
+  for (const table of salesWatched) {
+    if (inventoryWatched.includes(table) || supplierWatched.includes(table)) continue; // already reported above
+    if (isForbiddenSalesTable(table)) {
+      fail(
+        'no-authoritative-balance',
+        'infrastructure/database/migrations',
+        `table \`${table}\` stores derived truth — a receivable, a debt and an aging bucket are derived live (G-3/P4-AL-06)`,
+      );
     }
   }
 }
@@ -505,13 +562,29 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   if (readSurfaceFiles(reportFiles).length === 0) {
     fail('read-surface', 'apps/api/src', 'no accounting reporting module found — G-6 is watching nothing');
   }
-  // A merchant read module that exists must be one G-6 watches.
-  const surface = new Set(readSurfaceFiles(reportFiles));
-  for (const path of Object.keys(reportFiles)) {
-    if (/(^|[\\/])(inventory-reads|supplier-balance-reads)\.ts$/.test(path) && !surface.has(path)) {
-      fail('read-surface', path, 'a P3-S7 merchant read module is not on the G-6 surface');
-    }
-  }
+  // P4-S1: the hand-written list of merchant read modules that stood here —
+  // `(inventory-reads|supplier-balance-reads)\.ts$` — is REMOVED, and nothing
+  // is put in its place here.
+  //
+  // What it asserted is pinned, for those exact modules, by an accepted suite:
+  // `tests/integration/static-guards-s7.test.ts:136-139` requires
+  // `READ_SURFACE` to match both of them (and `:141` requires it NOT to match
+  // `purchasing-reads.ts`, which holds S6's command-side FX binding). So this
+  // loop could only ever repeat an accepted assertion.
+  //
+  // It is also the last place a read module was named by hand, which is what
+  // this slice exists to remove: G-6's reach must be a property of a module's
+  // SHAPE, so a read module in a context nobody has created yet is watched
+  // without anybody remembering to add it. Generalising this loop to
+  // `[\w.-]*-reads\.ts$` was considered and refused: it would demand that
+  // `purchasing-reads.ts` be on the surface and so contradict
+  // `static-guards-s7.test.ts:141`, an accepted assertion.
+  //
+  // The forward-looking property is asserted where it can carry a planted
+  // defect: `gate:phase4:s1` probes `READ_SURFACE` with a `*-reads.ts` module in
+  // a context directory that does not exist in the tree and refuses if the
+  // surface does not reach it, and `tests/guards/phase4-read-surface-guard.test.ts`
+  // carries the planted defects themselves.
 }
 
 // Rule 20 — GUARD G-7 (P3-S1, P3-AL-54 §D): every routine handed to
@@ -604,8 +677,32 @@ for (const dir of ['apps/api/src', 'apps/web/src', 'apps/admin/src', 'packages']
   }
 }
 
+// Rule 24 — GUARD G-8: a migration that verifies itself across its own DDL
+// must not be able to forge the comparison. The only carrier a single
+// migration has for a pre-state is a transaction-local GUC — the runner gives
+// each file its own transaction and G-5 forbids creating a relation to hold
+// one — and a GUC the file can write is a comparison the file can forge.
+// Measured 6 of 6: a planted widening applied GREEN as soon as one extra
+// `set_config` of the capture GUC was placed beside it, and was refused
+// outright without it. A runtime law cannot protect itself, so the protection
+// is a property of the TEXT and is checked here, before any server exists.
+{
+  const migrations: Record<string, string> = {};
+  for (const f of walk(join(ROOT, 'infrastructure/database/migrations'), /\.sql$/).sort()) {
+    migrations[relative(ROOT, f)] = readFileSync(f, 'utf8');
+  }
+  for (const violation of findSelfCaptureViolations({ migrations })) {
+    fail('migration-self-capture', 'infrastructure/database/migrations', violation);
+  }
+  // A guard watching nothing is decorative. If the shape ever leaves the tree,
+  // this says so rather than reporting a silent pass over an empty set.
+  if (selfCaptureSurface({ migrations }).length === 0) {
+    fail('migration-self-capture', 'infrastructure/database/migrations', 'no migration carries a self-capture GUC — rule 24 is watching nothing (G-8)');
+  }
+}
+
 if (failures > 0) {
   console.error(`\nSTATIC GUARDS: FAIL (${failures})`);
   process.exit(1);
 }
-console.log('STATIC GUARDS: PASS (23 rules)');
+console.log('STATIC GUARDS: PASS (24 rules)');

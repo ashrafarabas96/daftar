@@ -937,20 +937,84 @@ export function stocktakeOpenCommand(warehouseId: string, stocktakeId: string = 
 
 // ── the HTTP world (§6 T-09, T-17): the same S3 shape behind the real API ──
 
-/** A registered user and the bearer token the API issued them. */
+/**
+ * THE PASSWORD EVERY REGISTERED ACTOR HAS, spelled once.
+ *
+ * `registerActor` registers with it and `reauthenticate` logs in with it, so
+ * the two cannot drift apart. A second literal in a second place would be a
+ * fixture that can register an actor it can no longer authenticate.
+ */
+export const ACTOR_PASSWORD = 'Str0ng!Passw0rd';
+
+/**
+ * A registered user and the bearer token the API issued them.
+ *
+ * `token` is NOT readonly, and that is deliberate. `apps/api/src/modules/auth/tokens.ts`
+ * sets `accessTtlSeconds = 900`, so a bearer minted at registration is
+ * refused by the auth guard fifteen minutes later — and a fixture whose seed
+ * is paced against the product's own 300-per-60-s throttle runs well past
+ * that. A static token therefore makes a long fixture fail mid-seed with
+ * `UNAUTHENTICATED`, which is what `tests/performance/receivables-s4-budgets.test.ts`
+ * did: it died 902 s in, which is the 900 s TTL plus the request that met it.
+ * `reauthenticate` re-mints through the product's own `POST /v1/auth/login`
+ * and writes the new bearer HERE, so every header built from this actor
+ * afterwards carries it.
+ */
 export interface HttpActor {
-  readonly token: string;
+  token: string;
   readonly userId: string;
   readonly email: string;
 }
 
 export async function registerActor(t: TestApp, name: string): Promise<HttpActor> {
-  const reg = await t.request.post('/v1/auth/register').send({ email: uniqueEmail(), password: 'Str0ng!Passw0rd', displayName: name, preferredLocale: 'en' });
+  const reg = await t.request.post('/v1/auth/register').send({ email: uniqueEmail(), password: ACTOR_PASSWORD, displayName: name, preferredLocale: 'en' });
   expect(reg.status, `register ${name}`).toBe(201);
   const token = String(reg.body.accessToken);
   const me = await t.request.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
   expect(me.status).toBe(200);
   return { token, userId: String(me.body.userId), email: String(me.body.email) };
+}
+
+/**
+ * RE-MINT `a`'s bearer through the product's own login route, and say how long
+ * the product says the new one lasts.
+ *
+ * `POST /v1/auth/login` (`apps/api/src/modules/auth/auth.controller.ts:40`) is
+ * the merchant's own route and the response carries `expiresInSeconds` from
+ * `TokenService.accessTtlSeconds`, so a caller reads the TTL from the product
+ * rather than copying the number into a fixture. Nothing here raises the TTL,
+ * disables the guard or signs a token outside the product's route.
+ *
+ * LOGIN AND NOT REFRESH, on purpose. `AuthService.refresh` rotates
+ * single-use lineage with reuse detection: a refresh whose response is lost,
+ * retried or raced revokes the WHOLE session family (`auth.service.ts`,
+ * `TOKEN_REUSE_DETECTED`), which would turn a transient into a dead fixture
+ * with no way back. A login has no such cliff — it mints a new session and
+ * invalidates nothing — and its per-IP allowance (`LOGIN_IP_MAX_ATTEMPTS = 30`
+ * per `LOGIN_WINDOW_SECONDS = 300`) is ample for the handful of
+ * re-authentications a half-hour seed needs. `refresh:ip` is 60 per 300 s,
+ * nominally more, but the failure mode is the deciding factor, not the count.
+ *
+ * `headers` are the already-built header objects to keep in step —
+ * `asMember` snapshots the bearer into a plain object, so a world that holds
+ * one must have it rewritten or it keeps presenting the dead token.
+ */
+export async function reauthenticate(t: TestApp, a: HttpActor, ...headers: Record<string, string>[]): Promise<{ readonly expiresInSeconds: number }> {
+  const res = await t.request.post('/v1/auth/login').send({ email: a.email, password: ACTOR_PASSWORD });
+  // Asserted as a success, not as one literal status: what this helper owes
+  // its caller is a live bearer, and the status law of the login route belongs
+  // to the auth suites that are about the route.
+  expect(res.status, `re-authentication of ${a.email} through POST /v1/auth/login: ${JSON.stringify(res.body)}`).toBeLessThan(300);
+  const token = String(res.body.accessToken);
+  expect(token.length, `the login response carried no access token: ${JSON.stringify(res.body)}`).toBeGreaterThan(0);
+  const expiresInSeconds = Number(res.body.expiresInSeconds);
+  expect(
+    Number.isFinite(expiresInSeconds) && expiresInSeconds > 0,
+    `the login response did not state the token's lifetime, so no caller can re-mint before it ends: ${JSON.stringify(res.body)}`,
+  ).toBe(true);
+  a.token = token;
+  for (const h of headers) h['Authorization'] = `Bearer ${token}`;
+  return { expiresInSeconds };
 }
 
 /** The headers of a request by `a` in business `businessId`. */

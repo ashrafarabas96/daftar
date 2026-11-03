@@ -76,10 +76,21 @@ export interface LocaleNames {
   readonly supplierBSearch: string;
   readonly rice: string;
   readonly riceSearch: string;
+  /**
+   * The POS type-ahead is a PREFIX probe, not a substring one: `pos-reads.ts`
+   * matches `lower(t.name) ^@ lower($q)`. `riceSearch` is the substring term
+   * the catalog and stock pickers use, and "rice" is not a prefix of "Basmati
+   * rice 5 kg" — measured on the browser gate, where the en and tr POS sale
+   * steps timed out waiting for the row while ar passed only because "أرز"
+   * happens to be a prefix of "أرز بسمتي ٥ كغ". These two are real prefixes.
+   */
+  readonly ricePrefix: string;
   readonly oil: string;
   readonly oilSearch: string;
   readonly tea: string;
   readonly teaSearch: string;
+  /** See `ricePrefix`: a real prefix of `tea`, for the POS type-ahead. */
+  readonly teaPrefix: string;
   readonly cash: string;
   readonly starterItem: string;
 }
@@ -94,10 +105,12 @@ export const NAMES: Readonly<Record<Locale, LocaleNames>> = {
     supplierBSearch: 'Quds',
     rice: 'أرز بسمتي ٥ كغ',
     riceSearch: 'أرز',
+    ricePrefix: 'أرز',
     oil: 'زيت زيتون بكر ممتاز ١ لتر',
     oilSearch: 'زيت',
     tea: 'شاي أخضر',
     teaSearch: 'شاي',
+    teaPrefix: 'شاي',
     cash: 'الصندوق',
     starterItem: 'عسل جبلي',
   },
@@ -110,10 +123,12 @@ export const NAMES: Readonly<Record<Locale, LocaleNames>> = {
     supplierBSearch: 'Quds',
     rice: 'Basmati rice 5 kg',
     riceSearch: 'rice',
+    ricePrefix: 'Basmati',
     oil: 'Extra virgin olive oil 1 L',
     oilSearch: 'olive',
     tea: 'Green tea',
     teaSearch: 'tea',
+    teaPrefix: 'Green',
     cash: 'Cash drawer',
     starterItem: 'Mountain honey',
   },
@@ -126,10 +141,12 @@ export const NAMES: Readonly<Record<Locale, LocaleNames>> = {
     supplierBSearch: 'Quds',
     rice: 'Basmati pirinç 5 kg',
     riceSearch: 'pirinç',
+    ricePrefix: 'Basmati',
     oil: 'Sızma zeytinyağı 1 L',
     oilSearch: 'zeytin',
     tea: 'Yeşil çay',
     teaSearch: 'çay',
+    teaPrefix: 'Yeşil',
     cash: 'Kasa',
     starterItem: 'Dağ balı',
   },
