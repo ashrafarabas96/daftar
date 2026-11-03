@@ -1067,28 +1067,39 @@ jobs:
           # for every project, from a callback registered before the plugin's own.
           # `:app` configures with the same shape, so its line is the control.
           cat > /tmp/probe.init.gradle <<'PROBE_EOF'
+          gradle.addProjectEvaluationListener(new ProjectEvaluationListener() {
+            void beforeEvaluate(Project p) { }
+            void afterEvaluate(Project p, ProjectState s) {
+              println "PROBE2 ${p.path} evalFailure=" + (s.failure == null ? "none" : s.failure.toString())
+            }
+          })
           gradle.allprojects { p ->
             p.afterEvaluate {
+              def f = p.buildFile
+              def bytes = f.exists() ? f.bytes : new byte[0]
+              def txt = new String(bytes, "UTF-8")
+              def md = java.security.MessageDigest.getInstance("SHA-256")
+              println "PROBE2 ${p.path} projectDir=${p.projectDir}"
+              println "PROBE2 ${p.path} buildFile=${f} exists=${f.exists()} bytes=${bytes.length}"
+              println "PROBE2 ${p.path} buildFileSha256=" + md.digest(bytes).encodeHex()
+              println "PROBE2 ${p.path} hasAndroidBlock=" + txt.contains("android {") + " hasCompileSdkLine=" + txt.contains("compileSdk = 35")
               def ext = p.extensions.findByName('android')
-              println "PROBE ${p.path} ext=" + (ext == null ? "NULL" : ext.getClass().name + "@" + Integer.toHexString(System.identityHashCode(ext)))
-              if (ext != null) {
-                try { println "PROBE ${p.path} compileSdk=${ext.compileSdk} namespace=${ext.namespace}" }
-                catch (Throwable t) { println "PROBE ${p.path} read-failed " + t.getClass().name + ": " + t.message }
-                println "PROBE ${p.path} loader=" + System.identityHashCode(ext.getClass().getClassLoader()) + " jar=" + ext.getClass().protectionDomain?.codeSource?.location
-              }
-              println "PROBE ${p.path} androidPlugins=" + p.plugins.collect{ it.getClass().name }.findAll{ it.toLowerCase().contains('android') }
+              if (ext == null) { println "PROBE2 ${p.path} ext=NULL"; return }
+              try { println "PROBE2 ${p.path} compileSdk=${ext.compileSdk}" } catch (Throwable t) { println "PROBE2 ${p.path} compileSdk read-failed " + t.message }
+              try { println "PROBE2 ${p.path} compileSdkVersionLegacy=${ext.compileSdkVersion}" } catch (Throwable t) { println "PROBE2 ${p.path} legacy read-failed " + t.message }
+              try { println "PROBE2 ${p.path} namespace=${ext.namespace}" } catch (Throwable t) { println "PROBE2 ${p.path} namespace read-failed " + t.message }
             }
           }
           PROBE_EOF
           echo "### probe invocation -- its own exit code is NOT the gate"
           set +e
-          ./gradlew -I /tmp/probe.init.gradle help --no-daemon > /tmp/probe.txt 2>&1
+          ./gradlew -I /tmp/probe.init.gradle :offline-kernel:tasks --no-daemon > /tmp/probe.txt 2>&1
           prc=$?
           set -e
           echo "### probe rc=$prc, bytes: $(wc -c < /tmp/probe.txt)"
-          { grep -n "PROBE " /tmp/probe.txt || echo "NO PROBE LINES -- the probe itself never ran"; } | head -40
-          echo "### any second copy of the module build file on this machine"
-          find / -name build.gradle.kts -path "*offline-kernel*" 2>/dev/null | head -20
+          { grep -n "PROBE2 " /tmp/probe.txt || echo "NO PROBE2 LINES -- the probe itself never ran"; } | head -60
+          echo "### the first failure the probe itself reported, if any"
+          { grep -nE "FAILURE:|What went wrong|Caused by|not specified|Script compilation" /tmp/probe.txt || echo "no failure line matched"; } | head -25
           echo "### the real invocation; rc is re-raised, nothing swallowed"
           set +e
           ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace > /tmp/gradle.txt 2>&1
@@ -1130,16 +1141,24 @@ jobs:
           # keeps the no-match case a counted zero. Measured: with the kernel's
           # results directory deleted this step now fails on its own assertion
           # and says so, and with `:app` empty it still reaches that assertion.
-          count_cases () {
+          count_executed () {
             local dir="$1"
             if [ ! -d "$dir" ]; then echo 0; return 0; fi
-            find "$dir" -name '*.xml' -type f -exec cat {} + 2>/dev/null \
-              | { grep -o '<testcase' || true; } | wc -l
+            local xml cases skipped
+            xml=$(find "$dir" -name "*.xml" -type f -exec cat {} + 2>/dev/null)
+            cases=$(printf '%s' "$xml" | { grep -o "<testcase" || true; } | wc -l)
+            # A `<testcase>` carrying a `<skipped/>` child was COLLECTED, not executed.
+            # Counting it would let a suite that skipped every case read as a suite
+            # that ran, which is the same silent pass by another route, so the skipped
+            # ones are subtracted and the number this gate compares is the number of
+            # cases that actually executed.
+            skipped=$(printf '%s' "$xml" | { grep -o "<skipped" || true; } | wc -l)
+            echo $(( cases - skipped ))
           }
-          app=$(count_cases app/build/test-results)
-          kernel=$(count_cases offline-kernel/build/test-results)
-          static=$(grep -rho '@Test' offline-kernel/src/test 2>/dev/null | wc -l)
-          echo "app           executed: $app"
+          app=$(count_executed app/build/test-results)
+          kernel=$(count_executed offline-kernel/build/test-results)
+          static=$(grep -rho "@Test" offline-kernel/src/test 2>/dev/null | wc -l)
+          echo "app            executed: $app"
           echo "offline-kernel executed: $kernel"
           echo "offline-kernel static @Test occurrences: $static"
           echo "total executed: $((app + kernel))"
@@ -1148,6 +1167,20 @@ jobs:
             echo "      did not run, which is exactly the silent pass this gate exists for"
             exit 1
           fi
+          # Equality, not containment. A count that merely exceeds zero cannot tell a
+          # full run from a partial one: a suite that lost a file, or a class whose
+          # cases were filtered out, still clears a floor. The static inventory is the
+          # count this tree declares, measured at three agreeing identities (bare
+          # `@Test` occurrences, `@Test` at the start of a line, and `@Test` followed
+          # by `fun `) -- all 119 at 1f6fb1f6 -- so the executed count must MATCH it.
+          if [ "$kernel" -ne "$static" ]; then
+            echo "FAIL: offline-kernel executed $kernel of the $static cases this tree declares."
+            echo "      A difference is not noise: either cases did not run, or the two"
+            echo "      counts do not name the same identity. Both need reading, neither"
+            echo "      is cleared by lowering this gate."
+            exit 1
+          fi
+          echo "ok: the executed count equals the declared inventory ($kernel == $static)"
 
   # -------------------------------------------------------------------------
   # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
