@@ -20,7 +20,7 @@ plugins {
  * one. A JVM module's unit tests hang off `test` — a name that command never
  * says — so its ninety-nine cases would never run and the job would still go
  * green. This module therefore takes the plugin whose variant task names CI
- * already asks for, which is also why nothing under `.github/**` had to change:
+ * already asks for, which is also why nothing under `.github` had to change:
  * that path is outside this lane's ownership.
  */
 android {
