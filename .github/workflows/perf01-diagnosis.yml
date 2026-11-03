@@ -186,3 +186,95 @@ jobs:
           done
         env:
           PG_PORT: '5432'
+  perf01-through-the-gate:
+    runs-on: ubuntu-latest
+    # The same service the `backend` job uses, so the storage path under test
+    # is the one the failure happened on.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.12.x'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Create DAFTAR database + DB roles
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 -> latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Runner facts and the service's durability settings
+        run: |
+          echo "nproc=$(nproc)"
+          cat /proc/cpuinfo | grep -m1 'model name' || true
+          free -m | head -2
+          df -h / /home/runner | tail -2
+      - name: IO probe - durable commit versus plain round trip
+        run: node .github/diagnostics/perf01-io-probe.cjs
+        env:
+          PROBE_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: What npx resolves to inside the gate, versus what the project pins
+        run: |
+          echo "pinned:  $(node_modules/.bin/vitest --version)"
+          echo "npx:     $(npx vitest --version)"
+      - name: THE REAL PATH - the P2-S8 gate, with a process sampler beside it
+        run: |
+          set -u
+          (
+            while true; do
+              echo "--- $(date -u +%H:%M:%SZ) load=$(cat /proc/loadavg)"
+              ps -eo pcpu,rss,etime,args --sort=-pcpu | head -8
+              echo "postgres processes: $(ps -eo args | grep -c '[p]ostgres')"
+              sleep 5
+            done
+          ) > sampler.txt 2>&1 &
+          SAMPLER=$!
+          if npm run gate:phase2:s8; then echo "GATE PASSED"; else echo "GATE FAILED (exit $?)"; fi
+          kill $SAMPLER 2>/dev/null || true
+          echo "sampler lines: $(wc -l < sampler.txt)"
+        env:
+          PG_PORT: '5432'
+      - name: Budget A as the gate measured it, and what was running
+        if: always()
+        run: |
+          node -e "
+            const ev = require('./release/phase2-s8-performance-tier1.json');
+            for (const m of ev.measurements) {
+              if (!m.name.startsWith('A post')) continue;
+              const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+              console.log('GATE A: n=' + m.iterations + ' p50=' + m.p50.toFixed(3) +
+                ' p95=' + m.p95.toFixed(3) + ' p99=' + m.p99.toFixed(3) +
+                ' max=' + m.max.toFixed(3) + ' over=' + over + '/' + m.iterations);
+              console.log('GATE A samples: ' + JSON.stringify(m.samplesMs));
+            }
+          "
+          echo '--- the busiest sampler snapshots ---'
+          grep -c '^---' sampler.txt || true
+          tail -120 sampler.txt
