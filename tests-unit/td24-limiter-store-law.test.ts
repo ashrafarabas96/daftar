@@ -67,6 +67,7 @@ import type { DynamicModule, FactoryProvider, Provider, ValueProvider } from '@n
 import { loadConfig, type AppConfig } from '../apps/api/src/config';
 import { httpImports, httpProviders, NO_MERCHANT_CONTEXT } from '../apps/api/src/app/runtime';
 import type { RateLimiter } from '../apps/api/src/infra/redis';
+import { RedisThrottlerStorage } from '../apps/api/src/infra/rate-limit-store';
 
 /** The production KMS bridge a production HTTP surface must carry (Blocker 4). */
 const KMS_BRIDGE = {
@@ -152,6 +153,25 @@ describe('TD-24 law — the general allowance may not be counted in the process 
     // The identity limits (RATE_LIMITER). `memory-development-only` is the
     // value `platform.controller.ts:94` already refuses on readiness.
     expect(configuredLimiterKind(config)).not.toBe('memory-development-only');
+  });
+
+  /**
+   * DR-90 §4 named the gap in "not the in-process one" and it is a real one:
+   * a SHARED store that computed `isBlocked` wrongly would satisfy TD24-LAW-A
+   * and refuse nothing, while readiness reported a shared store. The refusal
+   * itself is therefore measured — in
+   * `tests-unit/td24-redis-throttler-store.test.ts` (TD24-POS: the 301st call
+   * is blocked; TD24-NEG: a backend each admits 600) — and this case is the
+   * join between the two files. Without it, that refusal would be a fact
+   * about a class nobody proved production binds.
+   *
+   * It does not drive the production-resolved store past the limit here on
+   * purpose: that store's backend is a `redis://` URL no test may reach, so
+   * the call would be answered by the degraded fallback and would pass for
+   * the wrong reason — which is the shape of defect this card is about.
+   */
+  it('TD24-LAW-C: the store production binds is the one whose refusal is measured', () => {
+    expect(configuredThrottlerStore(productionHttpConfig())).toBeInstanceOf(RedisThrottlerStorage);
   });
 
   it('TD24-LAW-B (positive control): a development config resolves to exactly the in-process store', () => {

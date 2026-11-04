@@ -53,6 +53,7 @@ import {
 } from '../modules/accounting/accounting-reconciliation.service';
 import { AccountingReconciliationWorker } from '../modules/accounting/accounting-reconciliation.worker';
 import { InventoryAssertionMinterService } from '../modules/inventory/inventory-assertion.minter';
+import { createThrottlerStorage } from '../infra/rate-limit-store';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -111,11 +112,18 @@ export interface RuntimeSeams {
  * forged X-Forwarded-For buys nothing. An IPv6 client counts per /64
  * (`limiterKey`, review L-3).
  */
-export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES'>) {
+export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES' | 'REDIS_URL'>) {
+  // TD-24 / DR-90: the counters live in the shared store wherever one is
+  // configured, so two replicas hold ONE allowance per client per route
+  // instead of one each. `undefined` leaves `forRoot` to bind its own
+  // in-process store — see `createThrottlerStorage` for why the condition is
+  // REDIS_URL and not isProd.
+  const storage = createThrottlerStorage(config);
   return [
     ThrottlerModule.forRoot({
       throttlers: [{ ttl: 60_000, limit: 300 }],
       getTracker: (_req: unknown, context: ExecutionContext) => clientLimiterKey(context.switchToHttp().getRequest<Request>(), config),
+      ...(storage ? { storage } : {}),
     }),
   ];
 }

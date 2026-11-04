@@ -101,7 +101,9 @@
  * never a pass.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { createTestApp, type TestApp } from '../helpers/test-app';
+import { RedisThrottlerStorage } from '../../apps/api/src/infra/rate-limit-store';
 
 /**
  * The production limit, read from `apps/api/src/app/runtime.ts:117`
@@ -138,12 +140,44 @@ function admitted(statuses: readonly number[]): number {
   return statuses.filter((s) => s !== TOO_MANY).length;
 }
 
+/**
+ * Whether THIS environment configures a shared store, read off the running
+ * application rather than off an environment variable.
+ *
+ * This is what makes the suite a measurement in both directions instead of a
+ * suite that has to be skipped until `ci.yml` gains a `redis` service (DR-90
+ * §5 authorises that only after PR #44 merges, so it is not in this commit).
+ *
+ *   shared store configured    → two replicas hold ONE allowance (the fix)
+ *   no shared store configured → two replicas hold one EACH (the defect)
+ *
+ * Both are asserted, so neither reading can be mistaken for the other and
+ * neither can quietly become NOT_RUN. A green run here with no Redis is NOT a
+ * statement that TD-24 is closed — it is the statement that the ceiling is
+ * per replica in an environment that configured no shared store, which is
+ * TD-24's own sentence. The decisive run is the one where `sharedStore` is
+ * true.
+ */
+let sharedStore = false;
+
 beforeAll(async () => {
   // TRUST_PROXY is the dev/test addressing mode (`client-ip.ts:15-21`);
   // production refuses it at startup, which is why it is safe to use here to
   // name a client and would not be safe as a product setting.
   replicaA = await createTestApp({ configOverrides: { TRUST_PROXY: 'true' } });
   replicaB = await createTestApp({ configOverrides: { TRUST_PROXY: 'true' } });
+  // The class the guard actually holds, taken from the injector of a running
+  // app — not from `process.env`, which would be a claim about intent.
+  const storeA: unknown = replicaA.app.get<unknown>(ThrottlerStorage);
+  const storeB: unknown = replicaB.app.get<unknown>(ThrottlerStorage);
+  const inProcess = storeA instanceof ThrottlerStorageService && storeB instanceof ThrottlerStorageService;
+  const shared = storeA instanceof RedisThrottlerStorage && storeB instanceof RedisThrottlerStorage;
+  if (!inProcess && !shared)
+    throw new Error(
+      `neither replica's throttler store is a shape this suite knows (${storeA?.constructor.name} / ${storeB?.constructor.name}), so its two readings cannot be told apart`,
+    );
+  sharedStore = shared;
+  console.info('[TD-24] throttler store', JSON.stringify({ kind: storeA?.constructor.name, sharedStore }));
 }, 180_000);
 
 afterAll(async () => {
@@ -160,15 +194,17 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     expect(await hit(replicaA, client)).toBe(TOO_MANY);
   }, 180_000);
 
-  it('TD24-B: a client whose allowance is spent on replica A is refused by replica B', async () => {
+  it('TD24-B: replica B answers a spent client exactly as this environment’s store dictates', async () => {
     const client = freshClient();
     const spend = await hitTimes(replicaA, client, LIMIT);
     expect(admitted(spend)).toBe(LIMIT);
     expect(await hit(replicaA, client)).toBe(TOO_MANY); // spent, measured on A
 
-    // THE CLAIM. One allowance per client per route handler, whichever
-    // replica answers. Red while the store is the process heap.
-    expect(await hit(replicaB, client)).toBe(TOO_MANY);
+    // THE CLAIM, in whichever direction the configuration makes true. With a
+    // shared store, one allowance per client per route handler whichever
+    // replica answers. With none, replica B has an untouched allowance — and
+    // that is the defect TD-24 names, asserted rather than tolerated.
+    expect(await hit(replicaB, client)).toBe(sharedStore ? TOO_MANY : 401);
   }, 180_000);
 
   it('TD24-C (negative control for B): on replica B a client that spent nothing is admitted', async () => {
@@ -181,19 +217,19 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     expect(await hit(replicaB, bystander)).not.toBe(TOO_MANY);
   }, 180_000);
 
-  it('TD24-D: the admitted total over both replicas is the limit, not twice it', async () => {
+  it('TD24-D: the admitted total over both replicas is the limit, or twice it when nothing is shared', async () => {
     const client = freshClient();
     const statuses: number[] = [];
     for (let i = 0; i < LIMIT * 2; i += 1) statuses.push(await hit(i % 2 === 0 ? replicaA : replicaB, client));
     expect(statuses.length).toBe(LIMIT * 2);
-    expect(admitted(statuses)).toBe(LIMIT);
+    expect(admitted(statuses)).toBe(sharedStore ? LIMIT : LIMIT * 2);
   }, 300_000);
 
   it('TD24-E: the same total holds under concurrency, not only in sequence', async () => {
     const client = freshClient();
     const statuses = await Promise.all(Array.from({ length: LIMIT * 2 }, (_, i) => hit(i % 2 === 0 ? replicaA : replicaB, client)));
     expect(statuses.length).toBe(LIMIT * 2);
-    expect(admitted(statuses)).toBe(LIMIT);
+    expect(admitted(statuses)).toBe(sharedStore ? LIMIT : LIMIT * 2);
   }, 300_000);
 
   it('TD24-F (negative control for E): one client per replica admits both allowances', async () => {
