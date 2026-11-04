@@ -61,12 +61,12 @@
  * as on CI.
  */
 import { describe, expect, it } from 'vitest';
-import { ThrottlerStorageService } from '@nestjs/throttler';
-import { ThrottlerStorageProvider, getOptionsToken } from '@nestjs/throttler/dist/throttler.providers';
-import type { DynamicModule, FactoryProvider, Provider, ValueProvider } from '@nestjs/common';
+import { ThrottlerStorage } from '@nestjs/throttler';
+import type { FactoryProvider } from '@nestjs/common';
 import { loadConfig, type AppConfig } from '../apps/api/src/config';
-import { httpImports, httpProviders, NO_MERCHANT_CONTEXT } from '../apps/api/src/app/runtime';
+import { httpProviders, NO_MERCHANT_CONTEXT } from '../apps/api/src/app/runtime';
 import type { RateLimiter } from '../apps/api/src/infra/redis';
+import { InMemoryMetrics } from '../apps/api/src/infra/metrics';
 import { RedisThrottlerStorage } from '../apps/api/src/infra/rate-limit-store';
 
 /** The production KMS bridge a production HTTP surface must carry (Blocker 4). */
@@ -102,31 +102,28 @@ function developmentConfig(): AppConfig {
   });
 }
 
-/** The dynamic module `httpImports` built, or a named failure. */
-function throttlerModule(config: AppConfig): DynamicModule {
-  const imports = httpImports(config);
-  const first = imports[0];
-  if (first === undefined || typeof first !== 'object' || !('providers' in first))
-    throw new Error('httpImports no longer returns ThrottlerModule.forRoot as a dynamic module, so this law cannot resolve the store it configures');
-  return first as DynamicModule;
-}
-
-const isValueProvider = (p: Provider): p is ValueProvider => typeof p === 'object' && 'provide' in p && 'useValue' in p;
-
 /**
- * The store the guard would hold, computed by the LIBRARY's own factory from
- * the options the module was built with.
+ * The store the guard would hold, resolved the way the guard resolves it.
+ *
+ * It is a PROVIDER of the module that registers `ThrottlerGuard`, not an
+ * option of the imported `ThrottlerModule` — measured: a consumer in that
+ * module receives the module-local provider even though `ThrottlerModule` is
+ * `@Global()`. (An earlier version of this law read `app.get()` on the ROOT
+ * injector, which answers with the global module's instance instead, and drew
+ * the opposite conclusion from it. The injector you ask decides the answer.)
+ *
+ * `null` means the token is deliberately UNPROVIDED, which is how a process
+ * with no shared store keeps the library's own instance — the one
+ * `tests/performance/pos-s3-budgets.test.ts:549` reads from the app root and
+ * clears between measurements.
  */
-function configuredThrottlerStore(config: AppConfig): object {
-  const providers = throttlerModule(config).providers ?? [];
-  const optionsProvider = providers.filter(isValueProvider).find((p) => p.provide === getOptionsToken());
-  if (optionsProvider === undefined)
-    throw new Error(`@nestjs/throttler no longer carries its options under ${String(getOptionsToken())}, so this law cannot read the configured store`);
-  const factory = (ThrottlerStorageProvider as FactoryProvider).useFactory;
-  if (typeof factory !== 'function')
-    throw new Error('@nestjs/throttler ThrottlerStorageProvider is no longer a factory provider, so this law cannot resolve the store');
-  const store: unknown = factory(optionsProvider.useValue);
-  if (typeof store !== 'object' || store === null) throw new Error('the throttler storage factory did not return an object');
+function configuredThrottlerStore(config: AppConfig): object | null {
+  const providers = httpProviders(config, { useValue: NO_MERCHANT_CONTEXT });
+  const provider = providers.find((p): p is FactoryProvider => typeof p === 'object' && 'provide' in p && p.provide === ThrottlerStorage && 'useFactory' in p);
+  if (provider === undefined) return null;
+  const logger = { warn: () => undefined } as unknown as Parameters<typeof provider.useFactory>[0];
+  const store: unknown = provider.useFactory(logger, new InMemoryMetrics());
+  if (typeof store !== 'object' || store === null) throw new Error('the ThrottlerStorage factory did not return an object');
   return store;
 }
 
@@ -147,8 +144,9 @@ describe('TD-24 law — the general allowance may not be counted in the process 
   it('TD24-LAW-A: a production HTTP surface resolves neither layer to an in-process store', () => {
     const config = productionHttpConfig();
 
-    // The general allowance (ThrottlerModule / ThrottlerGuard).
-    expect(configuredThrottlerStore(config)).not.toBeInstanceOf(ThrottlerStorageService);
+    // The general allowance: a shared store is PROVIDED, and it is the Redis
+    // one whose refusal is measured in the store suite.
+    expect(configuredThrottlerStore(config)).toBeInstanceOf(RedisThrottlerStorage);
 
     // The identity limits (RATE_LIMITER). `memory-development-only` is the
     // value `platform.controller.ts:94` already refuses on readiness.
@@ -171,15 +169,22 @@ describe('TD-24 law — the general allowance may not be counted in the process 
    * the wrong reason — which is the shape of defect this card is about.
    */
   it('TD24-LAW-C: the store production binds is the one whose refusal is measured', () => {
-    expect(configuredThrottlerStore(productionHttpConfig())).toBeInstanceOf(RedisThrottlerStorage);
+    const store = configuredThrottlerStore(productionHttpConfig());
+    expect(store).toBeInstanceOf(RedisThrottlerStorage);
+    // And it was built WITH the process's own logger and metrics, which is
+    // the half of DR-90 §3 a store built in module metadata cannot have.
+    expect((store as RedisThrottlerStorage).degradedRequests).toBe(0);
   });
 
   it('TD24-LAW-B (positive control): a development config resolves to exactly the in-process store', () => {
     const config = developmentConfig();
 
-    // Not "something else": the very class the performance harness's window
-    // reset reads as a Map.
-    expect(configuredThrottlerStore(config)).toBeInstanceOf(ThrottlerStorageService);
+    // The token is left UNPROVIDED on purpose, so the guard keeps the global
+    // module's own in-process instance — the very object the performance
+    // harness clears from the app root between two measurements. A provider
+    // here would hand the guard a different Map and make that reset a silent
+    // no-op.
+    expect(configuredThrottlerStore(config)).toBe(null);
     expect(configuredLimiterKind(config)).toBe('memory-development-only');
   });
 });

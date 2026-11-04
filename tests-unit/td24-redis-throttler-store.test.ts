@@ -218,18 +218,14 @@ describe('TD-24 — isolation is a property of the key (DR-90 §1)', () => {
     // `ScopeBlindStore` is what a regression looks like: the same store with
     // the scope segment dropped from the key it builds. Everything else —
     // backend, limit, logical key, call order — is identical to TD24-TEN.
-    class ScopeBlindStore {
-      constructor(private readonly backend: FakeRedis) {}
-      async increment(key: string, ttl: number, limit: number, blockMs: number, name: string): Promise<{ isBlocked: boolean; totalHits: number }> {
-        const counterKey = `${RATE_LIMIT_KEY_PREFIX}:${name}:${key}`;
-        const out = await this.backend.eval('', [counterKey, `${counterKey}:blocked`], [String(limit), String(ttl), String(blockMs)]);
-        return { totalHits: out[0] ?? 0, isBlocked: out[2] === 1 };
-      }
-    }
-
+    // The control shares the PRODUCTION key builder: both stores use the real
+    // `RedisThrottlerStorage` with the PRE-AUTH scope, which is the scope that
+    // carries no tenant. That is what a regression to a scope-less key looks
+    // like, and — unlike a local class with a key format of its own — it
+    // cannot keep passing if the production format changes.
     const backend = new FakeRedis();
-    const forA = new ScopeBlindStore(backend);
-    const forB = new ScopeBlindStore(backend);
+    const forA = new RedisThrottlerStorage(backend, { scope: PRE_AUTH_SCOPE });
+    const forB = new RedisThrottlerStorage(backend, { scope: PRE_AUTH_SCOPE });
 
     let ok = 0;
     for (let i = 0; i < LIMIT; i += 1) {
@@ -238,11 +234,11 @@ describe('TD-24 — isolation is a property of the key (DR-90 §1)', () => {
     }
     expect(ok).toBe(LIMIT);
 
-    // TD24-TEN's assertion on tenant B, verbatim — and it FAILS here, because
-    // without the segment tenant A has spent tenant B's allowance too.
+    // TD24-TEN's assertion on the second holder, verbatim — and it FAILS
+    // here, because with no tenant in the key the first holder has spent the
+    // second one's allowance too.
     const first = await forB.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
     expect(first.isBlocked).toBe(true);
-    expect(() => expect(first.isBlocked).toBe(false)).toThrow();
 
     // And the keys themselves differ only by that segment, so nothing else
     // can be the reason the real store passes TD24-TEN.
@@ -374,10 +370,41 @@ describe('TD-24 — an outage degrades and says so, and never becomes "no limit"
       () => 'resolved against a port nothing is listening on',
       (e: unknown) => (e instanceof Error ? e.message : String(e)),
     );
+    // The decisive assertion is the FIRST one: the old failure mode is gone.
+    // The second review was right that `/connect/i` also matches "Connection
+    // is closed." — which is what ioredis says once its retries are spent —
+    // so it proves nothing on its own. It is replaced by the two messages a
+    // dead port can honestly produce, as whole words.
     expect(reason).not.toMatch(/Stream isn't writeable/);
-    expect(reason).toMatch(/ECONNREFUSED|connect|timeout/i);
+    expect(reason).toMatch(/ECONNREFUSED|Connection is closed\.|ETIMEDOUT/);
     await evaluator.close?.();
   });
+
+  it('TD24-REDIAL: the real client dials again after its retries are spent, so a replica can recover', async () => {
+    // TD24-RECOVER proves the FLAG clears, but it does so through a fake
+    // evaluator — which, as the second review said, is not a measurement of
+    // the real client. This case is: on a dead port ioredis spends its
+    // retries and lands in status `end`, where `sendCommand` rejects
+    // "Connection is closed." without dialling. If `ready()` did not clear a
+    // finished attempt and re-dial from `end`, the attempt count would stay
+    // at one for the life of the process and the replica would count per
+    // replica for ever — even after Redis came back.
+    const evaluator = createRedisEvaluator('redis://127.0.0.1:6399');
+    await evaluator.eval('return 1', [], []).catch(() => undefined);
+    const afterFirst = evaluator.dialAttempts?.() ?? 0;
+    await evaluator.eval('return 1', [], []).catch(() => undefined);
+    const afterSecond = evaluator.dialAttempts?.() ?? 0;
+
+    expect(afterFirst).toBeGreaterThan(0); // the input was not empty
+    expect(afterSecond).toBeGreaterThan(afterFirst);
+
+    // And a released client does NOT dial again: recovery must not outlive
+    // the application.
+    await evaluator.close?.();
+    const afterClose = evaluator.dialAttempts?.() ?? 0;
+    await expect(evaluator.eval('return 1', [], [])).rejects.toThrow(/released with the application/);
+    expect(evaluator.dialAttempts?.() ?? 0).toBe(afterClose);
+  }, 30_000);
 
   it('TD24-DEGRADE-STORE: the fallback is the in-process store, not a third implementation', async () => {
     // The per-replica ceiling is the one the deployment had before this card

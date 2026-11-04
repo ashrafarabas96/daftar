@@ -109,9 +109,16 @@ export class HealthController {
       // It does NOT make the process unready: taking replicas out of service
       // over a cache blip is the worse failure, and the count is the signal.
       if (this.throttlerStore instanceof RedisThrottlerStorage) {
+        // `ok` ASKS THE BACKEND rather than reporting what the last request
+        // happened to do: a replica with no traffic would otherwise read
+        // healthy while the shared store was down, and an intermittent
+        // backend would read healthy whenever the last request got through.
+        // `degradedRequests` sits beside it as the history — how many
+        // requests this replica has already counted on its own.
+        const storeOk = await this.throttlerStore.healthCheck().catch(() => false);
         components['throttlerStore'] = {
           kind: this.throttlerStore.kind,
-          ok: !this.throttlerStore.degraded,
+          ok: storeOk,
           degradedRequests: this.throttlerStore.degradedRequests,
         };
       }

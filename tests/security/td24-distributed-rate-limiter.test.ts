@@ -192,7 +192,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     expect(spend.length).toBe(LIMIT); // the input was not empty (RULE-18/19)
     expect(admitted(spend)).toBe(LIMIT);
     expect(await hit(replicaA, client)).toBe(TOO_MANY);
-  }, 180_000);
+  }, 55_000);
 
   it('TD24-B: replica B answers a spent client exactly as this environment’s store dictates', async () => {
     const client = freshClient();
@@ -205,7 +205,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     // replica answers. With none, replica B has an untouched allowance — and
     // that is the defect TD-24 names, asserted rather than tolerated.
     expect(await hit(replicaB, client)).toBe(sharedStore ? TOO_MANY : 401);
-  }, 180_000);
+  }, 55_000);
 
   it('TD24-C (negative control for B): on replica B a client that spent nothing is admitted', async () => {
     const spender = freshClient();
@@ -215,7 +215,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
 
     // Replica B is not refusing everything: a different client still passes.
     expect(await hit(replicaB, bystander)).not.toBe(TOO_MANY);
-  }, 180_000);
+  }, 55_000);
 
   /**
    * The timeout is 55s and not a comfortable 300s ON PURPOSE. The window is

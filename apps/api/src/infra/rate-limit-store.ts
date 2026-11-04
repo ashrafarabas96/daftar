@@ -211,6 +211,17 @@ export interface RateLimitEvaluator {
   eval(script: string, keys: readonly string[], args: readonly string[]): Promise<readonly number[]>;
   /** Release the backend. Optional so a test fake need not implement it. */
   close?(): Promise<void>;
+  /** Is the backend reachable RIGHT NOW? Optional; a fake without one reports reachable. */
+  ping?(): Promise<boolean>;
+  /**
+   * How many times this evaluator has DIALLED the backend.
+   *
+   * It exists so that recovery can be measured rather than argued: a client
+   * that stopped dialling after its retries were spent is the defect the
+   * second review found, and the only honest proof that it dials again is a
+   * count of attempts. Optional, so a fake need not have one.
+   */
+  dialAttempts?(): number;
 }
 
 /** Narrow logger seam: this store needs one level and no transport. */
@@ -306,6 +317,20 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
     }
   }
 
+  /**
+   * Is the shared store reachable RIGHT NOW?
+   *
+   * `degraded` answers "did the last request fall back", which the second
+   * review rightly called a statement about the last request rather than
+   * about now: an idle replica would read healthy while Redis was down. So
+   * readiness asks the backend, exactly as it already asks the identity
+   * limiter (`platform.controller.ts`, `limiter.healthCheck()`), and
+   * `degradedRequests` stays beside it as the history.
+   */
+  async healthCheck(): Promise<boolean> {
+    return (await this.redis.ping?.()) ?? true;
+  }
+
   /** Release the backend with the application, so no client outlives `app.close()`. */
   async onApplicationShutdown(): Promise<void> {
     this.fallback.onApplicationShutdown();
@@ -388,12 +413,41 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
   });
   redis.on('error', () => undefined);
   let connecting: Promise<unknown> | null = null;
+  let closed = false;
+  let dialled = 0;
+  /**
+   * Connect once, and be able to connect AGAIN — which the first version of
+   * this function could not, and the second review measured why.
+   *
+   * `retryStrategy` returns null after three attempts, and ioredis does not
+   * reset its attempt counter until it reaches `ready`
+   * (`built/redis/event_handler.js`), so an outage of more than about a
+   * second puts the client in status `end` PERMANENTLY: `sendCommand` then
+   * rejects "Connection is closed." without ever dialling again
+   * (`built/Redis.js:331-334`). A `connecting` promise that was only cleared
+   * on failure stayed resolved from the first success, so `ready()` would
+   * never call `connect()` again either. The replica would have counted per
+   * replica for the rest of its life even after Redis came back — TD-24's own
+   * defect, reintroduced by the fix for it.
+   *
+   * So: a resolved attempt is cleared, and a client in `end` or `wait` is
+   * dialled again — `connect()` rejects only from `connecting`/`connect`/
+   * `ready` (`built/Redis.js:103-110`), so this is the supported path.
+   */
   const ready = async (): Promise<void> => {
+    if (closed) throw new Error('the rate limit store was released with the application and must not reconnect');
     if (redis.status === 'ready') return;
-    connecting ??= redis.connect().catch((e: unknown) => {
-      connecting = null; // a dead attempt is not inherited by the next request
-      throw e;
-    });
+    if (redis.status === 'end' || redis.status === 'wait') connecting = null;
+    dialled += 1;
+    connecting ??= redis.connect().then(
+      () => {
+        connecting = null; // a finished attempt is not reused as a liveness claim
+      },
+      (e: unknown) => {
+        connecting = null; // a dead attempt is not inherited by the next request
+        throw e;
+      },
+    );
     await connecting;
   };
   return {
@@ -403,7 +457,17 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
       if (!Array.isArray(out)) throw new Error('the rate-limit script did not return an array');
       return out.map((v) => Number(v));
     },
+    dialAttempts: () => dialled,
+    ping: async () => {
+      try {
+        await ready();
+        return (await redis.ping()) === 'PONG';
+      } catch {
+        return false;
+      }
+    },
     close: async () => {
+      closed = true;
       // `quit` on a client that never connected rejects; disconnecting is the
       // honest shutdown either way and leaves no reconnect timer behind.
       redis.disconnect();

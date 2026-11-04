@@ -1,7 +1,7 @@
 import type { ExecutionContext, Provider, Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { AppError } from '@daftar/domain-core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule, ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { Client } from 'pg';
 import { migrationOrdinal, REQUIRED_SCHEMA_MIGRATION, schemaFloor, type AppConfig } from '../config';
@@ -112,29 +112,11 @@ export interface RuntimeSeams {
  * forged X-Forwarded-For buys nothing. An IPv6 client counts per /64
  * (`limiterKey`, review L-3).
  */
-export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES' | 'REDIS_URL' | 'LOG_LEVEL'>) {
-  // TD-24 / DR-90: the counters live in the shared store wherever one is
-  // configured, so two replicas hold ONE allowance per client per route
-  // instead of one each. `undefined` leaves `forRoot` to bind its own
-  // in-process store — see `createThrottlerStorage` for why the condition is
-  // REDIS_URL and not isProd.
-  //
-  // The logger is BUILT HERE and not injected, and that is forced rather than
-  // preferred: `ThrottlerModule` is `@Global()` and `forRoot` is the only
-  // seam that accepts a store (measured — a module-local `ThrottlerStorage`
-  // provider does NOT win over the global export, which is why the store
-  // cannot be a provider with `inject: ['LOGGER']`). A logger is a transport
-  // at a level, not a registry, so a second pino at the same level writes the
-  // same lines to the same place. The DEGRADATION COUNT is read back through
-  // the readiness surface instead, where an operator already looks
-  // (`platform.controller.ts`), because a metrics registry nothing can reach
-  // would be a number that exists and is never seen.
-  const storage = createThrottlerStorage(config, { logger: createLogger(config.LOG_LEVEL) });
+export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES'>) {
   return [
     ThrottlerModule.forRoot({
       throttlers: [{ ttl: 60_000, limit: 300 }],
       getTracker: (_req: unknown, context: ExecutionContext) => clientLimiterKey(context.switchToHttp().getRequest<Request>(), config),
-      ...(storage ? { storage } : {}),
     }),
   ];
 }
@@ -550,6 +532,37 @@ export function httpProviders(config: AppConfig, resolver: Type<MembershipResolv
       provide: 'RATE_LIMITER',
       useFactory: (): RateLimiter => (config.REDIS_URL ? new RedisRateLimiter(config) : new MemoryRateLimiter()),
     },
+    // TD-24 / DR-90: the store behind the GENERAL allowance (300 per route
+    // handler per client), which until this card was the library's own
+    // in-process `Map` in every environment — one allowance PER REPLICA.
+    //
+    // It is a provider HERE, in the module that also registers
+    // `ThrottlerGuard` below, because that is the injector the guard resolves
+    // from: measured, a module-local `ThrottlerStorage` provider is what a
+    // consumer in that module receives, even though `ThrottlerModule` is
+    // `@Global()` and `app.get()` on the ROOT still answers with the global
+    // one. Being a provider is what lets it hold the SAME `LOGGER` and
+    // `METRICS` the rest of the process uses; `forRoot({ storage })` is
+    // evaluated while module metadata is built, where neither exists.
+    //
+    // ABSENT, not defaulted, when no shared store is configured. A provider
+    // that answered with a fresh in-process store would give the guard a
+    // DIFFERENT instance from the one the global module exports — and
+    // `tests/performance/pos-s3-budgets.test.ts:549` clears the store it
+    // reads from the app root between two measurements, so the guard would
+    // keep counting in a Map nobody cleared and the budget suite would
+    // measure throttling instead of reads. Silently. That file belongs to
+    // another lane; leaving the token unprovided keeps its reset correct.
+    ...(config.REDIS_URL
+      ? [
+          {
+            provide: ThrottlerStorage,
+            useFactory: (logger: Logger, metrics: Metrics): ThrottlerStorage =>
+              createThrottlerStorage(config, { logger, metrics }) ?? new ThrottlerStorageService(),
+            inject: ['LOGGER', METRICS],
+          },
+        ]
+      : []),
     'useValue' in resolver ? { provide: MEMBERSHIP_RESOLVER, useValue: resolver.useValue } : { provide: MEMBERSHIP_RESOLVER, useExisting: resolver },
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },
