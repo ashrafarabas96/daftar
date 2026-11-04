@@ -1485,3 +1485,183 @@ jobs:
           name: secret-history-scan
           path: release/secret-history-scan.json
           if-no-files-found: ignore
+
+  red-proofs:
+    needs: workspaces
+    # DR-85 item 4, and the blocker it closes: the independent review found that
+    # card P7-01's acceptance criterion -- "N of N caught by name against a
+    # floor MEASURED from the guard itself" -- had only half of itself met. The
+    # floor is measured (`tests-unit/p7-01-offline-kernel-promotion.test.ts`
+    # counts 105 `Proof(` rows out of the harness's own source, reads its 102
+    # literal, counts 100 static arm sites and says in words that 100 is a
+    # FLOOR and not the verdict). The other half was never met: `red_proofs`
+    # had zero mentions anywhere in this file -- measured with a positive
+    # control, `runs-on` at 6 hits over 86,021 bytes, so that zero was a
+    # measurement and not an empty probe.
+    #
+    # And it was not an oversight, it was an impossibility. The harness copies
+    # `ROOT/src` and `ROOT/test` (red_proofs.py:4571) and `run-tests.sh`
+    # compiles `"$SRC"/app/daftar/offline/*.kt`, which is the PRE-promotion
+    # layout. P7-01 moved the module to the Gradle convention, so there is no
+    # `offline-kernel/test` at all -- measured, `git ls-tree` of the module
+    # lists exactly `.gitignore README.md build.gradle.kts src tools`. Run it
+    # as it stands and `copytree` raises before a single proof is reached.
+    #
+    # The obvious repair -- teach the harness the new paths -- is refused here:
+    # `tools/red_proofs.py` and `tools/run-tests.sh` are two of the 27 files
+    # whose sha256 IS the proof that this promotion was a move and not a
+    # rewrite (654521c1..., dd79f4fa...). Editing them would buy this job by
+    # destroying the evidence it exists to complete.
+    #
+    # So the tree is shimmed instead, outside the repository: `tools/` copied
+    # byte-for-byte, and `src/` and `test/` built from `src/main/java` and
+    # `src/test/java`. The harness derives ROOT from its own file's location
+    # (red_proofs.py:167-168), so a copy of `tools/` one level under the shim
+    # root is all it takes. No pinned byte is touched, and the step proves that
+    # by re-hashing both files against their pins before running anything.
+    runs-on: ubuntu-latest
+    # Not a RAISED limit: this job did not exist, and GitHub's default is 360
+    # minutes, so naming 120 TIGHTENS it. The run cost is genuinely unmeasured
+    # -- 105 proofs, each compiling and running the Kotlin suite, parallel over
+    # `os.cpu_count()`, and the host this card was executed on has no JDK -- so
+    # the first green run here is also the first measurement of it.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: The two pinned harness files are unmodified before anything runs
+        working-directory: apps/android/offline-kernel
+        run: |
+          set -euo pipefail
+          # The pins come from tests-unit/p7-01-offline-kernel-promotion.test.ts,
+          # which derives them from `git cat-file blob 9ae37881:prep/phase7/...`.
+          # Read here too, because this job is about to COPY these files and a
+          # copy of the wrong bytes would measure the wrong harness.
+          echo '654521c108b483e776659d348ca3855c3206f2c24007669eb06ee2dc55b3f090  tools/red_proofs.py' > /tmp/p7-pins
+          echo 'dd79f4fae41ace54f2d2c2e1db817680471d78e973061856b76a2d355b68737a  tools/run-tests.sh' >> /tmp/p7-pins
+          sha256sum -c /tmp/p7-pins
+
+      - name: Stage the shim tree the harness's own layout expects
+        run: |
+          set -euo pipefail
+          SHIM="$RUNNER_TEMP/p7-shim"
+          rm -rf "$SHIM"
+          mkdir -p "$SHIM"
+          M=apps/android/offline-kernel
+          cp -R "$M/tools" "$SHIM/tools"
+          cp -R "$M/src/main/java" "$SHIM/src"
+          cp -R "$M/src/test/java" "$SHIM/test"
+          # The shim must hold the SAME harness bytes, or this job measures a
+          # copy of something else.
+          cmp "$M/tools/red_proofs.py" "$SHIM/tools/red_proofs.py"
+          cmp "$M/tools/run-tests.sh" "$SHIM/tools/run-tests.sh"
+          # And the layout the harness reaches for has to be there, by name,
+          # before a run is allowed to report anything.
+          test -d "$SHIM/src/app/daftar/offline"
+          test -d "$SHIM/test/app/daftar/offline"
+          echo "shim kernel files:  $(find "$SHIM/src" -name '*.kt' | wc -l)"
+          echo "shim test files:    $(find "$SHIM/test" -name '*.kt' | wc -l)"
+          echo "SHIM=$SHIM" >> "$GITHUB_ENV"
+
+      - name: Red proofs — the harness runs, and its own verdict is read
+        run: |
+          set -euo pipefail
+          cd "$SHIM/tools"
+          # `-I` is not optional: the harness refuses by name
+          # (REFUSED-P7-HARNESS-NOT-ISOLATED) when started without it, because
+          # it spawns copies of itself and a shared sys.path would let the
+          # subject of a measurement edit the measurer.
+          set +e
+          python3 -I red_proofs.py | tee /tmp/p7-red-proofs.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          # The exit code is read from the PROCESS, never from the tail of the
+          # pipe, which is this programme's first binding rule.
+          echo "harness exit = $rc"
+          test "$rc" -eq 0
+
+          # An exit code is not a presence check. The verdict sentence is
+          # parsed, and the two totals it prints are compared against the
+          # numbers the committed inventory test derives from the harness's own
+          # source: 105 proofs, 102 guard branches. A harness that silently
+          # shrank its own table would still exit 0.
+          verdict=$(grep -oE 'ALL [0-9]+ RED PROOFS SATISFIED over a [0-9]+-case green baseline, with [0-9]+ of [0-9]+ guard branches armed\.' /tmp/p7-red-proofs.log)
+          test -n "$verdict"
+          echo "verdict: $verdict"
+          proofs=$(echo "$verdict" | sed -E 's/^ALL ([0-9]+) .*/\1/')
+          armed=$(echo "$verdict" | sed -E 's/.*with ([0-9]+) of ([0-9]+) guard branches armed\./\1 \2/')
+          echo "proofs=$proofs armed=$armed"
+          test "$proofs" = "105"
+          test "$armed" = "102 102"
+
+      - name: Negative control — break the detector 47 proofs rest on
+        run: |
+          set -euo pipefail
+          CTRL="$RUNNER_TEMP/p7-shim-broken"
+          rm -rf "$CTRL"
+          cp -R "$SHIM" "$CTRL"
+          TARGET="$CTRL/test/app/daftar/offline/QueueModelCheckTest.kt"
+
+          # WHICH suite, and why this one: every Proof plants a find/replace in
+          # a KERNEL source and names the sentence it expects to go red. The
+          # harness names `QueueModelCheckTest` 47 times -- measured -- more
+          # than every other suite in it put together, so it is the detector
+          # most of the table depends on. Neuter it and those proofs can no
+          # longer go red. A harness that still reports all 105 satisfied
+          # against a suite that cannot fail is not measuring the suite, and a
+          # green run of the step above would then prove nothing.
+          #
+          # DR-55: the plant is proven APPLIED before its result is read. A
+          # substitution that matched nothing would otherwise be read as a
+          # passing control -- worse than a failure, because it is read as a
+          # measurement.
+          before=$(sha256sum "$TARGET" | cut -d' ' -f1)
+          sed -i -E 's/\b(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(/sank_\1(/g' "$TARGET"
+          after=$(sha256sum "$TARGET" | cut -d' ' -f1)
+          echo "plant: $before -> $after"
+          test "$before" != "$after"
+
+          # Applied by COUNT as well as by hash: the 113 assertion sites
+          # measured in this suite must all be gone and the sinks there in
+          # their place. A hash change on its own could come from the appended
+          # block below with every assertion left intact.
+          live=$(grep -cE '(^|[^_[:alnum:]])(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(' "$TARGET" || true)
+          sunk=$(grep -cE 'sank_(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(' "$TARGET" || true)
+          echo "live assertion lines after the plant = $live ; sink lines = $sunk"
+          test "$live" -eq 0
+          test "$sunk" -gt 0
+
+          cat >> "$TARGET" <<'KOTLIN'
+
+          // Negative control only. Never committed to the module: this file lives in a
+          // throw-away copy under RUNNER_TEMP. These swallow what the suite used to
+          // assert, so a planted defect cannot turn it red.
+          private fun sank_assertEquals(vararg ignored: Any?) {}
+          private fun sank_assertNotEquals(vararg ignored: Any?) {}
+          private fun sank_assertTrue(vararg ignored: Any?) {}
+          private fun sank_assertFalse(vararg ignored: Any?) {}
+          private fun sank_fail(vararg ignored: Any?): Nothing = throw IllegalStateException("control")
+          KOTLIN
+
+          cd "$CTRL/tools"
+          set +e
+          python3 -I red_proofs.py > /tmp/p7-red-proofs-control.log 2>&1
+          rc=$?
+          set -e
+          echo "harness exit on the broken tree = $rc"
+          tail -40 /tmp/p7-red-proofs-control.log
+          if [ "$rc" -eq 0 ]; then
+            echo "NEGATIVE CONTROL FAILED: the harness stayed green with its main"
+            echo "detector neutered, so a green run of the step above proves nothing."
+            exit 1
+          fi
+
+          # The subject tree is untouched by any of this -- the control ran on a
+          # copy -- and the pinned bytes are re-measured to say so rather than
+          # to assume it.
+          cd "$GITHUB_WORKSPACE/apps/android/offline-kernel"
+          sha256sum -c /tmp/p7-pins

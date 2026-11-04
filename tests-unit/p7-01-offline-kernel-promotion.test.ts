@@ -131,8 +131,16 @@ describe('P7-01: the CI command already in place reaches the module', () => {
    * outcomes, so the module takes the plugin whose variant task names the
    * command already says.
    *
-   * `.github/**` is outside this lane's ownership and was NOT touched. This
-   * asserts the command exactly as it already stands.
+   * A RETRACTION, and the reason the next test exists. This comment used to
+   * say that `.github/**` was NOT touched. That was false when it was written:
+   * measured with `--numstat` against `origin/main`, this branch adds 140 lines
+   * to `ci.yml` and removes 3. A sentence in a comment is not a measurement,
+   * and a false one inside an evidence file is worse than no sentence, so the
+   * claim is withdrawn here and replaced by the test below, which MEASURES.
+   *
+   * What licenses those lines is DR-85: a narrow, retroactive, closed-list
+   * exception for this lane, because card P7-01 reads "a Gradle module CI
+   * already builds" and cannot be executed without `.github/**`.
    */
   it('runs the unqualified variant tasks the Android library plugin provides', () => {
     expect(ci()).toContain('./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace');
@@ -150,6 +158,94 @@ describe('P7-01: the CI command already in place reaches the module', () => {
       .join('\n');
     expect(command).not.toBe('');
     expect(scoped.test(command)).toBe(false);
+  });
+});
+
+describe('DR-85: what this lane touches in .github is measured, not claimed in prose', () => {
+  const ci = () => readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+
+  /**
+   * The defect this test exists for happened in this very file: a comment
+   * denied that this lane had altered the workflow directory, while the branch
+   * was adding 140 lines to `ci.yml`. The independent review caught it, not
+   * CI, because nothing here measured prose. (Phrased WITHOUT the claim form,
+   * on purpose: the sweep below is sensitive enough to flag its own
+   * description of the defect, and it did, which is how I know it works.)
+   *
+   * So prose is measured now. The sweep FLATTENS first, because the claim can
+   * wrap across a line break and a line-by-line sweep walks past it — that is
+   * its own measured trap in this programme. And it carries a positive
+   * control, because a sweep that matches nothing is indistinguishable from a
+   * sweep that cannot match.
+   */
+  it('makes no untouched-claim about .github anywhere in its own prose', () => {
+    // One normalizer, used by the control and by the sweep alike: a control
+    // that runs a different code path from the subject measures nothing. It
+    // folds whitespace AND drops the block-comment stars, which is what the
+    // first attempt at this test got wrong — flattening alone leaves `*`
+    // between the words and `\s+` does not cross it, so the control read
+    // false and said the sweep was blind when it was the normalizer.
+    const flatten = (t) => t.replace(/\s+/g, ' ').replace(/ \* /g, ' ');
+    const flat = flatten(readFileSync(__filename, 'utf8'));
+    const claim = /\.github[^.]{0,120}?(?:was|is|are|were)\s+(?:deliberately\s+)?NOT\s+touched/i;
+
+    // Proven able to see the claim when it is there, including wrapped over a
+    // line break, which is the form that got past the last sweep.
+    const planted = 'the path `.github/**` is outside this lane and was\n   * NOT touched.';
+    expect(claim.test(flatten(planted))).toBe(true);
+
+    // The retraction above reports the withdrawn claim by name, so the regex
+    // matches that sentence too. It is excised by its exact wording — not by
+    // loosening the pattern, which would blind the sweep to the real thing.
+    const RETRACTION = 'This comment used to say that `.github/**` was NOT touched.';
+    // TWO sites, both of them this withdrawal and neither a live claim: the
+    // retraction comment above, and the literal on the line above this one.
+    // Pinning the count is the point -- a THIRD occurrence is either a new
+    // live claim or a second retraction, and both deserve a reader.
+    expect(flat.split(RETRACTION)).toHaveLength(3);
+    expect(flat.split(RETRACTION).join(' ')).not.toMatch(claim);
+  });
+
+  /**
+   * DR-85's list is closed: the android job, the CI-VARIANT gate, the
+   * red-proofs job, and nothing else. Each is asserted PRESENT by a string
+   * only it carries, so deleting any one of them turns this red rather than
+   * letting the exception quietly cover an empty set.
+   */
+  it('carries exactly the three ci.yml additions DR-85 licenses', () => {
+    const text = ci();
+    // 1. the android job builds the module and runs its tests
+    expect(text).toContain('./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace');
+    // 2. the CI-VARIANT gate counts executed cases against a computed inventory
+    expect(text).toContain('offline-kernel static @Test occurrences');
+    expect(text).toMatch(/the executed count equals the declared inventory/);
+    // 3. the red-proofs job runs the harness and reads its own verdict line
+    expect(text).toMatch(/red_proofs\.py/);
+    expect(text).toMatch(/RED PROOFS SATISFIED/);
+  });
+
+  /**
+   * A TEST I WROTE AND THEN WITHDREW, measured.
+   *
+   * It asserted that `continue-on-error` appears nowhere in `ci.yml` as
+   * text. It failed — on ten hits, and all ten are COMMENTS describing the
+   * prohibition itself. A text sweep for a yaml key is a false failure, and
+   * a false failure is how a law gets switched off.
+   *
+   * The concern is already measured, on the PARSE, by this repository's own
+   * `tests/guards/required-ci-chain-composition.test.ts` (its C-5): neither
+   * the required job nor any gate step may carry `continue-on-error`. So the
+   * right question here is transitive reach — does that gate exist and does
+   * it still name this concern — not a weaker copy of it.
+   */
+  it('leaves continue-on-error to the parse-level gate that already measures it', () => {
+    const guard = join(ROOT, 'tests', 'guards', 'required-ci-chain-composition.test.ts');
+    expect(existsSync(guard)).toBe(true);
+    const text = readFileSync(guard, 'utf8');
+    // It reads the key off the parsed job and off every parsed step, which is
+    // what a text sweep cannot do.
+    expect(text).toContain("job['continue-on-error']");
+    expect(text).toContain("step['continue-on-error']");
   });
 });
 
