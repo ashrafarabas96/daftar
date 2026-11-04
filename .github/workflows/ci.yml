@@ -1574,6 +1574,84 @@ jobs:
           echo "shim test files:    $(find "$SHIM/test" -name '*.kt' | wc -l)"
           echo "SHIM=$SHIM" >> "$GITHUB_ENV"
 
+      - name: Provision the Kotlin toolchain by verified digest, so the harness never downloads
+        run: |
+          set -euo pipefail
+          # WHY THIS STEP EXISTS, measured and not assumed. `tools/toolchain.sh`
+          # at lines 24-25 fetches with
+          #     curl ... --cacert /root/.ccr/ca-bundle.crt
+          # a path that exists on no runner, and not on the authoring host
+          # either -- measured, `~/.ccr` is absent there too -- so the fetch
+          # dies with `option --cacert: is badly used here` and the harness
+          # prints BASELINE IS NOT GREEN before one proof is read. Which is
+          # exactly what the first run of this job measured.
+          #
+          # That line is INHERITED, not introduced by this lane: `git log -S`
+          # over all refs puts it in 764671fd (2026-10-07), the Phase 7 prep
+          # commit, and 53349db1 only moved it. So the promotion stays a move.
+          #
+          # And it cannot be repaired in place: toolchain.sh is one of the 27
+          # sha256-pinned files (f002692b...) whose bytes ARE the proof that
+          # P7-01 moved this module rather than rewriting it. So the download
+          # is never REACHED instead. toolchain.sh skips its own fetch when
+          # $KOTLINC is executable and $JUNIT_JAR exists, both derived from
+          # P7_TOOLS_DIR, whose default is ${TMPDIR:-/tmp}/daftar-p7-kotlin --
+          # and the harness's own banner named /tmp/daftar-p7-kotlin, which is
+          # why that is the path provisioned here rather than a guessed one.
+          #
+          # This also CLOSES the no-checksum card rather than inheriting it:
+          # toolchain.sh verifies nothing it downloads, while every byte below
+          # is checked against a digest pinned in this file AND against the
+          # publisher's own sidecar read independently on this runner. A pin
+          # forged where it was written would disagree with the sidecar and
+          # fail here loudly, instead of being accepted in silence.
+          KOTLIN_SHA=0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a
+          JUNIT_SHA=a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f
+          D=/tmp/daftar-p7-kotlin
+          KZ=https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          JU=https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar
+          mkdir -p "$D/dl"
+          ZIP="$D/dl/kotlin-compiler-2.0.21.zip"
+          JAR="$D/dl/junit-platform-console-standalone-1.10.2.jar"
+          # Maven Central rate-limits (429 observed on this project before),
+          # so each fetch retries with backoff rather than being called
+          # unreachable on one answer.
+          get() { curl -sS -L --fail --retry 5 --retry-all-errors --retry-delay 3 -o "$1" "$2"; }
+          get "$ZIP" "$KZ"
+          get "$ZIP.sha256" "$KZ.sha256"
+          get "$JAR" "$JU"
+          get "$JAR.sha256" "$JU.sha256"
+
+          # Against the pins written above.
+          echo "$KOTLIN_SHA  $ZIP" | sha256sum -c -
+          echo "$JUNIT_SHA  $JAR" | sha256sum -c -
+          # And against each publisher's own digest, read here and now. An
+          # EMPTY sidecar is not agreement, so each is measured non-empty
+          # before it is compared -- a blank read would otherwise be trimmed
+          # to nothing and a `test` on nothing is how a probe passes vacuously.
+          kz=$(tr -d " \n\r" < "$ZIP.sha256" | cut -c1-64)
+          ju=$(tr -d " \n\r" < "$JAR.sha256" | cut -c1-64)
+          echo "publisher sidecars: kotlin=$kz junit=$ju"
+          test -n "$kz"
+          test -n "$ju"
+          test "$kz" = "$KOTLIN_SHA"
+          test "$ju" = "$JUNIT_SHA"
+
+          unzip -q -o "$ZIP" -d "$D"
+          # The five paths the harness probes BY NAME in its own banner, each
+          # readable before it runs. Named one by one, because a directory
+          # that exists says nothing about the file inside it.
+          for f in kotlinc/bin/kotlinc \
+                   kotlinc/lib/kotlin-stdlib.jar \
+                   kotlinc/lib/kotlin-test.jar \
+                   kotlinc/lib/kotlin-test-junit5.jar \
+                   dl/junit-platform-console-standalone-1.10.2.jar; do
+            test -r "$D/$f" || { echo "MISSING: $D/$f"; exit 1; }
+          done
+          test -x "$D/kotlinc/bin/kotlinc"
+          # A readable file is not a working compiler, and the JDK this job
+          # installed is not proven by its own install step either.
+          "$D/kotlinc/bin/kotlinc" -version
       - name: Red proofs — the harness runs, and its own verdict is read
         run: |
           set -euo pipefail
@@ -1589,6 +1667,17 @@ jobs:
           # The exit code is read from the PROCESS, never from the tail of the
           # pipe, which is this programme's first binding rule.
           echo "harness exit = $rc"
+          # Before the exit code is judged: the banner must not report an
+          # UNREADABLE tool. That is how the provisioned path is PROVEN to be
+          # the path this harness probes, instead of assumed from one earlier
+          # run's output -- and the banner line itself is required present, so
+          # a log that never printed it cannot read as agreement.
+          grep -q "P7 TOOLCHAIN" /tmp/p7-red-proofs.log
+          if grep -q "UNREADABLE" /tmp/p7-red-proofs.log; then
+            echo "the harness probed a toolchain path this job did not provision:"
+            grep -n "UNREADABLE" /tmp/p7-red-proofs.log
+            exit 1
+          fi
           test "$rc" -eq 0
 
           # An exit code is not a presence check. The verdict sentence is
