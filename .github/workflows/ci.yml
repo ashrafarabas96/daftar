@@ -1114,7 +1114,10 @@ jobs:
           # cases were filtered out, still clears a floor. The static inventory is the
           # count this tree declares, measured at three agreeing identities (bare
           # `@Test` occurrences, `@Test` at the start of a line, and `@Test` followed
-          # by `fun `) -- all 119 at 1f6fb1f6 -- so the executed count must MATCH it.
+          # by `fun `), which agreed at 119 on 1f6fb1f6, at 133 on 07e02468 and at
+          # 136 on 544069b6 -- so the executed count must MATCH it. The number is
+          # never written here: it is read from the tree being tested, so a suite
+          # added or removed moves both sides of the comparison together.
           if [ "$kernel" -ne "$static" ]; then
             echo "FAIL: offline-kernel executed $kernel of the $static cases this tree declares."
             echo "      A difference is not noise: either cases did not run, or the two"
