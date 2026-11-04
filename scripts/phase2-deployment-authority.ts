@@ -468,10 +468,27 @@ function url(db: string, role: string, password: string): string {
 const ownerUrl = (db: string): string => `postgresql://${PG_USER}:${PG_SUPER_PASSWORD}@127.0.0.1:${PG_PORT}/${db}`;
 const deployerUrl = (db: string): string => url(db, DEPLOYER, PASSWORDS['__MIGRATOR_DB_PASSWORD__'] as string);
 
+// DR-91. `spawnSync` leaves `status` null in TWO unrelated cases: the child
+// was killed by a signal, and the child never started at all. Only `error`
+// tells them apart, so it is read first and named. Reporting both as "signal"
+// is how an absent binary came to read as a killed process: on ubuntu-26.04
+// `/usr/lib/postgresql/16/bin/initdb` — the path PG_BIN defaults to — is not
+// there, because that image ships PostgreSQL 18.6 where 24.04 shipped 16.15.
+// The single root failure then cascaded P3-S1..P3-S6, the Phase 3 corrective
+// gate and P4-S1, under a word the measurement never supported.
+function spawnFailure(res: { status: number | null; signal: NodeJS.Signals | null; error?: Error }): string {
+  if (res.error) {
+    const code = (res.error as NodeJS.ErrnoException).code;
+    return code ? `${code}: ${res.error.message}` : res.error.message;
+  }
+  if (res.signal) return `killed by signal ${res.signal}`;
+  return String(res.status);
+}
+
 function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; allowFailure?: boolean } = {}): string {
   const res = spawnSync(cmd, args, { cwd: ROOT, env: { ...process.env, ...opts.env }, encoding: 'utf8' });
   const output = `${res.stdout ?? ''}${res.stderr ?? ''}`;
-  if (res.status !== 0 && !opts.allowFailure) throw new Error(`${cmd} ${args.join(' ')} failed (${res.status ?? 'signal'}):\n${output.slice(-4000)}`);
+  if (res.status !== 0 && !opts.allowFailure) throw new Error(`${cmd} ${args.join(' ')} failed (${spawnFailure(res)}):\n${output.slice(-4000)}`);
   return output;
 }
 
