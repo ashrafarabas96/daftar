@@ -1553,6 +1553,13 @@ jobs:
           mkdir -p "$SHIM"
           M=apps/android/offline-kernel
           cp -R "$M/tools" "$SHIM/tools"
+          # The four tool files are committed 100644 — measured, `git ls-tree`
+          # of the module shows no 755 among them — so the self-test hits a
+          # PermissionError the moment it execs `red-proofs.sh`. That is a
+          # FOURTH reason this harness had never run, found by running it.
+          # Fixed on the COPY: the committed mode is left exactly as it is,
+          # and the 27 sha256 pins hash CONTENTS, which a mode never changes.
+          chmod +x "$SHIM"/tools/*.sh
           cp -R "$M/src/main/java" "$SHIM/src"
           cp -R "$M/src/test/java" "$SHIM/test"
           # The shim must hold the SAME harness bytes, or this job measures a

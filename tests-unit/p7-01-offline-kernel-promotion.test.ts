@@ -185,7 +185,7 @@ describe('DR-85: what this lane touches in .github is measured, not claimed in p
     // first attempt at this test got wrong — flattening alone leaves `*`
     // between the words and `\s+` does not cross it, so the control read
     // false and said the sweep was blind when it was the normalizer.
-    const flatten = (t) => t.replace(/\s+/g, ' ').replace(/ \* /g, ' ');
+    const flatten = (t: string): string => t.replace(/\s+/g, ' ').replace(/ \* /g, ' ');
     const flat = flatten(readFileSync(__filename, 'utf8'));
     const claim = /\.github[^.]{0,120}?(?:was|is|are|were)\s+(?:deliberately\s+)?NOT\s+touched/i;
 
