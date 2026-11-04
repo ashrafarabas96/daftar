@@ -100,9 +100,21 @@ describe('every money field is an integer count of minor units, as a string', ()
       customerId: receivable.customerId,
       asOf: '2026-09-30',
       baseCurrency: 'JOD',
-      bucketDays: [30, 60, 90],
-      buckets: [{ label: '0-30', fromDays: 0, toDays: 30, baseMinor: '1250', byCurrency: [], invoiceCount: 1 }],
+      bucketDays: [0, 30, 60, 90],
+      // The standard bands (DR-10). The first one's `fromDays` is `null`
+      // because it has no lower bound: it is the NOT-DUE band, and the money
+      // in it is not late. `totalBaseMinor` spans both, which is why DR-10
+      // names it the total receivable rather than overdue debt.
+      buckets: [
+        { label: 'not-due', fromDays: null, toDays: 0, baseMinor: '1000', byCurrency: [], invoiceCount: 1 },
+        { label: '1-30', fromDays: 1, toDays: 30, baseMinor: '250', byCurrency: [], invoiceCount: 1 },
+      ],
       totalBaseMinor: '1250',
+      // Two invoices, one per band, and here the distinct count HAPPENS to
+      // equal the sum of the bands — which is lawful and is exactly why a
+      // client must not learn the habit (DR-29). Neither invoice is under an
+      // instalment plan, so neither reaches a second band.
+      openCounts: [{ currency: 'USD', openDebitCount: 2, openCreditCount: 0 }],
     };
     // A contra receivable is negative and is never clamped to zero: a customer
     // in credit is a fact, not an error.
@@ -110,7 +122,7 @@ describe('every money field is an integer count of minor units, as a string', ()
     // The as-of date and the boundaries are inputs echoed back, so the answer
     // is self-describing and no clock was read to produce it.
     expect(aging.asOf).toBe('2026-09-30');
-    expect(aging.bucketDays).toEqual([30, 60, 90]);
+    expect(aging.bucketDays).toEqual([0, 30, 60, 90]);
   });
 });
 
@@ -174,6 +186,17 @@ describe('numbering reports what was committed, not a counter (P4-AL-31)', () =>
       outstandingBaseMinor: '1250',
       settlementState: 'partial',
       daysPastDue: 30,
+      // DR-28: the age is never null, and "no stated due date" is its own
+      // field rather than a null age. The boundary and consistency laws for
+      // both live in `dr28-days-past-due.test.ts`.
+      hasExplicitDueDate: true,
+      // DR-31: every document also carries its own age — `asOf - issueDate`,
+      // which is NOT the overdue anchor — and says whether it is credit. A
+      // credit reports `daysPastDue: 0` with `isCredit: true`; this row is a
+      // DEBIT invoice, so the figure above is DR-28's unchanged. The laws live
+      // in `dr31-credit-age.test.ts`.
+      ageDays: 60,
+      isCredit: false,
     };
     expect(open.settlementState).toBe('partial');
     expect(Object.keys(open)).not.toContain('status');

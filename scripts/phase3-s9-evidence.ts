@@ -64,7 +64,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { PHASE2_PREFIX } from './phase2-prefix';
 import { PHASE3_PREFIX, PHASE3_PREFIX_END } from './phase3-prefix';
 import { secretScanEvidenceProblems, type ScanResult } from './phase3-secret-scan';
@@ -93,7 +93,22 @@ const DEPLOYER = 'daftar_migrator';
 
 const problems: string[] = [];
 const sha256 = (buf: Buffer | string): string => createHash('sha256').update(buf).digest('hex');
-const shown = (path: string): string => path.replace(`${ROOT}/`, '');
+/**
+ * A path as this script names it: relative to the repository root, always with
+ * forward slashes.
+ *
+ * This replaced a string replace of the root prefix, which stripped nothing
+ * on Windows — `ROOT` comes from `join()` and carries a backslash there, so
+ * the forward-slash prefix it looked for never occurred — and leaked the
+ * absolute path of the machine that ran the gate into the evidence.
+ * `relative` also declines to half-strip a sibling whose name merely starts
+ * with the root.
+ *
+ * tests-unit/release-evidence-path-portability.test.ts holds this script to
+ * both, and its guard reads the source text — so describe the retired pattern
+ * here, never quote it.
+ */
+const shown = (path: string): string => relative(ROOT, path).split(sep).join('/');
 
 /** The export's tree hash (`scripts/export-release.ts`): "<path>:<sha256>" lines in path order, joined with \n. */
 function treeHash(entries: readonly { path: string; sha256: string }[]): string {
@@ -456,7 +471,7 @@ const evidence = {
     fileCount: delivery?.fileCount ?? null,
     exportedAt: delivery?.generatedAt ?? null,
   },
-  archive: { name: ARCHIVE.split('/').pop(), sha256: archiveSha256, bytes: archiveBytes, entryCount: archiveEntryCount, forbiddenEntries },
+  archive: { name: basename(ARCHIVE), sha256: archiveSha256, bytes: archiveBytes, entryCount: archiveEntryCount, forbiddenEntries },
   gitArchive,
   migrations: {
     count: delivery?.migrationCount ?? null,

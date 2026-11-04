@@ -271,7 +271,20 @@ export function parseIgnoreFile(text: string): { entries: IgnoreEntry[]; problem
     } else if (reason === '') {
       problems.push(`.gitleaksignore line ${i + 1} has no reason comment directly above it: "${line}"`);
     } else if (c !== null && c[1] !== undefined && c[2] !== undefined && c[3] !== undefined && c[4] !== undefined) {
-      entries.push({ fingerprint: line, reason, kind: 'commit', commit: c[1], path: c[2], rule: c[3], line: Number(c[4]), lineSha256: null });
+      // The pin is read for a RANGE entry too (DR-73 §1). It was `tree`-only
+      // here while `verifyEntry` already knew how to check it, so a range entry
+      // could carry a correct `line-sha256` and still be refused for pinning
+      // nothing — measured before this line existed.
+      entries.push({
+        fingerprint: line,
+        reason,
+        kind: 'commit',
+        commit: c[1],
+        path: c[2],
+        rule: c[3],
+        line: Number(c[4]),
+        lineSha256: LINE_PIN.exec(reason)?.[1] ?? null,
+      });
     } else if (t !== null && t[1] !== undefined && t[2] !== undefined && t[3] !== undefined) {
       const pin = LINE_PIN.exec(reason)?.[1] ?? null;
       entries.push({ fingerprint: `${t[1]}:${t[2]}:${t[3]}`, reason, kind: 'tree', commit: null, path: t[1], rule: t[2], line: Number(t[3]), lineSha256: pin });
@@ -302,13 +315,29 @@ function verifyEntry(e: IgnoreEntry, read: (path: string) => Buffer | null, wher
     if (actual !== m[2]) return `${e.fingerprint}: ${m[1]} hashes to ${actual} ${where}, not the ${m[2]} on the line`;
     return null;
   }
-  if (e.kind === 'tree' && e.lineSha256 !== null) {
+  // A LINE PINNED BY ITS OWN DIGEST, IN EITHER MODE (DR-73 §1).
+  //
+  // This was `tree`-only. A RANGE entry now qualifies the same way, and the
+  // obligation it carries is STRICTER rather than looser: `verifyDigestEntry`
+  // reads the line with `git show <commit>:<path>`, so the pin is against the
+  // content AS IT STOOD AT THAT COMMIT. A tree pin can be satisfied by editing
+  // the file; a range pin cannot be satisfied at all except by the history that
+  // is already written.
+  //
+  // What did NOT move, and each of these is what keeps this narrow:
+  //   - only `generic-api-key` may ever be allowlisted (the check above);
+  //   - the fingerprint is exact — `COMMIT_FINGERPRINT` admits one commit, one
+  //     path, one rule and one line, and any wildcard is a problem;
+  //   - a reason comment is still mandatory, and the pin lives in it;
+  //   - the tree scan is untouched: a range fingerprint has four fields and can
+  //     never match a tree finding's `<path>:<rule>:<line>`.
+  if (e.lineSha256 !== null) {
     const actual = sha256(text);
     if (actual !== e.lineSha256)
       return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} hashes to ${actual}, not the pinned line-sha256 ${e.lineSha256}`;
     return null;
   }
-  return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} is not a ['<migration>.sql', '<sha256>'] pair${e.kind === 'tree' ? ' and the entry pins no line-sha256' : ''}`;
+  return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} is not a ['<migration>.sql', '<sha256>'] pair and the entry pins no line-sha256`;
 }
 
 /** Condition 3 for a range entry, read from git at the fingerprint's own commit. */

@@ -407,7 +407,15 @@ async function measure(
  */
 const READS = {
   receivable: (customerId: string): string => `/v1/customers/${customerId}/receivable`,
-  aging: (customerId: string, asOf: string): string => `/v1/customers/${customerId}/receivable/aging?asOf=${asOf}&bucketDays=30,60,90`,
+  // The standard set, in the contract's order. DR-14 narrowed `bucketDays` to
+  // exactly `STANDARD_AGING_BUCKET_DAYS` (`[0, 30, 60, 90]`), so `30,60,90` —
+  // what stood here — is refused by the field validator with 400. `read200`
+  // holds every one of these to 200, so this suite FAILED CLOSED rather than
+  // timing a rejection; had it asserted nothing about the status, the ceiling
+  // would have been measured against a validation error that never reached the
+  // aging reader at all, and reported a comfortable PASS for a read it never
+  // performed.
+  aging: (customerId: string, asOf: string): string => `/v1/customers/${customerId}/receivable/aging?asOf=${asOf}&bucketDays=0,30,60,90`,
   openInvoices: (customerId: string, asOf: string): string => `/v1/customers/${customerId}/open-invoices?asOf=${asOf}&limit=50`,
 } as const;
 

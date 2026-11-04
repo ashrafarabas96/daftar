@@ -65,6 +65,49 @@ const SELLING_STATUS = {
   /** An aging or open-invoice read whose supplied as-of date is not a usable horizon. */
   'customer.as_of_invalid': 400,
   'customer.aging_buckets_invalid': 400,
+  /**
+   * AN INTERNAL INVARIANT — 500, AND NEVER A MERCHANT OUTCOME (TL-P4-S2-R5).
+   *
+   * `customer_ar_aging(...)` returns `bucket_no = 1 + <thresholds exceeded>`
+   * (`0084`, §6), so a well-formed answer is a 1-BASED ordinal in
+   * `[1, labels.length]`. `foldCustomerAging` refuses anything else — a
+   * non-integer, a 0, a value past the last label — instead of skipping the
+   * row. It carries the SHAPE invariant too: `labels.length` must be
+   * `bucketDays.length + 1`, because a longer `labels` made the band
+   * construction read a boundary past the end and emit `fromDays: NaN` into a
+   * money DTO.
+   *
+   * It is 500 and not 400 because it is not the caller's mistake: the supplied
+   * boundaries were already judged by `CustomerAgingQuerySchema`'s
+   * `bucketDays` pipe (`selling.schemas.ts:178-189`), which enforces the
+   * `^\d{1,4}(,\d{1,4}){0,5}$` shape, then integer, `min 1`, `max
+   * MAX_AGING_BUCKET_DAY`, between 1 and `MAX_AGING_BUCKETS` entries, and a
+   * `.refine` for STRICTLY ASCENDING. Strictly ascending is what makes
+   * duplicate boundaries — and therefore an empty band with
+   * `fromDays > toDays` — unreachable. So a bucket number outside the range
+   * those boundaries define means the SQL function and this module disagree
+   * about the ordinal base. That is a defect.
+   *
+   * NOT `customer.aging_buckets_invalid`: that code is DECLARED in this
+   * registry and thrown NOWHERE in the tree, so it judges nothing and must
+   * not be cited as the check that does.
+   *
+   * The behaviour it replaces — `if (bucket === undefined) continue` —
+   * dropped the row's money out of `baseMinor`, out of `invoiceCount` and out
+   * of `totalBaseMinor` with no sound at all, so a customer whose debt sat in
+   * the oldest band had an aged debt that read as ZERO — reported as not
+   * existing, not as current. And index 0 — the FIRST band, which holds
+   * invoices up to `bucketDays[0]` days past due AND, because days-past-due
+   * goes negative, those not yet due as well — was UNREACHABLE, because the
+   * SQL's smallest `bucket_no` is 1: so every band that did land carried the
+   * PREVIOUS band's money.
+   *
+   * Deliberately NOT spelled `customer.aging_bucket*s*_invalid`: that code is
+   * a 400 about the boundaries the caller supplied, and one letter between a
+   * merchant outcome and a defect is how a defect comes to be read as an
+   * outcome.
+   */
+  'customer.aging_bucket_mapping_invalid': 500,
   /** A read that sums across branches, asked by an actor limited to some of them. */
   'customer.business_wide_scope_required': 403,
 
@@ -566,6 +609,411 @@ const SELLING_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
 
 /** The internal invariant codes, in registry order — the list a contract test enumerates. */
 export const SELLING_INTERNAL_INVARIANT_CODES: readonly string[] = [...SELLING_INTERNAL_INVARIANTS];
+
+/**
+ * ── THE INTERNAL P4-S7 INSTALLMENT INVARIANTS (`installment.*`) ───────────
+ *
+ * The SECOND internal vocabulary this module recognizes, registered for the
+ * same reason as the first and found the same way (`TL-P4-COORD-R46`, F-4).
+ *
+ * `GET /v1/customers/:customerId/receivable/aging` calls
+ * `customer_ar_aging(...)` (`customer-reads.ts:244`), and that function calls
+ * `installment_plan_fact_assert`, which RAISES. The installment relations also
+ * carry four trigger routines that raise on a plan writer's own transaction.
+ * Until this commit NOT ONE of those codes appeared anywhere in `apps/` or in any
+ * package source tree, so every one of them fell through
+ * `GlobalExceptionFilter`'s last `P0001` branch and was answered
+ * **`403 FORBIDDEN / Access denied`** — a broken invariant rendered as an
+ * authorization denial, which is precisely the incident the `selling.*`
+ * registry above exists to record and not to repeat. The aging read is a GET
+ * with no authorization question in it at all, so the answer was not merely
+ * mis-typed: it named a cause that cannot apply.
+ *
+ * Registered the same way, and the reachability of every entry read from the
+ * RAISE and not from the name.
+ *
+ * INCLUDED — raised from a FUNCTION BODY, so a request can reach it:
+ *
+ *   - `installment.plan_fact_unreadable`, `installment.plan_fact_unflagged`
+ *     and `installment.plan_schedule_unreadable` —
+ *     `installment_plan_fact_assert(BIGINT, BIGINT, BIGINT)`, called at the
+ *     ROOT of `customer_ar_aging`. These three are reachable by the aging GET
+ *     today, and they are the three this slice was built to raise;
+ *   - `installment.schedule_incomplete` — `installment_schedule_verify()`,
+ *     three DEFERRED constraint triggers, fired at the COMMIT of a plan
+ *     writer's own transaction;
+ *   - `installment.plan_index_disagrees` and
+ *     `installment.plan_fact_unordered` — `installment_plan_fact_sync()` and
+ *     `installment_plan_fact_verify()` again (`TL-P4-COORD-R52` ordered items
+ *     1 and 2): an index that is present and not enforcing, measured as a
+ *     disagreement between two access paths, and a deferred verifier that ran
+ *     before the writer because `SET CONSTRAINTS ALL IMMEDIATE` removed its
+ *     deferral;
+ *   - `installment.plan_fact_blind` and
+ *     `installment.plan_fact_desynchronised` —
+ *     `installment_plan_fact_sync()` and
+ *     `installment_plan_fact_verify()`, the immediate writer and the deferred
+ *     verifier of `invoices.has_active_installment_plan`;
+ *   - `installment.plan_active_conflict` —
+ *     `installment_plan_active_exclusive()`, the BEFORE row trigger, and the
+ *     one direction of the sync's cross-check that cannot be caused by a
+ *     blinded read. THIS IS THE ENTRY F-4 ASKED FOR: the refusal a plan writer
+ *     actually meets when it tries to move `active` between two plans of one
+ *     invoice in a single statement, which it must then retry as two.
+ *
+ * EXCLUDED, and each for a stated reason rather than by omission:
+ *
+ *   - `installment.migration_end_state_invalid` (29 raises),
+ *     `installment.authority_leak` (5) and
+ *     `installment.derived_truth_stored` (1) — every one is inside the
+ *     specification's end-state `DO` block, outside every `CREATE FUNCTION`.
+ *     They fire while the migration runs, in a transaction no request is
+ *     attached to;
+ * `installment.plan_fact_unwritable` WAS IN THE SECOND LIST AND IS NOW IN THE
+ * FIRST, AND THE RATIONALE THAT KEPT IT OUT WAS FALSE OF IT
+ * (`TL-P4-COORD-R55` ordered item 6, F13-6). The contract test pinned it as
+ * UNREGISTERED under the heading «these are the migration-time end-state
+ * assertions of the same prefix: they cannot reach a response at all». That
+ * sentence is true of `migration_end_state_invalid`, `authority_leak` and
+ * `derived_truth_stored`, and it is NOT true of this one: it is raised TWICE
+ * from `installment_plan_fact_sync()`'s body, on the LIVE PLAN WRITE PATH,
+ * inside a trigger a request fires, and the specification's own §7 declares
+ * its reachability OPEN rather than closed. Round 12 reached one of the two
+ * raises with a superuser `UPDATE installment_plans`. So the slice was
+ * pinning, as a contract, that a refusal from DATABASE MACHINERY on the write
+ * path renders `403 FORBIDDEN / "Access denied"` to a merchant — the exact
+ * inversion of the rule applied to its siblings, and the same product-surface
+ * defect class as the live 403 bug this registry was created to fix.
+ *
+ * THE RULE THIS CORRECTS TO, STATED ONCE: a name is registered when a RAISE of
+ * it sits inside a `CREATE FUNCTION` body that a request can execute, and it
+ * is excluded when every RAISE of it sits in the migration's own `DO` block.
+ * «Nobody has located a principal who reaches it» is a reason to record the
+ * reachability as OPEN — which §7 does — and NOT a reason to contract for the
+ * wrong rendering in the meantime: an unreachable name costs an unused entry,
+ * while a reachable one in the wrong list costs a merchant an access denial
+ * for a database fault.
+ *
+ * P4-AL-38 IS WHY THERE IS NO MERCHANT TABLE FOR THESE. The slice ships no
+ * plan writer and no plan command, so there is no request whose BUSINESS
+ * outcome any of these codes is. Three of them are reachable on a READ, and on
+ * a read the honest answer is 500 with the code in the log: the reader refused
+ * because the database's own fact disagrees with its own rows, which is a
+ * defect in the estate and never something the merchant did. When a later
+ * slice ships the plan writer, the codes a MERCHANT can cause — a schedule
+ * that does not sum, a second active plan — get merchant entries in
+ * `SELLING_STATUS` beside their internal ones, and that is the edit this
+ * explicitness exists to force.
+ */
+const INSTALLMENT_INTERNAL_CODE_RE = /^(installment\.[a-z_]+)\b/;
+
+const INSTALLMENT_INTERNAL_INVARIANTS: ReadonlySet<string> = new Set([
+  'installment.plan_fact_unreadable',
+  'installment.plan_fact_unflagged',
+  'installment.plan_schedule_unreadable',
+  'installment.schedule_incomplete',
+  'installment.plan_fact_blind',
+  'installment.plan_fact_desynchronised',
+  'installment.plan_active_conflict',
+  // `TL-P4-COORD-R50` ordered items 1, 2 and 3. Both are READ-REACHABLE
+  // through `customer_ar_aging` — `plan_active_unbounded` is also
+  // WRITE-reachable, from the sync and from the deferred verifier — and both
+  // join this set in the same commit as the measurement that reaches them,
+  // which is what the paragraph above requires of an entry here.
+  //
+  // `plan_active_unbounded`: an invoice carries more than one plan with
+  // status = 'active', which `installment_plans_one_active_per_invoice_uq`
+  // admits at most one of. The round-11 challenger reached it from TWO
+  // ORDINARY CONCURRENT plan creations with that index present but
+  // `indisvalid`/`indisready` false, and in that state the reader served the
+  // pre-installment figure silently instead of refusing.
+  //
+  // `plan_fact_untrusted`: one of the seven triggers that maintain
+  // `invoices.has_active_installment_plan` and judge section 3 obligation (a)
+  // is missing or is not enabled. It is OWNER-ONLY reachable — measured, not
+  // assumed: `session_replication_role` is a `superuser`-context GUC and
+  // `daftar_app` and `daftar_migrator` are both refused `42501` on it — so it
+  // is an estate defect and never something a merchant did, which is why it
+  // takes the 500-with-the-code-in-the-log contract like the rest of this set
+  // and gets no `SELLING_STATUS` entry.
+  'installment.plan_active_unbounded',
+  'installment.plan_fact_untrusted',
+  // `TL-P4-COORD-R52` ordered items 1 and 2. Both are raised from a FUNCTION
+  // BODY on the plan WRITE path -- `installment_plan_fact_sync()` and
+  // `installment_plan_fact_verify()` -- so a request can reach them, and both
+  // join this set in the same commit as the construction that raises them,
+  // which is what the paragraph above requires of an entry here.
+  //
+  // `plan_index_disagrees`: two readings of the SAME rows in the same
+  // transaction disagree -- one taken by an access path
+  // `installment_plans_one_active_per_invoice_uq` can serve and one it cannot
+  // -- which means the index holds no entry for a row that qualifies for it.
+  // That is an index that is PRESENT AND NOT ENFORCING, and it is the runtime
+  // detector for the state in which the round-11 harm was reachable while
+  // every apply-time flag read TRUE. It is an estate defect and never
+  // something a merchant did.
+  //
+  // `plan_fact_unordered`: READ FROM `pg_trigger`, NOT COUNTED IN A SETTING,
+  // WHICH IS `TL-P4-COORD-R55` ordered item 1. `SET CONSTRAINTS ALL IMMEDIATE`
+  // is unprivileged SQL both app roles may issue; it removes the deferred fact
+  // verifier's deferral, after which PostgreSQL fires the immediate `AFTER ROW`
+  // triggers of one relation in TRIGGER-NAME ORDER. While the verifier's
+  // trigger sorted FIRST it ran before the writer and refused a LAWFUL write
+  // as `plan_fact_desynchronised` — a false diagnosis rendered 500. Round 13
+  // detected that with a transaction-local CUSTOM GUC counter, and PostgreSQL
+  // places no privilege on an unreserved two-part setting: one `SET LOCAL`
+  // made a LAWFUL plan write refuse under THIS name, another defeated the
+  // detector, and a session-level `SET` disabled it for the life of a pooled
+  // connection. The counter is gone. The verifier's trigger is now named so
+  // that the writer sorts first, and this name is raised only when a reading
+  // of `pg_trigger` inside the event says the two trigger names are out of
+  // that order — catalogue DATA no session can write, changeable only by the
+  // table owner. It renders 500 with the code in the log because the cause is
+  // DDL somebody applied and not anything a merchant can supply, and it FAILS
+  // CLOSED: no wrong fact commits.
+  'installment.plan_index_disagrees',
+  'installment.plan_fact_unordered',
+  // `TL-P4-COORD-R55` ordered items 1, 2, 3 and 6. All three are raised from
+  // a FUNCTION BODY on the plan WRITE path, and each joins this set in the
+  // same commit as the construction or the measurement that reaches it.
+  //
+  // `plan_index_unenforcing`: an index of `installment_plans` carries
+  // `indisvalid`, `indisready` or `indislive` false — read out of `pg_index`
+  // INSIDE the failing event, at FOUR sites, and ONE OF THE FOUR IS NO LONGER
+  // ON A REFUSAL PATH AT ALL. In `installment_plan_fact_sync()` the reading is
+  // UNCONDITIONAL, on every non-DELETE plan event and BEFORE the probe
+  // (`1af9163` spec `:1610`-`:1616`, inside `IF TG_OP <> 'DELETE'` at
+  // `:1609`); the other three are on refusal paths whose other candidate cause
+  // is row security — the same routine's blind arm (spec `:1929`-`:1937`) and
+  // the deferred verifier's disagreement arm (spec `:2221`-`:2225`) — plus
+  // `installment_schedule_verify()`'s, whose alternative cause is a failed
+  // schedule obligation and NOT row security (that routine names row security
+  // nowhere).
+  // «ON THE THREE REFUSAL PATHS» STOOD HERE AND WAS FALSIFIED BY `27a7c998`
+  // (`TL-P4-COORD-R95` §2's second class; found by round 32's enumeration of
+  // it, not by the round-31 challenge, which reached the specification's copy
+  // of the same claim and not this one). It was TRUE at `54e3bbb7`, where all
+  // three row-security-alternative readings sat on refusal paths and the
+  // first of them was inside `IF NOT v_seen`. The cardinality was right then
+  // and is right now — three of the four have row security as the other
+  // candidate cause — but the DISCIPLINE is not, and this sentence is
+  // byte-identical at `54e3bbb7`, `27a7c998`, `b9682e1` and `1af9163`, each at
+  // `:739`. It exists because one catalogue flag on
+  // `installment_plans_pkey` — an index the specification did not name once —
+  // made A lawful plan write fail under `plan_fact_blind`, whose message
+  // had just been rewritten to say the cause was row security and to look in
+  // `pg_policy` and not in `pg_index`. «EVERY» STOOD HERE AND WAS FALSE OF
+  // THE ROUND IT DESCRIBES (`TL-P4-COORD-R90` §6's remaining copy under
+  // `apps/**`, ordered in `TL-P4-COORD-R93` §6 item 6; round 29 FINDING 5):
+  // in round 13 that detection was conditional on the planner choosing the
+  // unenforcing index, and on a `Seq Scan` the probe found the row and
+  // nothing refused. Since `27a7c998` the runtime reading is unconditional on
+  // every non-DELETE plan event, so the universal is true of THIS head and is
+  // NOT back-dated to the round that measured the single write. A refusal
+  // must state what it observed;
+  // this is the name for the state the code can establish, and
+  // `plan_fact_blind` now keeps only the state in which the index
+  // explanation has been EXCLUDED by a reading. It is an estate defect — an
+  // interrupted `CREATE INDEX CONCURRENTLY` or `REINDEX CONCURRENTLY` — and
+  // never anything a merchant did, so it takes the 500-with-the-code-in-the-
+  // log contract like the rest of this set.
+  //
+  // `plan_fact_unwritable`: see the correction above the list. Raised twice
+  // from `installment_plan_fact_sync()` on the live write path.
+  'installment.plan_index_unenforcing',
+  'installment.plan_fact_unwritable',
+]);
+
+/** The installment invariant codes, in registry order — the list a contract test enumerates. */
+export const INSTALLMENT_INTERNAL_INVARIANT_CODES: readonly string[] = [...INSTALLMENT_INTERNAL_INVARIANTS];
+
+/**
+ * ── THE STATIC REMEDY REFERENCE, ONE PER REGISTERED INVARIANT
+ *    (`TL-P4-COORD-R69` §1 and ordered item 1, which NARROWS
+ *    `TL-P4-COORD-R63` item 4) ──────────────────────────────────────────────
+ *
+ * WHAT ROUND 16 DID AND WHY IT WAS WRONG. `R63` item 4 found that the remedy
+ * written into `installment.schedule_incomplete` reached NOBODY: the body is
+ * generic by contract and the log line carried the invariant NAME alone.
+ * Round 16 repaired it by logging the refusal's FIRST LINE — and
+ * `error.filter.ts:151-153`, earlier in that file than the branch that logs it and
+ * untouched since, states the estate's boundary in terms: «SQL, THE ROUTINE'S
+ * MESSAGE AFTER THE COLON, AN AMOUNT, a journal entry id, an assertion body
+ * and a stack never leave the process». The first line IS the routine's
+ * message after the colon. A LOG LINE LEAVES THE PROCESS — that is what a log
+ * is for — so the rule governs it, and the rule stands: `R69` refuses the
+ * amendment that would have let the message through.
+ *
+ * SO WHAT LEAVES IS A REFERENCE AND NEVER PROSE. The log carries the
+ * invariant NAME and the STATIC reference below: a stable anchor into
+ * `infrastructure/database/specifications/p4s7-installment-aging.spec.sql`,
+ * IDENTICAL FOR EVERY OCCURRENCE of that invariant, carrying no identifier,
+ * no amount, no count and no fragment of the message. The prose the operator
+ * needs — the two causes of `schedule_incomplete`, the `REINDEX` of an
+ * unenforcing index, the seven triggers — lives in SECTION 3b of that file,
+ * at the anchor, which is `R63` item 4's second option arriving by the front
+ * door.
+ *
+ * THE ANCHOR IS NOT DERIVED FROM THE CODE, deliberately: this is a TABLE and
+ * a missing entry is a `null` the guard suite reds on, not a string composed
+ * out of the name that would resolve to nothing and look fine.
+ *
+ * WHAT READS THIS, so the table is not a claim about a destination nobody
+ * checks: `tests/guards/p4s7-installment-filter-contract.test.ts` requires
+ * every registered invariant to have an entry, requires each anchor to occur
+ * EXACTLY ONCE in the specification, inside section 3b, on a line that also
+ * names that invariant — and requires the rendered log line to carry the
+ * reference while neither the message nor the identifiers it substitutes
+ * appear anywhere in the log line or the body.
+ */
+const INSTALLMENT_REMEDY_ANCHORS: ReadonlyMap<string, string> = new Map([
+  ['installment.plan_fact_unreadable', 'p4s7-remedy-01'],
+  ['installment.plan_fact_unflagged', 'p4s7-remedy-02'],
+  ['installment.plan_schedule_unreadable', 'p4s7-remedy-03'],
+  ['installment.schedule_incomplete', 'p4s7-remedy-04'],
+  ['installment.plan_fact_blind', 'p4s7-remedy-05'],
+  ['installment.plan_fact_desynchronised', 'p4s7-remedy-06'],
+  ['installment.plan_active_conflict', 'p4s7-remedy-07'],
+  ['installment.plan_active_unbounded', 'p4s7-remedy-08'],
+  ['installment.plan_fact_untrusted', 'p4s7-remedy-09'],
+  ['installment.plan_index_disagrees', 'p4s7-remedy-10'],
+  ['installment.plan_fact_unordered', 'p4s7-remedy-11'],
+  ['installment.plan_index_unenforcing', 'p4s7-remedy-12'],
+  ['installment.plan_fact_unwritable', 'p4s7-remedy-13'],
+]);
+
+/** The specification the remedy anchors live in, as the logged reference spells it. */
+export const INSTALLMENT_REMEDY_SPEC = 'p4s7-installment-aging.spec.sql';
+
+/**
+ * The STATIC remedy reference for a registered `installment.*` invariant, or
+ * null when the registry holds a name this table does not. It is a function of
+ * the NAME alone: no request, no row, no figure and no message text can change
+ * what it returns, which is the whole of why it may be logged.
+ */
+export function installmentRemedyReference(code: string): string | null {
+  const anchor = INSTALLMENT_REMEDY_ANCHORS.get(code);
+  return anchor === undefined ? null : `${INSTALLMENT_REMEDY_SPEC}#${anchor}`;
+}
+
+/** The anchor ids, in registry order — the list the guard suite resolves against the specification. */
+export const INSTALLMENT_REMEDY_ANCHOR_IDS: readonly string[] = [...INSTALLMENT_REMEDY_ANCHORS.values()];
+
+/**
+ * ── THE TRANSACTION-MANAGER OUTCOMES, CLASSIFIED SO THEY STOP BEING AN
+ *    UNNAMED 500 (`TL-P4-COORD-R59` ordered item 2, F14-2) ─────────────────
+ *
+ * `40001` (serialization failure) and `40P01` (deadlock detected) are NOT
+ * invariant violations and are deliberately NOT in the two registries above:
+ * section 3a-ter of `p4s7-installment-aging.spec.sql` says so in terms, and a
+ * registry that held them would be contracting that contention is a defect of
+ * this slice. But until this commit they were classified NOWHERE, so
+ * `GlobalExceptionFilter` answered both from its last `unhandled error`
+ * branch: **`500 INTERNAL_ERROR`, with no code, no retry contract and the whole
+ * `pg` error object in the log** — the shape of an outage, for the one outcome
+ * whose correct answer is «nothing is broken, take it again».
+ *
+ * MEASURED AND NOT HYPOTHETICAL. A `40P01` arises on ONE invoice from TWO
+ * ORDINARY OPERATIONS: a `DELETE` of an active plan took the plan row (rank 6)
+ * and then needed the invoice row (rank 3), while an ordinary invoice write
+ * held the invoice row and then cancelled that plan through the documented
+ * route. THAT CYCLE IS NOT CLOSED STRUCTURALLY, AND ROUND 15 MEASURED WHY
+ * (round 16 correcting round 15's own sentence, `TL-P4-COORD-R63` item 1). A
+ * `BEFORE DELETE` arm on the one-active exclusion trigger, taking the invoice
+ * row first, WAS built and the race was re-run against it: the deleter still
+ * held the plan row while awaiting the invoice row and still got `40P01`,
+ * because for a `BEFORE ROW DELETE` trigger the executor produces `OLD`
+ * through `GetTupleForTrigger`, which LOCKS that tuple before the trigger
+ * body runs. No code in such an arm can take rank 3 first, so the arm was
+ * removed in the same commit that built it; the shipped trigger is
+ * `BEFORE INSERT OR UPDATE ON installment_plans` and nothing else, and part
+ * 12 of the specification's end-state block refuses the DELETE bit by name.
+ *
+ * SO THE DELETE PATH'S ORDER IS A CALLER OBLIGATION, with a MEASURED remedy:
+ * the deleter takes the invoice row `FOR NO KEY UPDATE` itself, first, in its
+ * own transaction, before the `DELETE` -- measured both ways in the
+ * concurrency suite's section G1. `P4-AL-41` rank 3 states the obligation;
+ * section 3a-ter of `p4s7-installment-aging.spec.sql` states the remedy. So
+ * `40P01` remains reachable on that path and for the shapes `P4-AL-41`
+ * leaves to the CALLER (several invoices in opposite order, and the
+ * multi-row plan statement whose row order is the planner's). A rendering is
+ * owed to every one of them.
+ *
+ * WHAT IS OWED, AND WHY 409 AND NOT 500 OR 503. The request was well formed,
+ * the server is healthy, and the transaction was rolled back whole: nothing
+ * partial committed. That is a CONFLICT over concurrent access, and the
+ * contract carries `retryable: true` so a caller knows the one thing it needs
+ * to know. 500 reads as «we are broken»; 503 reads as «we are down». Neither
+ * is true. `[[daftar-lock-order-not-retry]]` is not weakened by this: a retry
+ * HERE is a retry at the caller's own transaction boundary, which is the
+ * standard contract for these SQLSTATEs, and it is NOT a retry loop inside a
+ * writer and NOT a licence to leave a lock-order defect in place. What makes
+ * the retry contract honest is NOT a repair of the order -- there is none to
+ * point at, and the paragraph above measures that no trigger in this slice
+ * can make one. It is that the transaction was rolled back WHOLE, so a retry
+ * resumes from a state nothing partial was committed into; and that the
+ * lock-order defect is not left unowned either: on the DELETE path it is
+ * declared a `P4-AL-41` rank-3 obligation of the CALLER, in section 3a-ter,
+ * with the one remedy that was MEASURED to reach it (the deleter takes the
+ * invoice row `FOR NO KEY UPDATE` first, in its own transaction). A
+ * declaration with a measured remedy is the honest state; a sentence
+ * claiming a repair that does not exist is the defect this one replaces.
+ *
+ * NO MERCHANT MESSAGE KEY IS ADDED. `details.contention` is a machine word for
+ * a client's retry logic, not a string to render, so there is no
+ * `error.selling.*` entry to localize and `check:localization` is unaffected.
+ */
+const CONTENTION_SQLSTATES: ReadonlyMap<string, string> = new Map([
+  ['40001', 'serialization_failure'],
+  ['40P01', 'deadlock_detected'],
+]);
+
+/**
+ * The transaction-manager contention a database error carries, or null, read
+ * from the SQLSTATE and never from the message: these outcomes carry the
+ * server's own English sentence, which names relations, tuples and process
+ * ids, and none of that may reach a caller.
+ */
+export function parseDatabaseContention(error: unknown): { readonly sqlstate: string; readonly contention: string } | null {
+  const sqlstate = (error as { code?: unknown } | null)?.code;
+  if (typeof sqlstate !== 'string') return null;
+  const contention = CONTENTION_SQLSTATES.get(sqlstate);
+  return contention === undefined ? null : { sqlstate, contention };
+}
+
+/** The two SQLSTATEs the classifier above recognizes, for a contract test to enumerate. */
+export const CONTENTION_SQLSTATE_CODES: readonly string[] = [...CONTENTION_SQLSTATES.keys()];
+
+/**
+ * A contention outcome as the API reports it: `409 CONFLICT`, the machine word
+ * for which contention it was, and `retryable: true`. The SQLSTATE itself is
+ * NOT in the body — it goes to the log — because a SQLSTATE in a response body
+ * is the same leak class `AccountingError.toSafeJSON` forbids.
+ */
+export function transactionContentionRefusal(contention: string): AppError {
+  return new AppError('CONFLICT', 'The request met concurrent contention and was not applied; it can be retried', 409, { contention, retryable: true });
+}
+
+/**
+ * A RECOGNIZED internal `installment.*` invariant code — never a prefix test,
+ * for the reason the `selling.*` registry states: most `installment.*` strings
+ * in the tree are migration-time end-state assertions, and a wildcard would be
+ * a standing claim that they can reach a response.
+ */
+export function isInstallmentInternalInvariant(code: string): boolean {
+  return INSTALLMENT_INTERNAL_INVARIANTS.has(code);
+}
+
+/**
+ * The `installment.*` code a database refusal carries, or null. The code is all
+ * that is taken: these messages name a plan, an invoice, a business and a
+ * count, and they are written for an engineer reading a log.
+ */
+export function parseDatabaseInstallmentInternalCode(error: unknown): string | null {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : null;
+  if (message === null) return null;
+  return INSTALLMENT_INTERNAL_CODE_RE.exec(message)?.[1] ?? null;
+}
 
 /**
  * A RECOGNIZED internal `selling.*` invariant code — never a prefix test. A

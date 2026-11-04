@@ -14,6 +14,7 @@ import {
   MAX_CUSTOMER_CONTACTS,
   NUMBERED_DOCUMENT_KINDS,
   normalizeCustomerText,
+  STANDARD_AGING_BUCKET_DAYS,
   STRUCTURAL_ZERO_TAX_MINOR,
   validateAgingBucketDays,
   validateCustomerStatement,
@@ -190,7 +191,10 @@ describe('aging boundaries are supplied, never invented (OD-P4-03, lock §4)', (
     expect(validateAgingBucketDays(Array.from({ length: MAX_AGING_BUCKETS + 1 }, (_, i) => i + 1))).toContain('bucket_days_too_many');
     expect(validateAgingBucketDays([30, 30])).toEqual(['bucket_days_not_ascending']);
     expect(validateAgingBucketDays([60, 30])).toEqual(['bucket_days_not_ascending']);
-    expect(validateAgingBucketDays([0])).toEqual(['bucket_days_out_of_range']);
+    // `[0]` is NOT out of range any more: DR-10 made a leading zero the way to
+    // ask for the not-due band. A negative boundary takes its place as the
+    // under-range case.
+    expect(validateAgingBucketDays([-1])).toEqual(['bucket_days_out_of_range']);
     expect(validateAgingBucketDays([4000])).toEqual(['bucket_days_out_of_range']);
     expect(validateAgingBucketDays([1.5])).toEqual(['bucket_days_out_of_range']);
   });
@@ -198,5 +202,14 @@ describe('aging boundaries are supplied, never invented (OD-P4-03, lock §4)', (
   it('labels one bucket per boundary plus the open bucket', () => {
     expect([...agingBucketLabels([30, 60, 90])]).toEqual(['0-30', '31-60', '61-90', 'over-90']);
     expect([...agingBucketLabels([7])]).toEqual(['0-7', 'over-7']);
+  });
+
+  it('labels the standard set with a NOT-DUE band (DR-10)', () => {
+    expect([...STANDARD_AGING_BUCKET_DAYS]).toEqual([0, 30, 60, 90]);
+    expect(validateAgingBucketDays([...STANDARD_AGING_BUCKET_DAYS])).toEqual([]);
+    expect([...agingBucketLabels([...STANDARD_AGING_BUCKET_DAYS])]).toEqual(['not-due', '1-30', '31-60', '61-90', 'over-90']);
+    // The band whose upper bound is the due date cannot be named by a pair of
+    // day numbers, so it is not called `0-0`.
+    expect([...agingBucketLabels([0])]).toEqual(['not-due', 'over-0']);
   });
 });

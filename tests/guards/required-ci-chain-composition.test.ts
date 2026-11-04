@@ -611,9 +611,23 @@ const S2_IN_ANOTHER_JOB = (): string => IN_ANOTHER_JOB(S2_COMMAND);
 describe('the reader really reads the workflow (a parser that drops a key makes every claim below vacuous)', () => {
   const doc = parseWorkflow(WORKFLOW_TEXT);
 
+  // This list is a NON-VACUITY CONTROL ON THE READER, not a lock on the
+  // workflow's shape: if the parser silently dropped a top-level key, every
+  // claim in the describes below would be vacuously true, so the reader must
+  // be shown to return exactly the keys the file has, in the file's own order.
+  //
+  // `concurrency` is one of them. It was introduced on `main` by CI-RUNNER-01
+  // (3c3baab9), which serialises runs per workflow and event, and the
+  // browser-gate pacing card later corrected its group key. The Phase 4
+  // lineage never carried the block, so this assertion was true there and
+  // became false the moment the lineage was assembled on top of `main`.
+  //
+  // WHEN A TOP-LEVEL KEY IS ADDED OR REMOVED, UPDATE THIS LIST — do not relax
+  // it to `toContain` or to a length check. Those pass over a reader that
+  // drops a key, which is the one thing this control exists to catch.
   it('the document is a mapping with the workflow’s own top-level keys', () => {
     expect(isMap(doc)).toBe(true);
-    expect(Object.keys(isMap(doc) ? doc : {})).toEqual(['name', 'on', 'env', 'jobs']);
+    expect(Object.keys(isMap(doc) ? doc : {})).toEqual(['name', 'on', 'env', 'concurrency', 'jobs']);
   });
 
   it('every job is reached, and the required job’s steps are a sequence of mappings', () => {

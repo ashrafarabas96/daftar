@@ -22,7 +22,7 @@
  * millisecond figure with no machine attached is not evidence of anything.
  */
 import { execSync } from 'node:child_process';
-import { cpus, freemem, loadavg, totalmem, arch, platform, release } from 'node:os';
+import { cpus, totalmem, arch, platform, release } from 'node:os';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -44,7 +44,6 @@ import {
   type TableStatistics,
 } from './accounting-dataset';
 import { exactShaBinding } from '../../scripts/phase2-s8-binding';
-import { distribution, quantile, type Distribution } from './percentile';
 
 /**
  * PHASE_2_ACCOUNTING_EXECUTION_PLAN §34, repeated verbatim. Milliseconds.
@@ -68,30 +67,80 @@ const BUDGET = {
 const TIER = process.env['P2S8_PERF_TIER'] === '2' ? 2 : 1;
 const RUN_LOCATION = process.env['CI'] === 'true' ? 'CI' : 'LOCAL';
 const ITERATIONS = TIER === 2 ? 60 : 30;
-/**
- * THE TWO SHORT PERCENTILE BUDGETS TAKE 200 MEASURED ITERATIONS
- * (TL-P4-S3 performance-evidence directive §4).
- *
- * A and B are the only budgets whose single operation takes a few
- * milliseconds, and they were being judged on a `p95` over thirty samples —
- * which is the SECOND-WORST sample of the thirty (proven at
- * `tests/guards/accounting-budget-percentile-semantics.test.ts`). One stalled
- * iteration was therefore the verdict, in either direction: a lucky run
- * passed and an unlucky one failed, and neither outcome was about the product.
- *
- * NOTHING ELSE MOVES. The ceilings are the accepted 15 ms and 60 ms, the
- * percentile is still p95, the timing scope is unchanged — COMMIT is still
- * inside A and the endpoint is still end-to-end in B — every sample is still
- * counted, and the dataset and the product are untouched. More samples make
- * `p95` an actual tail estimate instead of a near-maximum, which can only
- * strengthen the estimate: it may show the ceiling is met, or show more firmly
- * that it is not. Both are evidence.
- *
- * C, D and E keep the accepted `ITERATIONS`, and F is one timed pass rather
- * than a percentile, so neither is touched here (§4).
- */
-const SHORT_PERCENTILE_ITERATIONS = 200;
 const WARMUP = 5;
+
+/**
+ * PERF-01 (owner decision DR-15): a stable p95 for the two CHEAP budgets, A
+ * and B. No budget value changed; only the measurement got sturdier.
+ *
+ * Why 200 samples. The estimator is `sorted[min(N - 1, floor(0.95 * N))]`.
+ * With N = 30 that is index 28, so exactly ONE sample sits above p95 and the
+ * second largest value IS the p95: two stalled iterations decide the verdict.
+ * That is what failed on CI run 40359807575, attempt 1 (27 of 30 samples
+ * between 8.3 and 14.5 ms; THREE stalls, at 48.3, 77.7 and 152.7 ms, gave
+ * p95 = 77.7). With N = 200 the index is 190, so 9 samples sit above p95 and
+ * the verdict moves only when at least 10 of 200 are slow.
+ *
+ * What that buys, and what it costs, both measured on the estimator itself.
+ * The verdict now turns on a FRACTION rather than on two samples, and the
+ * fraction that trips it tightens: at N = 30 it took 2 of 30 (6.67 %), at
+ * N = 200 it takes 10 of 200 (5.00 %). The price is the other side of the
+ * same arithmetic: the number of samples that may be arbitrarily slow while
+ * the case still passes goes from 1 of 30 (3.33 %) to 9 of 200 (4.50 %). So
+ * between 4.50 % and 6.67 % of requests this measurement is strictly better
+ * than the one it replaces, and below 4.50 % it is strictly blind — p95
+ * ignores its top tail by construction, at every N. A tail-only regression
+ * that slowed 4 % of a merchant's adjustments to any duration whatsoever
+ * would pass here, and would have passed at N = 30 too.
+ *
+ * So do NOT read this block as "a real regression still fails". What the
+ * negative control below proves is narrower and should be read narrowly: a
+ * UNIFORM shift of every iteration is detected. It is set on B only, so A's
+ * hardening carries no negative control at all — and A is the budget that
+ * failed on run 40748054752 at p95 23.5 ms against 15 ms.
+ *
+ * Why the hardening nevertheless answers the failure it was built for,
+ * measured by replaying the failing series through both estimators: the
+ * 30 samples of that run give p95 = 60.055 at N = 30 (it failed against 60),
+ * and the same four stalls among 200 calm samples give p95 = 12.216 — while
+ * the same stall FRACTION (27 of 200) gives 60.055 again. The hardening
+ * therefore holds if a runner stall is a bounded number of events per run,
+ * and does nothing if it is a constant rate. The evidence for the first
+ * reading is one measured run on each side, not a proof.
+ * Cost: 200 x ~10 ms = about 2 s per case. A and B are cheap; C, D, E and F
+ * keep their counts because each iteration is far more expensive.
+ *
+ * Why 20 warm-ups. They are discarded and never enter a statistic. 5 covered
+ * the JIT but not the pg pool filling, the planner caching plans for
+ * repeated statements and the HTTP keep-alive socket; 20 passes use every
+ * pooled connection several times before the clock starts. Start-up (app
+ * creation, dataset load, ANALYZE, token issue) happens in beforeAll, outside
+ * every measured window.
+ */
+const STABLE_ITERATIONS = 200;
+const STABLE_WARMUP = 20;
+
+/**
+ * NEGATIVE CONTROL ONLY. Unset in every normal run, and then inert. When set
+ * to a number of milliseconds it delays every measured iteration of BOTH
+ * hardened budgets — A and B — by that much, so `p95 <= 15 ms` and
+ * `p95 <= 60 ms` MUST both go red. It exists to prove the hardened
+ * measurement can still fail; it never relaxes anything.
+ *
+ * It covered B alone until DR-74, and nothing in CI ever set it, so the only
+ * evidence that a hardened budget could still fail was one local run of one
+ * of the two. A control nothing exercises is a control nobody has seen work.
+ * `.github/workflows/ci.yml` now runs this suite with the knob set and FAILS
+ * IF THE SUITE PASSES, and it also requires both tags below in the output —
+ * a suite that cannot start also exits non-zero, and a control satisfied by
+ * that would be green for a reason that has nothing to do with the budgets.
+ *
+ * The delay sits at the head of the measured window, where the operation's
+ * own cost sits, so the red is the budget's own assertion missing its own
+ * ceiling. Nothing about the ceiling, the iteration count or the warm-up
+ * changes when it is set.
+ */
+const NEGATIVE_CONTROL_MS = Number(process.env['PERF01_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
 
 interface Measurement {
   readonly name: string;
@@ -133,16 +182,14 @@ const MONEY = {
 
 function summarise(name: string, budgetMs: number, samples: number[]): Measurement {
   const sorted = [...samples].sort((a, b) => a - b);
-  // `quantile` is the arithmetic that was here, moved to `./percentile` so a
-  // test can assert the index it reads (TL-P4-S3 §6). Unchanged: the same
-  // `min(n - 1, floor(q · n))` over the ascending samples.
+  const at = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
   const m: Measurement = {
     name,
     budgetMs,
     iterations: sorted.length,
-    p50: quantile(sorted, 0.5),
-    p95: quantile(sorted, 0.95),
-    p99: quantile(sorted, 0.99),
+    p50: at(0.5),
+    p95: at(0.95),
+    p99: at(0.99),
     max: must(sorted[sorted.length - 1]),
     min: must(sorted[0]),
     samplesMs: samples.map((v) => Number(v.toFixed(3))),
@@ -151,60 +198,9 @@ function summarise(name: string, budgetMs: number, samples: number[]): Measureme
   return m;
 }
 
-/**
- * WHAT THE DISTRIBUTION LOOKED LIKE, PRINTED AND RECORDED
- * (TL-P4-S3 performance-evidence directive §7).
- *
- * A percentile and a ceiling say a budget was missed. They do not say whether
- * it was missed by one stalled iteration or by a slow population that is a
- * third of the series, and that difference is the difference between an
- * instrument problem and a product problem. So for the two short percentile
- * budgets the whole ordered series is printed beside the counts either side
- * of the ceiling, the ratios between the modes, and what kind of runner took
- * the measurement.
- *
- * DIAGNOSTIC DATA NEVER CHANGES THE VERDICT (§7). Nothing here is consulted
- * by an assertion, nothing is excluded because a host metric looked bad, and
- * the verdict above is still `p95` over every sample.
- */
-interface Diagnostic extends Distribution {
-  readonly name: string;
-  /** `push`, `pull_request`, or `local` when no workflow took it. */
-  readonly runnerEvent: string;
-  readonly workflowRunId: string;
-  readonly cpuCount: number;
-  readonly loadAverage: readonly number[];
-  readonly processUptimeSeconds: number;
-  readonly freeMemoryBytes: number;
-}
-
-const diagnostics: Diagnostic[] = [];
-
-function diagnose(m: Measurement): Diagnostic {
-  const d: Diagnostic = {
-    ...distribution(m.samplesMs, m.budgetMs),
-    name: m.name,
-    runnerEvent: process.env['GITHUB_EVENT_NAME'] ?? 'local',
-    workflowRunId: process.env['GITHUB_RUN_ID'] ?? 'none',
-    cpuCount: cpus().length,
-    loadAverage: loadavg(),
-    processUptimeSeconds: Number(process.uptime().toFixed(1)),
-    freeMemoryBytes: freemem(),
-  };
-  diagnostics.push(d);
-  console.log(`\nDISTRIBUTION — ${m.name}\n${JSON.stringify(d, null, 1)}\n`);
-  // Returned so the ASSERTION MESSAGE carries it as well. Vitest's reporter
-  // did not surface this suite's `console.log` output in the piped CI log —
-  // the C plan block is captured in the artefact and absent from the log —
-  // whereas the message of a failed `expect` is always printed. §7 asks for
-  // the distribution to be readable while a failure is fresh, and the only
-  // channel that reliably is, on the run that matters, is the failure itself.
-  return d;
-}
-
 /** Warm up, then measure. The warm-up samples are discarded, never averaged in. */
-async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS): Promise<Measurement> {
-  for (let i = 0; i < WARMUP; i += 1) await once();
+async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS, warmup = WARMUP): Promise<Measurement> {
+  for (let i = 0; i < warmup; i += 1) await once();
   const samples: number[] = [];
   for (let i = 0; i < iterations; i += 1) {
     const started = process.hrtime.bigint();
@@ -409,12 +405,6 @@ afterAll(async () => {
     dataset: { ...spec, seededLines, reportingLines, reconciliationLines },
     budgets: BUDGET,
     measurements,
-    /**
-     * TL-P4-S3 §7: the full distribution behind the two short percentile
-     * budgets — the ordered series, the counts either side of the ceiling,
-     * and the runner that took them. Recorded, never consulted by a verdict.
-     */
-    distributions: diagnostics,
     /** §11: the plan behind budget C, recorded rather than described. */
     plans: { C_TRIAL_BALANCE: trialBalancePlan },
     /**
@@ -439,6 +429,9 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
         'A post() in an open transaction',
         BUDGET.A_POST_P95,
         async () => {
+          // The negative control, in the same place B carries it: inside the
+          // measured window, at its head. Inert unless the knob is set.
+          if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
           const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
           await c.query('BEGIN');
           await postAs(assertionFor(command, userId), command, {}, c);
@@ -448,9 +441,13 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
           // the budget than §34 requires, never a looser one.
           await c.query('COMMIT');
         },
-        SHORT_PERCENTILE_ITERATIONS,
+        STABLE_ITERATIONS,
+        STABLE_WARMUP,
       );
-      expect(m.p95, JSON.stringify(diagnose(m))).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+      // The tag is pure ASCII and stable, and the CI negative control greps
+      // for it: an inverted run must fail on THIS assertion, not on a fixture
+      // that could not reach the budget at all.
+      expect(m.p95, `PERF01-BUDGET-A ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.A_POST_P95);
     } finally {
       await c.end();
     }
@@ -463,6 +460,7 @@ describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
       'B manual adjustment endpoint',
       BUDGET.B_ADJUSTMENT_ENDPOINT_P95,
       async () => {
+        if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
         const response = await t.request
           .post(`/v1/businesses/${businessId}/accounting/adjustments`)
           .set('Authorization', `Bearer ${token}`)
@@ -479,9 +477,10 @@ describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
           });
         expect([200, 201]).toContain(response.status);
       },
-      SHORT_PERCENTILE_ITERATIONS,
+      STABLE_ITERATIONS,
+      STABLE_WARMUP,
     );
-    expect(m.p95, JSON.stringify(diagnose(m))).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+    expect(m.p95, `PERF01-BUDGET-B ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
   }, 900_000);
 });
 

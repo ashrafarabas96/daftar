@@ -341,6 +341,120 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     );
   }
 
+  /**
+   * THE PRE-UPGRADE IDENTITIES, PRODUCED BY THE REAL REGISTRATION PATH AND
+   * MOVED HERE (C1.5).
+   *
+   * This used to boot the API against the database pinned at `0056` and
+   * register there. C1.5 put a schema floor gate in front of every money read
+   * — structurally, as a dependency of the `Database` provider — and that gate
+   * refuses to construct a database handle against a schema thirty migrations
+   * behind the build. It is right to: that is exactly the defect it exists to
+   * refuse, so this suite's MECHANISM became illegitimate the moment the gate
+   * was correct. The gate does not bend, and it has no test escape.
+   *
+   * What the suite actually needs at `0056` is narrow, and it is measured
+   * rather than assumed: the frozen `provision_create_business` call below
+   * needs the owners' `users` ROWS to exist (it mints an assertion over
+   * `owner.userId` and binds the business to it). Their TOKENS are not needed
+   * here — nothing between this point and the upgrade uses one; the first
+   * token use is `f.token` after `runMigrations`, and the only pre-upgrade
+   * owner whose token is ever used is `ownerOf['B1']`, in the delegation
+   * ceiling describe, which runs long after the upgrade.
+   *
+   * So the rows arrive by REGISTRATION on a database at latest and are then
+   * projected onto `0056`'s shape. Equivalence by construction: these are the
+   * rows the real path writes, not rows written to imitate it. The projection
+   * is the INTERSECTION of the two catalogues, read from
+   * `information_schema`, so it cannot silently drift as `users` gains
+   * columns — and any column `0056` requires that the intersection does not
+   * cover is named and fails here rather than producing a wrong row.
+   *
+   * WHAT TRAVELS, AND WHAT DOES NOT. Registration writes `users`, `sessions`
+   * and `session_refresh_tokens`. The first two travel; the third does not,
+   * and both halves of that were MEASURED rather than reasoned:
+   *
+   *   — `sessions` is required. An earlier version of this helper moved
+   *     `users` alone, on the argument that `verifyAccessToken`
+   *     (`modules/auth/tokens.ts:78`) is purely cryptographic and touches no
+   *     table. That argument is true and INSUFFICIENT: the guard then calls
+   *     `resolvePrincipal`, which joins `users` to `sessions` and requires
+   *     `s.status = 'active' AND s.expires_at > now()`
+   *     (`auth.service.ts:335-337`). The B1 ceiling block answered **401**
+   *     until the session row travelled too. The suite caught the wrong
+   *     claim, which is the only reason it is not still in this comment.
+   *   — `session_refresh_tokens` is not required: no refresh or logout flow
+   *     runs against this database (measured — zero occurrences in this
+   *     file), so no row of it is ever read here.
+   *
+   * Both apps are built by `createTestApp` with the same `JWT_SECRET`
+   * (`SCRATCH_APP` overrides only the database URLs), so a token minted on
+   * the source database verifies against the scratch. `hdr(owner, …)` in the
+   * B1 ceiling block is the live control for the whole arrangement: if any of
+   * it were false, those requests would 401 rather than 201.
+   */
+  async function adoptIdentities(userIds: readonly string[]): Promise<void> {
+    // `users` before `sessions`: `sessions.user_id` references it.
+    const plan = [
+      { table: 'users', key: 'id', must: ['id', 'email'] },
+      { table: 'sessions', key: 'user_id', must: ['id', 'user_id', 'status', 'expires_at'] },
+    ] as const;
+
+    const columnsOf = async (p: Pool, table: string): Promise<string[]> =>
+      (
+        await p.query<{ c: string }>(
+          `SELECT column_name AS c FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position`,
+          [table],
+        )
+      ).rows.map((r) => r.c);
+
+    for (const { table, key, must } of plan) {
+      const sourceCols = await columnsOf(admin, table);
+      const scratchCols = await columnsOf(pool, table);
+      expect(sourceCols.length > 0, `NO SUBJECT — the source database has no ${table} table, so there are no real rows to move`).toBe(true);
+      expect(scratchCols.length > 0, `NO SUBJECT — the 0056 database has no ${table} table, so there is nowhere to move them to`).toBe(true);
+
+      const shared = scratchCols.filter((c) => sourceCols.includes(c));
+      // The columns this suite's own mechanism depends on, named one by one.
+      // A projection that silently lost `sessions.status` would move a row the
+      // guard rejects, and the failure would surface as a 401 three describes
+      // away from its cause.
+      for (const c of must) expect(shared, `the ${table} projection must carry ${c}`).toContain(c);
+
+      // Any column `0056` REQUIRES that the real row cannot supply is named
+      // here. Without this the INSERT would either fail obscurely or, worse,
+      // succeed on a default and leave a row the real path would never write.
+      const required = (
+        await pool.query<{ c: string }>(
+          `SELECT column_name AS c FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = $1 AND is_nullable = 'NO' AND column_default IS NULL`,
+          [table],
+        )
+      ).rows.map((r) => r.c);
+      expect(
+        required.filter((c) => !shared.includes(c)),
+        `the 0056 ${table} table requires columns the current ${table} table no longer has, so a moved row cannot be the row the real path writes`,
+      ).toEqual([]);
+
+      const quoted = shared.map((c) => `"${c}"`).join(', ');
+      const rows = await admin.query(`SELECT ${quoted} FROM ${table} WHERE "${key}" = ANY($1::uuid[])`, [[...userIds]]);
+      // The real path really wrote them. A move that silently carried nothing
+      // would fail later and elsewhere — `provision_create_business` on a
+      // missing owner, or a 401 in a describe that is not about identities.
+      expect(rows.rows.length > 0, `the registration path wrote no ${table} row for these ${userIds.length} users, so there is nothing to move`).toBe(true);
+      for (const row of rows.rows) {
+        const values = shared.map((c) => (row as Record<string, unknown>)[c]);
+        await pool.query(`INSERT INTO ${table} (${quoted}) VALUES (${shared.map((_, i) => `$${i + 1}`).join(', ')})`, values);
+      }
+      const landed = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${table} WHERE "${key}" = ANY($1::uuid[])`, [[...userIds]]);
+      expect(landed.rows[0]?.n, `every ${table} row moved into the 0056 database`).toBe(String(rows.rows.length));
+    }
+
+    const landedUsers = await pool.query<{ n: string }>(`SELECT count(*)::text AS n FROM users WHERE id = ANY($1::uuid[])`, [[...userIds]]);
+    expect(landedUsers.rows[0]?.n, `all ${userIds.length} owner identities are present in the 0056 database`).toBe(String(userIds.length));
+  }
+
   beforeAll(async () => {
     await ensurePostgres();
     await admin.query(`DROP DATABASE IF EXISTS ${SCRATCH} WITH (FORCE)`);
@@ -357,10 +471,14 @@ describe('P3-AL-53 — a backfilled population and a freshly provisioned one, in
     await pool.query(`SELECT provision_assertion_key_install($1, decode($2, 'base64'))`, [PROVISIONING_ASSERTION_KID, PROVISIONING_ASSERTION_KEY_B64]);
     await pool.query(`SELECT accounting_assertion_key_install($1, decode($2, 'base64'))`, [ACCOUNTING_ASSERTION_KID, ACCOUNTING_ASSERTION_KEY_B64]);
 
-    // Identities of the pre-P3 world (registration touches identity tables only).
-    const t0 = await app();
+    // Identities of the pre-P3 world (registration touches identity tables
+    // only). Registered on a database AT LATEST and moved here — see
+    // `adoptIdentities`: the API may not be booted against this database until
+    // the upgrade below, because C1.5's schema floor gate refuses it.
+    const t0 = await createTestApp();
     const owners = [await register(t0, 'Owner B1'), await register(t0, 'Owner B2'), await register(t0, 'Owner B3'), await register(t0, 'Owner B4')];
     await t0.close();
+    await adoptIdentities(owners.map((o) => o.userId));
 
     // The pre-Phase-3 population, written by the frozen routine.
     for (const [i, label] of ['B1', 'B2', 'B3', 'B4'].entries()) await provisionBeforeP3(label, owners[i] as Actor);

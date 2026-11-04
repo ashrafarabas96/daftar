@@ -1,0 +1,6391 @@
+/**
+ * P4-S7 — THE SEVEN PROOFS THE OWNER REQUIRES, OVER THE INSTALLMENT-AGING
+ * PROJECTION.
+ *
+ * HOW EACH PROOF IS WRITTEN, AND THE FOUR FAILURE SHAPES IT AVOIDS
+ * ----------------------------------------------------------------
+ * This estate's recurring failures are named, and each one is answered here
+ * by construction rather than by care:
+ *
+ *  (1) «a test that compares an expression with itself.» Every money identity
+ *      is asserted against a figure that does NOT come from the projection:
+ *      proof 1 compares the bucket total against the AUTHORITATIVE
+ *      `outstandingTxnMinor` of the fixture, and the residual is given its
+ *      own closed form so the identity is a theorem about the telescoping
+ *      clamp rather than a restatement of `O - Sum(alloc)`. `meta_2` further
+ *      requires every mutant to CHANGE the output, so a mutation that proves
+ *      nothing is itself red.
+ *
+ *  (2) «an exemption that is never evaluated.» `meta_1` enumerates
+ *      `POLICY_KNOBS` and fails if any knob's defective value is not
+ *      exercised by a named proof. A knob added without a proof turns this
+ *      file red.
+ *
+ *  (3) «a law whose subject is a textual coincidence.» The subjects are real
+ *      files, read with comments stripped, and each law carries a
+ *      NON-COINCIDENCE arm asserting the legitimate text is NOT flagged — so
+ *      `due_date` and `down_payment_minor` passing is part of proof 7, and a
+ *      `DEFAULT now()` audit stamp not being a clock read is part of proof 8.
+ *
+ *      WHICH PREDICATES ARE THE ESTATE'S, EXACTLY. The first round claimed
+ *      proofs 6, 7 and 8 all used the estate's own predicates and «never a
+ *      regex invented here», and the challenger showed that was false for 6
+ *      and 8 (H-6). The accurate statement:
+ *        — proof 7 uses `isAuthoritativeSalesColumn` and
+ *          `findAuthoritativeSalesColumns` from
+ *          `scripts/guards/no-authoritative-balance.ts`, unmodified;
+ *        — proof 6 uses the estate's `discoverSalesTables` for relation
+ *          discovery, and a LOCAL `SETTLING_RELATION` vocabulary plus a
+ *          LOCAL, alias-independent `relationsRead`. The vocabulary is copied
+ *          from seam `S-P4-03`'s question in `scripts/phase4-s1-gate.ts`;
+ *          it is not imported, because that gate exports no predicate for it;
+ *        — proof 8's `FINANCIAL_TIME` is LOCAL, because the estate has no
+ *          body-reading clock predicate yet. Supplying one is the whole point
+ *          of patch request PR-3, and this is the predicate to transcribe.
+ *      Where a predicate is local it is red-proved here and said to be local.
+ *
+ *  (4) «a gate that reads a verdict out of an exit status that can never say
+ *      no.» Nothing here reads an exit status. Every proof is an `expect`
+ *      over a value, and every proof is accompanied by the mutation that
+ *      makes it fire, asserted red in the same `it` block. A proof whose
+ *      mutant stays green fails.
+ *
+ * AND THE BOX. This file runs under `packages/domain-core/vitest.config.ts`,
+ * which declares neither `globalSetup` nor `setupFiles`. It starts no
+ * PostgreSQL cluster, creates no `/tmp/daftar-pg-*` directory and touches no
+ * database: it is pure-function work over a reference model and over file
+ * text.
+ */
+import { describe, expect, it } from 'vitest';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import {
+  discoverSalesTables,
+  findAuthoritativeSalesColumns,
+  isAuthoritativeSalesColumn,
+  isForbiddenSalesTable,
+} from '../../../scripts/guards/no-authoritative-balance';
+import {
+  assertDr13AgingFallback,
+  assertPinnedBodiesComplete,
+  bodyDigests,
+  declaredBodyDigests,
+  dollarQuotedBody,
+  dr13AgingFindings,
+  plantRetiredNullGuard,
+  routineHeads,
+  shippedAgingBody,
+  specAgingBody,
+} from '../../../scripts/guards/p4s7-body-digests';
+import { agingBucketLabels } from '../src/invoice';
+import { apRelease } from '../../inventory/src/supplier-settlement';
+import {
+  aggregate,
+  CANONICAL_RELEASE,
+  bucketOf,
+  DECLARED_SETTLEMENT_ORDER,
+  SETTLEMENT_ORDERS,
+  contributionsFor,
+  CORRECT_POLICY,
+  epochDay,
+  POLICY_KNOBS,
+  projectCustomerAging,
+  projectInvoice,
+  scheduledDueBy,
+  termlessBucketDate,
+  type AgingContribution,
+  type InstallmentPlan,
+  type OpenInvoiceRow,
+  type ProjectionPolicy,
+  type ReleaseFn,
+} from './phase4-s7-aging-reference-model';
+
+const REPO = join(__dirname, '..', '..', '..');
+const SPEC_PATH = join(REPO, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
+const MIGRATIONS_DIR = join(REPO, 'infrastructure', 'database', 'migrations');
+const SHIPPED_AGING_PATH = join(MIGRATIONS_DIR, '0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+
+const SPEC = readFileSync(SPEC_PATH, 'utf8');
+/**
+ * THE ADOPTED ORACLE AND READER — the S7 proof engineer's module, consumed
+ * rather than re-implemented.
+ *
+ * The coordinator's instruction was «adopt its reader and its oracle rather
+ * than patching yours — it has measured recall over 17 forms and precision
+ * over 11 decoys, and yours has four shapes that all spell `public.`». So:
+ *
+ *   * `bucketIndexByBand` replaces this file's use of `bucketOf` as proof 2's
+ *     EXPECTED value. The old form asserted `x.bucketNo === bucketOf(...)`
+ *     while the projection produced `bucketNo` BY CALLING `bucketOf` — over
+ *     the banding the law said `f(x) === f(x)` and its refusal was
+ *     unreachable. The band oracle is derived from `agingBucketLabels`, which
+ *     is PRODUCT code, by interval containment: a different algorithmic path
+ *     to the same answer.
+ *   * `relationReferences` / `relationsTouched` replace `relationsRead`'s
+ *     `public.`-qualified-only scan, which missed five legitimate SQL forms
+ *     (unqualified, unqualified-unaliased, quoted identifiers, a space around
+ *     the dot, and CTE wrapping) — and this file's own mutation matrix wrote
+ *     `public.` in all four of its shapes, so the gap was UNTESTED rather
+ *     than tested and tolerated.
+ *   * `canonicalReducerRegistry` replaces `REDUCER_COLUMN`, which was an
+ *     UNANCHORED substring: `bill_invoice_amount_applied_minor` would have
+ *     made an unrelated relation an invoice reducer.
+ *   * `lastEffectiveRoutineDefinition` replaces `liveDefinition`, whose
+ *     dollar-tag selection took the first `$fn$` ANYWHERE later in the file
+ *     and preferred `$fn$` even when a `$$` opened first. It was right today
+ *     BY LUCK, and `0084` is the only Phase 4 migration using `$fn$`, so the
+ *     luck was load-bearing.
+ */
+import type { MandatoryProof } from './phase4-s7-proof-oracles';
+import {
+  BUCKET_MUTANTS,
+  INVOICE_REDUCER_COLUMN,
+  ONE_SIDED_INVARIANTS,
+  PURCHASE_REDUCER_COLUMN,
+  bucketIndexByBand,
+  bucketIndexByBinarySearch,
+  auditProofFile,
+  alterDropColumns,
+  canonicalReducerRegistry,
+  lastEffectiveRoutineDefinition,
+  proofLedger,
+  recordProof,
+  relationsTouched,
+  scheduleInvariantAccepts,
+  scheduleInvariantVerdict,
+  unpaidDuePortion,
+} from './phase4-s7-proof-oracles';
+
+const SELF = readFileSync(join(__dirname, 'phase4-s7-installment-aging.test.ts'), 'utf8');
+
+/**
+ * THE WHOLE MIGRATION TREE, in apply order. The first round of this file
+ * pinned `0083` as "the one definition" of `invoice_outstanding(UUID, UUID[])`
+ * and reasoned about a body the database does not hold: `0084:488` DROPs that
+ * signature and `0084:593` recreates it with `currency_code, due_date`
+ * appended (challenger C-1). A law about the live settlement sum must find the
+ * LAST definition of that name across the tree, never a chosen file — so the
+ * subject is discovered here and a later migration cannot escape it.
+ */
+const MIGRATIONS: readonly { readonly name: string; readonly sql: string }[] = Object.freeze(
+  readdirSync(MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .map((name) => Object.freeze({ name, sql: readFileSync(join(MIGRATIONS_DIR, name), 'utf8') })),
+);
+
+/**
+ * THE SUBJECT OF A SCHEMA LAW IS SCHEMA, NEVER PROSE. The specification
+ * explains at length which columns and which source types it refuses, so a
+ * checker run over the whole file flags the file for saying what it will not
+ * do. This was not predicted — it was MEASURED: the first run of proofs 6
+ * and 8 went red on the specification's own `-- ... accounting_source_type`
+ * and `-- ... now()` sentences, which is precisely the «law whose subject is
+ * a textual coincidence» failure, caught in the author's own checker. Both
+ * laws now read schema. (The estate's own `findAuthoritativeSalesColumns`
+ * already strips non-schema internally, which is why proof 7 was green from
+ * the first run.)
+ */
+/**
+ * ── THE DOLLAR TAG, MATCHED WITHOUT A WINDOW AND WITH DIGITS
+ *    (`TL-P4-COORD-R52` ordered item 8, F-9) ────────────────────────────────
+ *
+ * The round-12 challenger measured five latent defects in this lexer, NONE of
+ * them reachable by the specification's current text, all of them measured on
+ * a verbatim copy. Two are fixed here and one is turned from a SILENT
+ * fall-through into a raise; the two that remain are declared at `lexSql`.
+ *
+ *   * `/^\$[A-Za-z_]*\$/` rejects a tag containing a DIGIT -- `$q1$` is legal
+ *     PostgreSQL -- and the body then lexes as TOP LEVEL, where `sqlCodeOnly`
+ *     BLANKS its literals. That is the inversion `sqlCodeOnly` exists to
+ *     refuse, pointed the other way. The character class now admits digits
+ *     after the first character, exactly as an identifier does;
+ *   * the match was taken over `sql.slice(i, i + 64)`, so a tag longer than 64
+ *     characters was invisible. A STICKY regex anchored at `i` has no window
+ *     at all, which is the repair rather than a bigger number.
+ *
+ * `$$` with an empty tag is matched too, and it was before.
+ */
+const DOLLAR_TAG = /\$(?:[A-Za-z_\u0080-\uFFFF][A-Za-z0-9_\u0080-\uFFFF]*)?\$/y;
+
+/** The dollar tag opening at `i`, or null. No window, digits admitted. */
+function dollarTagAt(s: string, i: number): string | null {
+  DOLLAR_TAG.lastIndex = i;
+  const m = DOLLAR_TAG.exec(s);
+  return m === null ? null : m[0];
+}
+
+/**
+ * `true` when the quote at `i` opens an `E'...'` escape string, in which a
+ * BACKSLASH escapes the following character — so `E'a\'b'` is ONE literal and
+ * the naive scanner ended it at the escaped quote, deleting the statement that
+ * followed from the code projection. Measured by the round-12 challenger on a
+ * copy; the shipped file contains no escape-string literal (its 25 `E'` hits
+ * are apostrophes in prose), so this changes no projection of it today.
+ */
+function isEscapeString(s: string, i: number): boolean {
+  const p = s[i - 1];
+  if (p !== 'E' && p !== 'e') return false;
+  const q = s[i - 2];
+  return q === undefined || !/[A-Za-z0-9_$]/.test(q);
+}
+
+/**
+ * The index just past the single-quoted literal that opens at `i`.
+ *
+ * AN UNTERMINATED LITERAL RAISES AND NO LONGER RETURNS THE END OF THE SUBJECT
+ * (`TL-P4-COORD-R55` ordered item 10, F13-7). `return s.length` made every
+ * statement after an unbalanced quote vanish from the code projection in
+ * silence — measured on a copy, a whole `CREATE UNIQUE INDEX` lost — which is
+ * the same failure as the unterminated dollar tag the previous round repaired
+ * in ONE of its three sites. The one instrument whose job is not to invert may
+ * not fail quietly in any of them.
+ */
+function endOfLiteral(s: string, i: number): number {
+  const escapes = isEscapeString(s, i);
+  let j = i + 1;
+  while (j < s.length) {
+    if (escapes && s[j] === '\\') {
+      j += 2;
+      continue;
+    }
+    if (s[j] === "'" && s[j + 1] === "'") {
+      j += 2;
+      continue;
+    }
+    if (s[j] === "'") return j + 1;
+    j += 1;
+  }
+  throw new Error(
+    `endOfLiteral: the single-quoted literal opened at offset ${i} is never closed, so every statement after it would be swallowed by the projection. ` +
+      `A projection that loses its subject is not a projection, and this is raised rather than returned.`,
+  );
+}
+
+/**
+ * The index just past the block comment that opens at `i`. PostgreSQL NESTS
+ * block comments and `indexOf` of a closing delimiter does not: an outer
+ * comment holding an inner one ended at the INNER close, which left the outer
+ * comment's remaining text -- a forbidden token and a stray closing delimiter
+ * -- in BOTH projections, where a code law would read it as code. Depth is
+ * counted instead. (The construct itself cannot be written in this comment:
+ * a closing delimiter would end the comment. `H13` writes it as a string and
+ * measures it.)
+ *
+ * AN UNTERMINATED BLOCK COMMENT RAISES AND NO LONGER RETURNS THE END OF THE
+ * SUBJECT (`TL-P4-COORD-R59` ordered item 5, F14-8). `return s.length` was the
+ * FOURTH silent-swallow site of this one lexer, shipped in the round whose own
+ * report said all three were closed, while both its siblings
+ * (`endOfLiteral`, `lexSql`'s dollar tag) raise. The nesting count above is
+ * correct and that is exactly what made the silent return easy to miss. Latent
+ * on the shipped bytes -- the specification contains the opening delimiter
+ * ZERO times, which `H13` measures rather than assumes -- and repaired anyway,
+ * because the instrument whose job is not to invert may not fail quietly in
+ * ANY of its sites.
+ */
+function endOfBlockComment(s: string, i: number): number {
+  let depth = 0;
+  let j = i;
+  while (j < s.length) {
+    if (s[j] === '/' && s[j + 1] === '*') {
+      depth += 1;
+      j += 2;
+      continue;
+    }
+    if (s[j] === '*' && s[j + 1] === '/') {
+      depth -= 1;
+      j += 2;
+      if (depth === 0) return j;
+      continue;
+    }
+    j += 1;
+  }
+  throw new Error(
+    `endOfBlockComment: the block comment opened at offset ${i} is never closed (depth ${depth} at the end of the subject), ` +
+      `so every statement after it would be swallowed by the projection. A projection that loses its subject is not a projection, ` +
+      `and this is raised rather than returned.`,
+  );
+}
+
+function stripCommentsQuoteAware(s: string): string {
+  let out = '';
+  let i = 0;
+  while (i < s.length) {
+    // A NESTED dollar-quoted literal is DATA and is copied through whole.
+    // `stripCommentsQuoteAware` was not dollar-quote aware, so a `--` inside
+    // an inner `$q$ ... $q$` literal of a routine body ate the rest of that
+    // line. The shipped file nests none (measured, walked pairwise over the
+    // seven `$fn$` bodies), so this changes no projection of it today.
+    const tag = dollarTagAt(s, i);
+    if (tag !== null) {
+      const close = s.indexOf(tag, i + tag.length);
+      // AND HERE TOO (`TL-P4-COORD-R55` ordered item 10, F13-7). The previous
+      // round made the TOP-LEVEL lexer raise on an unterminated tag and left
+      // this copy of the branch returning the remainder as one literal — so a
+      // nested unterminated tag inside a routine body copied that body's `--`
+      // comments through into the CODE projection, which is the inversion
+      // class that cost one run six laws. Measured on a copy; latent on the
+      // shipped bytes (zero dollar tags inside all six bodies).
+      if (close === -1) {
+        throw new Error(
+          `stripCommentsQuoteAware: the nested dollar tag ${tag} opened at offset ${i} of a routine body is never closed, ` +
+            `so the rest of that body would be copied through as one literal with its comments intact. Raised rather than returned.`,
+        );
+      }
+      const stop = close + tag.length;
+      out += s.slice(i, stop);
+      i = stop;
+      continue;
+    }
+    if (s[i] === "'") {
+      // A single-quoted literal is DATA. A `--` inside it is two hyphens, not
+      // a comment, and the old stripper ate the rest of the line INCLUDING
+      // the closing quote -- which is the inversion this function exists to
+      // refuse. The literal is copied through, quote doubling and all.
+      const j = endOfLiteral(s, i);
+      out += s.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (s[i] === '-' && s[i + 1] === '-') {
+      const nl = s.indexOf('\n', i);
+      i = nl === -1 ? s.length : nl; // the newline itself is kept
+      continue;
+    }
+    if (s[i] === '/' && s[i + 1] === '*') {
+      out += ' ';
+      i = endOfBlockComment(s, i);
+      continue;
+    }
+    out += s[i];
+    i += 1;
+  }
+  return out;
+}
+
+/**
+ * ONE LEXER, TWO SUBJECTS. Both extractors are projections of a SINGLE
+ * left-to-right pass that knows where it is, because round 11's challenger
+ * (F-8) showed that two independent regex passes cannot: `sqlSchemaOnly` used
+ * to strip `--.*$` over the RAW file, before anything knew about quoting, so a
+ * `--` planted inside a `COMMENT ... IS '...'` literal deleted that literal's
+ * CLOSING QUOTE, and from that character on every literal and every stretch of
+ * code in the file swapped places in `sqlCodeOnly`'s parse. The fault was not
+ * that the strippers blanked too much; it was that they INVERTED, which can
+ * turn a shipped law green over text that is not its subject.
+ *
+ * So quoting is decided first and comments second, never the other way round:
+ *   - a dollar-quoted body is executable SQL, so it is kept, with comments
+ *     stripped INSIDE it by the quote-aware stripper above;
+ *   - a top-level single-quoted literal is data: blanked to `''` for a code
+ *     law, passed through verbatim for a schema law;
+ *   - `--` and block comments are removed only where the lexer is in neither.
+ */
+function lexSql(sql: string, blankLiterals: boolean): string {
+  let out = '';
+  let i = 0;
+  while (i < sql.length) {
+    const tag = dollarTagAt(sql, i);
+    if (tag !== null) {
+      const close = sql.indexOf(tag, i + tag.length);
+      // AN UNTERMINATED TAG RAISES AND NO LONGER CONSUMES THE REST OF THE
+      // FILE IN SILENCE (`TL-P4-COORD-R52` ordered item 8). `close === -1`
+      // used to make the remainder a body: every law downstream then read a
+      // projection that had swallowed the file, and nothing said so. The one
+      // instrument whose job is to not invert may not fail quietly.
+      if (close === -1) {
+        throw new Error(
+          `lexSql: the dollar tag ${tag} opened at offset ${i} is never closed, so the rest of the subject would lex as one body. ` +
+            `A projection that swallowed its subject is not a projection, and this is raised rather than returned.`,
+        );
+      }
+      const stop = close + tag.length;
+      // THE DELIMITERS ARE RE-ADDED HERE AND NOT PASSED DOWN, which was
+      // MEASURED and is not a tidiness: `stripCommentsQuoteAware` is now
+      // dollar-quote aware (so a NESTED literal's `--` is data), and handing
+      // it a slice that STARTS with `$fn$` made it treat the whole body as one
+      // nested literal and copy it verbatim -- comments included. Six laws
+      // inverted in that one run, which is how this was found.
+      out += tag + stripCommentsQuoteAware(sql.slice(i + tag.length, close)) + tag;
+      i = stop;
+      continue;
+    }
+    if (sql[i] === "'") {
+      // `E'...'` IS SCANNED WITH BACKSLASH ESCAPES and `U&'...'` without
+      // them, which is PostgreSQL's own rule: a Unicode escape string is a
+      // STANDARD literal in which only `''` doubles, so it needs no case of
+      // its own here and gets none. The two DECLARED remainders of the
+      // round-12 lexer findings are: a `?`-style placeholder is not a
+      // construct this estate's SQL uses, and `standard_conforming_strings =
+      // off` -- which would make EVERY literal an escape string -- is not
+      // read, because this projection's subject is a FILE and not a session.
+      //
+      // AND A THIRD REMAINDER IS DECLARED BECAUSE THE FIX FOR IT WAS
+      // MEASURED AND WAS WORSE THAN THE DEFECT. A DOUBLE-QUOTED IDENTIFIER
+      // holding a `--` or an apostrophe is lexed as ordinary characters here,
+      // which the round-12 challenger recorded as latent and unreachable. The
+      // obvious repair -- treat `"` as opening a skip region -- was
+      // implemented and MEASURED AGAINST THIS SUBJECT, and it INVERTED six
+      // laws: the specification's PROSE is full of quotation marks ( «must
+      // mean "I could not reach the invoice row"» and others ), and in the
+      // de-commented projection sketch those become code, so every stretch
+      // between two of them swallowed its `--` comments. A repair that
+      // inverts the instrument on the real subject is the exact failure this
+      // lexer exists to prevent, so it was REVERTED and the construct is
+      // declared instead: this file's SQL contains no double-quoted
+      // identifier carrying a comment marker, `H13` measures that the one
+      // double-quoted identifier it does contain survives, and a later author
+      // adding one must fix the lexer with its own measurement in hand.
+      const j = endOfLiteral(sql, i);
+      out += blankLiterals ? "''" : sql.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (sql[i] === '-' && sql[i + 1] === '-') {
+      const nl = sql.indexOf('\n', i);
+      i = nl === -1 ? sql.length : nl;
+      continue;
+    }
+    if (sql[i] === '/' && sql[i + 1] === '*') {
+      out += ' ';
+      i = endOfBlockComment(sql, i);
+      continue;
+    }
+    out += sql[i];
+    i += 1;
+  }
+  return out;
+}
+
+function sqlSchemaOnly(sql: string): string {
+  return lexSql(sql, false);
+}
+
+/**
+ * THE SUBJECT OF A CODE LAW IS CODE, AND A STRING LITERAL IS NOT CODE.
+ *
+ * THE FIFTH OCCURRENCE OF THE SAME LESSON, and it is kept in the file for the
+ * same reason the coordinator kept the first: the next author will write the
+ * same prose. Rounds 1 and 2 saw proofs 6 and 8 go red on the specification's
+ * own `--` sentences (twice) and then on the sketch's inline comments. Round 3
+ * saw it again from a new direction: `COMMENT ON FUNCTION ... IS '...'` is
+ * REAL DDL, so `sqlSchemaOnly` correctly keeps it — and the documentation
+ * string says «an invoice may now appear in SEVERAL buckets» and names
+ * `source_to_base_rate` as metadata, which made the clock law and proof 10's
+ * rate law both go red on a COMMENT.
+ *
+ * Ducking it by rewording the COMMENT would leave the trap armed. So the
+ * subject is refined instead: single-quoted literals outside a dollar-quoted
+ * body are DATA and are blanked, while the dollar-quoted function body — the
+ * thing a code law is actually about — is passed through untouched.
+ * `meta_8` proves this function is not simply deleting everything.
+ */
+function sqlCodeOnly(sql: string): string {
+  return lexSql(sql, true);
+}
+
+/**
+ * The projection SQL the specification is judged on: the block between its
+ * two explicit markers, with the comment prefix removed. The sketch lives
+ * inside comments because this slice writes no migration, so the block must
+ * be DELIMITED and de-commented deliberately rather than hunted for.
+ */
+function projectionSketch(sql: string): string {
+  const begin = '>>> P4S7 PROJECTION SKETCH BEGIN';
+  const end = '<<< P4S7 PROJECTION SKETCH END';
+  const a = sql.indexOf(begin);
+  const b = sql.indexOf(end);
+  if (a === -1 || b === -1) throw new Error('the projection sketch markers are missing from the specification');
+  return sql
+    .slice(a + begin.length, b)
+    .split('\n')
+    .map((l) => l.replace(/^--\s?/, ''))
+    .join('\n');
+}
+
+/** Which knob each proof mutates — read by `meta_1`. */
+/**
+ * THE MANDATORY PROOF TABLE — the registry the meta gate READS.
+ *
+ * It is not prose and it is not a comment. Every field is consumed by
+ * `auditProofFile` and by `meta_1a`'s ledger check, and `meta_9` proves each
+ * way of hollowing a proof out is refused.
+ *
+ * WHY IT IS KEYED ON THE PROOF AND NOT ON THE KNOB. `MUTATIONS_EXERCISED` is
+ * keyed on the policy knob, so proofs 6, 7, 8 and 9 — whose mutations are
+ * planted into SQL text rather than reached through a knob — were outside
+ * every meta law. Deleting proof 6 or proof 9 outright left the whole file
+ * green. "Remove proof A" had no coverage for four of the seven required
+ * proofs.
+ *
+ * `arms` IS DECLARED AND NOT COUNTED, because a proof with three red arms
+ * that loses one is a proof that lost a mutation, and an auditor that read
+ * only the first matching arm was measured green on exactly that.
+ *
+ * IF YOU RENAME AN `it` OR A TAG, UPDATE THIS TABLE IN THE SAME CHANGE. The
+ * gate is fail-closed by design; a red here after a rename is the coupling
+ * working, not a defect in the proof.
+ */
+const MANDATORY: readonly MandatoryProof[] = Object.freeze([
+  Object.freeze({
+    id: 'proof_1',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ["mutate('clampToRowAmount'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_2',
+    armTitleContains: 'FIRES',
+    arms: 3,
+    requiresInArm: ["mutate('bucketBy'", 'BUCKET_MUTANTS'],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_3',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('planlessArm'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_4',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('carryResidual'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_5',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('outstandingSource'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  // DR-13-SPEC. The PLACEMENT law, and the only proof in this file whose
+  // mutation moves no money at all — which is exactly why the slice shipped
+  // with the termless defect while every conservation law stayed green.
+  Object.freeze({
+    id: 'proof_13',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('termlessFallback'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_6',
+    armTitleContains: 'FIRES',
+    arms: 4,
+    requiresInArm: ['journalFindings(', 'relationsRead(', 'canonicalReducerRegistry('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_7',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ['findAuthoritativeSalesColumns('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_8',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ['FINANCIAL_TIME'],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_9',
+    armTitleContains: 'FIRES',
+    arms: 2,
+    requiresInArm: ['OVER_SCHEDULED', 'unpaidDuePortion('],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+  Object.freeze({
+    id: 'proof_10',
+    armTitleContains: 'FIRES',
+    arms: 1,
+    requiresInArm: ["mutate('baseAllocation'"],
+    minAssertions: 3,
+    file: 'phase4-s7-installment-aging.test.ts',
+  }),
+]);
+
+const MUTATIONS_EXERCISED: readonly { readonly proof: string; readonly knob: keyof ProjectionPolicy; readonly to: unknown }[] = Object.freeze([
+  Object.freeze({ proof: 'proof_1', knob: 'clampToRowAmount' as const, to: false }),
+  Object.freeze({ proof: 'proof_2', knob: 'bucketBy' as const, to: 'invoice_due_date' }),
+  Object.freeze({ proof: 'proof_3', knob: 'planlessArm' as const, to: 'every_invoice' }),
+  Object.freeze({ proof: 'proof_4', knob: 'carryResidual' as const, to: false }),
+  Object.freeze({ proof: 'proof_13', knob: 'termlessFallback' as const, to: 'none' }),
+  Object.freeze({ proof: 'proof_5', knob: 'outstandingSource' as const, to: 'plan_local' }),
+  Object.freeze({ proof: 'proof_2', knob: 'scheduleDateShiftDays' as const, to: -200 }),
+  Object.freeze({ proof: 'proof_10', knob: 'baseAllocation' as const, to: 'per_row_conversion' }),
+]);
+
+function mutate(knob: keyof ProjectionPolicy, to: unknown): ProjectionPolicy {
+  return { ...CORRECT_POLICY, [knob]: to } as ProjectionPolicy;
+}
+
+const THRESHOLDS = [30, 60, 90] as const;
+const AS_OF = '2026-10-07';
+
+/** A civil date `n` days before `AS_OF`, so every age below is DERIVED. */
+const daysBefore = (n: number): string => new Date((epochDay(AS_OF) - n) * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * THE BOUNDARY SCHEDULE — the finding inside the finding, and the better
+ * lesson of the two.
+ *
+ * The design fixture is a round monthly schedule, so it touches NO band
+ * boundary: 175, 145, 114, 84, 53, 22 days and the future ones. The `>` to
+ * `>=` mutant is therefore INERT on it — proof 2 would have been green FOR
+ * WANT OF A CASE, not for want of a check, and no amount of repairing the
+ * law's subject would have found that.
+ *
+ * This schedule puts a scheduled date on EVERY boundary, on both sides of
+ * every boundary, and one day off each: ages 0, 30, 31, 60, 61, 90, 91 and a
+ * future date. Twelve rows of 100 000 against the same authoritative pair as
+ * the design fixture, so the sum law and the base law hold over it unchanged.
+ */
+const BOUNDARY_AGES = [-30, 0, 29, 30, 31, 60, 61, 90, 91, 200, 300, 400] as const;
+
+const BOUNDARY_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-boundary',
+  currencyCode: 'SAR',
+  dueDate: daysBefore(200),
+  issueDate: daysBefore(401),
+  outstandingTxnMinor: 900_000n,
+  paidTxnMinor: 300_000n,
+  paidBaseMinor: 253_750n,
+  outstandingBaseMinor: 761_251n,
+});
+
+const BOUNDARY_PLAN: InstallmentPlan = Object.freeze({
+  planId: 'plan-boundary',
+  invoiceId: 'inv-boundary',
+  status: 'active',
+  downPaymentMinor: 0n,
+  downPaymentDueDate: daysBefore(401),
+  installments: Object.freeze(
+    // Ascending by date, so `seq_no` and `due_date` agree and the settlement
+    // order is unambiguous: the oldest ages first.
+    [...BOUNDARY_AGES].sort((a, b) => b - a).map((age, i) => Object.freeze({ seqNo: i + 1, dueDate: daysBefore(age), amountTxnMinor: 100_000n })),
+  ),
+});
+
+// ── THE DEFECT FIXTURE ────────────────────────────────────────────────────
+//
+// Exactly the owner's complaint. A 12,000.00 invoice, billed on terms whose
+// invoice-level `due_date` is the ORIGINAL first-payment date, carrying a
+// 12-month plan of 1,000.00 a month. Three instalments have been collected,
+// so the AUTHORITATIVE outstanding is 9,000.00. As of 2026-10-07 only six of
+// the twelve dates have passed and 3,000.00 has not fallen due at all — yet
+// the shipped routine reports the whole 9,000.00 in the over-90 bucket.
+
+const PLANNED_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-plan',
+  currencyCode: 'SAR',
+  dueDate: '2026-01-15',
+  issueDate: '2025-12-15',
+  outstandingTxnMinor: 900_000n,
+  // The other halves of the SAME authoritative row: three instalments
+  // collected, and the carrying released for them. `total_base_minor` is
+  // 1 015 001 against a `total_txn_minor` of 1 200 000 — deliberately not a
+  // round ratio, so the HALF_EVEN cumulative law does real rounding:
+  // `R(300 000) = HALF_EVEN(1 015 001 x 300 000 / 1 200 000)
+  //            = HALF_EVEN(253 750.25) = 253 750`.
+  paidTxnMinor: 300_000n,
+  paidBaseMinor: 253_750n,
+  outstandingBaseMinor: 761_251n,
+});
+
+const SCHEDULE = Object.freeze(
+  Array.from({ length: 12 }, (_, k) =>
+    Object.freeze({
+      seqNo: k + 1,
+      dueDate: `2026-${String(k + 1).padStart(2, '0')}-15`,
+      amountTxnMinor: 100_000n,
+    }),
+  ),
+);
+
+const PLAN: InstallmentPlan = Object.freeze({
+  invoiceId: 'inv-plan',
+  status: 'active' as const,
+  downPaymentMinor: 0n,
+  downPaymentDueDate: '2026-01-01',
+  installments: SCHEDULE,
+});
+
+/** An invoice with NO plan: the arm whose behaviour must not change. */
+const PLAINLESS_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-plain',
+  currencyCode: 'SAR',
+  dueDate: '2026-05-01',
+  issueDate: '2026-04-01',
+  outstandingTxnMinor: 250_000n,
+  paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 211_251n,
+});
+
+/**
+ * A SUM-LAW VIOLATION: `Sum instalments + down = invoice total` (`P4-AL-13`,
+ * `R-SAL-06`) is broken, so the schedule accounts for only 2,000.00 of a
+ * 10,000.00 outstanding. The projection must still total the authoritative
+ * figure rather than silently losing 8,000.00.
+ */
+const SHORT_SCHEDULE_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-short',
+  currencyCode: 'SAR',
+  dueDate: '2026-02-01',
+  issueDate: '2026-01-01',
+  outstandingTxnMinor: 1_000_000n,
+  paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 845_003n,
+});
+const SHORT_PLAN: InstallmentPlan = Object.freeze({
+  invoiceId: 'inv-short',
+  status: 'active' as const,
+  downPaymentMinor: 0n,
+  downPaymentDueDate: '2026-01-20',
+  installments: Object.freeze([
+    Object.freeze({ seqNo: 1, dueDate: '2026-11-01', amountTxnMinor: 100_000n }),
+    Object.freeze({ seqNo: 2, dueDate: '2026-12-01', amountTxnMinor: 100_000n }),
+  ]),
+});
+
+/**
+ * THE OVER-SCHEDULED DIRECTION (challenger M-11). The sum law is broken the
+ * other way: `Σ instalments = 1 800 000` against an invoice total of
+ * `paid + outstanding = 900 000`. Every fixture in the first round was on the
+ * UNDER-scheduled side, and the seven laws all hold here while the aging
+ * reports a 265-day-overdue receivable as entirely not yet due.
+ */
+const OVER_SCHEDULED_INVOICE: OpenInvoiceRow = Object.freeze({
+  invoiceId: 'inv-over',
+  currencyCode: 'SAR',
+  dueDate: '2026-01-15',
+  issueDate: '2025-12-15',
+  outstandingTxnMinor: 900_000n,
+  paidTxnMinor: 0n,
+  paidBaseMinor: 0n,
+  outstandingBaseMinor: 760_501n,
+});
+const OVER_SCHEDULED_PLAN: InstallmentPlan = Object.freeze({
+  invoiceId: 'inv-over',
+  status: 'active' as const,
+  downPaymentMinor: 0n,
+  downPaymentDueDate: '2026-01-10',
+  installments: Object.freeze([
+    Object.freeze({ seqNo: 1, dueDate: '2026-01-15', amountTxnMinor: 900_000n }),
+    Object.freeze({ seqNo: 2, dueDate: '2027-01-15', amountTxnMinor: 900_000n }),
+  ]),
+});
+
+/**
+ * A bucket date that must be PRESENT, asserted rather than asserted-away.
+ *
+ * `AgingContribution.scheduleDate` stays nullable only because the
+ * `termlessFallback: 'none'` knob has to be expressible — that knob IS the
+ * defect DR-13 retired. Under any correct policy it is never null, so the
+ * tests below REFUSE a null here instead of casting it off with `as string`,
+ * which would hide exactly the state this card exists to make impossible.
+ */
+function mustDate(date: string | null, what: string): string {
+  expect(date, `${what}: a contribution with NO bucket date is the DR-13 defect, not a value to band`).not.toBeNull();
+  return date as string;
+}
+
+function sum(xs: readonly { readonly txnMinor: bigint }[]): bigint {
+  return xs.reduce((a, x) => a + x.txnMinor, 0n);
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('P4-S7 the defect, stated and fixed', () => {
+  it('the shipped granularity really is the defect: one invoice, one date, the whole value over 90 days', () => {
+    // The status-quo behaviour, reached by the `invoice_due_date` knob.
+    const today = aggregate(contributionsFor([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS, mutate('bucketBy', 'invoice_due_date')));
+    expect(today).toEqual([{ bucketNo: 4, currencyCode: 'SAR', txnMinor: 900_000n, baseMinor: 761_251n, invoiceCount: 1 }]);
+
+    // The fix. Each instalment ages on its own date — and the base carrying
+    // portion travels with it, by the canonical cumulative law (proof 10).
+    // 338 334 + 84 583 + 84 584 + 253 750 = 761 251, the authoritative
+    // outstanding base, EXACTLY: the sum is unchanged by the regrouping
+    // because the four figures are differences of ONE cumulative function.
+    expect(projectCustomerAging([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS)).toEqual([
+      { bucketNo: 1, currencyCode: 'SAR', txnMinor: 400_000n, baseMinor: 338_334n, invoiceCount: 1 },
+      { bucketNo: 2, currencyCode: 'SAR', txnMinor: 100_000n, baseMinor: 84_583n, invoiceCount: 1 },
+      { bucketNo: 3, currencyCode: 'SAR', txnMinor: 100_000n, baseMinor: 84_584n, invoiceCount: 1 },
+      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 300_000n, baseMinor: 253_750n, invoiceCount: 1 },
+    ]);
+    // The regrouping is value-preserving on BOTH columns, which is the
+    // granularity claim stated as an equation rather than as a picture.
+    const onlyBand = today[0];
+    expect(onlyBand, 'the defect reading produced NO bucket, so the equation below has no subject').toBeDefined();
+    expect(onlyBand?.txnMinor).toBe(900_000n);
+    expect(onlyBand?.baseMinor).toBe(761_251n);
+  });
+
+  it('settlement is oldest-scheduled-first, so the three collected instalments are the three earliest', () => {
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    const outstandingSeqs = c.filter((x) => x.origin === 'installment').map((x) => x.seqNo);
+    expect(outstandingSeqs).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    // January, February and March are settled and contribute nothing.
+    expect(outstandingSeqs).not.toContain(1);
+  });
+
+  it('an invoice with no plan is bucketed exactly as before', () => {
+    expect(projectCustomerAging([PLAINLESS_INVOICE], [], AS_OF, THRESHOLDS)).toEqual([
+      // The base is the AUTHORITATIVE `outstanding_base_minor` passed through,
+      // not a recomputation of it: the plan-less arm performs no arithmetic.
+      { bucketNo: 4, currencyCode: 'SAR', txnMinor: 250_000n, baseMinor: 211_251n, invoiceCount: 1 },
+    ]);
+    expect(PLAINLESS_INVOICE.outstandingBaseMinor).toBe(211_251n);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 1 [proof_1] — the sum of the aging buckets equals the authoritative invoice outstanding', () => {
+  // The SUBJECT is the authoritative figure, taken from the fixture and never
+  // from the projection, over a portfolio that mixes a planned invoice, a
+  // plan-less invoice and a broken sum law.
+  // The portfolio spans all three schedule shapes: well-formed, UNDER-scheduled
+  // and OVER-scheduled. The over-scheduled one is what makes the upper clamp
+  // bite — without it the `clampToRowAmount` mutation is INERT, which `meta_2`
+  // would then catch as a mutation that proves nothing.
+  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+  const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
+  const authoritative = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+
+  it('holds over the portfolio, and per invoice', () => {
+    expect(sum(projectCustomerAging(rows, plans, AS_OF, THRESHOLDS))).toBe(authoritative);
+    for (const r of rows) {
+      const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+      expect(sum(projectInvoice(r, plan, AS_OF, THRESHOLDS))).toBe(r.outstandingTxnMinor);
+    }
+  });
+
+  it('holds at every as-of date, because the allocation does not depend on as-of at all', () => {
+    for (const asOf of ['2025-12-31', '2026-01-15', '2026-06-30', '2026-10-07', '2027-06-01']) {
+      expect(sum(projectCustomerAging(rows, plans, asOf, THRESHOLDS))).toBe(authoritative);
+    }
+  });
+
+  it('FIRES under its mutation: THE CANONICAL LAW ITSELF REFUSES a level past the invoice total', () => {
+    // The strongest outcome available: removing the upper clamp lets a
+    // cumulative level run past the invoice total, and `apRelease`'s own
+    // guard — «an AP release exceeds the purchase total»
+    // (`supplier-settlement.ts:94`) — refuses it. The defect cannot even
+    // produce a number.
+    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('clampToRowAmount', false))).toThrow(/AP release exceeds the purchase total/);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the UNMUTATED configuration does not throw, so the
+    // refusal belongs to the mutation and not to the fixture.
+    expect(() => projectCustomerAging(rows, plans, AS_OF, THRESHOLDS)).not.toThrow();
+    // ...and the unmutated answer still totals the authoritative figure, so
+    // this arm is not taking credit for a refusal proof 1 would have raised.
+    expect(projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).reduce((a, b) => a + b.txnMinor, 0n)).toBe(
+      rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n),
+    );
+    recordProof('proof_1', 3, 'FIRES arm ran: the canonical law refuses an over-total level; unmutated does not throw');
+  });
+
+  it('FIRES under its mutation: and the overshoot is MEASURED, with the guard stood down', () => {
+    // A permissive release, so the arithmetic proceeds and the damage is a
+    // number rather than an exception. This is what proof 1 would have been
+    // asserting if the canonical law carried no guard — so the law is shown
+    // to be red-capable on its own terms, not only via someone else's throw.
+    const permissive: ReleaseFn = (B, T, X, a) => (T === 0n ? 0n : (B * (X + a)) / T - (B * X) / T);
+    const good = rows.flatMap((r) =>
+      projectInvoice(
+        r,
+        plans.find((p) => p.invoiceId === r.invoiceId),
+        AS_OF,
+        THRESHOLDS,
+        CORRECT_POLICY,
+        permissive,
+      ),
+    );
+    expect(sum(good)).toBe(authoritative);
+    const bad = rows.flatMap((r) =>
+      projectInvoice(
+        r,
+        plans.find((p) => p.invoiceId === r.invoiceId),
+        AS_OF,
+        THRESHOLDS,
+        mutate('clampToRowAmount', false),
+        permissive,
+      ),
+    );
+    expect(sum(bad)).not.toBe(authoritative);
+    // The overshoot is exactly the over-scheduled excess: 1 800 000 − 900 000.
+    expect(sum(bad) - authoritative).toBe(900_000n);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_1', 3, 'FIRES arm ran: FIRES under its mutation: and the overshoot is MEASURED, wit');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 2 [proof_2] — no not-yet-due scheduled amount enters an overdue bucket', () => {
+  // THE SUBJECT IS THE PLAN, NOT THE OUTPUT.
+  //
+  // The first round judged each contribution's bucket against the contribution's
+  // OWN `scheduleDate`. One ternary in the model set both fields, so
+  // `bucketNo === bucketOf(asOf, scheduleDate)` held BY CONSTRUCTION under
+  // both values of the knob, and the law could only ever re-test `bucketOf`
+  // (challenger H-3). It could not see a wrong date chosen, a wrong row
+  // allocated, or an off-by-a-day boundary — and under its own mutant the
+  // not-yet-due set was EMPTY, so the law iterated over nothing while the
+  // whole 900 000 aged too old.
+  //
+  // The bucket is now judged against the date THE PLAN DECLARES, found by
+  // `seq_no`, which the projection does not rewrite. The non-vacuity canary
+  // is in the mutant arm as well as the holds arm.
+
+  /** The date the PLAN declares for this contribution, read from the plan. */
+  function declaredDate(c: AgingContribution, plan: InstallmentPlan, row: OpenInvoiceRow): string {
+    if (c.origin === 'down_payment') return plan.downPaymentDueDate;
+    if (c.origin === 'installment') {
+      const i = plan.installments.find((x) => x.seqNo === c.seqNo);
+      if (i === undefined) throw new Error(`no declared instalment for seq ${String(c.seqNo)}`);
+      return i.dueDate;
+    }
+    // `residual` and `whole_invoice` are money the schedule never named, and
+    // the document's own date is the only date with authority over it:
+    // `coalesce(due_date, issue_date)` (DR-13, DR-21). The SUBJECT of this
+    // oracle is the PLAN's and the DOCUMENT's declared dates, read
+    // independently of the projection — so it must carry the fallback too, or
+    // it would certify as correct the very band the defect produced.
+    return mustDate(termlessBucketDate(row), 'the declared document date');
+  }
+
+  /** Contributions whose DECLARED date has not arrived at `p_as_of`. */
+  function notYetDueByPlan(cs: readonly AgingContribution[], plan: InstallmentPlan, row: OpenInvoiceRow): readonly AgingContribution[] {
+    return cs.filter((c) => {
+      const d = declaredDate(c, plan, row);
+      return d !== null && epochDay(d) >= epochDay(AS_OF);
+    });
+  }
+
+  it('every threshold the aging validator admits is at least 1, which is what makes bucket 1 the non-overdue bucket', () => {
+    expect(Math.min(...THRESHOLDS)).toBeGreaterThanOrEqual(1);
+    expect(bucketOf(AS_OF, AS_OF, THRESHOLDS)).toBe(1);
+    expect(bucketOf(AS_OF, '2027-01-01', THRESHOLDS)).toBe(1);
+  });
+
+  it('THE STRONG LAW: every contribution sits in the bucket of the date the PLAN declares for it', () => {
+    // This implies proof 2 AND its converse (challenger M-11): a bucket may be
+    // neither too old nor too young for its own declared date.
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    expect(c.length).toBeGreaterThan(0);
+    for (const x of c) {
+      // THE EXPECTED VALUE IS THE INDEPENDENT ORACLE, never `bucketOf`.
+      // `bucketIndexByBand` parses `agingBucketLabels` — PRODUCT code — back
+      // into intervals and asks which interval contains the age. The
+      // projection counts thresholds. Two algorithmic paths; the law is a
+      // claim again instead of `f(x) === f(x)`.
+      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS));
+    }
+    // And the law really does range over several distinct buckets, so it is
+    // not satisfied by everything landing in one.
+    expect(new Set(c.map((x) => x.bucketNo)).size).toBeGreaterThan(1);
+  });
+
+  it('THE BOUNDARY FIXTURE: the strong law holds where the bands actually meet', () => {
+    // The design fixture is round monthly and touches no boundary, so the
+    // `>=` mutant below is INERT on it. This one sits on every boundary.
+    const c = projectInvoice(BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS);
+    expect(c.length).toBeGreaterThan(0);
+    for (const x of c) {
+      expect(x.bucketNo, `seq ${String(x.seqNo)}`).toBe(bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS));
+    }
+    // Every band is reached, so no band is asserted vacuously. The three
+    // oldest rows (400, 300, 200 days) are what the 300 000 already paid
+    // settles, which is why the fixture carries them: without rows older than
+    // the paid prefix, band 4 would be empty and the law vacuous there.
+    expect(new Set(c.map((x) => x.bucketNo))).toEqual(new Set([1, 2, 3, 4]));
+    // The money laws still hold on it, so the fixture is not a special case
+    // that only the banding sees.
+    expect(sum(c)).toBe(BOUNDARY_INVOICE.outstandingTxnMinor);
+    // And a date really does sit ON each boundary, which is the whole point.
+    const ages = BOUNDARY_PLAN.installments.map((i) => epochDay(AS_OF) - epochDay(i.dueDate));
+    for (const t of THRESHOLDS) expect(ages, `no date at exactly ${String(t)} days`).toContain(t);
+    recordProof('proof_2', 7, 'boundary fixture: every band reached, a date on each threshold');
+  });
+
+  it('FIRES: FIVE mutants of the BANDING that the old self-referential form could not refuse', () => {
+    // Each one leaves the surrounding structure entirely valid — money
+    // untouched, indices in range, the sum law still holding, the output
+    // self-consistent — which is exactly why an oracle that calls `bucketOf`
+    // cannot refuse any of them. They are injected into the real projection.
+    expect(BUCKET_MUTANTS.length).toBe(5);
+    const victims: readonly { readonly row: OpenInvoiceRow; readonly plan: InstallmentPlan }[] = [
+      { row: BOUNDARY_INVOICE, plan: BOUNDARY_PLAN },
+      { row: PLANNED_INVOICE, plan: PLAN },
+    ];
+    for (const { name, fn } of BUCKET_MUTANTS) {
+      let disagreements = 0;
+      let moneyMoved = false;
+      for (const { row, plan } of victims) {
+        const c = projectInvoice(row, plan, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, fn);
+        // THE SURROUNDING STRUCTURE IS STILL VALID. If the mutant broke the
+        // money too, the law would be caught by proof 1 and this one would be
+        // taking credit for someone else's refusal.
+        expect(sum(c), `${name}: the money moved`).toBe(row.outstandingTxnMinor);
+        for (const x of c) {
+          expect(x.bucketNo, `${name}: out of range`).toBeGreaterThanOrEqual(1);
+          expect(x.bucketNo, `${name}: out of range`).toBeLessThanOrEqual(THRESHOLDS.length + 1);
+        }
+        if (sum(c) !== row.outstandingTxnMinor) moneyMoved = true;
+        disagreements += c.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, plan, row), THRESHOLDS)).length;
+      }
+      expect(moneyMoved).toBe(false);
+      // ...and the band oracle refuses it. A non-zero count is the proof that
+      // the law's refusal is REACHABLE, which it was not before.
+      expect(disagreements, `${name} was INERT — the law cannot refuse it`).toBeGreaterThan(0);
+    }
+    // THE INERTNESS THE PROOF ENGINEER FOUND, reproduced rather than
+    // described: the `>=` mutant disagrees on the BOUNDARY fixture and NOT on
+    // the round monthly one, so on the design fixture alone this law would
+    // have been green for want of a case.
+    const inclusive = BUCKET_MUTANTS.find((m) => m.name === 'boundary_inclusive');
+    // A `??` FALLBACK HERE WOULD BE THE DEFECT. Substituting the correct
+    // bucket function for a missing mutant makes the two readings below agree
+    // and the arm green for want of a mutant. So: refuse, loudly.
+    if (inclusive === undefined) throw new Error('NO SUBJECT: BUCKET_MUTANTS no longer carries boundary_inclusive');
+    const onRound = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive.fn);
+    expect(onRound.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, PLAN, PLANNED_INVOICE), THRESHOLDS))).toHaveLength(0);
+    const onBoundary = projectInvoice(BOUNDARY_INVOICE, BOUNDARY_PLAN, AS_OF, THRESHOLDS, CORRECT_POLICY, CANONICAL_RELEASE, inclusive.fn);
+    expect(
+      onBoundary.filter((x) => x.bucketNo !== bucketIndexByBand(AS_OF, declaredDate(x, BOUNDARY_PLAN, BOUNDARY_INVOICE), THRESHOLDS)).length,
+    ).toBeGreaterThan(0);
+    recordProof('proof_2', 5, 'five banding mutants refused; `>=` shown inert on the round fixture');
+  });
+
+  it('THE ORACLE IS CALIBRATED AGAINST ITSELF, so it is evidence and not an assertion', () => {
+    // Two independent derivations that agree are evidence the oracle is
+    // right; one is an assertion. Interval containment and binary search
+    // agree with the shipped counting expression on every age in range.
+    for (let age = -5; age <= 200; age += 1) {
+      const d = daysBefore(age);
+      const band = bucketIndexByBand(AS_OF, d, THRESHOLDS);
+      expect(bucketIndexByBinarySearch(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
+      expect(bucketOf(AS_OF, d, THRESHOLDS), `age ${String(age)}`).toBe(band);
+    }
+    // AND NOT «a null date is band 1» (DR-13, DR-21). The three derivations
+    // now agree on a TERMLESS document's RESOLVED date instead of agreeing
+    // with each other about a date nobody owns.
+    const termlessIssue = daysBefore(400);
+    expect(bucketIndexByBand(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    expect(bucketIndexByBinarySearch(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    expect(bucketOf(AS_OF, termlessIssue, THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+  });
+
+  it('holds: money whose DECLARED date has not arrived is in bucket 1 and nowhere else', () => {
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    const future = notYetDueByPlan(c, PLAN, PLANNED_INVOICE);
+    expect(future.length, 'the law arm is vacuous').toBeGreaterThan(0);
+    for (const f of future) expect(f.bucketNo).toBe(1);
+    expect(sum(future)).toBe(300_000n); // October, November, December
+  });
+
+  it('THE CONVERSE: money whose DECLARED date is long past may not sit in the not-yet-due bucket', () => {
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    const longPast = c.filter((x) => {
+      const d = declaredDate(x, PLAN, PLANNED_INVOICE);
+      return d !== null && epochDay(AS_OF) - epochDay(d) > Math.max(...THRESHOLDS);
+    });
+    expect(longPast.length, 'the converse arm is vacuous').toBeGreaterThan(0);
+    for (const x of longPast) expect(x.bucketNo).toBe(THRESHOLDS.length + 1);
+  });
+
+  it('KNOWN SOFT SPOT, declared: the residual is bucketed by invoices.due_date, which the strong law treats as its declared date', () => {
+    // Stated rather than left for a challenger to find that the author knew.
+    // The residual is money the schedule never named, so the plan declares no
+    // date for it and `invoices.due_date` is the only date with authority.
+    // That is now INSIDE the strong law rather than an exception to it:
+    // `declaredDate` returns the invoice's date for `residual`, so the
+    // residual's bucket is asserted too, against a date the projection does
+    // not choose.
+    const c = contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS);
+    const residual = c.filter((x) => x.origin === 'residual');
+    expect(residual).toHaveLength(1);
+    expect(residual[0]?.bucketNo).toBe(
+      bucketIndexByBand(AS_OF, mustDate(termlessBucketDate(SHORT_SCHEDULE_INVOICE), 'the short-schedule document date'), THRESHOLDS),
+    );
+    expect(residual[0]?.bucketNo).toBeGreaterThan(1);
+    for (const i of SHORT_PLAN.installments) expect(epochDay(i.dueDate)).toBeGreaterThan(epochDay(AS_OF));
+    // The honest reading: a sum-law VIOLATION signal, aged conservatively at
+    // the invoice's own date. The violation itself is bounded by the DEFERRED
+    // verifier (proof 9), which is now its only home.
+    expect(SHORT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n)).toBe(200_000n);
+    expect(SHORT_SCHEDULE_INVOICE.paidTxnMinor + SHORT_SCHEDULE_INVOICE.outstandingTxnMinor).toBe(1_000_000n);
+  });
+
+  it('FIRES under its mutation: bucketing by the invoice due date instead of the schedule date', () => {
+    const c = contributionsFor([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS, mutate('bucketBy', 'invoice_due_date'));
+    // THE CANARY IS IN THE MUTANT ARM TOO: the not-yet-due set is computed
+    // from the PLAN, so it is non-empty whatever the projection relabels.
+    const future = notYetDueByPlan(c, PLAN, PLANNED_INVOICE);
+    expect(future.length, 'the mutant arm is vacuous — the law saw nothing').toBeGreaterThan(0);
+    expect(sum(future)).toBe(300_000n);
+    // ...and that money is now in an overdue bucket.
+    for (const f of future) expect(f.bucketNo).toBeGreaterThan(1);
+    expect(c.every((x) => x.bucketNo === 4)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_2', 4, 'FIRES arm ran: FIRES under its mutation: bucketing by the invoice due date ');
+  });
+
+  it('FIRES under its mutation: every schedule date shifted 200 days earlier inside the allocation', () => {
+    // The defect the challenger demonstrated no knob could reach. The output
+    // stays self-consistent — each contribution reports the shifted date it
+    // used — so a law judging the bucket against the output cannot see it.
+    const m = mutate('scheduleDateShiftDays', -200);
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, m);
+    // Self-consistent, which is why the old law stayed green:
+    for (const x of c) {
+      expect(x.bucketNo).toBe(bucketOf(AS_OF, mustDate(x.scheduleDate, 'self-consistency'), THRESHOLDS));
+    }
+    // The plan-subject law sees it.
+    const wrong = c.filter((x) => x.bucketNo !== bucketOf(AS_OF, mustDate(declaredDate(x, PLAN, PLANNED_INVOICE), 'declared date'), THRESHOLDS));
+    expect(wrong.length).toBeGreaterThan(0);
+    // And the canary holds while the law fires: real not-yet-due money has
+    // been aged into overdue buckets.
+    const future = notYetDueByPlan(c, PLAN, PLANNED_INVOICE);
+    expect(future.length).toBeGreaterThan(0);
+    expect(future.some((f) => f.bucketNo > 1)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_2', 4, 'FIRES arm ran: FIRES under its mutation: every schedule date shifted 200 da');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 3 [proof_3] — no amount is counted twice', () => {
+  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
+  const plans = [PLAN, SHORT_PLAN];
+
+  it('the plan-aware arm and the plan-less arm PARTITION the open invoices', () => {
+    const c = contributionsFor(rows, plans, AS_OF, THRESHOLDS);
+    const planned = new Set(plans.filter((p) => p.status === 'active').map((p) => p.invoiceId));
+    for (const r of rows) {
+      const mine = c.filter((x) => x.invoiceId === r.invoiceId);
+      const origins = new Set(mine.map((x) => x.origin));
+      if (planned.has(r.invoiceId)) {
+        expect(origins.has('whole_invoice')).toBe(false);
+      } else {
+        expect([...origins]).toEqual(['whole_invoice']);
+      }
+    }
+  });
+
+  it('each schedule row contributes at most once, and the keys are unique', () => {
+    const c = contributionsFor(rows, plans, AS_OF, THRESHOLDS);
+    const keys = c.map((x) => `${x.invoiceId}|${x.origin}|${String(x.seqNo)}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('M-9: an ACTIVE PLAN WITH NO INSTALMENT ROWS takes the PLAN arm, as the SQL does — the row count is not consulted', () => {
+    // The challenger measured the model and the SQL taking OPPOSITE arms here
+    // and giving opposite buckets on one input: the model required
+    // `installments.length > 0`, the SQL's plan-less arm is
+    // `NOT EXISTS (… active_plan …)` and `active_plan` is built from
+    // `installment_plans` alone. The SQL is right — an active plan is a plan,
+    // and its down payment is a schedule row with a date of its own — so the
+    // model no longer consults the row count, and THIS LAW is what stops the
+    // condition being reinstated.
+    const emptyPlan: InstallmentPlan = Object.freeze({
+      invoiceId: 'inv-empty',
+      status: 'active' as const,
+      downPaymentMinor: 400n,
+      downPaymentDueDate: '2027-06-01', // future
+      installments: Object.freeze([]),
+    });
+    const row: OpenInvoiceRow = Object.freeze({
+      invoiceId: 'inv-empty',
+      currencyCode: 'SAR',
+      dueDate: '2026-01-15', // long past
+      issueDate: '2025-12-15',
+      outstandingTxnMinor: 400n,
+      paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 338n,
+    });
+    const c = projectInvoice(row, emptyPlan, AS_OF, THRESHOLDS);
+    // The PLAN arm: the down payment at its own future date, bucket 1.
+    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([['down_payment', 0, '2027-06-01', 1, 400n]]);
+    // NOT the plan-less arm, which would put the whole 400 at the invoice's
+    // long-past due date in the oldest bucket — the opposite end of the aging.
+    expect(c.some((x) => x.origin === 'whole_invoice')).toBe(false);
+    expect(bucketOf(AS_OF, mustDate(row.dueDate, 'the invoice due date'), THRESHOLDS)).toBe(THRESHOLDS.length + 1);
+    // Totality is unaffected either way, which is why proofs 1 and 4 could
+    // not see this.
+    expect(sum(c)).toBe(row.outstandingTxnMinor);
+    // And the SQL agrees by construction: its plan-less arm keys off the PLAN
+    // row's existence, not the instalment rows'.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    // ROUND 7 F1: arm (c) is no longer keyed on what the caller can SEE in
+    // `installment_plans`. It is keyed on the invoice's own column, so the
+    // partition of the open invoices is now between flagged and unflagged.
+    expect(sketch).toMatch(/FROM open_invoice oi\n\s*WHERE NOT oi\.flagged/);
+    expect(sketch).toMatch(/FROM public\.installment_plans p/);
+    // The state is ALSO made unreachable at commit, so this is closed from
+    // both ends rather than only from the model's.
+    expect(SPEC).toMatch(/AT LEAST ONE `installments` row per active plan/);
+  });
+
+  it('two active plans on one invoice are REFUSED rather than silently counted twice', () => {
+    const twin: InstallmentPlan = { ...PLAN, invoiceId: 'inv-plan' };
+    expect(() => contributionsFor([PLANNED_INVOICE], [PLAN, twin], AS_OF, THRESHOLDS)).toThrow(/installment_plan\.more_than_one_active/);
+  });
+
+  it('the specification forbids it structurally, with a partial unique index', () => {
+    expect(SPEC).toMatch(/CREATE\s+UNIQUE\s+INDEX\s+\w+\s+ON\s+installment_plans\s*\(\s*business_id\s*,\s*invoice_id\s*\)\s*WHERE\s+status\s*=\s*'active'/i);
+  });
+
+  it('FIRES under its mutation: the plan-less arm stops excluding planned invoices', () => {
+    const authoritative = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+    const got = sum(projectCustomerAging(rows, plans, AS_OF, THRESHOLDS, mutate('planlessArm', 'every_invoice')));
+    expect(got).not.toBe(authoritative);
+    // The two planned invoices are counted twice over.
+    expect(got).toBe(authoritative + PLANNED_INVOICE.outstandingTxnMinor + SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the unmutated portfolio totals the authoritative
+    // figure exactly, so the overcount is the mutation's and not the
+    // fixture's.
+    expect(sum(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(authoritative);
+    recordProof('proof_3', 3, 'FIRES arm ran: the plan-less arm stops excluding planned invoices; unmutated is exact');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 4 [proof_4] — no amount disappears', () => {
+  // A DIFFERENT SUBJECT from proof 1. Proof 1 is about the total being right
+  // when the schedule is well formed; this is about money the SCHEDULE DOES
+  // NOT ACCOUNT FOR still reaching a bucket. A projection that totals
+  // correctly on good data and loses the difference on bad data passes
+  // proof 1 and fails here, which is why the two mutations are different.
+
+  it('a broken sum law does not lose the difference: the residual reaches a bucket', () => {
+    const c = projectInvoice(SHORT_SCHEDULE_INVOICE, SHORT_PLAN, AS_OF, THRESHOLDS);
+    expect(sum(c)).toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
+    const residual = c.filter((x) => x.origin === 'residual');
+    expect(sum(residual)).toBe(800_000n);
+    // And it is bucketed at the invoice's own due date, the only date with
+    // any authority over money the schedule never named.
+    expect(residual.map((x) => x.scheduleDate)).toEqual([SHORT_SCHEDULE_INVOICE.dueDate]);
+  });
+
+  it('a negative outstanding is carried too, rather than clamped away', () => {
+    const over: OpenInvoiceRow = {
+      ...PLANNED_INVOICE,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    };
+    expect(sum(projectInvoice(over, PLAN, AS_OF, THRESHOLDS))).toBe(-5_000n);
+  });
+
+  it('the named BOUNDARIES are explicit fixtures, not left to chance', () => {
+    // The first round hoped 400 random cases would reach these. The
+    // challenger measured that `O = 0`, `O = T`, `O` equal to a suffix sum and
+    // a zero-amount row were each ZERO of 400, and that `n` was never 2 or 4,
+    // because `rng * 1103515245` exceeds 2^53 and the low bits rounded away.
+    // They are fixtures now. The challenger checked the form by hand at each
+    // one and found it exact, so this pins behaviour rather than hunting a
+    // bug.
+    const inst = [
+      { seqNo: 1, dueDate: '2026-03-01', amountTxnMinor: 100_000n },
+      { seqNo: 2, dueDate: '2026-06-01', amountTxnMinor: 200_000n },
+      { seqNo: 3, dueDate: '2026-09-01', amountTxnMinor: 300_000n },
+    ];
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-b',
+      status: 'active',
+      downPaymentMinor: 50_000n,
+      downPaymentDueDate: '2026-01-05',
+      installments: inst,
+    };
+    const T = 650_000n; // 50 000 + 100 000 + 200 000 + 300 000
+    // Every inclusive PREFIX sum of the ordered schedule, plus the endpoints.
+    // Prefix and not suffix: the cumulative levels are anchored at the PAID
+    // level and run forward, so these are the points at which the cut falls
+    // BETWEEN rows and no row is partially allocated.
+    const boundaries: readonly bigint[] = [0n, 50_000n, 150_000n, 350_000n, T, T + 1n, -1n];
+    for (const O of boundaries) {
+      const row: OpenInvoiceRow = {
+        invoiceId: 'inv-b',
+        currencyCode: 'SAR',
+        dueDate: '2026-02-01',
+        issueDate: '2026-01-01',
+        outstandingTxnMinor: O,
+        paidTxnMinor: 0n,
+        paidBaseMinor: 0n,
+        outstandingBaseMinor: O > 0n ? O - O / 8n : O,
+      };
+      const c = projectInvoice(row, plan, AS_OF, THRESHOLDS);
+      expect(sum(c), `boundary O=${String(O)}`).toBe(O);
+      // At an exact suffix sum the cut falls BETWEEN rows, so no row is
+      // partially allocated — the case a pro-rata rule would have to round.
+      if (O === 50_000n || O === 150_000n || O === 350_000n || O === T || O === 0n) {
+        for (const x of c) {
+          if (x.origin === 'residual') continue;
+          const declared = x.origin === 'down_payment' ? plan.downPaymentMinor : (inst.find((i) => i.seqNo === x.seqNo)?.amountTxnMinor as bigint);
+          expect(x.txnMinor, `partial row at exact boundary O=${String(O)}`).toBe(declared);
+        }
+      }
+    }
+    // `n = 2` and `n = 4`, which the generator never produced.
+    for (const n of [1, 2, 3, 4, 5]) {
+      const rows = Array.from({ length: n }, (_, k) => ({
+        seqNo: k + 1,
+        dueDate: `2026-0${k + 1}-01`,
+        amountTxnMinor: 100_000n,
+      }));
+      const pl: InstallmentPlan = { ...plan, installments: rows, downPaymentMinor: 0n };
+      const row: OpenInvoiceRow = {
+        invoiceId: 'inv-b',
+        currencyCode: 'SAR',
+        dueDate: '2026-02-01',
+        issueDate: '2026-01-01',
+        outstandingTxnMinor: BigInt(n) * 50_000n,
+        paidTxnMinor: 0n,
+        paidBaseMinor: 0n,
+        outstandingBaseMinor: BigInt(n) * 42_131n,
+      };
+      expect(sum(projectInvoice(row, pl, AS_OF, THRESHOLDS)), `n=${n}`).toBe(BigInt(n) * 50_000n);
+    }
+    // A ZERO-amount schedule row. `amount_txn_minor >= 1` forbids it in the
+    // database, so this is a model-level robustness case, named as such.
+    const withZero: InstallmentPlan = {
+      ...plan,
+      downPaymentMinor: 0n,
+      installments: [
+        { seqNo: 1, dueDate: '2026-03-01', amountTxnMinor: 0n },
+        { seqNo: 2, dueDate: '2026-06-01', amountTxnMinor: 100_000n },
+      ],
+    };
+    const zrow: OpenInvoiceRow = {
+      invoiceId: 'inv-b',
+      currencyCode: 'SAR',
+      dueDate: '2026-02-01',
+      issueDate: '2026-01-01',
+      outstandingTxnMinor: 100_000n,
+      paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 84_503n,
+    };
+    const zc = projectInvoice(zrow, withZero, AS_OF, THRESHOLDS);
+    expect(sum(zc)).toBe(100_000n);
+    expect(zc.every((x) => x.txnMinor !== 0n)).toBe(true); // a zero row emits nothing
+  });
+
+  it('the closed-form allocation agrees with an INDEPENDENT oldest-first simulation, over randomised schedules', () => {
+    // A second implementation, a loop with an accumulator rather than a closed
+    // form. The generator is fixed: the first round's `rng * 1103515245`
+    // exceeded 2^53 so the low bits rounded away and `next(12)` yielded only
+    // six distinct values (challenger M-7). `Math.imul` keeps the multiply in
+    // 32 bits exactly, and the spread is ASSERTED below rather than assumed.
+    let rng = 0x9e3779b9 | 0;
+    const next = (n: number): number => {
+      rng = (Math.imul(rng, 1664525) + 1013904223) | 0;
+      return (((rng >>> 1) % n) + n) % n;
+    };
+    const seenN = new Set<number>();
+    const seenMonth = new Set<number>();
+    for (let trial = 0; trial < 400; trial += 1) {
+      const n = 1 + next(14);
+      seenN.add(n);
+      const inst = Array.from({ length: n }, (_, k) => {
+        const month = 1 + next(12);
+        seenMonth.add(month);
+        return {
+          seqNo: k + 1,
+          dueDate: `2026-${String(month).padStart(2, '0')}-${String(1 + next(28)).padStart(2, '0')}`,
+          amountTxnMinor: BigInt(1 + next(90_000)),
+        };
+      });
+      const down = BigInt(next(50_000));
+      const total = down + inst.reduce((a, i) => a + i.amountTxnMinor, 0n);
+      // Reach past both ends, so over- and under-coverage both occur.
+      const O = BigInt(next(Number(total) + 40_000) - 10_000);
+      const P = BigInt(next(20_000));
+      const totalTxn = P + O;
+      const row: OpenInvoiceRow = {
+        invoiceId: 'r',
+        currencyCode: 'SAR',
+        dueDate: '2026-06-01',
+        issueDate: '2026-05-01',
+        outstandingTxnMinor: O,
+        paidTxnMinor: P,
+        paidBaseMinor: P > 0n ? P - P / 8n : 0n,
+        outstandingBaseMinor: O > 0n ? O - O / 8n : O,
+      };
+      const plan: InstallmentPlan = {
+        invoiceId: 'r',
+        status: 'active',
+        downPaymentMinor: down,
+        downPaymentDueDate: '2026-01-02',
+        installments: inst,
+      };
+
+      const ordered = [
+        { seqNo: 0, dueDate: '2026-01-02', amount: down },
+        ...inst.map((i) => ({ seqNo: i.seqNo, dueDate: i.dueDate, amount: i.amountTxnMinor })),
+      ].sort((a, b) => epochDay(a.dueDate) - epochDay(b.dueDate) || a.seqNo - b.seqNo);
+      // PREFIX-ANCHORED, matching the paid-anchored levels: skip the part of
+      // the schedule the payment covers, then fill forward while outstanding
+      // capacity remains. A loop with two accumulators, structurally unlike
+      // the closed form.
+      let skip = P;
+      let capacity = totalTxn - P;
+      const simAlloc = new Map<number, bigint>();
+      for (const r of ordered) {
+        const covered = skip < r.amount ? skip : r.amount;
+        skip -= covered;
+        const free = r.amount - covered;
+        const a = free < capacity ? free : capacity;
+        if (a > 0n) simAlloc.set(r.seqNo, a);
+        capacity -= a;
+      }
+
+      // M-8: THE RESIDUAL GETS AN INDEPENDENT COMPUTATION. A CASE ANALYSIS
+      // over where the schedule's last level falls, mentioning neither
+      // `capacity` nor `simAlloc`, so the law is not `O − Σ alloc` restated.
+      const lastLevel = total > P ? (total < totalTxn ? total : totalTxn) : P;
+      // The degenerate branch: nothing outstanding, or an outstanding no
+      // CHECK permits, carries wholly as residual and allocates nothing.
+      const degenerate = O <= 0n || totalTxn <= 0n;
+      const simResidual = degenerate ? O : totalTxn - lastLevel;
+      if (degenerate) simAlloc.clear();
+
+      const got = projectInvoice(row, plan, AS_OF, THRESHOLDS);
+      const gotAlloc = new Map(got.filter((x) => x.origin !== 'residual').map((x) => [x.seqNo as number, x.txnMinor]));
+      expect([...gotAlloc.entries()].sort((a, b) => a[0] - b[0])).toEqual([...simAlloc.entries()].sort((a, b) => a[0] - b[0]));
+      expect(sum(got.filter((x) => x.origin === 'residual'))).toBe(simResidual);
+      expect(sum(got)).toBe(O);
+    }
+    // THE GENERATOR IS NOT DEGENERATE, asserted rather than hoped.
+    expect(seenN.size, 'schedule length barely varies').toBeGreaterThanOrEqual(12);
+    expect(seenMonth.size, 'month barely varies').toBe(12);
+    for (const n of [2, 4]) expect(seenN, `n=${n} never generated`).toContain(n);
+  });
+
+  it('FIRES under its mutation: the residual is dropped', () => {
+    const got = sum(projectInvoice(SHORT_SCHEDULE_INVOICE, SHORT_PLAN, AS_OF, THRESHOLDS, mutate('carryResidual', false)));
+    expect(got).not.toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
+    expect(got).toBe(200_000n); // 8,000.00 has vanished
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: unmutated, the same fixture loses nothing.
+    expect(sum(contributionsFor([SHORT_SCHEDULE_INVOICE], [SHORT_PLAN], AS_OF, THRESHOLDS))).toBe(SHORT_SCHEDULE_INVOICE.outstandingTxnMinor);
+    recordProof('proof_4', 3, 'FIRES arm ran: the residual is dropped and 8,000.00 vanishes; unmutated loses nothing');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 4(b) — no amount disappears AT THE API READ EITHER (a defect found while proving this)', () => {
+  // Proof 4 is about the SQL projection totalling the authoritative figure.
+  // Asserting it there and stopping would have left the law true of the
+  // routine and false of the number the merchant sees, so the same law was
+  // carried one layer out — and it fired.
+  //
+  // `customer_ar_aging` returns a ONE-BASED `bucket_no`: the shipped body is
+  // `1 + (SELECT count(*) ... WHERE (p_as_of - due_date) > t.threshold)`
+  // (`0084:707-710`), so for `k` supplied boundaries it ranges over `1..k+1`.
+  // `agingBucketLabels` returns `k+1` labels at indices `0..k`
+  // (`packages/domain-core/src/invoice.ts:169-180`). The read surface indexes
+  // the label array with the raw bucket number.
+  const READ_SURFACE = readFileSync(join(REPO, 'apps', 'api', 'src', 'modules', 'selling', 'customer-reads.ts'), 'utf8');
+  const DAYS = [30, 60, 90] as const;
+
+  /** A civil date `n` days before `AS_OF`, so the ages are derived and not hand-picked. */
+  const daysBefore = (n: number): string => new Date((epochDay(AS_OF) - n) * 86_400_000).toISOString().slice(0, 10);
+
+  it('the SQL bucket number is one-based and tops out at k+1', () => {
+    expect(bucketOf(AS_OF, daysBefore(0), DAYS)).toBe(1); // not yet due / due today
+    expect(bucketOf(AS_OF, daysBefore(30), DAYS)).toBe(1); // the band is `> t`, so 30 is still bucket 1
+    expect(bucketOf(AS_OF, daysBefore(31), DAYS)).toBe(2);
+    expect(bucketOf(AS_OF, daysBefore(61), DAYS)).toBe(3);
+    expect(bucketOf(AS_OF, daysBefore(91), DAYS)).toBe(4);
+    expect(bucketOf(AS_OF, daysBefore(4000), DAYS)).toBe(DAYS.length + 1);
+    // AND NO LONGER «a NULL due date is bucket 1» (DR-13, DR-21). That line
+    // stood here as a faithfulness claim about the shipped expression, and
+    // what it was faithful to was the retired `due_date IS NOT NULL AND …`
+    // guard: a receivable with no stated term exceeded no threshold however
+    // old it got. `bucketOf` no longer ACCEPTS a null — the parameter is
+    // total — and a termless receivable is banded from its own issue date.
+    const termless: OpenInvoiceRow = {
+      invoiceId: 'inv-null-due',
+      currencyCode: 'SAR',
+      dueDate: null,
+      issueDate: daysBefore(4000),
+      outstandingTxnMinor: 100_000n,
+      paidTxnMinor: 0n,
+      paidBaseMinor: 0n,
+      outstandingBaseMinor: 84_503n,
+    };
+    expect(bucketOf(AS_OF, mustDate(termlessBucketDate(termless), 'a termless receivable'), DAYS)).toBe(DAYS.length + 1);
+  });
+
+  it('the label array is zero-based and has exactly k+1 slots, so the top bucket has no slot at its own number', () => {
+    expect(agingBucketLabels(DAYS)).toEqual(['0-30', '31-60', '61-90', 'over-90']);
+    expect(agingBucketLabels(DAYS).length).toBe(DAYS.length + 1);
+    // The index the read surface uses for the oldest bucket does not exist.
+    expect(agingBucketLabels(DAYS)[DAYS.length + 1]).toBeUndefined();
+  });
+
+  it('REPAIRED (C-1, f6f2e0b): the read surface maps bucket_no one-based and refuses a bucket it cannot place', () => {
+    // This was the MEASURED pin of the defect: `buckets[r.bucket_no]` with
+    // `if (bucket === undefined) continue;`, which dropped the oldest band's
+    // money from `baseMinor`, `invoiceCount` and `totalBaseMinor`, and
+    // reported every other band one band too old. It turned red when the
+    // repair landed, as it said it would, and is retired into the law the
+    // repair makes true — still about the exact shipped text.
+    expect(READ_SURFACE).not.toMatch(/const bucket = buckets\[r\.bucket_no\];/);
+    expect(READ_SURFACE).not.toMatch(/if \(bucket === undefined\) continue;/);
+    expect(READ_SURFACE).toMatch(/const bucket = buckets\[r\.bucket_no - 1\];/);
+    expect(READ_SURFACE).toMatch(/if \(bucket === undefined\) throw sellingRefusal\('customer\.aging_bucket_mapping_invalid'\);/);
+    // The raw index the defect used is still the wrong one, and still shows
+    // why: it labels the not-yet-due money overdue and has no slot for over-90.
+    const shifted = (bucketNo: number): string | undefined => agingBucketLabels(DAYS)[bucketNo];
+    expect(shifted(1)).toBe('31-60');
+    expect(shifted(4)).toBeUndefined();
+  });
+
+  it('the correct mapping is total and order-preserving, and loses nothing', () => {
+    const correct = (bucketNo: number): string | undefined => agingBucketLabels(DAYS)[bucketNo - 1];
+    expect(correct(1)).toBe('0-30');
+    expect(correct(2)).toBe('31-60');
+    expect(correct(3)).toBe('61-90');
+    expect(correct(4)).toBe('over-90');
+    for (let b = 1; b <= DAYS.length + 1; b += 1) expect(correct(b)).toBeDefined();
+  });
+
+  it('and the granularity fix makes the defect WORSE, which is why it is raised now and not later', () => {
+    // Today an invoice contributes to ONE bucket, so a merchant with no
+    // over-90 debt never sees the loss. After this slice a single invoice
+    // contributes to several buckets, so the dropped top bucket takes a
+    // slice out of almost every planned invoice's aging.
+    const c = projectCustomerAging([PLANNED_INVOICE], [PLAN], AS_OF, THRESHOLDS);
+    expect(c.map((b) => b.bucketNo)).toEqual([1, 2, 3, 4]);
+    const dropped = c.filter((b) => b.bucketNo === DAYS.length + 1);
+    expect(sum(dropped)).toBe(300_000n); // silently lost by the shipped read
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 5 [proof_5] — a payment or a reversal changes the projection THROUGH the existing invoice settlement truth', () => {
+  // The three states are the SAME invoice at three settlement positions. A
+  // payment and its reversal are expressed ONLY as a change in
+  // `outstandingTxnMinor`, which is what `invoice_outstanding` returns
+  // (`0083:295`) — there is no other input to move.
+  const before: OpenInvoiceRow = PLANNED_INVOICE; // 9,000.00 outstanding
+  const afterPayment: OpenInvoiceRow = {
+    ...PLANNED_INVOICE,
+    outstandingTxnMinor: 800_000n,
+    paidTxnMinor: 400_000n,
+    // `R(400 000) = HALF_EVEN(1 015 001 x 400 000 / 1 200 000)
+    //            = HALF_EVEN(338 333.67) = 338 334`.
+    paidBaseMinor: 338_334n,
+    outstandingBaseMinor: 676_667n,
+  };
+
+  /** The plan, with the forbidden plan-local field made COUNTABLE. */
+  function countingPlan(): { plan: InstallmentPlan; reads: () => number } {
+    let n = 0;
+    const p = { ...PLAN } as Record<string, unknown>;
+    Object.defineProperty(p, 'planLocalCollectedMinor', {
+      get: () => {
+        n += 1;
+        return 300_000n;
+      },
+      enumerable: true,
+    });
+    return { plan: p as unknown as InstallmentPlan, reads: () => n };
+  }
+
+  it('a payment moves the projection, and moves it by exactly the payment', () => {
+    const b = projectCustomerAging([before], [PLAN], AS_OF, THRESHOLDS);
+    const a = projectCustomerAging([afterPayment], [PLAN], AS_OF, THRESHOLDS);
+    expect(sum(b) - sum(a)).toBe(100_000n);
+    // And it settles the OLDEST outstanding instalment, April, which was in
+    // the over-90 bucket — so the over-90 bucket is what shrinks.
+    const bucket4 = (x: readonly { bucketNo: number; txnMinor: bigint }[]): bigint => x.filter((y) => y.bucketNo === 4).reduce((s, y) => s + y.txnMinor, 0n);
+    expect(bucket4(b) - bucket4(a)).toBe(100_000n);
+  });
+
+  it('a reversal returns the projection EXACTLY to where it was', () => {
+    const b = projectCustomerAging([before], [PLAN], AS_OF, THRESHOLDS);
+    const reversed = projectCustomerAging([{ ...PLANNED_INVOICE }], [PLAN], AS_OF, THRESHOLDS);
+    expect(reversed).toEqual(b);
+  });
+
+  it('the projection READS NO plan-local settlement figure — counted, not asserted', () => {
+    const { plan, reads } = countingPlan();
+    projectInvoice(before, plan, AS_OF, THRESHOLDS);
+    expect(reads()).toBe(0);
+  });
+
+  it('FIRES under its mutation: a plan-local collected total is a parallel path that a payment does not move', () => {
+    const { plan, reads } = countingPlan();
+    const m = mutate('outstandingSource', 'plan_local');
+    const b = sum(projectInvoice(before, plan, AS_OF, THRESHOLDS, m));
+    const a = sum(projectInvoice(afterPayment, plan, AS_OF, THRESHOLDS, m));
+    // The mutant really did read the forbidden field...
+    expect(reads()).toBeGreaterThan(0);
+    // ...and the payment changed nothing, which is the harm.
+    expect(a).toBe(b);
+    expect(a).not.toBe(afterPayment.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_5', 3, 'FIRES arm ran: FIRES under its mutation: a plan-local collected total is a ');
+  });
+
+  it('the specification adds no reducer and no second settlement path', () => {
+    expect(SPEC).toMatch(/NO reducer relation/);
+    expect(SPEC).not.toMatch(/INSERT\s+INTO\s+(payment_allocations|customer_credit_applications)/i);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 6 [proof_6] — no installment journal, and no new reducer branch in the LIVE settlement sum', () => {
+  // THE SUBJECT IS THE LAST DEFINITION IN THE TREE, NOT A FILE (C-1), AND THE
+  // DETECTOR IS ALIAS-INDEPENDENT (H-5). The first round pinned `0083` and
+  // required a ONE-LETTER alias, so a branch planted with a two-letter alias,
+  // no alias, or unqualified was invisible — and the author's own mutation
+  // used `n` while the two real reducers happen to use `a` and `c`, so the
+  // detector was tailored to itself.
+
+  /**
+   * The last EFFECTIVE definition of a routine across the tree, delegated to
+   * the adopted mechanism. This file's own version picked the first `$fn$`
+   * anywhere later in the FILE — past the end of the definition — and
+   * preferred `$fn$` even when a `$$` opened first. It was right today by
+   * luck, and `0084` is the only Phase 4 migration using `$fn$`, so the luck
+   * was load-bearing. The adopted one takes the FIRST dollar tag after the
+   * header whatever it is spelled, and interleaves DROP and CREATE by
+   * POSITION inside the file, because `0084` drops at :488 and recreates at
+   * :593 and the order is what decides.
+   */
+  function liveDefinition(header: string): { migration: string; body: string; line: number } {
+    const sig = /customer_ar_aging/.test(header)
+      ? String.raw`DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?customer_ar_aging`
+      : String.raw`DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?invoice_outstanding`;
+    const h = lastEffectiveRoutineDefinition(MIGRATIONS, header, new RegExp(sig, 'i'));
+    if (h.live === null) throw new Error(`no live definition of: ${header}`);
+    return { migration: h.live.migration, body: h.live.body, line: h.live.line };
+  }
+
+  /**
+   * Every relation a body touches, by the ADOPTED reader. It excludes aliases
+   * STRUCTURALLY — only post-introducer positions are ever read — rather than
+   * by a `public.` spelling, so an unqualified table, a quoted identifier, a
+   * space around the dot and a CTE-wrapped unqualified source are all seen.
+   */
+  function relationsRead(body: string): string[] {
+    return [...relationsTouched(body)];
+  }
+
+  /**
+   * WHAT MAKES A RELATION AN INVOICE REDUCER — canonically, and by the
+   * ADOPTED registry rather than by this file's own regex.
+   *
+   * A name list would be a textual coincidence and would miss the next
+   * reducer whatever it is called. Seam `S-P4-03` asks which relations settle
+   * an invoice, and the answer has a SHAPE: a relation that reduces an
+   * invoice declares a column named EXACTLY `invoice_amount_applied_minor`.
+   *
+   * EXACT equality, through the estate's own `findColumnDeclarations`, and
+   * `DROP TABLE` honoured. Round 3 shipped `/invoice_amount_applied_minor/i`
+   * — an UNANCHORED SUBSTRING — so `bill_invoice_amount_applied_minor` or
+   * `invoice_amount_applied_minor_cents` would have made an unrelated
+   * relation an invoice reducer and could have pulled the SUPPLIER side into
+   * a customer-side law. A law about a column must say which column.
+   */
+  function reducerRelationsInTree(): string[] {
+    return [...canonicalReducerRegistry(MIGRATIONS)];
+  }
+
+  const SETTLING_RELATION = new RegExp(`^(${reducerRelationsInTree().join('|')})$`);
+
+  function journalFindings(raw: string): string[] {
+    const sql = sqlSchemaOnly(raw);
+    const f: string[] = [];
+    if (/accounting_source_type/i.test(sql)) f.push('declares an accounting_source_type');
+    if (/INSERT\s+INTO\s+(public\.)?accounting_source_bindings/i.test(sql)) f.push('registers an accounting source binding');
+    if (/INSERT\s+INTO\s+(public\.)?journal_(entries|lines)/i.test(sql)) f.push('posts a journal entry');
+    for (const t of discoverSalesTables(sql)) if (/journal/.test(t)) f.push(`creates a journal relation: ${t}`);
+    return f;
+  }
+
+  const HEADER = 'CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])';
+
+  it('the LIVE definition is in 0084, not 0083 — the subject is discovered, not chosen', () => {
+    const live = liveDefinition(HEADER);
+    expect(live.migration).toBe('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+    // And 0083's body really is gone: 0084 drops that signature.
+    const dropper = MIGRATIONS.find((m) => /DROP FUNCTION public\.invoice_outstanding\(UUID, UUID\[\]\)/.test(m.sql));
+    expect(dropper?.name).toBe('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+  });
+
+  it('the live settlement sum reads exactly the accepted reducers, and S7 appends nothing', () => {
+    const live = liveDefinition(HEADER);
+    const read = relationsRead(live.body);
+    const reducersRead = read.filter((t) => SETTLING_RELATION.test(t));
+    expect(reducersRead).toEqual(['customer_credit_applications', 'payment_allocations']);
+    // EVERY settling relation the tree creates is read by that body: a new
+    // one that is not read would be a second copy of the settlement sum.
+    // Discovered structurally: exactly the two relations that declare
+    // `invoice_amount_applied_minor`, and the live body reads BOTH.
+    expect(reducerRelationsInTree()).toEqual(['customer_credit_applications', 'payment_allocations']);
+    expect(reducerRelationsInTree().filter((t) => !read.includes(t))).toEqual([]);
+    // And the specification does not redefine it at all.
+    expect(sqlSchemaOnly(SPEC)).not.toMatch(/FUNCTION\s+invoice_outstanding/i);
+  });
+
+  it('the specification creates installment_plans and installments, and neither is journal-bearing', () => {
+    expect(discoverSalesTables(SPEC).sort()).toEqual(['installment_plans', 'installments']);
+    expect(journalFindings(SPEC)).toEqual([]);
+    // Neither is of the settlement vocabulary, so neither owes a branch.
+    for (const t of discoverSalesTables(SPEC)) expect(SETTLING_RELATION.test(t)).toBe(false);
+  });
+
+  it('NON-COINCIDENCE: the checker flags the construct and not the word', () => {
+    expect(SPEC).toMatch(/accounting_source_type/);
+    expect(SPEC).toMatch(/accounting_source_bindings/);
+    expect(SPEC).toMatch(/journal/i);
+    expect(sqlSchemaOnly(SPEC)).not.toMatch(/accounting_source_type/);
+    expect(journalFindings(SPEC)).toEqual([]);
+    expect(sqlSchemaOnly(SPEC)).toMatch(/CREATE TABLE installments/);
+    expect(sqlSchemaOnly(SPEC)).toMatch(/amount_txn_minor/);
+  });
+
+  it('FIRES under its mutation: an installment journal planted into the specification', () => {
+    const planted = `${SPEC}\nALTER TABLE installments ADD COLUMN accounting_source_type TEXT GENERATED ALWAYS AS ('installment') STORED;\nINSERT INTO accounting_source_bindings (source_type) VALUES ('installment');\n`;
+    expect(journalFindings(planted)).toEqual(['declares an accounting_source_type', 'registers an accounting source binding']);
+    const plantedRelation = `${SPEC}\nCREATE TABLE installment_journal_lines (business_id UUID NOT NULL, id UUID NOT NULL);\n`;
+    expect(journalFindings(plantedRelation)).toContain('creates a journal relation: installment_journal_lines');
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real specification is NOT flagged, so the
+    // detector is discriminating and not merely alarming.
+    expect(journalFindings(SPEC)).toEqual([]);
+    recordProof('proof_6', 3, 'FIRES arm ran: journal planted and flagged; the real specification is clean');
+  });
+
+  it('FIRES under its mutation: a reducer branch planted in NINE legitimate SQL forms, five of which used to pass', () => {
+    // ROUND 4: THE FOUR SHAPES ALL SPELLED `public.`, SO THE GAP WAS
+    // UNTESTED RATHER THAN TESTED AND TOLERATED.
+    //
+    // Round 3 planted the branch four ways and caught all four — but every
+    // one of them wrote `public.installment_collections`, which is the ONE
+    // thing the old `/\bpublic\.(...)/` reader could see. The proof engineer
+    // planted 17 legitimate forms into the real live body and measured FIVE
+    // misses: an unqualified table, unqualified with no alias, quoted
+    // identifiers, a space around the dot, and CTE wrapping with an
+    // unqualified source inside. A new reducer branch written in any of the
+    // five would have appended silently to the settlement sum with proof 6
+    // GREEN.
+    //
+    // The adopted reader excludes aliases STRUCTURALLY — only
+    // post-introducer positions are ever read — so the five are now shapes of
+    // the same law rather than holes beside it. All nine are asserted here,
+    // and the five that used to pass are named as such.
+    const live = liveDefinition(HEADER);
+    const shapes: readonly { readonly name: string; readonly sql: string }[] = [
+      { name: 'one-letter alias', sql: 'FROM public.installment_collections n WHERE n.business_id = x' },
+      { name: 'two-letter alias', sql: 'FROM public.installment_collections ic WHERE ic.business_id = x' },
+      { name: 'AS alias', sql: 'FROM public.installment_collections AS coll WHERE coll.business_id = x' },
+      { name: 'no alias', sql: 'FROM public.installment_collections WHERE business_id = x' },
+      // ── THE FIVE THAT USED TO PASS ──────────────────────────────────
+      { name: 'UNQUALIFIED, aliased', sql: 'FROM installment_collections n WHERE n.business_id = x' },
+      { name: 'UNQUALIFIED, no alias', sql: 'FROM installment_collections WHERE business_id = x' },
+      { name: 'QUOTED identifiers', sql: 'FROM "public"."installment_collections" n WHERE n.business_id = x' },
+      { name: 'SPACE around the dot', sql: 'FROM public . installment_collections n WHERE n.business_id = x' },
+      { name: 'JOINed rather than FROMed', sql: 'FROM public.invoices i JOIN installment_collections n ON n.invoice_id = i.id WHERE x' },
+    ];
+    for (const shape of shapes) {
+      const planted = `${live.body}\n            UNION ALL\n            SELECT invoice_id, amount, rel ${shape.sql}\n`;
+      expect(planted).not.toBe(live.body);
+      const reducers = relationsRead(planted).filter((t) => SETTLING_RELATION.test(t) || t === 'installment_collections');
+      expect(reducers, `missed with ${shape.name}`).toContain('installment_collections');
+    }
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the LIVE body's own reducer set is exactly the two
+    // canonical ones, so a planted third is a real change and not noise.
+    expect(
+      relationsRead(live.body)
+        .filter((t) => reducerRelationsInTree().includes(t))
+        .sort(),
+    ).toEqual([...reducerRelationsInTree()].sort());
+    recordProof('proof_6', 3, 'FIRES arm ran: a planted reducer branch is seen in every shape; the live set is exactly two');
+  });
+
+  it('FIRES under its mutation: S7-5 — RENAME COLUMN, RENAME TABLE and DROP COLUMN, the four shapes that escaped', () => {
+    // CHALLENGER S7-5. The registry consumed `findColumnDeclarations` and
+    // honoured `DROP TABLE`, and nothing else — one of five mutating
+    // statements. Four escapes remained, using readers the same file already
+    // imported:
+    //
+    //   RENAME COLUMN x TO invoice_amount_applied_minor  — RECALL
+    //   RENAME COLUMN invoice_amount_applied_minor TO y  — PRECISION
+    //   DROP COLUMN invoice_amount_applied_minor         — PRECISION
+    //   ALTER TABLE t RENAME TO u                        — RECALL
+    //
+    // AND THE MATRIX VARIES THE STATEMENT SHAPE, which is what the detector
+    // now depends on — not the alias and not the qualification, which §7.0 of
+    // the design document records it demonstrably no longer does. A matrix
+    // shaped to the detector is how the `public.` hole survived a four-way
+    // matrix for two rounds.
+    const base = canonicalReducerRegistry(MIGRATIONS);
+    expect([...base]).toEqual(['customer_credit_applications', 'payment_allocations']);
+
+    const synthetic = (sql: string): readonly { readonly name: string; readonly sql: string }[] => [...MIGRATIONS, { name: '9999_synthetic.sql', sql }];
+
+    // (1) RECALL — a relation that NEVER declares the column at CREATE time
+    //     and acquires it by rename. Under the old registry it never entered.
+    const renamedIn = canonicalReducerRegistry(
+      synthetic(
+        'CREATE TABLE sale_installment_collections (business_id UUID NOT NULL, invoice_id UUID NOT NULL, applied_minor BIGINT NOT NULL);\n' +
+          'ALTER TABLE sale_installment_collections RENAME COLUMN applied_minor TO invoice_amount_applied_minor;\n',
+      ),
+    );
+    expect(renamedIn, 'RENAME COLUMN into the reducer column still escapes').toContain('sale_installment_collections');
+
+    // (2) PRECISION — a real reducer renames the column AWAY, so it is no
+    //     longer a reducer and must leave the registry.
+    const renamedOut = canonicalReducerRegistry(
+      synthetic('ALTER TABLE payment_allocations RENAME COLUMN invoice_amount_applied_minor TO legacy_applied_minor;\n'),
+    );
+    expect(renamedOut, 'RENAME COLUMN out of the reducer column still escapes').not.toContain('payment_allocations');
+    // ...and the OTHER reducer is untouched, so the removal is targeted.
+    expect(renamedOut).toContain('customer_credit_applications');
+
+    // (3) PRECISION — the column is dropped outright.
+    const dropped = canonicalReducerRegistry(synthetic('ALTER TABLE customer_credit_applications DROP COLUMN invoice_amount_applied_minor;\n'));
+    expect(dropped, 'DROP COLUMN still escapes').not.toContain('customer_credit_applications');
+    expect(dropped).toContain('payment_allocations');
+
+    // (4) RECALL — the relation is renamed, so the registry would otherwise
+    //     hold a name no `CREATE TABLE` ever wrote again (`sql-schema.ts`'s
+    //     own L-3 lesson). Membership is CARRIED, not dropped.
+    const tableRenamed = canonicalReducerRegistry(synthetic('ALTER TABLE payment_allocations RENAME TO invoice_payment_allocations;\n'));
+    expect(tableRenamed).toContain('invoice_payment_allocations');
+    expect(tableRenamed).not.toContain('payment_allocations');
+
+    // (5) THE EXEMPTION IS EVALUATED, NOT DECLARED. The real tree contains
+    //     ZERO `RENAME COLUMN` and ZERO `ALTER TABLE … RENAME TO`, and its
+    //     only `DROP COLUMN`s touch relations that never declared the reducer
+    //     column — so the four passes are INERT on the shipped tree, which is
+    //     exactly the «exemption that is never evaluated» trap. The synthetic
+    //     migrations above are what evaluate them, and this arm asserts the
+    //     inertness is a FACT about the tree rather than an assumption.
+    const tree = MIGRATIONS.map((m) => m.sql).join('\n');
+    expect(tree).not.toMatch(/RENAME\s+COLUMN/i);
+    expect(tree).not.toMatch(/ALTER\s+TABLE[^;]*?\bRENAME\s+TO\b/i);
+    const treeDrops = MIGRATIONS.flatMap((m) => alterDropColumns(m.sql));
+    expect(treeDrops.length, 'the tree has no DROP COLUMN at all — then this check is vacuous').toBeGreaterThan(0);
+    expect(treeDrops.filter((d) => d.column === 'invoice_amount_applied_minor')).toEqual([]);
+
+    // (6) PRECISION against the near-miss statement: `DROP CONSTRAINT` is not
+    //     a column drop, and a reader that read the next identifier would
+    //     think a column named `CONSTRAINT` had been dropped.
+    expect(alterDropColumns('ALTER TABLE t DROP CONSTRAINT t_pk;')).toEqual([]);
+    expect(alterDropColumns('ALTER TABLE t ALTER COLUMN c DROP NOT NULL;')).toEqual([]);
+    expect(alterDropColumns('ALTER TABLE t DROP COLUMN IF EXISTS "c" CASCADE;')).toEqual([{ table: 't', column: 'c' }]);
+    // ...and the supplier side is still a different side.
+    expect(base).not.toContain('purchase_payment_allocations');
+    expect(PURCHASE_REDUCER_COLUMN).not.toBe(INVOICE_REDUCER_COLUMN);
+
+    recordProof('proof_6', 16, 'FIRES arm ran: S7-5 four statement-shape escapes closed, recall and precision both');
+  });
+
+  it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name', () => {
+    // A later slice's reducer, named nothing this file could have guessed.
+    const planted = `CREATE TABLE zzz_whatever_we_call_it_next (
+      business_id UUID NOT NULL, id UUID NOT NULL, invoice_id UUID NOT NULL,
+      invoice_amount_applied_minor BIGINT NOT NULL,
+      invoice_carrying_base_released_minor BIGINT NOT NULL);`;
+    // The discovery finds it by the reducer column, with no name list.
+    expect(planted).toContain(INVOICE_REDUCER_COLUMN);
+    expect(discoverSalesTables(planted)).toContain('zzz_whatever_we_call_it_next');
+    // And the live settlement sum does not read it, which is the violation.
+    expect(relationsRead(liveDefinition(HEADER).body)).not.toContain('zzz_whatever_we_call_it_next');
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_6', 3, 'FIRES arm ran: FIRES under its mutation: a NEW reducer relation, discovered');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 7 [proof_7] — no stored installment outstanding', () => {
+  // The SUBJECT is the specification's CREATE TABLE column lists, read by the
+  // ESTATE'S OWN predicate — `isAuthoritativeSalesColumn` /
+  // `findAuthoritativeSalesColumns` in
+  // `scripts/guards/no-authoritative-balance.ts` — and not by any pattern
+  // invented in this file.
+  const WATCHED = ['installment_plans', 'installments'];
+
+  it('neither relation is itself derived truth', () => {
+    for (const t of WATCHED) expect(isForbiddenSalesTable(t)).toBe(false);
+  });
+
+  it('holds: the specification declares no authoritative balance column on either relation', () => {
+    expect(findAuthoritativeSalesColumns(SPEC, WATCHED)).toEqual([]);
+  });
+
+  it('NON-COINCIDENCE: the legitimate columns are not flagged, and the forbidden ones are', () => {
+    // If this arm were missing, proof 7 could be passing because the
+    // predicate flags nothing at all.
+    for (const ok of ['down_payment_minor', 'down_payment_due_date', 'installment_count', 'amount_txn_minor', 'due_date', 'seq_no', 'status', 'plan_id']) {
+      expect(isAuthoritativeSalesColumn(ok)).toBe(false);
+    }
+    for (const bad of [
+      'outstanding_minor',
+      'settled_minor',
+      'collected_minor',
+      'paid_minor',
+      'balance_minor',
+      'due_minor',
+      'overdue_minor',
+      'aging_minor',
+      'allocated_minor',
+    ]) {
+      expect(isAuthoritativeSalesColumn(bad)).toBe(true);
+    }
+  });
+
+  it('FIRES under its mutation: the two columns P4-AL-06 names planted into the specification', () => {
+    const planted = SPEC.replace(
+      / {2}amount_txn_minor BIGINT NOT NULL CHECK \(amount_txn_minor >= 1\),/,
+      '  amount_txn_minor BIGINT NOT NULL CHECK (amount_txn_minor >= 1),\n  outstanding_minor BIGINT NOT NULL DEFAULT 0,\n  settled_minor    BIGINT NOT NULL DEFAULT 0,',
+    );
+    expect(planted).not.toBe(SPEC); // the mutation really applied
+    expect(findAuthoritativeSalesColumns(planted, WATCHED)).toEqual([
+      { table: 'installments', column: 'outstanding_minor' },
+      { table: 'installments', column: 'settled_minor' },
+    ]);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real specification declares none of them.
+    expect(findAuthoritativeSalesColumns(SPEC, WATCHED)).toEqual([]);
+    recordProof('proof_7', 3, 'FIRES arm ran: the two P4-AL-06 columns planted and named; the real spec declares none');
+  });
+
+  it('FIRES under its mutation: a plan-level remaining added by ALTER', () => {
+    const planted = `${SPEC}\nALTER TABLE installment_plans ADD COLUMN outstanding_txn_minor BIGINT NOT NULL DEFAULT 0;\n`;
+    expect(findAuthoritativeSalesColumns(planted, WATCHED)).toEqual([{ table: 'installment_plans', column: 'outstanding_txn_minor' }]);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: without the ALTER, nothing is named — and the ALTER
+    // really did change the text it was applied to.
+    expect(planted).not.toBe(SPEC);
+    expect(findAuthoritativeSalesColumns(SPEC, WATCHED)).toEqual([]);
+    recordProof('proof_7', 3, 'FIRES arm ran: a plan-level remaining added by ALTER is named; the unaltered spec is clean');
+  });
+
+  it('the reference model carries no plan-local balance either, and names the one field it refuses', () => {
+    // `planLocalCollectedMinor` exists ONLY so proof 5 can mutate into it,
+    // and proof 5 asserts the correct path never reads it.
+    expect(Object.keys(PLAN)).not.toContain('planLocalCollectedMinor');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 8 [proof_8] — the clock guard, widened and red-capable (p_as_of is the protection, not IMMUTABLE)', () => {
+  // The previous round MEASURED that a function declared `IMMUTABLE` may read
+  // `CURRENT_DATE` and PostgreSQL will accept it, because the label is
+  // trusted and the body is never read. So the guard below never consults a
+  // volatility label: it reads the BODY for financial time functions.
+  const FINANCIAL_TIME =
+    /\b(current_date|current_time|current_timestamp|localtime|localtimestamp|now|transaction_timestamp|statement_timestamp|clock_timestamp|timeofday)\b/i;
+
+  /** The body of one routine, by name, from a migration text. */
+  function routineBody(sql: string, header: string): string {
+    const at = sql.indexOf(header);
+    expect(at).toBeGreaterThan(-1);
+    const open = sql.indexOf('$fn$', at);
+    const close = sql.indexOf('$fn$', open + 4);
+    return sql.slice(open + 4, close);
+  }
+
+  it('the SHIPPED aging routine reads p_as_of and no clock — the previous round diagnosis was wrong and is not reopened', () => {
+    const shipped = readFileSync(SHIPPED_AGING_PATH, 'utf8');
+    const body = routineBody(shipped, 'CREATE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])');
+    expect(body).toMatch(/p_as_of/);
+    expect(FINANCIAL_TIME.test(body)).toBe(false);
+  });
+
+  it('the specification asks for no IMMUTABLE label and reads no clock in the projection it specifies', () => {
+    // THE SUBJECT IS EXECUTABLE SQL, NOT THE SKETCH'S OWN PROSE. This caught
+    // itself a THIRD time: the sketch's inline comments say «NEVER
+    // `outstanding - sum(alloc)`» and «the reference model now agrees», and
+    // the bare-`sum(` and `\bnow\b` guards both fired on those sentences.
+    // Same lesson as proofs 6 and 8 in round 1, one level deeper — a guard
+    // over SQL must read SQL. Recorded rather than quietly fixed, because the
+    // next author will write the same prose.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    // The subject is real and substantial, not an empty slice that would pass
+    // any guard. It is now REAL function DDL rather than a commented sketch
+    // (challenger C-2), so the guard reads the SQL that will be transcribed.
+    expect(sketch).toMatch(/CREATE OR REPLACE FUNCTION customer_ar_aging/);
+    expect(sketch).toMatch(/WITH invoice_fact AS \(/);
+    expect(sketch).toMatch(/public\.invoice_outstanding\(/);
+    expect(sketch).toMatch(/p_as_of/);
+    expect(sketch.split('\n').length).toBeGreaterThan(40);
+    expect(FINANCIAL_TIME.test(sketch)).toBe(false);
+  });
+
+  it('L-15: the IMMUTABLE arm has a REAL subject now — the spec declares a volatility and it is STABLE', () => {
+    // The first round asserted `not.toMatch(/LANGUAGE\s+sql\s+IMMUTABLE/)`
+    // over a file containing `LANGUAGE` zero times: a negative assertion over
+    // an absent subject, inside the very proof whose job is to show
+    // `IMMUTABLE` is not leaned on (challenger L-15). The specification now
+    // carries real function DDL, so the subject exists and is asserted
+    // POSITIVELY first.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/LANGUAGE\s+sql\s+STABLE\b/); // the subject exists
+    expect(sketch).not.toMatch(/\bIMMUTABLE\b/); // and it is not that
+    // The signature really is unchanged, which is what makes CREATE OR
+    // REPLACE legal: all five shipped columns, in order (challenger C-2).
+    expect(sketch).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
+    const shipped = readFileSync(SHIPPED_AGING_PATH, 'utf8');
+    expect(shipped).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
+  });
+
+  it('C-2: the DDL is complete and transcribable, and the structural block is LIFTED BY A RULING', () => {
+    // Round 2's block was a token that is not valid SQL — `LANGUAGE sql`
+    // bodies are parsed at CREATE time, so the definition could not be
+    // applied by accident. It held the hole open for a ruling instead of
+    // guessing. THE RULING CAME (owner §21), so the token is GONE and the
+    // expression it stood in for is the canonical cumulative law.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch).not.toMatch(/__OWED_BASE_ALLOCATION__/);
+    expect(sketch).toMatch(/public\.supplier_ap_release\(/);
+    expect(SPEC).not.toMatch(/THIS SLICE CANNOT SHIP AS IT STANDS/);
+    // All five columns, in the shipped order and with the shipped types —
+    // §25 requires the return shape be KEPT, and `CREATE OR REPLACE FUNCTION`
+    // cannot change a `RETURNS TABLE` list at all (42P13), so a design that
+    // dropped `base_minor` was never available.
+    expect(sketch).toMatch(/RETURNS TABLE \(bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER\)/);
+    // ...and the shape is read off the LIVE shipped definition rather than
+    // retyped from memory — the shape of the LAST `customer_ar_aging` in the
+    // tree, which is the one the database holds (challenger C-1).
+    // The LAST definition across the whole tree in apply order — `0075`
+    // created it, `0083` replaced it and `0084:488` DROPs `0083`'s and
+    // recreates it with a bare `CREATE FUNCTION`, so neither a chosen file nor
+    // a fixed `CREATE OR REPLACE` spelling is a safe subject (challenger C-1).
+    const defs = MIGRATIONS.flatMap((m) =>
+      [...m.sql.matchAll(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+customer_ar_aging\(/gi)].map((x) => ({
+        name: m.name,
+        // `matchAll` always sets `index`; a 0 fallback would silently make the
+        // tail the WHOLE FILE and the return shape below the first one in it.
+        tail: x.index === undefined ? '' : m.sql.slice(x.index),
+      })),
+    );
+    expect(defs.length, 'no customer_ar_aging definition in the tree').toBeGreaterThan(0);
+    expect(
+      defs.every((d) => d.tail !== ''),
+      'a match without an index — the tail would be the wrong body',
+    ).toBe(true);
+    const live = defs.at(-1);
+    if (live === undefined) throw new Error('NO SUBJECT: no customer_ar_aging definition in the tree');
+    expect(live.name).toBe('0084_phase4_ar_fixed_cost_and_open_invoice_page.sql');
+    const shape = /RETURNS TABLE \(([^)]*)\)/.exec(live.tail)?.[1];
+    expect(shape, 'the shipped return shape was not found').toBeDefined();
+    if (shape === undefined) throw new Error('NO SUBJECT: the shipped return shape was not found');
+    expect(sketch).toContain(`RETURNS TABLE (${shape})`);
+    // And the DDL a migration owner needs really is here — `LANGUAGE`,
+    // `RETURNS`, `GRANT`, `REVOKE` each appeared ZERO times in the first
+    // round, so there was no function DDL to transcribe at all.
+    for (const token of ['LANGUAGE', 'RETURNS TABLE', 'GRANT EXECUTE', 'REVOKE ALL', 'COMMENT ON FUNCTION']) {
+      expect(SPEC, `the spec has no ${token}`).toContain(token);
+    }
+    // WHAT STILL BLOCKS IT, named rather than left to be discovered: no
+    // migration number, not in `migrations/`, not in the manifest, and one
+    // authority change that is not the author's to make.
+    expect(SPEC_PATH).not.toMatch(/\/migrations\//);
+    const specBasename = SPEC_PATH.split('/').pop() ?? '';
+    expect(specBasename, 'the specification path has no basename, so the numbering law has no subject').not.toBe('');
+    expect(/^\d{4}_/.test(specBasename)).toBe(false);
+    expect(SPEC).toMatch(/PR-6/);
+    expect(SPEC).toMatch(/GRANT EXECUTE ON FUNCTION supplier_ap_release\(BIGINT, BIGINT, BIGINT, BIGINT\) TO daftar_app/);
+  });
+
+  it('M-12: the projection reads currency and due date OFF THE CALL, and joins invoices back on nowhere', () => {
+    // `0084:593-596` appended `currency_code, due_date` to
+    // `invoice_outstanding` precisely so the AR readers stop joining
+    // `invoices` back onto the call; the first round's sketch joined it back
+    // on and undid a measured optimisation on the `P4-D` path.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/SELECT o\.invoice_id, o\.currency_code, o\.due_date,/);
+    // And the authoritative PAIR is recomposed from the same call, which is
+    // what lets the base allocation need no `invoices` join either.
+    expect(sketch).toMatch(/o\.paid_txn_minor \+ o\.outstanding_txn_minor/);
+    expect(sketch).toMatch(/o\.paid_base_minor \+ o\.outstanding_base_minor/);
+    expect(sketch).not.toMatch(/JOIN\s+public\.invoices/i);
+    // The shipped routine does the same, which is the precedent — AND THIS
+    // ASSERTION WAS A THIRD COPY OF THE RETIRED RULE (DR-13-SPEC). It read
+    // `expect(readFileSync(SHIPPED_AGING_PATH)).toMatch(/o\.due_date IS NOT NULL/)`
+    // against the RAW migration, and `0084:727` has not contained that guard
+    // in code since DR-13: the only `o.due_date IS NOT NULL` left in that file
+    // is the SENTENCE at `0084:717` explaining why it was retired. So the law
+    // was green off a comment — the exact instrument class
+    // `TL-P4-COORD-R46` ruled on — while pinning the behaviour the owner had
+    // reversed. The subject is CODE now, and it is the resolution DR-13
+    // requires rather than the guard it retired.
+    expect(sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'))).toMatch(/coalesce\(o\.due_date, o\.issue_date\)/);
+    expect(sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'))).not.toMatch(/o\.due_date IS NOT NULL/);
+    // The only `public.invoices` reference is the id list, as shipped.
+    expect([...sketch.matchAll(/public\.invoices\b/g)]).toHaveLength(1);
+  });
+
+  it('L-16: catalogue FUNCTIONS are pg_catalog-qualified; SQL CONSTRUCTS cannot be, and are not', () => {
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    // ROUND 3 CORRECTION, AND IT WAS A REAL DEFECT IN THIS FILE'S OWN LAW.
+    // Round 2 listed `coalesce` here, and the sketch duly wrote
+    // `pg_catalog.coalesce(...)`. `COALESCE` is SQL SYNTAX, not a catalogue
+    // function, and cannot be schema-qualified at all — so the law was
+    // DEMANDING A SYNTAX ERROR, and the body it certified could never have
+    // been created. Measured rather than recalled: `pg_catalog.coalesce`
+    // appears ZERO times in the whole migration tree and `0084` alone writes
+    // bare `coalesce(` seven times, and `0084:810` states the rule outright
+    // for `GREATEST`. The same holds for `least`, `greatest` and `nullif`,
+    // which is why they were never in the list.
+    const CONSTRUCTS = ['coalesce', 'least', 'greatest', 'nullif'];
+    for (const c of CONSTRUCTS) {
+      const qualified = new RegExp(`pg_catalog\\.${c}\\s*\\(`, 'gi');
+      expect([...sketch.matchAll(qualified)], `pg_catalog.${c}( is not creatable SQL`).toHaveLength(0);
+      // Over SCHEMA, not prose — this very check first went red on
+      // `0084:810`'s own comment, which is the estate recording the SAME
+      // lesson in words: «`GREATEST` is a SQL CONSTRUCT and not a function,
+      // so it is NOT schema qualified: `pg_catalog.greatest(...)` does not
+      // resolve». The exemption is therefore not the author's invention.
+      const treeUses = MIGRATIONS.reduce((a, m) => a + [...sqlSchemaOnly(m.sql).matchAll(qualified)].length, 0);
+      expect(treeUses, `the tree qualifies ${c}, so this exemption is wrong`).toBe(0);
+    }
+    // At least one of them really is used bare in the projection, so the
+    // exemption above is EVALUATED and not merely declared.
+    expect(sketch).toMatch(/(?<![.\w])coalesce\s*\(/);
+    for (const fn of ['sum', 'count', 'unnest', 'array_agg', 'max']) {
+      const bare = new RegExp(`(?<![.\\w])${fn}\\s*\\(`, 'g');
+      expect([...sketch.matchAll(bare)], `bare ${fn}( is unqualified`).toHaveLength(0);
+      expect(sketch, `${fn} is never used`).toContain(`pg_catalog.${fn}(`);
+    }
+  });
+
+  it('NON-COINCIDENCE: a DEFAULT now() audit stamp is not a financial time read, and the guard says so', () => {
+    // The specification's DDL does carry `created_at ... DEFAULT now()`, as
+    // every accepted Phase 4 relation does. That is a row-creation stamp and
+    // not a figure the aging reads, so the law is scoped to the PROJECTION
+    // and the DDL arm is asserted separately: the only clock use in the
+    // schema is a DEFAULT on an `_at` column.
+    const schema = sqlCodeOnly(SPEC);
+    expect(schema).toMatch(/created_at\s+TIMESTAMPTZ NOT NULL DEFAULT now\(\)/);
+    const clockLines = schema.split('\n').filter((l) => FINANCIAL_TIME.test(l));
+    expect(clockLines.length).toBeGreaterThan(0);
+    for (const l of clockLines) expect(l).toMatch(/_at\s+TIMESTAMPTZ NOT NULL DEFAULT now\(\)/);
+  });
+
+  it('FIRES under its mutation: a clock read planted into the projection, and IMMUTABLE does not save it', () => {
+    const planted = 'SELECT 1 + count(*) FROM unnest(p_bucket_days) t WHERE (CURRENT_DATE - c.bucket_date) > t.threshold';
+    expect(FINANCIAL_TIME.test(planted)).toBe(true);
+    // And the label is explicitly NOT the guard: a body that reads the clock
+    // is caught whatever it is labelled.
+    const labelled = `CREATE FUNCTION f() RETURNS DATE LANGUAGE sql IMMUTABLE AS $fn$ SELECT CURRENT_DATE $fn$;`;
+    expect(FINANCIAL_TIME.test(labelled)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    // THE DISCRIMINATION: the real projection sketch reads no clock, so the
+    // guard is distinguishing and not simply matching everything.
+    expect(FINANCIAL_TIME.test(sqlCodeOnly(projectionSketch(SPEC)).replace(/DEFAULT now\(\)/g, ''))).toBe(false);
+    recordProof('proof_8', 3, 'FIRES arm ran: a planted clock read is flagged under any volatility label; the sketch is clean');
+  });
+
+  it('NON-COINCIDENCE: a column or parameter that merely contains a time word is not a clock read', () => {
+    for (const ok of ['p_as_of', 'due_date', 'rate_timestamp', 'created_at', 'down_payment_due_date']) {
+      expect(FINANCIAL_TIME.test(ok)).toBe(false);
+    }
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 9 [proof_9] — a broken sum law is SIGNALLED in both directions, not absorbed silently', () => {
+  // Challenger M-11. The projection must total the authoritative outstanding
+  // whatever the data says, which is right for proofs 1 and 4 and leaves a
+  // hole: UNDER-scheduled surfaces as a non-zero residual, OVER-scheduled
+  // surfaces as nothing at all.
+
+  it('THE 265-DAY GOLDEN: the over-scheduled case is now allocated to the EARLIEST UNPAID row, and reports as overdue', () => {
+    // The challenger's PROBE D, kept as a PERMANENT DETERMINISTIC GOLDEN
+    // (owner §26: never replaced by random-only coverage).
+    //
+    // In round 2 this input put the whole 900 000 on instalment 2, dated
+    // 2027-01-15, and reported a 265-day-overdue receivable as ENTIRELY NOT
+    // YET DUE. Anchoring the cumulative levels at the PAID level — which the
+    // base ruling forces — allocates to the earliest UNPAID row instead, so
+    // the understatement is no longer EXPRESSIBLE rather than merely
+    // signalled.
+    expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
+    const c = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
+    expect(c.map((x) => [x.origin, x.seqNo, x.scheduleDate, x.bucketNo, x.txnMinor])).toEqual([['installment', 1, '2026-01-15', 4, 900_000n]]);
+    // The whole balance is in the OLDEST bucket, where a 265-day-overdue
+    // receivable belongs, and nothing is in the not-yet-due bucket.
+    expect(sum(c.filter((x) => x.bucketNo === 1))).toBe(0n);
+    expect(sum(c)).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
+    // Nothing paid, so nothing may be treated as settled.
+    expect(OVER_SCHEDULED_INVOICE.paidTxnMinor).toBe(0n);
+  });
+
+  it('THE 265-DAY GOLDEN, AGAINST THE FOUR §10.5 CHECKS — asOf not a clock, bases sum exactly, the carrying pair is the input, the rate is metadata', () => {
+    // ORDERED BY `TL-P4-COORD-R55` ordered item 9, out of `TL-P4-COORD-R54`
+    // §3 and the 2026-10-12 Master Continuous Mission §10.5, which moves the
+    // 265-day case from a limitation the coordinator declares in every ruling
+    // to a REQUIREMENT this challenge must meet. The golden input above is
+    // the subject; what this case adds is the four §10.5 checks stated and
+    // MEASURED on it, in one place, rather than inferred from four proofs.
+    const INV = OVER_SCHEDULED_INVOICE;
+    const B = INV.paidBaseMinor + INV.outstandingBaseMinor;
+    const T = INV.paidTxnMinor + INV.outstandingTxnMinor;
+
+    // (1) THE AGING COMES FROM THE CANONICAL BALANCE AND THE PASSED `asOf`,
+    //     NEVER A DEVICE CLOCK. The projection is a pure function of
+    //     (invoice, plan, asOf, thresholds): the SAME input at a DIFFERENT
+    //     as-of moves the bucket and nothing else, and no call reads a clock.
+    //     With thresholds 30/60/90, 265 days past the schedule date is
+    //     bucket 4, 31 days past it is bucket 2, and the day itself is
+    //     bucket 1 — the same money, three bands, decided by the argument.
+    expect(epochDay(AS_OF) - epochDay('2026-01-15')).toBe(265);
+    const at = (asOf: string): readonly AgingContribution[] => projectInvoice(INV, OVER_SCHEDULED_PLAN, asOf, THRESHOLDS);
+    expect(at(AS_OF).map((x) => x.bucketNo)).toEqual([4]);
+    expect(at('2026-02-15').map((x) => x.bucketNo)).toEqual([2]); // 31 days > 30, not > 60
+    expect(at('2026-01-15').map((x) => x.bucketNo)).toEqual([1]);
+    // ...and the MONEY is identical at all three, because the allocation does
+    // not depend on `asOf` at all — only the banding does.
+    for (const asOf of [AS_OF, '2026-02-15', '2026-01-15']) {
+      expect(
+        at(asOf).reduce((a, x) => a + x.txnMinor, 0n),
+        asOf,
+      ).toBe(INV.outstandingTxnMinor);
+    }
+    // ...and the pure model reads no clock, which is the same law PROOF 8
+    // applies to the specification's own text.
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    //     A CLOCK READ IS A CALL WITH NO ARGUMENT, and the distinction is the
+    //     one PROOF 8 draws: `new Date(epochDay(x) * 86_400_000)` converts an
+    //     ARGUMENT and reads nothing, while `new Date()` and `Date.now()` are
+    //     the machine's opinion of the time. The non-coincidence is asserted
+    //     below so the matcher is not satisfied by refusing all date maths.
+    //     AND THE SUBJECT IS THE MODEL'S CODE AND NOT ITS PROSE, for the same
+    //     reason every law in this file filters comments: the model's own
+    //     header NAMES `CURRENT_DATE` and `now()` in the sentence that forbids
+    //     them, and a law satisfied or broken by a comment is the `prosrc
+    //     LIKE` defect in another language.
+    const modelCode = model
+      .split('\n')
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join('\n');
+    expect(modelCode, 'the comment filter removed the model itself').toContain('export function projectInvoice');
+    for (const clock of [/Date\.now/, /new Date\(\s*\)/, /CURRENT_DATE/i, /\bnow\(\)/, /Date\.UTC\(\s*\)/]) {
+      expect(modelCode, `the reference model reads a clock: ${String(clock)}`).not.toMatch(clock);
+    }
+    expect(modelCode, 'the model no longer converts a passed civil date, so the matcher above has no subject').toContain('new Date((epochDay(civil)');
+
+    // (2) THE AGING BASES SUM EXACTLY TO THE OUTSTANDING BASE — at this
+    //     as-of and at every other, since the allocation is as-of independent.
+    for (const asOf of [AS_OF, '2026-02-15', '2026-01-15', '2027-12-31']) {
+      expect(
+        at(asOf).reduce((a, x) => a + x.baseMinor, 0n),
+        asOf,
+      ).toBe(INV.outstandingBaseMinor);
+    }
+
+    // (3) THE CARRYING ALLOCATION COMES FROM `total_txn_minor` AND
+    //     `total_base_minor`, THROUGH THE CANONICAL CUMULATIVE LAW, WITH ONE
+    //     CUMULATIVE HALF_EVEN ROUNDING. Shown as an identity on the stored
+    //     PAIR rather than as an assertion about the code: each contribution's
+    //     base is the difference of the canonical cumulative release at the
+    //     two settlement levels, and the pair is the only money input.
+    let level = INV.paidTxnMinor;
+    for (const c of at(AS_OF)) {
+      expect(c.baseMinor, `the base share at level ${String(level)} is not the canonical difference`).toBe(apRelease(B, T, level, c.txnMinor));
+      level += c.txnMinor;
+    }
+    expect(level, 'the levels do not reach the invoice total').toBe(T);
+    // R is cumulative and its endpoints are the stored pair itself.
+    expect(apRelease(B, T, 0n, T)).toBe(B);
+    expect(apRelease(B, T, 0n, INV.paidTxnMinor)).toBe(INV.paidBaseMinor);
+
+    // (4) `source_to_base_rate` IS METADATA ONLY. It is not a field of the
+    //     reference model's inputs, it appears in no arithmetic in the model
+    //     or in the projection the specification ships, and the base figures
+    //     above were reproduced from the PAIR with no rate anywhere.
+    expect(modelCode, 'the reference model has grown a rate').not.toContain('source_to_base_rate');
+    const sketch = sqlCodeOnly(SPEC.slice(SPEC.indexOf('>>> P4S7 PROJECTION SKETCH BEGIN'), SPEC.indexOf('<<< P4S7 PROJECTION SKETCH END')));
+    expect(sketch, 'the projection reads the rate').not.toContain('source_to_base_rate');
+    expect(sketch, 'the projection does not consume the canonical law').toContain('public.supplier_ap_release(');
+  });
+
+  it('FIRES: the round-2 anchor is what produced the understatement, and it no longer exists', () => {
+    // The old form anchored on the OUTSTANDING against the schedule's SUFFIX.
+    // Reconstructed here from the fixture alone, to show the repair is a real
+    // change of answer and not a re-labelling.
+    const T = OVER_SCHEDULED_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    const O = OVER_SCHEDULED_INVOICE.outstandingTxnMinor;
+    expect(T).toBe(1_800_000n);
+    // Suffix-anchored: instalment 2's share was `clamp(O - 0, 0, a_2)` = all of it.
+    const suffixAnchoredSeq2 = O < 1_800_000n - 900_000n ? O : 900_000n;
+    expect(suffixAnchoredSeq2).toBe(900_000n);
+    expect(bucketOf(AS_OF, '2027-01-15', THRESHOLDS)).toBe(1); // ...in bucket 1
+    // Paid-anchored puts it in bucket 4 instead.
+    const got = projectInvoice(OVER_SCHEDULED_INVOICE, OVER_SCHEDULED_PLAN, AS_OF, THRESHOLDS);
+    expect(got.every((x) => x.bucketNo === 4)).toBe(true);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_9', 4, 'FIRES arm ran: FIRES: the round-2 anchor is what produced the understatemen');
+  });
+
+  it('FIRES: the INDEPENDENT OVERDUE ORACLE agrees exactly where the sum law holds, and overstates where it is broken', () => {
+    // THE SECOND MEASUREMENT OF THE OVERDUE COLUMN, and it is a second
+    // IMPLEMENTATION rather than `f(x) === f(x)`. `unpaidDuePortion` is
+    // `max(0, D - P)` over a PREFIX of the declared schedule with ONE clamp;
+    // the projection is a per-row suffix-telescoping allocation with a clamp
+    // per level. They share no code path, no intermediate and no helper, and
+    // the projection never calls the oracle.
+    //
+    // WHERE THE SCHEDULE OBEYS THE SUM LAW, the telescoping identity makes the
+    // two provably identical, so this is an equality and not a tolerance.
+    for (const [label, invoice, plan] of [
+      ['the design fixture', PLANNED_INVOICE, PLAN],
+      ['the boundary fixture', BOUNDARY_INVOICE, BOUNDARY_PLAN],
+    ] as const) {
+      const scheduled = plan.downPaymentMinor + plan.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+      // NON-VACUITY: the equality below is only a theorem while this holds, so
+      // the premise is measured and not assumed.
+      expect(scheduled, `${label} must obey the sum law, or the oracle is not exact on it`).toBe(invoice.paidTxnMinor + invoice.outstandingTxnMinor);
+      const contributions = projectInvoice(invoice, plan, AS_OF, THRESHOLDS);
+      // THE SUBJECT IS THE SCHEDULE DATE, NOT THE BUCKET ORDINAL — and that
+      // distinction is a finding this arm made on its first run. Bucket 1 is
+      // the `0-30` band: it holds the NOT-YET-DUE rows AND the rows up to
+      // thirty days past due, so `bucketNo > 1` is not «overdue» and summing
+      // it against `max(0, D - P)` compared two different quantities (500 000
+      // against 600 000 on the design fixture). The oracle's subject is money
+      // whose DECLARED DATE has arrived, so the projection's matching subject
+      // is its contributions' own `scheduleDate` — which also keeps this law
+      // independent of `bucketOf` entirely.
+      const projectedDue = sum(contributions.filter((x) => x.scheduleDate !== null && x.scheduleDate <= AS_OF));
+      const oracle = unpaidDuePortion(plan, AS_OF, invoice.paidTxnMinor);
+      expect(projectedDue, `${label}: the fallen-due allocation must equal max(0, D - P)`).toBe(oracle);
+      // ...and the oracle is not trivially zero, or the equality is 0 === 0.
+      expect(oracle > 0n, `${label}: NO SUBJECT — nothing has fallen due`).toBe(true);
+      // THE BAND-LEVEL CONSEQUENCE, which is the half a reader cares about:
+      // everything in an OVERDUE band is fallen-due money, so it cannot
+      // exceed the fallen-due total. This is the one-sided reading of
+      // proof 2's law, measured against a second implementation.
+      expect(sum(contributions.filter((x) => x.bucketNo > 1)) <= oracle, `${label}: an overdue band carries more than has fallen due`).toBe(true);
+    }
+
+    // WHERE THE SUM LAW IS BROKEN ABOVE, AND THE OVER-SCHEDULED MONEY HAS
+    // FALLEN DUE, the two part company — and they must. The oracle counts the
+    // DECLARED dates and is bounded by nothing; the projection is bounded by
+    // the authoritative outstanding and cannot report money the invoice does
+    // not owe. So the disagreement is the DETECTOR of a broken schedule, and
+    // the database-level verifier is what makes the state unreachable rather
+    // than merely detectable (obligation (a), measured firing in
+    // tests/integration/phase4-s7-installment-aging-live.test.ts §B).
+    const bothOverdue: InstallmentPlan = Object.freeze({
+      ...OVER_SCHEDULED_PLAN,
+      installments: Object.freeze([
+        Object.freeze({ seqNo: 1, dueDate: '2026-01-15', amountTxnMinor: 900_000n }),
+        Object.freeze({ seqNo: 2, dueDate: '2026-02-15', amountTxnMinor: 900_000n }),
+      ]),
+    });
+    const brokenOracle = unpaidDuePortion(bothOverdue, AS_OF, OVER_SCHEDULED_INVOICE.paidTxnMinor);
+    const brokenProjected = sum(
+      projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS).filter((x) => x.scheduleDate !== null && x.scheduleDate <= AS_OF),
+    );
+    expect(brokenOracle).toBe(1_800_000n);
+    // The projection reports the AUTHORITATIVE outstanding and not a penny more.
+    expect(brokenProjected).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
+    expect(brokenProjected).toBe(900_000n);
+    expect(brokenOracle === brokenProjected, 'a broken schedule must be VISIBLE as a disagreement, not absorbed').toBe(false);
+    // and conservation is NOT sacrificed to make the oracle happy: proof 1's
+    // law still holds on the broken input, which is the whole reason the
+    // overstatement lands on the oracle rather than on the projection.
+    expect(sum(projectInvoice(OVER_SCHEDULED_INVOICE, bothOverdue, AS_OF, THRESHOLDS))).toBe(OVER_SCHEDULED_INVOICE.outstandingTxnMinor);
+    recordProof('proof_9', 14, 'FIRES arm ran: the independent overdue oracle agrees where the sum law holds');
+  });
+
+  it('the two anchors AGREE exactly wherever the sum law holds, so the repair costs nothing', () => {
+    // The design fixture obeys the sum law: 300 000 paid + 900 000 outstanding
+    // = 1 200 000 = 12 x 100 000.
+    expect(PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor).toBe(1_200_000n);
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    // Instalments 4..12 outstanding, 1..3 settled — the same answer round 1
+    // and round 2 gave, reached from the other end.
+    expect(c.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  it('PR-5 RESOLVED BY DELETION: the unwired signal is gone and the verifier is the whole bound', () => {
+    // The coordinator's objection was this estate's recorded defect class — a
+    // name existed and no evidence read it — and it was worse than usual
+    // because the unwired function was offered as the bound on ruling 1.
+    // Two homes for a bound, one of them believed. Now one.
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    const code = model
+      .split('\n')
+      .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/scheduleCoherenceFindings/);
+    expect(model).toMatch(/PR-5, RESOLVED BY DELETION/);
+    // And the bound that remains is a DEFERRED constraint trigger, which fires
+    // at COMMIT whoever writes.
+    expect(SPEC).toMatch(/installment_plans_schedule_complete/);
+    expect(SPEC).toMatch(/DEFERRABLE INITIALLY DEFERRED/);
+    expect(SPEC).toMatch(/R-SAL-06/);
+  });
+
+  it('the sum law is owed AT DB LEVEL in all three directions, and the specification says which', () => {
+    // Owner §26: below total refused, equal accepted, above total refused —
+    // not TypeScript-only and not UI-only. It is a cluster run, so it is OWED
+    // and named rather than asserted here.
+    expect(SPEC).toMatch(/below total REFUSED/);
+    expect(SPEC).toMatch(/equal to total ACCEPTED/);
+    expect(SPEC).toMatch(/above total REFUSED/);
+    expect(SPEC).toMatch(/OWED TO THE BOX/);
+    // ...and the part that is NOT prose. A prose sentence is the failure shape
+    // this estate is named for, so the reachability of both directions is
+    // asserted over the DDL: a schedule can be pushed below the total by
+    // DELETING a row, so a verifier that fired only on INSERT and UPDATE would
+    // make one of the three directions unenforceable whatever the prose says.
+    const ddl = sqlSchemaOnly(SPEC);
+    const allConstraintTriggers = [...ddl.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)\s+([\s\S]*?)EXECUTE FUNCTION\s+(\w+)/gi)];
+    // ROUND 7 F1 added two MORE deferred constraint triggers, for the invoice-
+    // borne fact (specification §3a). THIS law is about the SCHEDULE verifier's
+    // pair, so it selects them by the function they execute rather than by
+    // counting every constraint trigger in the file — which would otherwise
+    // turn a later slice's trigger into a failure of the sum law.
+    const triggers = allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_schedule_verify');
+    // THREE, NOT TWO, SINCE `TL-P4-COORD-R43` F1-d. The equality reads THREE
+    // relations and its RIGHT-HAND SIDE is `invoices.total_txn_minor`, which
+    // `0075:561` leaves MUTABLE while the invoice is a draft. With the two
+    // plan-side triggers alone the equality could be falsified from the right
+    // — build a lawful schedule against a draft invoice, bump its total,
+    // promote it — and the reader then refuses that receivable for ever.
+    expect(triggers.length).toBe(3);
+    // ...and the fact's own pair is there too, so this selection is a filter
+    // and not a way of not looking.
+    expect(allConstraintTriggers.filter((t) => (t[3] ?? '') === 'installment_plan_fact_verify')).toHaveLength(2);
+    const onRelation = new Map(triggers.map((t) => [/\bON\s+(\w+)/i.exec(t[2] ?? '')?.[1] ?? '?', { events: t[2] ?? '', fn: t[3] ?? '' }]));
+    // Both relations of the schedule, both judged by the ONE verifier.
+    expect([...onRelation.keys()].sort()).toEqual(['installment_plans', 'installments', 'invoices']);
+    for (const [rel, t] of onRelation) {
+      expect(t.fn, rel).toBe('installment_schedule_verify');
+      expect(t.events, rel).toMatch(/DEFERRABLE INITIALLY DEFERRED/i);
+      expect(t.events, rel).toMatch(/AFTER[\s\S]*UPDATE/i);
+      // The two SCHEDULE relations carry the INSERT arm. The `invoices` arm is
+      // `UPDATE OF total_txn_minor` and NOTHING else: that one column is the
+      // whole of what this relation contributes to the equality, and no plan
+      // can exist for an invoice being INSERTed (`installment_plans_invoice_fk`).
+      if (rel === 'invoices') {
+        expect(t.events, rel).toMatch(/UPDATE\s+OF\s+total_txn_minor/i);
+        expect(t.events, rel).not.toMatch(/INSERT/i);
+      } else {
+        expect(t.events, rel).toMatch(/AFTER[\s\S]*INSERT/i);
+      }
+    }
+    // The row relation must also fire on DELETE — that is the direction a
+    // prose-only law would have left open.
+    const rowTrigger = onRelation.get('installments');
+    expect(rowTrigger, 'there is no constraint trigger on installments at all').toBeDefined();
+    expect(rowTrigger?.events).toMatch(/DELETE/i);
+  });
+
+  it('the DECLARED schedule that has fallen due is read from the plan, never from the projection', () => {
+    expect(scheduledDueBy(PLAN, AS_OF)).toBe(900_000n); // Jan..Sep, down payment 0
+    expect(scheduledDueBy(OVER_SCHEDULED_PLAN, AS_OF)).toBe(900_000n); // instalment 1 only
+    expect(scheduledDueBy(SHORT_PLAN, AS_OF)).toBe(0n); // both instalments future
+  });
+
+  it('the real repair is in the DDL: a DEFERRED verifier makes both directions unreachable at commit', () => {
+    expect(SPEC).toMatch(/installment_plans_schedule_complete/);
+    expect(SPEC).toMatch(/DEFERRABLE INITIALLY DEFERRED/);
+    expect(SPEC).toMatch(/R-SAL-06/);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 10 [proof_10] — the base conservation law, as a CONSEQUENCE of differencing one cumulative function', () => {
+  // THE OWNER'S RULING (TL, S7 §21/§25). `source_to_base_rate` must NOT become
+  // a second arithmetic authority. The base portion of a schedule boundary is
+  // the canonical cumulative carrying-value law over the invoice's stored
+  // monetary PAIR, differenced between the schedule's cumulative levels:
+  //
+  //     base_i = R(L_i) − R(L_{i−1}) = apRelease(B, Tot, L_{i−1}, alloc_i)
+  //
+  // The owner named the property this buys and asked for it to be proved that
+  // way: the levels telescope, so
+  //
+  //     Σ base_i + residual_base = R(Tot) − R(P) = B − paid_base
+  //                              = outstanding_base_minor
+  //
+  // EXACTLY — and not as a coincidence anyone has to police.
+  const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE];
+  const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
+  const sumBase = (xs: readonly AgingContribution[]): bigint => xs.reduce((a, x) => a + x.baseMinor, 0n);
+
+  it('holds EXACTLY, per invoice and over the portfolio, against the authoritative base', () => {
+    for (const r of rows) {
+      const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+      expect(sumBase(projectInvoice(r, plan, AS_OF, THRESHOLDS)), r.invoiceId).toBe(r.outstandingBaseMinor);
+    }
+    expect(sumBase(contributionsFor(rows, plans, AS_OF, THRESHOLDS))).toBe(rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n));
+  });
+
+  it('the rounding is REAL on these fixtures, so the law is not passing on exact ratios', () => {
+    // `total_base 1 015 001` against `total_txn 1 200 000` is deliberately not
+    // a round ratio. If it were, every per-row figure would come out exact and
+    // the conservation law would hold for the WRONG reason.
+    const B = PLANNED_INVOICE.paidBaseMinor + PLANNED_INVOICE.outstandingBaseMinor;
+    const T = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    expect(B).toBe(1_015_001n);
+    expect(T).toBe(1_200_000n);
+    expect((B * 100_000n) % T).not.toBe(0n); // a per-instalment conversion rounds
+    // And the paid level really is the cumulative release of the paid amount,
+    // which is the identity the writers enforce (`0084`'s own note).
+    expect(apRelease(B, T, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(PLANNED_INVOICE.paidBaseMinor);
+    // R(Tot) = B exactly: the final cumulative release is the whole base.
+    expect(apRelease(B, T, 0n, T)).toBe(B);
+  });
+
+  it('IT IS A PROPERTY OF TELESCOPING, NOT OF HALF_EVEN — proved with adversarial rounding functions', () => {
+    // The owner asked for it this way. Any cumulative `R` differenced between
+    // the same levels conserves, so the law does not depend on the canonical
+    // law's rounding at all — which is why the canonical law can be CONSUMED
+    // rather than re-stated, and why no counterexample requiring the raw rate
+    // exists (§21).
+    const adversarial: readonly { readonly name: string; readonly fn: ReleaseFn }[] = [
+      { name: 'floor', fn: (B, T, X, a) => (B * (X + a)) / T - (B * X) / T },
+      { name: 'ceil-ish', fn: (B, T, X, a) => (B * (X + a) + T - 1n) / T - (B * X + T - 1n) / T },
+      { name: 'always zero', fn: () => 0n },
+      { name: 'wildly nonlinear', fn: (B, T, X, a) => ((X + a) * (X + a)) / (T === 0n ? 1n : T) - (X * X) / (T === 0n ? 1n : T) },
+    ];
+    for (const { name, fn } of adversarial) {
+      for (const r of rows) {
+        const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+        const c = projectInvoice(r, plan, AS_OF, THRESHOLDS, CORRECT_POLICY, fn);
+        const B = r.paidBaseMinor + r.outstandingBaseMinor;
+        const Tot = r.paidTxnMinor + r.outstandingTxnMinor;
+        // Conservation against THAT R's own endpoints: R(Tot) − R(P).
+        const expected = plan === undefined || r.outstandingTxnMinor <= 0n ? r.outstandingBaseMinor : fn(B, Tot, 0n, Tot) - fn(B, Tot, 0n, r.paidTxnMinor);
+        expect(sumBase(c), `${name} / ${r.invoiceId}`).toBe(expected);
+      }
+    }
+    // ...and with the CANONICAL law those endpoints ARE the authoritative
+    // figures, which is the whole point of the ruling.
+    const B = PLANNED_INVOICE.paidBaseMinor + PLANNED_INVOICE.outstandingBaseMinor;
+    const Tot = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    expect(apRelease(B, Tot, 0n, Tot) - apRelease(B, Tot, 0n, PLANNED_INVOICE.paidTxnMinor)).toBe(PLANNED_INVOICE.outstandingBaseMinor);
+  });
+
+  it('`source_to_base_rate` appears in NO arithmetic, anywhere in this design', () => {
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    const code = model
+      .split('\n')
+      .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+      .join('\n');
+    expect(code).not.toMatch(/source_to_base_rate|sourceToBaseRate/);
+    expect(sqlCodeOnly(SPEC)).not.toMatch(/source_to_base_rate/);
+    // It is named in prose only — valid immutable invoice metadata for
+    // display, audit and traceability, and never a carrying-allocation
+    // primitive.
+    expect(SPEC).toMatch(/source_to_base_rate/);
+  });
+
+  it('the canonical law is CONSUMED, never re-implemented — R-81, and the owner said so', () => {
+    expect(CANONICAL_RELEASE).toBe(apRelease);
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    expect(model).not.toMatch(/function\s+roundHalfEven/);
+    // And the SQL calls the SQL twin rather than restating it.
+    const sketch = sqlSchemaOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/public\.supplier_ap_release\(/);
+    expect(sketch).not.toMatch(/inventory_half_even/);
+    expect(SPEC).toMatch(/0067:683/);
+  });
+
+  it('FIRES under its mutation: each row converted on its own, at the row grain', () => {
+    // The second rounding at the second grain this design exists to refuse.
+    const m = mutate('baseAllocation', 'per_row_conversion');
+    const c = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, m);
+    expect(sumBase(c)).not.toBe(PLANNED_INVOICE.outstandingBaseMinor);
+    // Nine instalments, each rounded down by the same fraction: the drift is
+    // small, which is exactly why a law that did not assert EXACT equality
+    // would never have found it.
+    expect(PLANNED_INVOICE.outstandingBaseMinor - sumBase(c)).toBe(4n);
+    // The txn side is untouched, so only the base law can see this.
+    expect(sum(c)).toBe(PLANNED_INVOICE.outstandingTxnMinor);
+    // THE DATA FLOW TO THE META GATE: recorded AFTER the assertions, so a
+    // proof that does not RUN does not record and the gate goes red. A tag in
+    // a comment cannot satisfy this; `describe.skip` cannot satisfy it.
+    recordProof('proof_10', 3, 'FIRES arm ran: FIRES under its mutation: each row converted on its own, at ');
+  });
+});
+
+/** The standard bands DR-10 fixed and DR-14 made the only set on offer. */
+const STANDARD = [0, 30, 60, 90] as const;
+/** `over-90` under `STANDARD`: five bands, so the oldest is 5. */
+const OLDEST_STANDARD = STANDARD.length + 1;
+
+/** A termless receivable: no stated term, issued `age` days before `AS_OF`. */
+function termlessRow(age: number, overrides: Partial<OpenInvoiceRow> = {}): OpenInvoiceRow {
+  return {
+    invoiceId: 'inv-termless',
+    currencyCode: 'SAR',
+    dueDate: null,
+    issueDate: daysBefore(age),
+    outstandingTxnMinor: 100_000n,
+    paidTxnMinor: 0n,
+    paidBaseMinor: 0n,
+    outstandingBaseMinor: 84_503n,
+    ...overrides,
+  };
+}
+
+/**
+ * THE PORTFOLIO FIXTURE THIS SUITE DID NOT HAVE, and its absence is the
+ * finding. `meta_2` requires every knob mutation to CHANGE the output, and it
+ * measured the portfolio: four invoices, every one of them stating a due
+ * date. On such a portfolio the termless fallback is INERT — which is the
+ * mechanism by which this specification carried a money defect past a suite
+ * of ten money proofs and nine meta gates. A termless document is now in the
+ * portfolio, so the inertness is gone rather than argued about.
+ */
+const TERMLESS_INVOICE: OpenInvoiceRow = Object.freeze(termlessRow(400, { invoiceId: 'inv-termless-portfolio' }));
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('PROOF 13 [proof_13] — no receivable leaves the report by having no date', () => {
+  // THE SUBJECT NO OTHER PROOF HAS, and the reason this specification shipped
+  // the defect DR-13 had already retired from `0084`: every money law above is
+  // about WHICH FIGURE reaches a bucket, and this one is about WHICH BUCKET.
+  // The termless defect moves no money — the totals are exact under it, the
+  // base shares still telescope, proof 1 and proof 4 hold identically — it
+  // only parks the whole figure in the first band for ever. A suite that
+  // proves conservation and never proves PLACEMENT cannot see it, which is
+  // measured below: the FIRES arm leaves every sum untouched.
+
+  it('a termless receivable is placed by its ISSUE date, in the planless arm and in the residual arm alike', () => {
+    const row = termlessRow(400, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const planless = projectInvoice(row, undefined, AS_OF, STANDARD);
+    expect(planless).toHaveLength(1);
+    expect((planless[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(395),
+      installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 40_000n }],
+    };
+    const withPlan = projectInvoice(row, plan, AS_OF, STANDARD);
+    const residual = withPlan.filter((x) => x.origin === 'residual');
+    expect(residual).toHaveLength(1);
+    expect((residual[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // And a scheduled instalment is NOT dragged along with them (DR-21).
+    const scheduled = withPlan.filter((x) => x.origin === 'installment');
+    expect(scheduled).toHaveLength(1);
+    expect((scheduled[0] as AgingContribution).scheduleDate).toBe(plan.installments[0]?.dueDate);
+  });
+
+  it('FIRES under its mutation: the termless fallback is withdrawn and the receivable sits in band 1 for ever', () => {
+    const row = termlessRow(4000, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const defective = mutate('termlessFallback', 'none');
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD, defective);
+    expect(c).toHaveLength(1);
+    // ELEVEN YEARS OVERDUE, REPORTED AS NOT DUE. That is the retired
+    // `bucket_date IS NOT NULL AND …` guard, reached through the knob.
+    expect((c[0] as AgingContribution).bucketNo, 'the mutation is INERT — the law cannot refuse it').toBe(1);
+    expect((c[0] as AgingContribution).scheduleDate).toBeNull();
+    // THE DISCRIMINATION: unmutated, the same row is in the oldest band.
+    expect((projectInvoice(row, undefined, AS_OF, STANDARD)[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // AND THE REASON NOTHING ELSE CAUGHT IT: the mutation moves NO money. The
+    // totals are identical, so every conservation law in this file holds under
+    // the defect and only the placement is wrong.
+    expect(sum(c)).toBe(sum(projectInvoice(row, undefined, AS_OF, STANDARD)));
+    expect(sum(c)).toBe(100_000n);
+    recordProof('proof_13', 4, 'FIRES arm ran: withdrawing the issue-date fallback parks an 11-year-old receivable in band 1 while every total stays exact');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('DR-13-SPEC the body law is in the guard, and it has been seen to refuse', () => {
+  // The digests pin «the installed body is the body that was reviewed». They
+  // say nothing about what the body DOES, and that is how a body which aged a
+  // termless receivable at no date at all was pinned for the life of the
+  // slice. The law below is the one thing a text instrument can honestly
+  // carry: the retired guard is DETECTED and the DR-13 resolution is
+  // REQUIRED, on comment-stripped code, in both bodies of interest.
+
+  it('the SPECIFICATION body and the APPROVED `0084` body both satisfy the DR-13/DR-21 law', () => {
+    expect(dr13AgingFindings(specAgingBody(), 'spec')).toEqual([]);
+    // THE POSITIVE CONTROL, and it is the body of record the owner decided
+    // DR-13 against — not the file this law was written for.
+    expect(dr13AgingFindings(shippedAgingBody(), '0084')).toEqual([]);
+    expect(() => assertDr13AgingFallback(specAgingBody(), 'spec')).not.toThrow();
+    expect(() => assertDr13AgingFallback(shippedAgingBody(), '0084')).not.toThrow();
+  });
+
+  it('IT REFUSES: the retired guard planted back into each REAL body is named, not merely counted', () => {
+    for (const [where, body] of [
+      ['spec', specAgingBody()],
+      ['0084', shippedAgingBody()],
+    ] as const) {
+      const planted = plantRetiredNullGuard(body);
+      // The plant must have APPLIED, or the arm below proves nothing.
+      expect(planted, `${where}: the plant did not apply, so this arm has no subject`).not.toBe(body);
+      const findings = dr13AgingFindings(planted, where);
+      expect(
+        findings.map((f) => f.kind),
+        where,
+      ).toContain('retired_null_guard');
+      expect(() => assertDr13AgingFallback(planted, where)).toThrow(/retired/i);
+    }
+  });
+
+  it('IT REFUSES a body whose fallback is gone, and it is not satisfied by a SENTENCE describing either', () => {
+    // `coalesce` removed from the specification body: the resolution is gone
+    // and the law says so.
+    const noFallback = specAgingBody().replace(/coalesce\(oi\.due_date, oi\.issue_date\) AS due_date/g, 'oi.due_date');
+    expect(noFallback).not.toBe(specAgingBody());
+    expect(dr13AgingFindings(noFallback, 'spec').map((f) => f.kind)).toContain('fallback_absent');
+
+    // AND THE TRAP THIS ESTATE HAS BEEN CAUGHT BY FIVE TIMES: a comment is not
+    // code. A body whose ONLY `coalesce` is in a sentence is refused...
+    const prose = `${noFallback}\n-- coalesce(o.due_date, o.issue_date) is what DR-13 requires.\n`;
+    expect(dr13AgingFindings(prose, 'spec').map((f) => f.kind)).toContain('fallback_absent');
+    // ...and a body whose only RETIRED GUARD is in a sentence is NOT refused,
+    // which is why the law can be asked about `0084` at all: that migration
+    // deliberately carries a sentence naming the guard it retired.
+    const sentenceOnly = `${specAgingBody()}\n-- This guard used to read \`o.due_date IS NOT NULL AND …\`.\n`;
+    expect(dr13AgingFindings(sentenceOnly, 'spec')).toEqual([]);
+    expect(readFileSync(SHIPPED_AGING_PATH, 'utf8')).toMatch(/o\.due_date IS NOT NULL/); // the sentence really is there
+  });
+
+  it('IT REFUSES a non-strict boundary, so the law cannot pass over a `>=` it never found', () => {
+    const inclusive = specAgingBody().replace('(p_as_of - c.bucket_date) > t.threshold', '(p_as_of - c.bucket_date) >= t.threshold');
+    expect(inclusive).not.toBe(specAgingBody());
+    expect(dr13AgingFindings(inclusive, 'spec').map((f) => f.kind)).toContain('boundary_not_strict');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('META — the proofs are not vacuous', () => {
+  it('meta_1: every knob has a proof that exercises its defective value, AND that proof exists in this file', () => {
+    // The first round wrote `proof:` five times and read it zero times, so
+    // deleting every "FIRES under its mutation" block left both meta tests
+    // green (challenger H-4). The field is now READ, and read against this
+    // file's own source, so a law with no proof behind it cannot pass.
+    const exercised = new Map(MUTATIONS_EXERCISED.map((m) => [m.knob, m.to]));
+    for (const k of POLICY_KNOBS) {
+      expect(exercised.has(k.knob), `knob ${k.knob} has no proof`).toBe(true);
+      expect(k.defective).toContain(exercised.get(k.knob));
+    }
+    const known = new Set(POLICY_KNOBS.map((k) => k.knob));
+    for (const m of MUTATIONS_EXERCISED) expect(known.has(m.knob)).toBe(true);
+    expect(MUTATIONS_EXERCISED.length).toBe(POLICY_KNOBS.length);
+
+    // ── (a) WHAT WAS WRONG WITH (a), AND IT WAS WRONG TWICE ────────────
+    //
+    // Round 2's version wrote `proof:` and never read it (challenger H-4).
+    // Round 3's version READ it — `expect(SELF).toContain(\`[${'$'}{m.proof}]\`)` —
+    // and that is still only a TEXTUAL relationship. The proof engineer
+    // measured it: delete the whole FIRES block for `proof_4`, append a
+    // comment naming it, and both assertions pass. `describe.skip` passes. A
+    // body replaced by `expect(true).toBe(true)` passes. That is this
+    // estate's «a comment is not evidence» trap, live, in the gate that
+    // exists to prevent it.
+    //
+    // It is replaced by TWO relationships, neither of them prose, and
+    // `meta_9` proves both are red-capable.
+    for (const m of MUTATIONS_EXERCISED) {
+      expect(
+        MANDATORY.some((x) => x.id === m.proof),
+        `proof ${m.proof} is not declared mandatory`,
+      ).toBe(true);
+    }
+
+    // ── (b) EACH KNOB IS ACTUALLY MUTATED SOMEWHERE IN THIS FILE ────────
+    for (const k of POLICY_KNOBS) {
+      expect(SELF, `knob ${k.knob} is never passed to mutate()`).toContain(`mutate('${k.knob}'`);
+    }
+
+    // ── (c) AND NO MORE KNOBS ARE MUTATED THAN ARE REGISTERED ───────────
+    const mutatedInSource = new Set([...SELF.matchAll(/mutate\('([A-Za-z]+)'/g)].map((x) => x[1] as string));
+    expect([...mutatedInSource].sort()).toEqual([...known].sort());
+
+    // ── (d) Every proof claims a DISTINCT knob ─────────────────────────
+    expect(new Set(MUTATIONS_EXERCISED.map((m) => m.knob)).size).toBe(MUTATIONS_EXERCISED.length);
+
+    // ── (e) AND THE REGISTRY COVERS THE PROOFS THAT HAVE NO KNOB ────────
+    //
+    // Proofs 6, 7, 8 and 9 were OUTSIDE `MUTATIONS_EXERCISED` entirely,
+    // because their mutations are planted into SQL text rather than reached
+    // through a policy knob. So «remove proof A» had NO COVERAGE for four of
+    // the seven required proofs: deleting proof 6 or proof 9 outright left
+    // every `meta_*` test green. The mandatory table below is keyed on the
+    // PROOF, not on the knob, so a proof without a knob is covered too.
+    const knobbed = new Set(MUTATIONS_EXERCISED.map((m) => m.proof));
+    const knobless = MANDATORY.filter((m) => !knobbed.has(m.id)).map((m) => m.id);
+    expect(knobless.sort()).toEqual(['proof_6', 'proof_7', 'proof_8', 'proof_9']);
+  });
+
+  it('meta_1a: THE RUNTIME LEDGER — a proof that did not RUN did not record, and the gate reads the record', () => {
+    // A DATA FLOW, not a string search. `recordProof` is called from inside
+    // each mandatory proof's mutation arm AFTER its assertions, so the entry
+    // exists only if those assertions passed. This test runs last in the
+    // file, so every arm has had its chance.
+    const led = proofLedger();
+    for (const m of MANDATORY) {
+      const entry = led.get(m.id);
+      expect(entry, `${m.id} never recorded — it did not run, or it did not reach its record`).toBeDefined();
+      if (entry === undefined) throw new Error(`${m.id} never recorded — it did not run, or it did not reach its record`);
+      expect(entry.assertions, `${m.id} recorded ${String(entry.assertions)} assertions`).toBeGreaterThanOrEqual(m.minAssertions);
+      expect(entry.detail.length).toBeGreaterThan(10);
+    }
+    // Every ledger entry belongs to a declared proof, so a proof cannot
+    // record itself into existence under a name nothing requires.
+    for (const id of led.keys()) {
+      expect(
+        MANDATORY.some((m) => m.id === id),
+        `${id} recorded but is not mandatory`,
+      ).toBe(true);
+    }
+    expect(led.size).toBeGreaterThanOrEqual(MANDATORY.length);
+  });
+
+  it('meta_1b: THE STRUCTURAL AUDIT — the describe, the arms, the arm COUNT, the call sites and the floor', () => {
+    // The second relationship, and the one that survives a file that fails to
+    // load: the auditor masks comments AND regex literals while preserving
+    // string contents, locates `describe`/`it` by BALANCED call rather than
+    // by indentation, and detects `skip`/`todo`/`xit`/`skipIf`.
+    const findings = auditProofFile(SELF, MANDATORY);
+    expect(findings.map((f) => `${f.proof}/${f.kind}: ${f.detail}`)).toEqual([]);
+  });
+
+  it('meta_9: THE GATE IS RED-CAPABLE — every way of hollowing out a proof is refused', () => {
+    // «A green gate with no authority» is this estate's named failure, and a
+    // gate nobody has seen go red is one. Each case below is the gate's own
+    // subject, mutated in memory; the file on disk is untouched.
+    const target = 'proof_4';
+    const decl = MANDATORY.find((m) => m.id === target);
+    expect(decl).toBeDefined();
+
+    const describeAt = SELF.indexOf(`describe('PROOF 4 [${target}]`);
+    expect(describeAt).toBeGreaterThan(-1);
+
+    // (i) THE COMMENT CASE, exactly as the proof engineer measured it: delete
+    //     the whole mutation arm and append a comment naming the proof. The
+    //     old textual gate passed this.
+    const armAt = SELF.indexOf("  it('FIRES under its mutation: the residual is dropped'", describeAt);
+    expect(armAt).toBeGreaterThan(describeAt);
+    const armEnd = SELF.indexOf('\n  });', armAt) + '\n  });'.length;
+    const armDeleted = `${SELF.slice(0, armAt)}${SELF.slice(armEnd)}\n// a comment naming [${target}] and mutate('carryResidual'\n`;
+    expect(armDeleted).toContain(`[${target}]`); // the OLD gate's test, still green
+    expect(armDeleted).toContain("mutate('carryResidual'"); // and this one too
+    expect(auditProofFile(armDeleted, MANDATORY).map((f) => f.kind)).toContain('arm_missing');
+
+    // (ii) `describe.skip` — the tag is still in the file, so the textual
+    //      gate is still green and the proof still does not run.
+    const skipped = SELF.replace(`describe('PROOF 4 [${target}]`, `describe.skip('PROOF 4 [${target}]`);
+    expect(skipped).toContain(`[${target}]`);
+    expect(auditProofFile(skipped, MANDATORY).map((f) => f.kind)).toContain('disabled');
+
+    // (iii) THE HOLLOWED BODY: the arm exists, is live, is named right, and
+    //       asserts only literals.
+    const hollow =
+      SELF.slice(0, armAt) + "  it('FIRES under its mutation: the residual is dropped', () => {\n    expect(true).toBe(true);\n  });" + SELF.slice(armEnd);
+    const hollowKinds = auditProofFile(hollow, MANDATORY).map((f) => f.kind);
+    expect(hollowKinds.some((k) => k === 'unconditional_pass' || k === 'too_few_assertions' || k === 'call_site_missing')).toBe(true);
+
+    // (iv) THE ARM COUNT. An auditor reading only the FIRST matching arm
+    //      stayed green when one of proof_6's three arms was deleted —
+    //      measured, and the reason the count is DECLARED rather than
+    //      counted. Losing one red arm is losing one mutation.
+    const six = MANDATORY.find((m) => m.id === 'proof_6');
+    // FOUR since the S7-5 repair added a fourth statement-shape arm. The
+    // declared count moves with the file IN THE SAME CHANGE, which is the
+    // discipline the fail-closed coupling requires (design document §17.8).
+    expect(six?.arms).toBe(4);
+    const sixArm = SELF.indexOf("  it('FIRES under its mutation: a NEW reducer relation, discovered by its SHAPE and not its name'");
+    expect(sixArm).toBeGreaterThan(-1);
+    const sixEnd = SELF.indexOf('\n  });', sixArm) + '\n  });'.length;
+    const oneArmGone = SELF.slice(0, sixArm) + SELF.slice(sixEnd);
+    expect(auditProofFile(oneArmGone, MANDATORY).map((f) => f.kind)).toContain('arm_count_short');
+
+    // (v) AND THE UNMUTATED FILE IS CLEAN, so none of the above passes for
+    //     want of a working auditor.
+    expect(auditProofFile(SELF, MANDATORY)).toEqual([]);
+  });
+
+  it('meta_2: every mutation actually CHANGES the output — an inert mutation proves nothing', () => {
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE, OVER_SCHEDULED_INVOICE, TERMLESS_INVOICE];
+    const plans = [PLAN, SHORT_PLAN, OVER_SCHEDULED_PLAN];
+    // The over-scheduled fixture is in the portfolio because it is what makes
+    // the upper-clamp mutation bite at all; without it that mutation is
+    // measurably INERT, which is this very law's job to catch.
+    const baseline = JSON.stringify(
+      projectCustomerAging(rows, plans, AS_OF, THRESHOLDS).map((b) => [b.bucketNo, b.currencyCode, String(b.txnMinor), b.invoiceCount, String(b.baseMinor)]),
+    );
+    for (const m of MUTATIONS_EXERCISED) {
+      const plan5 = m.knob === 'outstandingSource' ? [{ ...PLAN, planLocalCollectedMinor: 300_000n }, SHORT_PLAN, OVER_SCHEDULED_PLAN] : plans;
+      // A mutation that REFUSES has changed the output as surely as one that
+      // returns different numbers — `clampToRowAmount` is refused by the
+      // canonical release law's own guard (proof 1).
+      let got: string;
+      try {
+        got = JSON.stringify(
+          projectCustomerAging(rows, plan5, AS_OF, THRESHOLDS, mutate(m.knob, m.to)).map((b) => [
+            b.bucketNo,
+            b.currencyCode,
+            String(b.txnMinor),
+            b.invoiceCount,
+            String(b.baseMinor),
+          ]),
+        );
+      } catch {
+        got = 'REFUSED';
+      }
+      expect(got, `mutation ${m.knob} -> ${String(m.to)} was inert`).not.toBe(baseline);
+    }
+  });
+
+  it('meta_3: the correct policy is the one the model ships, and nothing silently differs', () => {
+    // Every DEFECT knob is at its correct value, and the DECLARED POLICY is
+    // at the ruled one. Both halves, so neither a silently flipped defect
+    // knob nor a silently changed convention can pass.
+    expect(CORRECT_POLICY).toEqual({
+      ...Object.fromEntries(POLICY_KNOBS.map((k) => [k.knob, k.correct])),
+      settlementOrder: DECLARED_SETTLEMENT_ORDER,
+    });
+  });
+
+  it('meta_4: DETERMINISM — the answer does not depend on the order the schedule or the invoices arrive in', () => {
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
+    const expected = projectCustomerAging(rows, [PLAN, SHORT_PLAN], AS_OF, THRESHOLDS);
+    const shuffledPlan: InstallmentPlan = { ...PLAN, installments: [...SCHEDULE].reverse() };
+    expect(projectCustomerAging([...rows].reverse(), [SHORT_PLAN, shuffledPlan], AS_OF, THRESHOLDS)).toEqual(expected);
+    // Two instalments on the SAME date: `seq_no` breaks the tie, so the
+    // allocation is still a total order and still deterministic.
+    const tied: InstallmentPlan = {
+      invoiceId: 'inv-tie',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: '2026-01-01',
+      installments: [
+        { seqNo: 1, dueDate: '2026-03-01', amountTxnMinor: 60_000n },
+        { seqNo: 2, dueDate: '2026-03-01', amountTxnMinor: 40_000n },
+      ],
+    };
+    const tiedRow: OpenInvoiceRow = {
+      invoiceId: 'inv-tie',
+      currencyCode: 'SAR',
+      dueDate: '2026-03-01',
+      issueDate: '2026-02-01',
+      outstandingTxnMinor: 50_000n,
+      paidTxnMinor: 50_000n,
+      paidBaseMinor: 42_251n,
+      outstandingBaseMinor: 42_252n,
+    };
+    const a = projectInvoice(tiedRow, tied, AS_OF, THRESHOLDS);
+    const b = projectInvoice(tiedRow, { ...tied, installments: [...tied.installments].reverse() }, AS_OF, THRESHOLDS);
+    expect(a).toEqual(b);
+    // seq 2 is the later row, so it absorbs the outstanding first.
+    expect(a.map((x) => [x.seqNo, x.txnMinor])).toEqual([
+      [1, 10_000n],
+      [2, 40_000n],
+    ]);
+  });
+
+  it('meta_5: the allocation performs ZERO roundings — every figure is an exact integer of minor units', () => {
+    // There is no division, no ratio and no proration anywhere in the model,
+    // so this is checkable by construction: the source contains no `/`
+    // arithmetic over money and no rounding call.
+    const model = readFileSync(join(__dirname, 'phase4-s7-aging-reference-model.ts'), 'utf8');
+    const strip = (src: string): string =>
+      src
+        .split('\n')
+        .filter((l) => !/^\s*(\*|\/\*|\/\/)/.test(l))
+        .join('\n');
+
+    // THE ALLOCATION. The subject is `projectInvoice`'s body — the function
+    // that turns an authoritative outstanding into per-bucket amounts — and
+    // not the whole file, because the whole file also converts DATES.
+    const from = model.indexOf('export function projectInvoice(');
+    const to = model.indexOf('/** One aggregated bucket');
+    expect(from).toBeGreaterThan(-1);
+    expect(to).toBeGreaterThan(from);
+    const allocation = strip(model.slice(from, to));
+    expect(allocation).toMatch(/cumulative \+= r\.amount/); // really the allocation
+    expect(allocation).not.toMatch(/Math\.(round|floor|ceil|trunc)/);
+    expect(allocation).not.toMatch(/\btoFixed\b/);
+    expect(allocation).not.toMatch(/Number\(/);
+    // No division at all over money in the TXN allocation: no ratio, no
+    // proration, no residue to distribute, no quotient to round.
+    expect([...allocation.matchAll(/[^*/\n]\/[^*/\n]/g)].map((m) => m[0])).toEqual([]);
+
+    // THE BASE SIDE HAS EXACTLY ONE ROUNDING AND THIS FILE DOES NOT WRITE IT.
+    // It is `apRelease`'s HALF_EVEN, consumed from
+    // `packages/inventory/src/supplier-settlement.ts:89` — «the twin of
+    // `supplier_ap_release`» — because a second body would be a second
+    // financial truth (R-81, and the owner's ruling). The allocation calls
+    // `release(...)` and states no rounding of its own.
+    expect(allocation).toMatch(/release\(totalBase, totalTxn,/);
+    expect(model).toMatch(/import \{ apRelease \} from '\.\.\/\.\.\/inventory\/src\/supplier-settlement'/);
+    const modelCode = strip(model);
+    expect(modelCode).not.toMatch(/function\s+roundHalfEven/);
+    // THE SIXTH OCCURRENCE OF THE SAME LESSON, kept for the same reason as the
+    // other five: this assertion read the WHOLE FILE, so the moment the
+    // header stated the law as `R(x) = HALF_EVEN(B·x, T)` — which is what
+    // documenting a consumed law looks like — a law about implementation went
+    // red on a definition. The subject is CODE. Prose may name the law; code
+    // may not restate it.
+    expect(modelCode).not.toMatch(/HALF_EVEN/);
+    expect(model).toMatch(/HALF_EVEN\(B/); // and the prose really does name it
+    expect(CANONICAL_RELEASE).toBe(apRelease);
+
+    // The ONE rounding in the file, stated rather than hidden: `epochDay`
+    // normalises a civil date to whole days. It rounds a DATE and never an
+    // amount, and `Date.UTC` of a date-only triple is already an exact
+    // multiple of 86_400_000, so it is defensive and not load-bearing.
+    const dateFrom = model.indexOf('export function epochDay(');
+    const dateTo = model.indexOf('export function bucketOf(');
+    const dateCode = strip(model.slice(dateFrom, dateTo));
+    expect(dateCode).toMatch(/Math\.round\(ms \/ 86_400_000\)/);
+    const allRoundings = [...strip(model).matchAll(/Math\.(round|floor|ceil|trunc)/g)];
+    expect(allRoundings.length).toBe(1);
+    // Every amount the projection emits is a bigint, so no float can enter.
+    const emitted = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS);
+    for (const c of emitted) expect(typeof c.txnMinor).toBe('bigint');
+  });
+
+  it('meta_6: CONVENTION-INDEPENDENCE — every money law holds under BOTH settlement orders', () => {
+    // The claim «the seven proofs hold under either convention» is the reason
+    // the settlement order can be a DECLARED POLICY rather than a derivation
+    // (coordinator ruling 1). It is asserted here rather than stated, so that
+    // overturning the ruling is a one-constant change whose proofs still run.
+    const rows = [PLANNED_INVOICE, PLAINLESS_INVOICE, SHORT_SCHEDULE_INVOICE];
+    const plans = [PLAN, SHORT_PLAN];
+    const authoritative = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+
+    expect(SETTLEMENT_ORDERS.length).toBe(2);
+    for (const order of SETTLEMENT_ORDERS) {
+      const policy = { ...CORRECT_POLICY, settlementOrder: order };
+      const c = contributionsFor(rows, plans, AS_OF, THRESHOLDS, policy);
+      const where = `settlementOrder=${order}`;
+
+      // PROOF 1 — the buckets total the authoritative outstanding.
+      expect(sum(c), where).toBe(authoritative);
+      for (const r of rows) {
+        const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+        expect(sum(projectInvoice(r, plan, AS_OF, THRESHOLDS, policy)), where).toBe(r.outstandingTxnMinor);
+      }
+
+      // PROOF 2 — no not-yet-due scheduled amount in an overdue bucket. This
+      // holds under either order because a row is bucketed by ITS OWN date,
+      // whichever rows the convention leaves outstanding.
+      for (const x of c) {
+        if (x.scheduleDate !== null && epochDay(x.scheduleDate) >= epochDay(AS_OF)) {
+          expect(x.bucketNo, where).toBe(1);
+        }
+      }
+
+      // PROOF 3 — nothing counted twice: the keys stay unique and the arms
+      // stay a partition.
+      const keys = c.map((x) => `${x.invoiceId}|${x.origin}|${String(x.seqNo)}`);
+      expect(new Set(keys).size, where).toBe(keys.length);
+      const planned = new Set(plans.map((p) => p.invoiceId));
+      for (const x of c) if (planned.has(x.invoiceId)) expect(x.origin, where).not.toBe('whole_invoice');
+
+      // PROOF 4 — nothing disappears, including the broken sum law.
+      expect(sum(c.filter((x) => x.invoiceId === 'inv-short')), where).toBe(1_000_000n);
+      expect(sum(c.filter((x) => x.origin === 'residual')), where).toBe(800_000n);
+    }
+
+    // And the two conventions really are DIFFERENT, so this is not two runs
+    // of one thing: under newest-first the outstanding sits on the OLDEST
+    // instalments instead of the newest.
+    const oldestFirst = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, {
+      ...CORRECT_POLICY,
+      settlementOrder: 'oldest_scheduled_first',
+    });
+    const newestFirst = projectInvoice(PLANNED_INVOICE, PLAN, AS_OF, THRESHOLDS, {
+      ...CORRECT_POLICY,
+      settlementOrder: 'newest_scheduled_first',
+    });
+    expect(oldestFirst.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([4, 5, 6, 7, 8, 9, 10, 11, 12]);
+    expect(newestFirst.filter((x) => x.origin === 'installment').map((x) => x.seqNo)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    // Which is exactly reason 3 of the ruling, measured: the declared order
+    // reports LESS delinquency than the alternative.
+    const overdue = (x: readonly AgingContribution[]): bigint => sum(x.filter((y) => y.bucketNo > 1));
+    expect(overdue(oldestFirst)).toBeLessThan(overdue(newestFirst));
+  });
+
+  it('meta_7: the declared policy is declared, and the defect registry cannot grow an unevaluable knob', () => {
+    // The ruling's constant is the one place the convention lives.
+    expect(DECLARED_SETTLEMENT_ORDER).toBe('oldest_scheduled_first');
+    expect(CORRECT_POLICY.settlementOrder).toBe(DECLARED_SETTLEMENT_ORDER);
+
+    // `settlementOrder` is EXCLUDED from the defect registry on purpose,
+    // because its other value is a legitimate convention and not a defect.
+    // The exclusion is asserted so it reads as deliberate rather than as an
+    // omission, and `meta_6` is what earns it.
+    const defectKnobs = POLICY_KNOBS.map((k) => k.knob);
+    expect(defectKnobs).not.toContain('settlementOrder');
+
+    // Every knob in the registry HAS a defective value. A knob added later
+    // with an empty defective list is an exemption that can never be
+    // evaluated, so it fails here rather than passing silently.
+    for (const k of POLICY_KNOBS) {
+      expect(k.defective.length, `knob ${k.knob} has no defective value`).toBeGreaterThan(0);
+      expect(k.defective, `knob ${k.knob} lists its correct value as defective`).not.toContain(k.correct);
+    }
+
+    // And the registry covers every field of the policy record except the
+    // declared policy, so a NEW field cannot be added without either a
+    // defective value or a deliberate, asserted exclusion.
+    const policyFields = Object.keys(CORRECT_POLICY).sort();
+    expect(policyFields).toEqual([...defectKnobs, 'settlementOrder'].sort());
+  });
+
+  it('meta_8: the SUBJECT EXTRACTORS are not quietly deleting the evidence', () => {
+    // A law whose subject extractor returns nothing passes for free, and this
+    // file now has three extractors. Each is measured against a fixture whose
+    // answer is known, so a future "fix" that widens the stripping is caught
+    // here rather than by a green proof over an empty string.
+    const fixture = [
+      '-- a comment naming accounting_source_type and now() and source_to_base_rate',
+      'CREATE TABLE t (created_at TIMESTAMPTZ NOT NULL DEFAULT now());',
+      "COMMENT ON TABLE t IS 'prose naming accounting_source_type, now() and source_to_base_rate; it''s data.';",
+      'CREATE FUNCTION f() RETURNS BIGINT LANGUAGE sql AS $fn$ SELECT public.supplier_ap_release(1, 2, 0, 1) $fn$;',
+    ].join('\n');
+
+    // ROUND 11 F-8, THE INVERSION, ANSWERED BY A FIXTURE WHOSE ANSWER IS
+    // KNOWN. One `--` inside a `COMMENT ... IS '...'` literal used to delete
+    // that literal's closing quote, and from there the quote parse was one
+    // literal out of step for the rest of the file: the `CREATE INDEX` below
+    // was read as the INSIDE of a string and blanked, so a law naming it went
+    // green over nothing. The hazard is a PARITY hazard, so it is measured as
+    // one: the statement AFTER the planted comment must survive both
+    // extractors, and the prose before it must survive neither.
+    const planted = [
+      "COMMENT ON TABLE t IS 'this literal contains -- two hyphens and then more prose';",
+      'CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;',
+      "COMMENT ON INDEX t_live_uq IS 'another literal -- with another pair';",
+      'CREATE INDEX t_other_ix ON t (created_at);',
+    ].join('\n');
+    const plantedCode = sqlCodeOnly(planted);
+    const plantedSchema = sqlSchemaOnly(planted);
+    for (const [name, projected] of [
+      ['sqlCodeOnly', plantedCode],
+      ['sqlSchemaOnly', plantedSchema],
+    ] as const) {
+      expect(projected, `${name} lost a statement to a -- inside a literal`).toContain('CREATE UNIQUE INDEX t_live_uq ON t (id) WHERE status = 1;');
+      expect(projected, `${name} lost the statement after the second literal`).toContain('CREATE INDEX t_other_ix ON t (created_at);');
+    }
+    // ...and the literal's prose is still DATA to a code law, which is the
+    // property the inversion silently took away.
+    expect(plantedCode).not.toMatch(/two hyphens and then more prose/);
+    expect(plantedCode).not.toMatch(/with another pair/);
+    expect(plantedCode).toMatch(/COMMENT ON TABLE t IS ''/);
+    expect(plantedCode).toMatch(/COMMENT ON INDEX t_live_uq IS ''/);
+    // A schema law keeps the literal, and keeps ALL of it -- the old stripper
+    // truncated it at the hyphens, which is how the closing quote went.
+    expect(plantedSchema).toContain("'this literal contains -- two hyphens and then more prose'");
+
+    // `sqlSchemaOnly` drops the `--` comment and keeps both statements.
+    const schema = sqlSchemaOnly(fixture);
+    expect(schema).not.toMatch(/a comment naming/);
+    expect(schema).toMatch(/DEFAULT now\(\)/);
+    expect(schema).toMatch(/COMMENT ON TABLE/); // the literal is still there
+
+    // `sqlCodeOnly` additionally blanks the literal — and KEEPS the
+    // dollar-quoted body, which is the half that matters.
+    const code = sqlCodeOnly(fixture);
+    expect(code).not.toMatch(/prose naming/);
+    expect(code).not.toMatch(/source_to_base_rate/);
+    expect(code).not.toMatch(/accounting_source_type/);
+    expect(code).toMatch(/COMMENT ON TABLE t IS ''/); // the SHAPE survives
+    expect(code).toMatch(/DEFAULT now\(\)/); // real DDL outside a literal
+    expect(code).toMatch(/SELECT public\.supplier_ap_release\(1, 2, 0, 1\)/);
+    expect(code).toMatch(/\$fn\$/);
+    // It is not a `.replace(/.*/, '')`. The specification is mostly `--`
+    // prose, so a FRACTION of the file is the wrong measure; the right one is
+    // that every executable statement survives intact.
+    const specCode = sqlCodeOnly(SPEC);
+    expect(sqlCodeOnly(projectionSketch(SPEC))).toContain('public.supplier_ap_release(');
+    for (const stmt of [
+      'CREATE OR REPLACE FUNCTION customer_ar_aging',
+      'public.supplier_ap_release(',
+      'CREATE TABLE installment_plans',
+      'CREATE TABLE installments',
+      'CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq',
+      'CREATE CONSTRAINT TRIGGER installments_schedule_complete',
+      'ALTER TABLE installments ENABLE ROW LEVEL SECURITY',
+      'GRANT EXECUTE ON FUNCTION customer_ar_aging',
+    ]) {
+      expect(specCode, `sqlCodeOnly dropped ${stmt}`).toContain(stmt);
+    }
+
+    // `projectionSketch` returns the whole delimited body and nothing else.
+    const sketch = projectionSketch(SPEC);
+    expect(sketch).toMatch(/^\s*CREATE OR REPLACE FUNCTION customer_ar_aging/);
+    expect(sketch.trimEnd()).toMatch(/\$fn\$;$/);
+    expect(sketch).not.toMatch(/CREATE TABLE/); // the DDL above the markers
+    expect(sketch).not.toMatch(/COMMENT ON FUNCTION/); // the prose below them
+    expect(sketch.length).toBeGreaterThan(2_000);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+describe('ROUND-5 CHALLENGE C1 / H4 / H6 — the policy set, the fail-closed arm, and the ORDER law', () => {
+  /** `0075`'s own declared policy-name sets, PARSED OUT OF `0075`, never typed here. */
+  function declaredPolicySets(): { readonly ordinary: readonly string[]; readonly source: readonly string[] } {
+    const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'));
+    expect(predecessor, 'NO SUBJECT: 0075 is not on disk, so there is nothing to derive from').toBeDefined();
+    const sql = predecessor?.sql ?? '';
+    const grab = (name: string): readonly string[] => {
+      const m = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(sql);
+      expect(m, `0075 no longer declares ${name}, so this law has lost its oracle`).not.toBeNull();
+      return [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
+    };
+    return { ordinary: grab('c_ordinary'), source: grab('c_source') };
+  }
+
+  it("C1.b THE POLICY-NAME SET IS `0075`'s OWN `c_source`, DERIVED AND NOT ENUMERATED, on BOTH relations", () => {
+    // THE DEFECT THIS ARM EXISTS FOR. The first version of §2a shipped SIX
+    // policies per relation — `c_source` minus `inventory_internal_read` — a
+    // set matching NEITHER shape `0075` declares, with the omitted name taken
+    // from INSIDE the range §2a cites and immediately above the one it copied.
+    // Three readers compared the block against prose. Nothing compared it
+    // against `0075`'s own constant, which is what this does.
+    const { ordinary, source } = declaredPolicySets();
+    expect(source.length).toBe(7);
+    expect(ordinary.length).toBe(6);
+    // NON-VACUITY: the two sets really differ by the one name, or "equals
+    // c_source" would be satisfied by "equals c_ordinary" too.
+    expect(source.filter((n) => !ordinary.includes(n))).toEqual(['accounting_validator']);
+    expect(ordinary.filter((n) => !source.includes(n))).toEqual([]);
+
+    const ddl = sqlSchemaOnly(SPEC);
+    for (const relation of ['installment_plans', 'installments']) {
+      const names = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+(\\w+)\\s+ON\\s+${relation}\\b`, 'g'))].map((m) => m[1] as string).sort();
+      expect(names, `the policies on ${relation} are not 0075's declared c_source set`).toEqual([...source]);
+    }
+  });
+
+  it('C1.c the two UNCONDITIONAL reads name their own roles, so no principal is left asymmetric', () => {
+    const ddl = sqlSchemaOnly(SPEC);
+    // A policy of the right NAME granted to the wrong role satisfies the
+    // inventory above and leaves the asymmetry the inventory exists to close.
+    for (const [policy, role] of [
+      ['inventory_internal_read', 'daftar_inventory_internal'],
+      ['accounting_validator', 'daftar_accounting_internal'],
+    ] as const) {
+      const hits = [...ddl.matchAll(new RegExp(`CREATE POLICY\\s+${policy}\\s+ON\\s+(\\w+)\\s+FOR SELECT TO\\s+(\\w+)\\s+USING \\(true\\)`, 'g'))];
+      expect(hits.map((m) => m[1]).sort(), `${policy} is not on both relations in the unconditional form`).toEqual(['installment_plans', 'installments']);
+      for (const m of hits) expect(m[2], `${policy} names the wrong role`).toBe(role);
+    }
+  });
+
+  it('C1.a THE NO-PLAN ARM IS KEYED ON THE INVOICE ROW, and no routine certifies its own read reach (round 7 F1)', () => {
+    // THIRD ROUND OF ONE DEFECT. `NOT EXISTS` through the caller's row
+    // security; then a `SECURITY DEFINER` count whose own blindness read as
+    // zero; then a `pg_policy` assertion whose checked properties were not the
+    // properties that decide whether a role can see a row — satisfied by
+    // `tenant_membership` re-created with every token it looked for plus one
+    // extra conjunct, which excluded every row.
+    //
+    // `TL-P4-COORD-R38`: A READER CANNOT CERTIFY ITS OWN VISIBILITY. So the
+    // fact lives on the invoice row (specification §2c) and the arm reads it
+    // from there. The DATABASE half of this law — the three attacks
+    // reproduced and then closed on one fixture — is
+    // `tests/integration/phase4-s7-installment-fact-db.test.ts` §E. This is
+    // its text-level twin, and the text is the subject that can be edited
+    // without a database.
+    const sketch = projectionSketch(SPEC);
+    const code = sqlCodeOnly(SPEC);
+
+    // THE RETIRED GUARD IS DELETED, not weakened and not kept beside the
+    // column: a retired guard left in place is a second answer to a question
+    // with one answer, and the next author would believe the wrong one.
+    expect(code).not.toMatch(/CREATE OR REPLACE FUNCTION installment_plan_visibility_assert/);
+    expect(code).not.toContain('installment.plan_guard_blind');
+    expect(code).not.toContain('installment_plan_absence_guard');
+    expect(code).not.toContain('installment.plan_invisible');
+    // AND NOTHING READS `pg_policy` AT READ TIME ANY MORE. The whole family of
+    // repairs this closes is "inspect the policy catalogue from inside the
+    // reader", so its absence from the read path is the law.
+    // ...and the absence is judged over CODE. `projectionSketch` strips only a
+    // comment that starts at column 0, so the body's own indented `--`
+    // sentences survive — and this law's first version went red on its own
+    // explanation of why there is no `pg_policy` read. The subject of a code
+    // law is code: the fifth occurrence of this file's oldest lesson, now in a
+    // law written to retire a guard.
+    const sketchCode = sketch
+      .split('\n')
+      .map((l) => l.replace(/^\s*--.*$/, ''))
+      .join('\n');
+    expect(sketchCode).toContain('customer_ar_aging');
+    expect(sketchCode).not.toContain('pg_policy');
+    expect(sketchCode).not.toContain('polroles');
+    expect(sketchCode).not.toContain('has_table_privilege(');
+
+    // THE ARM IS KEYED ON THE COLUMN, and the `NOT EXISTS` it replaced is gone
+    // from the arm. Keeping both would reintroduce the relation whose
+    // invisibility is the defect.
+    expect(sketchCode).toContain('WHERE NOT oi.flagged');
+    expect(sketchCode).toContain('x.has_active_installment_plan AS flagged');
+    // ...over CODE again, and this is the SECOND time inside this one law: the
+    // `no_plan` CTE's own comment QUOTES the `NOT EXISTS` it replaced, because
+    // recording what was removed is how the next author learns not to put it
+    // back. A law that read that sentence as the thing itself would force the
+    // explanation out of the file.
+    expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM active_plan/);
+
+    // THE FIVE REFUSALS THAT REMAIN, each with its own name — a law that
+    // asserts "it refused" rather than "it refused THIS" is satisfied by a
+    // routine that refuses everything.
+    //
+    // THREE OF THEM UNTIL `TL-P4-COORD-R50`, AND THREE WAS NOT ENOUGH. The
+    // fourth is the bound the reader's own arithmetic is predicated on — at
+    // most one active plan per invoice — measured as a COUNT over the rows
+    // the caller can see, because with the partial unique index present but
+    // `indisvalid`/`indisready` false two ORDINARY CONCURRENT plan creations
+    // committed two active plans and this reader then served the
+    // pre-installment figure byte-identical to the no-plan answer with no
+    // refusal at all. The fifth is `pg_trigger.tgenabled` over the seven
+    // triggers that maintain the fact and judge obligation (a): that column
+    // occurred ZERO times in this specification, so all seven could be
+    // disabled with the apply-time ratchet still reporting OK.
+    expect(code).toContain('installment.plan_fact_unreadable');
+    expect(code).toContain('installment.plan_fact_unflagged');
+    expect(code).toContain('installment.plan_schedule_unreadable');
+    expect(code).toContain('installment.plan_active_unbounded');
+    expect(code).toContain('installment.plan_fact_untrusted');
+    expect(sketch).toContain('installment_plan_fact_assert(');
+
+    // AND THE REFUSAL IS TOLD FIVE NUMBERS, never asked about a row. Round 6
+    // pinned `pronargs = 0` for that reason; this pins the TYPES instead,
+    // because five `bigint`s name no row, no business and no tenant.
+    expect(code).toMatch(
+      /CREATE OR REPLACE FUNCTION installment_plan_fact_assert\(p_unreadable_plan BIGINT,\s*p_unflagged_plan BIGINT,\s*p_unreadable_schedule BIGINT,\s*p_unbounded_plan BIGINT,\s*p_untrusted_fact BIGINT\)\s*RETURNS BOOLEAN\s*LANGUAGE plpgsql STABLE SECURITY INVOKER/,
+    );
+    expect(code).not.toMatch(/installment_plan_fact_assert\s*\([^)]*UUID/);
+    expect(code).toContain(
+      "p.proargtypes = ARRAY['bigint'::regtype, 'bigint'::regtype, 'bigint'::regtype,\n                                 'bigint'::regtype, 'bigint'::regtype]::oidvector",
+    );
+
+    // THE FOURTH COUNT IS A `count(*)` GROUPED PER INVOICE AND NOT A `FILTER`
+    // OVER THE JOIN, because the join is exactly what multiplies in the state
+    // it measures: a `FILTER` would count the invoice once per active plan
+    // and the number in the refusal would be the harm's own doubling.
+    //
+    // AND ITS SCAN CARRIES NO `status` QUALIFIER (`TL-P4-COORD-R52` ordered
+    // item 1, F-2). It used to read `visible_plan`, whose `WHERE` restricts
+    // `status = 'active'` -- the PREDICATE OF
+    // `installment_plans_one_active_per_invoice_uq` itself -- so the count
+    // that measures whether that index is enforcing was ANSWERED BY it and
+    // read one where the heap held two. The status test is in a `FILTER`,
+    // which a partial index cannot be the implication source for.
+    expect(sketchCode).toMatch(/GROUP BY p2\.invoice_id\s*HAVING pg_catalog\.count\(\*\) FILTER \(WHERE p2\.status = 'active'\) > 1/);
+    expect(sketchCode, 'the bound count reads visible_plan again, which is index-served').not.toMatch(/FROM visible_plan v2/);
+    // AND THE FIFTH READS `tgenabled` FROM `pg_trigger`, joined through
+    // `pg_proc` BY NAME: a `::regprocedure` cast RAISES when the routine is
+    // absent, which would turn a missing routine into an unrelated 42883 from
+    // the middle of an arithmetic CTE.
+    expect(sketchCode).toContain("t.tgenabled = 'O'");
+    expect(sketchCode).toContain('pg_catalog.pg_trigger');
+    expect(sketchCode).not.toMatch(/installment_plan_fact_sync\(\)'::regprocedure[\s\S]{0,80}tgfoid/);
+    // `GREATEST` IS SYNTAX AND NOT A FUNCTION, exactly like `COALESCE`, so it
+    // may not be schema-qualified — the one trap this estate records about the
+    // pinned-search_path idiom, and the reason this law exists beside the one
+    // above it.
+    expect(sketchCode).not.toContain('pg_catalog.greatest');
+    // A COUNT IS NOT AN IDENTITY (`TL-P4-COORD-R52` ordered item 3, F-3). The
+    // fifth count was `greatest(0, 7 - (the enabled ones on four routines))`,
+    // which pins neither `tgname` nor `tgrelid` and was therefore defeated by
+    // COMPENSATION: one conforming extra trigger paid for one disabled real
+    // one, the count returned to 7, and the reader served the full figure.
+    // The seven are now ENUMERATED, each pinned to its relation, its name and
+    // its routine, and the count is of the ones NOT satisfied -- so nothing
+    // is subtracted and nothing can pay.
+    expect(sketchCode, 'the subtractable trigger count is back').not.toContain('greatest(0, 7 -');
+    for (const [relname, tgname, proname] of [
+      ['installment_plans', 'installment_plans_fact_sync', 'installment_plan_fact_sync'],
+      ['installment_plans', 'installment_plans_active_exclusive', 'installment_plan_active_exclusive'],
+      ['installment_plans', 'installment_plans_fact_verified', 'installment_plan_fact_verify'],
+      ['invoices', 'invoices_installment_fact_agrees', 'installment_plan_fact_verify'],
+      ['installment_plans', 'installment_plans_schedule_complete', 'installment_schedule_verify'],
+      ['installments', 'installments_schedule_complete', 'installment_schedule_verify'],
+      ['invoices', 'invoices_installment_schedule_complete', 'installment_schedule_verify'],
+    ] as const) {
+      expect(sketchCode, `the read-time trigger law does not enumerate ${tgname}`).toMatch(new RegExp(`'${relname}',\\s*'${tgname}',\\s*'${proname}'`));
+    }
+    // the four things it pins per row, and the `NOT EXISTS` that makes an
+    // absence the thing counted
+    expect(sketchCode).toContain('c.relname = e.relname AND t.tgname = e.tgname');
+    expect(sketchCode).toContain("f.proname = e.proname AND t.tgenabled = 'O'");
+
+    // THE FACT IS MAINTAINED AND VERIFIED BY THIS SLICE, on both sides, and
+    // the verifier is DEFERRED while the writer is NOT.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_fact_sync\s+AFTER INSERT OR UPDATE OR DELETE ON installment_plans\s+FOR EACH ROW/);
+    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER installment_plans_fact_verified[\s\S]{0,200}DEFERRABLE INITIALLY DEFERRED/);
+    expect(code).toMatch(/CREATE CONSTRAINT TRIGGER invoices_installment_fact_agrees\s+AFTER INSERT OR UPDATE OF has_active_installment_plan ON invoices/);
+    expect(code).toContain('installment.plan_fact_desynchronised');
+    expect(code).toContain('installment.plan_fact_unwritable');
+
+    // THE WRITE AUTHORITY IS ONE COLUMN AND ONE PRINCIPAL.
+    expect(code).toContain('GRANT UPDATE (has_active_installment_plan) ON invoices TO daftar_accounting_internal;');
+    expect(code).not.toMatch(/GRANT UPDATE ON invoices/);
+
+    // ...and the projection ITSELF stays INVOKER and STABLE: R-P4-07 makes a
+    // reader run as its caller, and making the reader a DEFINER would have
+    // been the other, worse repair.
+    expect(sketch).toMatch(/customer_ar_aging\([\s\S]*?LANGUAGE sql STABLE/);
+    expect(sketch).not.toContain('SECURITY DEFINER');
+  });
+
+  it('C1.b THE SCHEDULE RELATION IS JUDGED BY ARITHMETIC, not by existence (round 8 F1-a)', () => {
+    const code = sqlCodeOnly(SPEC);
+    const sketch = projectionSketch(SPEC);
+    const sketchCode = sketch
+      .split('\n')
+      .map((l) => l.replace(/^\s*--.*$/, ''))
+      .join('\n');
+
+    // `TL-P4-COORD-R41`: direction (d) was applied to ONE of the TWO second
+    // relations. `installments` is the other one, and its PARTIAL invisibility
+    // was invisible to a `NOT EXISTS` — which fires only when EVERY row is
+    // hidden. The replacement is section 3 obligation (a) read backwards: the
+    // declared schedule of an active plan sums EXACTLY to the invoice's own
+    // stored total, so a visible sum that differs is proof of hidden rows.
+    expect(sketchCode).toContain('visible_schedule AS (');
+    expect(sketchCode).toContain('x.total_txn_minor AS declared_total');
+    expect(sketchCode).toMatch(/AND \(s\.visible_rows = 0\s*\n\s*OR s\.visible_total <> i\.declared_total\)/);
+    // THE OPERAND COMES OFF THE GOVERNING ROW, not from the money call. The
+    // obligation is written against the COLUMN and the constraint trigger
+    // judges the COLUMN, so comparing against `paid + outstanding` would make
+    // two correct figures disagreeing look like a hidden row.
+    expect(sketchCode).not.toMatch(/visible_total <> oi\.total_txn_minor/);
+    // AND THE RETIRED EXISTENCE TEST IS GONE FROM THE CODE. Judged over code,
+    // because the CTE's own comment DESCRIBES the retired shape — it must not
+    // QUOTE it, since section 2b's ratchet searches `prosrc` and `prosrc`
+    // holds comments too. Sixth occurrence of this file's oldest lesson.
+    expect(sketchCode).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installments/);
+
+    // THE RATCHET IS NO LONGER A SUBSTRING TEST AT ALL, and this is where the
+    // change lands (`TL-P4-COORD-R46`, extended by `TL-P4-COORD-R50` ordered
+    // item 4). The previous version of this law pinned
+    // `c.code LIKE '%visible_schedule%'` and friends — a comment-stripped
+    // `prosrc` search — and the round-11 challenger defeated the stripped
+    // version too, with no comment and no dead code: a VARIABLE RENAME. The
+    // binding law is that a `LIKE` cannot establish a property of code and a
+    // `NOT LIKE` cannot establish the ABSENCE of one, because an identifier is
+    // also a string, and no amount of stripping repairs that.
+    //
+    // So the apply-time instrument is now a BODY IDENTITY over catalogue DATA:
+    // `sha256(convert_to(p.prosrc, 'UTF8'))` compared against the digest this
+    // migration ships, for each of the five routines. A renamed body has a
+    // different digest whatever it is named, and the property the old ratchet
+    // was reaching for is proved BY EXECUTION in
+    // `tests/integration/phase4-s7-installment-fact-db.test.ts` §F6 and
+    // `tests/integration/phase4-s7-installment-concurrency-db.test.ts` §C.
+    // H7 below holds the digests current; this law holds the SHAPE present.
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+    expect(code).toContain('c_bodies');
+    expect(code, 'a substring ratchet came back').not.toMatch(/\bcode\s+(NOT\s+)?LIKE\s+'%/);
+    expect(code, 'a raw prosrc substring law came back').not.toMatch(/\bprosrc\s+(NOT\s+)?LIKE\s+'/);
+
+    // AND THE COMPLETENESS THE TEST RESTS ON IS DECLARED, not assumed: every
+    // hidden row moves the sum only because no instalment may be worth zero.
+    expect(code).toContain('CHECK (amount_txn_minor >= 1)');
+  });
+
+  it("C1.c THE FACT'S WRITER DOES NOT DECIDE IT BY A READ THAT CAN BE BLINDED (round 8 F1-b)", () => {
+    const code = sqlCodeOnly(SPEC);
+
+    // `TL-P4-COORD-R41`: the sync decided the fact with a `SECURITY DEFINER`
+    // `EXISTS` over `installment_plans`, and the verifier repeated the
+    // IDENTICAL read — so the COMMIT-time check compared a blinded reading
+    // against a column written from the same blinded reading, and the two
+    // could not disagree. `installment_plans` is FORCE ROW LEVEL SECURITY, so
+    // no principal short of `rolbypassrls` has an unblindable read of it.
+    expect(code).toContain('ALTER TABLE installment_plans FORCE ROW LEVEL SECURITY;');
+
+    // ROUND 9'S FLOOR IS GONE, AND THAT IS THE SUBJECT OF THIS LAW NOW
+    // (`TL-P4-COORD-R43`, F1-c). `v_asserted` was scoped to «the handed row
+    // asserts an ACTIVE plan on this invoice» while the write it guarded was
+    // scoped to the invoice, so a NON-ACTIVE plan write carried NO floor and
+    // still took its value from the blindable recomputation. The challenger
+    // committed `{flag: false, truth: true, plans: 2}` through it with an
+    // ordinary cancelled plan, which the PARTIAL unique index permits.
+    const sync = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_sync()'));
+    const syncBody = sync.slice(0, sync.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_verify()'));
+    expect(syncBody, 'round 9 floor still present').not.toContain('v_asserted');
+
+    // THE WRITE SET IS DERIVED FROM THE TRANSITION, from `NEW.status` and
+    // `OLD.status` and nothing read, and it is EMPTY for a transition that
+    // determines nothing.
+    expect(syncBody).toMatch(/v_is\s*:=\s*\(NEW\.status = 'active'\);/);
+    expect(syncBody).toMatch(/v_was\s*:=\s*\(OLD\.status = 'active'\);/);
+    expect(syncBody).toMatch(/v_invoices UUID\[\]\s*:= ARRAY\[\]::UUID\[\];/);
+    // The value written is `v_value`, taken from the derived array, and never
+    // `v_state` — which is what makes the recomputation unable to decide.
+    expect(syncBody).toMatch(/SET has_active_installment_plan = v_value/);
+    expect(syncBody, 'the recomputation is still writing the fact').not.toMatch(/SET has_active_installment_plan = v_state/);
+
+    // THE RECOMPUTATION SURVIVES AS A CROSS-CHECK THAT MAY ONLY REFUSE, AND
+    // ITS TWO DIRECTIONS NOW CARRY DIFFERENT NAMES (`TL-P4-COORD-R46`, F-4).
+    // One `IS DISTINCT FROM` under one name was a FALSE DIAGNOSIS in one of
+    // the two directions, because a blinded `EXISTS` can only read `false`:
+    // «derived false, recomputed true» is therefore never blindness and is
+    // always another active plan, so it raises `plan_active_conflict`, while
+    // «derived true, recomputed false» is the blind one and keeps
+    // `plan_fact_blind`. Asserted as the two branches, because a single
+    // branch is exactly what this law is now against.
+    // AND IT IS A `count(*)`, NOT AN `EXISTS` (`TL-P4-COORD-R50` ordered item
+    // 1). `EXISTS` collapses ONE active plan and TWO into one answer, and «at
+    // most one» is precisely the premise that makes the derivation above
+    // total — so for eleven rounds the writer could not tell the state its
+    // premise forbids from the state its premise asserts, and with the index
+    // not enforcing two concurrent writers committed and the reader served
+    // the no-plan figure in silence. The count can tell them apart, and it is
+    // taken AFTER the invoice row is locked, because a count taken before the
+    // lock is a count taken on the snapshot the statement started with.
+    expect(syncBody).toMatch(/SELECT pg_catalog\.count\(\*\) INTO v_active[\s\S]{0,300}AND p\.status = 'active';/);
+    expect(syncBody).toMatch(/v_state := \(v_active > 0\);/);
+    expect(syncBody, 'the blindable EXISTS came back').not.toMatch(/SELECT EXISTS \(SELECT 1 FROM public\.installment_plans p[\s\S]{0,200}INTO v_state;/);
+    // THE LOCK PRECEDES THE COUNT, in this body, in this order.
+    const lockAt = syncBody.indexOf('FOR NO KEY UPDATE');
+    const countAt = syncBody.indexOf('SELECT pg_catalog.count(*) INTO v_active');
+    expect(lockAt, 'the sync takes no invoice row lock of its own').toBeGreaterThan(-1);
+    expect(lockAt, 'the count precedes the lock, so it reads the pre-wait snapshot').toBeLessThan(countAt);
+    expect(syncBody).toContain('installment.plan_active_unbounded');
+    expect(syncBody, 'the two directions are back under one name').not.toMatch(/IF v_state IS DISTINCT FROM v_value THEN/);
+    expect(syncBody).toMatch(/IF v_state AND NOT v_value THEN/);
+    expect(syncBody).toMatch(/IF v_value AND NOT v_state THEN/);
+    expect(code).toContain('installment.plan_fact_blind');
+    expect(code).toContain('installment.plan_active_conflict');
+    // AND THE EXCLUSION IS JUDGED BEFORE THE ROW IS WRITTEN, which is the half
+    // of F-4's repair that makes the OTHER heap order give the same name.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_active_exclusive\s*\n\s*BEFORE INSERT OR UPDATE ON installment_plans/);
+    expect(code).toContain('CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER');
+
+    // AND THE WRITER DETECTS ITS OWN BLINDNESS (F1-c prime): it reads the row
+    // it was HANDED, by primary key, on every INSERT and UPDATE. That row
+    // exists in this snapshot, so «I cannot find it» has a known wrong answer.
+    expect(syncBody).toMatch(/WHERE p\.business_id = NEW\.business_id AND p\.id = NEW\.id/);
+    expect(syncBody).toMatch(/IF TG_OP <> 'DELETE' THEN/);
+
+    // THE DERIVATION RESTS ON THE PARTIAL UNIQUE INDEX, and the apply-time
+    // block refuses the migration unless that index is there in that shape.
+    expect(code).toContain("c.relname = 'installment_plans_one_active_per_invoice_uq'");
+    expect(code).toContain("pg_get_expr(x.indpred, x.indrelid) = '(status = ''active''::text)'");
+
+    // AND THE DEFERRED VERIFIER CARRIES NO HANDED-ROW FLOOR, because deferral
+    // makes the handed row stale: an INSERT-then-DELETE in one transaction
+    // still fires the INSERT's event with `NEW.status = 'active'` against a
+    // correctly-false flag. The stale case and the blinded case cannot be told
+    // apart without asking the forbidden question, so the floor lives on the
+    // IMMEDIATE writer and this is recorded rather than papered over.
+    const verify = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_plan_fact_verify()'));
+    const verifyBody = verify.slice(0, verify.indexOf('CREATE TRIGGER'));
+    expect(verifyBody).not.toContain('v_asserted');
+    expect(verifyBody).toContain('installment.plan_fact_desynchronised');
+
+    // THE RATCHET FOR THE WRITE SIDE IS NO LONGER A SUBSTRING TEST
+    // (`TL-P4-COORD-R46` F-1, extended by `TL-P4-COORD-R50` ordered item 4).
+    //
+    // THE HISTORY, BECAUSE IT IS THE ARGUMENT. Round 10's challenger
+    // satisfied the raw version of these four tests with `NEW.status`,
+    // `OLD.status` and `plan_fact_blind` appearing only INSIDE COMMENTS of an
+    // otherwise round-9 body. Round 11 stripped the comments first — and was
+    // then defeated AGAIN, with no comment and no dead code at all: a
+    // VARIABLE RENAME (`v_asserted` to `v_floor`, plus one live `OLD.status`
+    // assignment) installs round 9's behaviour and satisfies every one of
+    // these four. That is not a gap to patch; it is the ruling: an identifier
+    // is a string, so a `LIKE` establishes nothing about code and a
+    // `NOT LIKE` establishes nothing about its absence, under any amount of
+    // stripping.
+    //
+    // THE TWO HONEST INSTRUMENTS REPLACE IT, and both are now in the tree:
+    //   * CATALOGUE DATA — `sha256(convert_to(p.prosrc, 'UTF8'))` against the
+    //     digest `c_bodies` ships, which no rename survives (§C1 of
+    //     `tests/integration/phase4-s7-installment-concurrency-db.test.ts`
+    //     plants the renamed body and measures the refusal);
+    //   * EXECUTION — §F1-b, §F1-c, §F1-c′, §F5 and the new §F6 of
+    //     `tests/integration/phase4-s7-installment-fact-db.test.ts`, which
+    //     INSTALL the pre-repair bodies, including the renamed one, and
+    //     require the refusal from the running database.
+    // So what this law now asserts is that the substring instrument is GONE
+    // and the digest instrument is present.
+    expect(code, 'a code-substring ratchet came back on the write side').not.toMatch(/\bcode\s+(NOT\s+)?LIKE\s+'%/);
+    // SCOPED TO THE OPERATOR WITH ITS PATTERN, NOT TO THE WORDS -- the EIGHTH
+    // time in this slice that explaining a removal has tripped the test for
+    // the removal, and measured here rather than guessed: the digest law's own
+    // `RAISE` message explains, in prose inside a dollar-quoted body that
+    // `sqlCodeOnly` correctly passes through, that «a prosrc LIKE cannot
+    // establish a property of code». A bare `/prosrc LIKE/` therefore reds on
+    // the very statement that enforces the absence. A real substring test is
+    // `prosrc LIKE '...'` -- the operator followed by a LITERAL -- so that is
+    // what is forbidden, and the explanation may say the words.
+    expect(code, 'a raw prosrc substring law is back on the write side').not.toMatch(/\bprosrc\s+(NOT\s+)?LIKE\s+'/);
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+    expect(code).toContain("['public.installment_plan_fact_sync()',");
+    // AND THE SPECIFICATION SAYS WHAT THE INSTRUMENT IS AND WHAT IT COSTS, in
+    // the refusal a future applier reads, so the limit travels with the law.
+    expect(SPEC).toContain('THE DIGEST COUPLING');
+
+    // AND THE ENUMERATION `R41` ORDERED IS IN THE FILE, with the one relation
+    // whose invisibility is NOT observable named as such rather than given an
+    // invented check.
+    expect(SPEC).toContain('THE COMPLETENESS ENUMERATION');
+    expect(SPEC).toContain('SAID PLAINLY: THIS SLICE DOES NOT DETECT IT.');
+  });
+
+  it("C1 the tenant divergence is now UNREACHABLE, and obligation (e)'s stated reason was measurably false (TL-P4-COORD-R43, F2)", () => {
+    const code = sqlCodeOnly(SPEC);
+
+    // OBLIGATION (e) WAS A DEFERRED COMPARISON, justified by the claim that no
+    // composite key existed for a foreign key to name. THE CLAIM WAS FALSE,
+    // and it is false in the FROZEN estate, which is read here rather than
+    // cited: `0016` makes `businesses (tenant_id, id)` UNIQUE, and the edge
+    // onto it is already carried by dozens of relations including `invoices`.
+    const uq = MIGRATIONS.filter((m) => /ADD CONSTRAINT businesses_tenant_id_uq UNIQUE \(tenant_id, id\)/.test(m.sql));
+    expect(uq.length, 'the composite key obligation (e) said did not exist is not in the tree after all').toBe(1);
+    const edges = MIGRATIONS.reduce(
+      (n, m) => n + [...m.sql.matchAll(/FOREIGN KEY \(tenant_id, business_id\) REFERENCES businesses \(tenant_id, id\)/g)].length,
+      0,
+    );
+    expect(edges, 'the tenant edge is not an estate-wide pattern').toBeGreaterThan(50);
+    expect(
+      MIGRATIONS.some((m) => /CONSTRAINT invoices_tenant_fk FOREIGN KEY \(tenant_id, business_id\) REFERENCES businesses \(tenant_id, id\)/.test(m.sql)),
+    ).toBe(true);
+
+    // SO THE EDGE IS CARRIED, BY BOTH RELATIONS, and the plan's tenant is the
+    // invoice's by construction: `business_id` is already pinned to the
+    // invoice's, and one `business_id` has exactly one `tenant_id`.
+    expect(code).toContain('CONSTRAINT installment_plans_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)');
+    expect(code).toContain('CONSTRAINT installments_tenant_fk FOREIGN KEY (tenant_id, business_id) REFERENCES businesses (tenant_id, id)');
+
+    // AND THE LATE CHECK IS DELETED RATHER THAN KEPT BESIDE THE CONSTRAINT
+    // THAT SUBSUMES IT, for the reason this file states about the retired
+    // visibility guard: a check that can no longer fire is a second answer.
+    //
+    // SCOPED TO THE VERIFIER'S OWN BODY, because the apply-time block's RATCHET
+    // quotes the retired message in order to refuse it, and that quotation
+    // lives inside a dollar-quoted body that `sqlCodeOnly` passes through
+    // verbatim. Asserting the absence over the whole file would be refuted by
+    // the very statement that enforces the absence — the seventh time in this
+    // slice that explaining a removal has tripped the test for the removal.
+    const verifier = code.slice(code.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()'));
+    const verifierBody = verifier.slice(0, verifier.indexOf('CREATE CONSTRAINT TRIGGER'));
+    expect(verifierBody).not.toContain('(e) the plan tenant');
+    expect(verifierBody).not.toContain('v_plan_tenant');
+    expect(verifierBody).not.toContain('v_tenant_mismatch');
+    // ...and the apply-time block refuses a tree where any of them comes back
+    // — BY BODY IDENTITY and no longer by `p.prosrc LIKE '%(e) the plan
+    // tenant%'`, which `TL-P4-COORD-R50` ordered item 4 retires: a `NOT LIKE`
+    // cannot establish the absence of a property, since the absent thing can
+    // be spelled another way, and a `LIKE` for the ratchet's own token can be
+    // satisfied by a body that does nothing. The digest of
+    // `installment_schedule_verify()` is pinned in `c_bodies`, so ANY body
+    // other than the one shipped here — including one that brings the retired
+    // guard back under any spelling — refuses the migration.
+    expect(code).toContain("['public.installment_schedule_verify()',");
+    expect(code).toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+  });
+
+  it('H6 THE ORDER LAW IS EXECUTABLE — the verifier is DEFINED ABOVE the triggers that execute it', () => {
+    // §20.1 claimed an `ORDER_NOTE` comment meant "the next editor cannot
+    // reorder them back". A comment cannot do that. `CREATE CONSTRAINT
+    // TRIGGER` resolves `EXECUTE FUNCTION` AT CREATE TIME and the file is one
+    // implicit transaction, so the reversed order applied NOTHING (42883).
+    //
+    // ROUND 6, F4, AND IT IS THE SAME LESSON A SIXTH TIME. This law was
+    // written over the RAW SPEC, so the challenger satisfied it with a
+    // COMMENT: plant a mention of the `CREATE` above, move the real `CREATE`
+    // below its triggers, and all 94 cases passed — a law written to refuse
+    // "a comment cannot do that" was itself satisfied by a comment.
+    //
+    // THE SUBJECT OF A CODE LAW IS CODE. `sqlCodeOnly` is this file's OWN
+    // extractor, already used by every other code law here and already
+    // mutation-tested: `sqlSchemaOnly` strips `--` and `/* */` EVERYWHERE,
+    // dollar-quoted bodies included, and `sqlCodeOnly` then blanks the
+    // single-quoted literals, so a mention planted in a comment and a mention
+    // planted in a `COMMENT ON ... IS '...'` string both disappear.
+    //
+    // THE BOUND, STATED. A mention inside a DOLLAR-QUOTED BODY survives, because
+    // `sqlCodeOnly` keeps those bodies verbatim so the projection can still be
+    // judged in full. That residue is a string literal inside plpgsql — e.g. a
+    // `RAISE EXCEPTION` text — and §2b's end-state block is what closes it for
+    // real: it reads `pg_trigger` and `pg_proc` from the LIVE CATALOGUE, where
+    // no arrangement of comments or literals can put a trigger before the
+    // function it executes.
+    const code = sqlCodeOnly(SPEC);
+    const fn = code.indexOf('CREATE OR REPLACE FUNCTION installment_schedule_verify()');
+    const trg = code.indexOf('CREATE CONSTRAINT TRIGGER');
+    const own = code.indexOf('ALTER FUNCTION installment_schedule_verify() OWNER TO');
+    expect(fn, 'the verifier definition is not in the specification at all').toBeGreaterThan(-1);
+    expect(trg, 'no constraint trigger is in the specification at all').toBeGreaterThan(-1);
+    expect(own, 'the authority transfer is not in the specification at all').toBeGreaterThan(-1);
+    // function, THEN triggers, THEN the authority transfer — `0075:632-634`.
+    expect(fn).toBeLessThan(trg);
+    expect(trg).toBeLessThan(own);
+    // and the note that explains why is still there, as documentation of a
+    // law that is now asserted rather than as the law itself.
+    expect(SPEC).toContain('ORDER_NOTE');
+  });
+
+  it('THE ADOPTED ONE-SIDED MUTANTS ARE EVALUATED — the exact invariant refuses what each half accepts', () => {
+    // FOUND BY LINT, WHICH IS WHY THE RULE IS NOT NOISE.
+    // `@typescript-eslint/no-unused-vars` reported `ONE_SIDED_INVARIANTS` and
+    // `scheduleInvariantVerdict` imported and never used: an oracle ADOPTED
+    // from the proof engineer and never wired. That is the estate's named
+    // failure shape — AN EXEMPTION THAT IS NEVER EVALUATED — sitting in an
+    // import list, and silencing it with a `_` prefix would have preserved it
+    // exactly. So it is wired, not quieted.
+    //
+    // The DATABASE half of this law is the one that matters and it is measured
+    // in `tests/integration/phase4-s7-installment-aging-live.test.ts` §B1/§B2,
+    // where the real verifier's single `<>` refuses below and above at COMMIT.
+    // This is its model-level twin: the two one-directional verifiers each
+    // accept a case the exact one refuses, in OPPOSITE directions, so neither
+    // inequality can be relaxed without a case going green.
+    expect(ONE_SIDED_INVARIANTS.map((m) => m.name)).toEqual(['at_most_total', 'at_least_total']);
+
+    const exactTotal = PLANNED_INVOICE.paidTxnMinor + PLANNED_INVOICE.outstandingTxnMinor;
+    // THE EXACT CASE: everything accepts it, which is precisely why a one-sided
+    // verifier looks correct on every well-formed fixture.
+    expect(scheduleInvariantVerdict(PLAN, exactTotal).verdict).toBe('exact');
+    expect(scheduleInvariantVerdict(PLAN, exactTotal).excessTxnMinor).toBe(0n);
+    for (const m of ONE_SIDED_INVARIANTS) expect(m.fn(PLAN, exactTotal), `${m.name} refuses the exact schedule`).toBe(true);
+    expect(scheduleInvariantAccepts(PLAN, exactTotal)).toBe(true);
+
+    // ABOVE: the challenger's own counterexample. `at_most_total` refuses it;
+    // `at_least_total` ACCEPTS it, and that acceptance is the defect.
+    const overTotal = OVER_SCHEDULED_INVOICE.paidTxnMinor + OVER_SCHEDULED_INVOICE.outstandingTxnMinor;
+    const above = scheduleInvariantVerdict(OVER_SCHEDULED_PLAN, overTotal);
+    expect(above.verdict).toBe('above');
+    expect(above.excessTxnMinor).toBe(900_000n);
+    expect(scheduleInvariantAccepts(OVER_SCHEDULED_PLAN, overTotal), 'the EXACT invariant must refuse it').toBe(false);
+    expect(ONE_SIDED_INVARIANTS[1]?.fn(OVER_SCHEDULED_PLAN, overTotal), 'at_least_total must ACCEPT the over-scheduled plan').toBe(true);
+    expect(ONE_SIDED_INVARIANTS[0]?.fn(OVER_SCHEDULED_PLAN, overTotal)).toBe(false);
+
+    // BELOW: the mirror. `at_least_total` refuses it; `at_most_total` ACCEPTS
+    // it, and the shortfall is then carried silently as residual.
+    const under: InstallmentPlan = Object.freeze({
+      ...PLAN,
+      installments: Object.freeze(PLAN.installments.slice(0, -1)),
+    });
+    const below = scheduleInvariantVerdict(under, exactTotal);
+    expect(below.verdict).toBe('below');
+    expect(below.excessTxnMinor).toBe(-100_000n);
+    expect(scheduleInvariantAccepts(under, exactTotal), 'the EXACT invariant must refuse it').toBe(false);
+    expect(ONE_SIDED_INVARIANTS[0]?.fn(under, exactTotal), 'at_most_total must ACCEPT the under-scheduled plan').toBe(true);
+    expect(ONE_SIDED_INVARIANTS[1]?.fn(under, exactTotal)).toBe(false);
+
+    // AND THE TWO DIRECTIONS ARE REALLY OPPOSITE — each mutant is defeated by
+    // exactly one of the two cases, so one comparison cannot cover both and
+    // the verifier's `<>` is load-bearing rather than stylistic.
+    const defeatedBy = ONE_SIDED_INVARIANTS.map((m) => [m.fn(OVER_SCHEDULED_PLAN, overTotal), m.fn(under, exactTotal)].filter((ok) => !ok).length);
+    expect(defeatedBy).toEqual([1, 1]);
+  });
+
+  it('H3 THE CREATE BRACKET IS PRESENT AND BALANCED, and the owner transfer is LAST', () => {
+    // TWO MORE DEFECTS THE EXECUTOR FOUND, and neither is visible to a
+    // superuser — which is the whole of challenger H3. Applied by the real
+    // deployment principal `daftar_migrator`:
+    //   * `ALTER FUNCTION ... OWNER TO r` requires `r` to hold CREATE on the
+    //     schema, and `daftar_accounting_internal` holds only USAGE
+    //     (`bootstrap.sql:198`) -> `42501 permission denied for schema public`;
+    //   * and with the transfer issued BEFORE the function's own `REVOKE` and
+    //     `COMMENT`, the applier is no longer the owner and may not issue them
+    //     -> `42501 must be owner of function installment_schedule_verify`.
+    // Three rounds of applying this file as `postgres` could not see either.
+    const code = sqlCodeOnly(SPEC);
+    const lends = [...code.matchAll(/GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;/g)];
+    const takebacks = [...code.matchAll(/REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;/g)];
+    const transfers = [...code.matchAll(/ALTER FUNCTION (\w+)\([^)]*\) OWNER TO daftar_accounting_internal;/g)];
+    // Every transfer is bracketed, and a bracket that only opens is a
+    // permanent widening of a role's authority over the schema.
+    expect(transfers.length, 'no owner transfer in the specification at all').toBeGreaterThan(0);
+    expect(lends.length, 'the lends and the take-backs are not balanced').toBe(takebacks.length);
+    // ROUND 7 F1: ONE bracket may now hold SEVERAL transfers — §3a lends once
+    // and hands over both fact routines — so the k-th transfer is no longer
+    // the k-th bracket. The law's content is unchanged and is asserted
+    // directly instead of through that coincidence: every transfer is inside
+    // an OPEN bracket (the nearest lend before it is later than the nearest
+    // take-back before it) and that bracket is closed afterwards.
+    expect(lends.length, 'a bracket holds no transfer at all').toBeLessThanOrEqual(transfers.length);
+    const lendIdx = lends.map((m) => m.index ?? -1);
+    const backIdx = takebacks.map((m) => m.index ?? -1);
+    for (let k = 0; k < transfers.length; k += 1) {
+      const t = transfers[k]?.index ?? -1;
+      const open = Math.max(...lendIdx.filter((x) => x < t), -1);
+      const closedBefore = Math.max(...backIdx.filter((x) => x < t), -1);
+      const close = Math.min(...backIdx.filter((x) => x > t), Number.MAX_SAFE_INTEGER);
+      const name = transfers[k]?.[1] ?? '?';
+      expect(open, `${name}'s transfer is not inside a lend`).toBeLessThan(t);
+      expect(closedBefore, `${name}'s transfer sits outside its bracket — the lend before it was already taken back`).toBeLessThan(open);
+      expect(close, `${name}'s lend is never taken back after the transfer`).toBeGreaterThan(t);
+      const revoke = code.indexOf(`REVOKE ALL ON FUNCTION ${name}(`);
+      const comment = code.indexOf(`COMMENT ON FUNCTION ${name}(`);
+      expect(revoke, `${name} has no REVOKE ALL ... FROM PUBLIC`).toBeGreaterThan(-1);
+      expect(comment, `${name} has no COMMENT`).toBeGreaterThan(-1);
+      expect(revoke, `${name}'s REVOKE is after its owner transfer, which the applier may not issue`).toBeLessThan(t);
+      expect(comment, `${name}'s COMMENT is after its owner transfer, which the applier may not issue`).toBeLessThan(t);
+    }
+  });
+
+  it('H4 THE END-STATE BLOCK IS PRESENT and reads the LIVE CATALOGUE, not this file', () => {
+    // Eleven predecessors ship one; `0075:838-945` is the worked example. A
+    // `DO $end$` block travels inside the migration: no gate row, no CI step,
+    // no roster entry, no runner window — it refuses at apply time.
+    expect(SPEC).toContain('DO $end$');
+    const block = SPEC.slice(SPEC.indexOf('DO $end$'));
+    expect(block).toContain('migration_end_state_invalid');
+    // It must read catalogues. A block that re-read this file's own statements
+    // would be the file agreeing with itself.
+    for (const cat of ['pg_class', 'pg_attribute', 'pg_policy', 'pg_trigger', 'pg_proc', 'has_table_privilege']) {
+      expect(block, `the end-state block never consults ${cat}`).toContain(cat);
+    }
+    // H5: the closed lists are the PREDECESSOR'S, not this file's idea of them.
+    const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'))?.sql ?? '';
+    for (const name of ['c_runtime', 'c_dml', 'c_column_dml']) {
+      const mine = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(block);
+      const theirs = new RegExp(`${name}\\s+CONSTANT TEXT\\[\\] := ARRAY\\[([\\s\\S]*?)\\];`).exec(predecessor);
+      expect(mine, `the end-state block does not declare ${name}`).not.toBeNull();
+      expect(theirs, `0075 no longer declares ${name}`).not.toBeNull();
+      const words = (m: RegExpExecArray | null): readonly string[] => [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1] as string).sort();
+      expect(words(mine), `${name} diverges from 0075's own declared list`).toEqual([...words(theirs)]);
+    }
+    // 8 runtime principals x 6 privileges, not the 3 x 3 the first version
+    // hand-wrote — and `TRIGGER` is in it, which is the privilege the design's
+    // own "the verifier cannot be bypassed" argument depends on.
+    const runtime = [...(/c_runtime\s+CONSTANT TEXT\[\] := ARRAY\[([\s\S]*?)\];/.exec(block)?.[1] ?? '').matchAll(/'([^']+)'/g)];
+    const dml = [...(/c_dml\s+CONSTANT TEXT\[\] := ARRAY\[([\s\S]*?)\];/.exec(block)?.[1] ?? '').matchAll(/'([^']+)'/g)];
+    expect(runtime.length).toBe(8);
+    expect(dml.length).toBe(6);
+    expect(dml.map((m) => m[1])).toContain('TRIGGER');
+    expect(runtime.map((m) => m[1])).toContain('public');
+  });
+
+  /**
+   * ── THE BODY DIGESTS, CHECKED IN BOTH DIRECTIONS
+   *    (`TL-P4-COORD-R46`'s structural ruling; `TL-P4-COORD-R50` §5 and
+   *     ordered item 4) ─────────────────────────────────────────────────────
+   *
+   * The end-state block's `c_bodies` array pins `sha256` of each routine's
+   * dollar-quoted body. The CONSTANTS live in the file and the SUBJECT is
+   * what a cluster installs, which is what makes the comparison a law rather
+   * than the file agreeing with itself — but it is also a maintenance
+   * coupling, and a coupling whose only alarm is a failed deployment is a
+   * trap. This is the alarm. It computes the digests from the file and
+   * requires the declared constants to equal them, so a body edited without
+   * its constant reds HERE.
+   */
+  it('H7 THE SIX BODY DIGESTS ARE CURRENT, and no prosrc substring test is left behind in any spelling', () => {
+    const computed = bodyDigests(SPEC);
+    const declared = declaredBodyDigests(SPEC);
+    expect(declared.map((d) => d.signature)).toEqual(computed.map((d) => d.signature));
+    for (const [i, c] of computed.entries()) {
+      // A placeholder that was never filled is the failure mode this catches
+      // first, so it is named rather than left to a hex mismatch.
+      expect(declared[i]?.sha256, `${c.signature}: the end-state block still carries an unfilled placeholder`).toMatch(/^[0-9a-f]{64}$/);
+      expect(declared[i]?.sha256, `${c.signature}: the declared digest is stale — run scripts/guards/p4s7-body-digests.ts`).toBe(c.sha256);
+      // AND THE SLICE IS NON-EMPTY, so a digest of nothing cannot pass.
+      expect(c.length, `${c.signature}: the body sliced to ${c.length} characters`).toBeGreaterThan(1000);
+    }
+    expect(computed).toHaveLength(6);
+    // AND THE LIST IS THE COMPLETE SET OF ROUTINES THE FILE INSTALLS
+    // (`TL-P4-COORD-R52` ordered item 4, F-6). It covered FIVE of six, and
+    // the omitted one was `installment_plan_fact_assert` -- the single site
+    // of all five of the reader's refusals, replaceable by a stub that
+    // conformed to every attribute part 7 pins. `bodyDigests` now THROWS on
+    // an incomplete list; this is the direct reading of the same fact.
+    expect(computed.map((d) => d.signature)).toContain('public.installment_plan_fact_assert(bigint,bigint,bigint,bigint,bigint)');
+    expect([...routineHeads(SPEC)].sort()).toEqual(
+      [
+        'customer_ar_aging',
+        'installment_plan_active_exclusive',
+        'installment_plan_fact_assert',
+        'installment_plan_fact_sync',
+        'installment_plan_fact_verify',
+        'installment_schedule_verify',
+      ].sort(),
+    );
+
+    // THE RULING'S OTHER HALF: the instruments it forbids are GONE from the
+    // end-state block. The subject is the block's SQL and not its prose — a
+    // line that is a comment is not a law, and the refusal messages quote the
+    // ruling by name — so comment lines and `RAISE` lines are removed before
+    // the search, and the search is for the TEST SYNTAX rather than for the
+    // words.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const sql = block
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .filter((l) => !l.includes('RAISE EXCEPTION') && !l.trimStart().startsWith("'"))
+      .join('\n');
+    // ── THE INSTRUMENT, NOT THE SPELLING (`TL-P4-COORD-R52` ordered item 7)
+    //
+    // `TL-P4-COORD-R46` ruled that a `prosrc LIKE` cannot establish a
+    // property of code because a COMMENT is a string, and `TL-P4-COORD-R50`
+    // §5 that a `prosrc NOT LIKE` cannot establish an ABSENCE because an
+    // IDENTIFIER is also a string. BOTH HALVES ARE TRUE OF EVERY SUBSTRING
+    // OPERATOR AND OF EVERY SUBSTRING FUNCTION, and this law forbade one
+    // token. `~~` IS `LIKE`, `~~*` is `ILIKE`, and `SIMILAR TO`, `~`, `!~`,
+    // `position()` and `strpos()` are the same instrument under other names.
+    // The ruling is about the instrument, so the law is now about the class.
+    //
+    // THE SUBJECT IS THE BLOCK'S SQL AND NOT ITS PROSE, which is why comment
+    // lines and `RAISE` lines are filtered above: those sentences QUOTE the
+    // ruling and name the forbidden operators on purpose.
+    for (const forbidden of [
+      /prosrc\s+(NOT\s+)?LIKE/i,
+      /prosrc\s+(NOT\s+)?ILIKE/i,
+      /prosrc\s*!?~~\*?/,
+      /prosrc\s*!?~\*?\s*'/,
+      /prosrc\s+(NOT\s+)?SIMILAR\s+TO/i,
+      /(position|strpos|substring|left|right)\s*\([^)]*prosrc/i,
+      /prosrc\s*(LIKE|ILIKE|SIMILAR)/i,
+    ]) {
+      expect(sql, `a prosrc substring instrument is back, as ${String(forbidden)}`).not.toMatch(forbidden);
+    }
+    expect(sql).not.toMatch(/\bc?\.?code\s+(NOT\s+)?LIKE/i);
+    expect(sql).not.toMatch(/\bc?\.?code\s*!?~~\*?/);
+    // and the digest instrument IS there, named.
+    expect(sql).toContain('pg_catalog.sha256');
+    expect(sql).toContain('c_bodies');
+  });
+
+  /**
+   * ── THE THREE ENFORCEMENT FLAGS AND `tgenabled`, AS CATALOGUE DATA
+   *    (`TL-P4-COORD-R50` ordered items 2 and 3) ──────────────────────────
+   *
+   * All four strings occurred ZERO times in this specification before this
+   * round. Part 9 read every property of the index's DEFINITION and none of
+   * its ENFORCEMENT, so an index left present-but-unenforcing satisfied it
+   * while bounding nothing; and nothing anywhere read whether a trigger
+   * FIRES, so all seven could be disabled with the block still reporting OK.
+   */
+  it('H8 THE END-STATE BLOCK READS THE ENFORCEMENT FLAGS IT NAMES, and the reader reads tgenabled too', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const sql = block
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .filter((l) => !l.includes('RAISE EXCEPTION') && !l.trimStart().startsWith("'"))
+      .join('\n');
+    // the index's three flags, in the SQL and not only in the prose
+    for (const flag of ['indisvalid', 'indisready', 'indislive']) {
+      expect(sql, `the end-state block never reads ${flag}`).toContain(`x.${flag}`);
+    }
+    // `tgenabled` pinned to the one value this file installs — not «not D»,
+    // because `R` (replica only) would make these triggers silent in every
+    // ordinary session, which is the harm with a different letter.
+    expect(sql).toContain("t.tgenabled <> 'O'");
+    expect(sql).not.toMatch(/tgenabled\s*<>\s*'D'/);
+    // and the READ-TIME half is in the projection, which is a different
+    // instrument in a different path: the apply-time block answers once.
+    const sketchCode = sqlCodeOnly(SPEC.slice(SPEC.indexOf('>>> P4S7 PROJECTION SKETCH BEGIN'), SPEC.indexOf('<<< P4S7 PROJECTION SKETCH END')));
+    expect(sketchCode).toContain("t.tgenabled = 'O'");
+    expect(sketchCode).toContain('untrusted_fact');
+    expect(sketchCode).toContain('unbounded_plan');
+  });
+
+  /**
+   * ── THE LOCK ORDER IS DECLARED, AND IT AGREES WITH `P4-AL-41`
+   *    (`TL-P4-COORD-R50` ordered item 5) ─────────────────────────────────
+   *
+   * The slice declared no lock order and took one — plan row, then index
+   * entry, then the invoice row from the sync's `UPDATE`. `P4-AL-41` ranks
+   * `invoices` THIRD and `installment_plans` SIXTH, so every plan write was
+   * taking rank 6 before rank 3, and two transactions creating plans on two
+   * invoices in opposite order deadlocked `40P01`. The order is now taken in
+   * the BEFORE trigger, which is the only point that runs before the plan row
+   * exists, and it is DECLARED in the file.
+   */
+  it('H9 THE LOCK ORDER IS DECLARED AND TAKEN, invoice row first, ascending by id', () => {
+    expect(SPEC).toContain('3a-ter');
+    expect(SPEC).toContain('P4-AL-41');
+    const code = sqlCodeOnly(SPEC);
+    // taken, in the BEFORE trigger's body, on `invoices`, with the ordering
+    expect(code).toMatch(
+      /FROM public\.invoices i\s*\n\s*WHERE i\.business_id = NEW\.business_id AND i\.id = ANY \(v_locks\)\s*\n\s*ORDER BY i\.id\s*\n\s*FOR NO KEY UPDATE/,
+    );
+    // `FOR NO KEY UPDATE` and not `FOR UPDATE`: it is the strength a plain
+    // UPDATE of a non-key column takes and it does not block the `FOR KEY
+    // SHARE` an ordinary foreign-key check takes against the same invoice.
+    expect(code).not.toContain('FOR UPDATE;');
+    // ── AND THE `DELETE` INVERSION IS DECLARED WITH A REMEDY THAT REACHES
+    //    IT, AFTER THE TRIGGER THAT WAS SUPPOSED TO CLOSE IT WAS BUILT AND
+    //    MEASURED NOT TO (`TL-P4-COORD-R59` ordered item 2, F14-2). Round 14
+    //    declared the inversion and said an EIGHTH trigger would be needed.
+    //    Round 15 found that no eighth trigger is needed to FIRE on DELETE —
+    //    and that firing on DELETE does not help, because
+    //    `GetTupleForTrigger` locks the `OLD` tuple before a `BEFORE ROW
+    //    DELETE` trigger is called, so rank 6 is held before the arm runs.
+    //    The arm is therefore NOT in the body, part 12 REFUSES the bit, and
+    //    the measured case is declared with the caller remedy that reaches it.
+    const exclusive = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_active_exclusive() RETURNS TRIGGER');
+    expect(exclusive, 'the DELETE arm is back, and it was measured not to fix the order').not.toContain("IF TG_OP = 'DELETE' THEN");
+    expect(exclusive, 'the DELETE arm is back, and it was measured not to fix the order').not.toContain('RETURN OLD;');
+    // ...and the REASON is in the file, as the mechanism and not as a mood.
+    expect(SPEC).toContain('GetTupleForTrigger');
+    expect(SPEC).toContain('LOCKS THAT TUPLE BEFORE THE TRIGGER');
+    // ...and the measured trace of the cycle is there, with the 55P03 that
+    //    proves which rank the deleter held.
+    expect(SPEC).toContain('A  DELETE FROM installment_plans WHERE id = $1   -> BLOCKED, asserted');
+    expect(SPEC).toContain('refused 55P03, which PROVES A held rank 6 while awaiting rank 3');
+    // ...and the REMEDY IS A STATEMENT THE CALLER CAN WRITE, which is the
+    //    condition a declared hazard has to meet.
+    expect(SPEC).toContain('THE DELETER TAKES THE INVOICE ROW ITSELF');
+    expect(SPEC).toContain('SELECT 1 FROM invoices WHERE business_id = $1 AND id = $2');
+    // ...and the trigger shape and part 12 AGREE with all of that: INSERT and
+    //    UPDATE required, DELETE refused, read out of `tgtype`.
+    expect(code).toMatch(/CREATE TRIGGER installment_plans_active_exclusive\s*\n\s*BEFORE INSERT OR UPDATE ON installment_plans/);
+    const endBlock = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const block12 = endBlock.slice(endBlock.indexOf('-- 12. THE ONE-ACTIVE EXCLUSION'));
+    expect(block12.indexOf('installment_plan_active_exclusive()'), 'part 12 is not where it was').toBeGreaterThan(-1);
+    expect(block12).toContain('AND (t.tgtype & 4) = 4 AND (t.tgtype & 16) = 16 AND (t.tgtype & 8) = 0');
+    // ...and part 12's own rationale names the measurement rather than only
+    //    the old «a deleted row cannot become anything», which was true of
+    //    the exclusion and silent about the lock order.
+    expect(block12).toContain('GetTupleForTrigger');
+    // ...and the one-invoice case is in the determinism table with the answer
+    //    that is TRUE of it, instead of being absent from it.
+    expect(SPEC).toContain('ONE invoice: a plan DELETE against an');
+    expect(SPEC).toContain('invoice row FIRST, which no');
+    // ...and the RENDERING half of ordered item 2 is declared here too: 409,
+    //    retryable, by SQLSTATE, and in NEITHER registry.
+    expect(SPEC).toContain('retryable: true');
+    expect(SPEC).toContain('STILL NOT in either invariant registry');
+    // ...and the still-open caller shape is DECLARED and not certified absent.
+    expect(SPEC).toContain('TAKE THE INVOICE ROW (or the plan row) BEFORE THE SCHEDULE');
+    // the determinism claim is SCOPED and names the three outcomes it is not
+    for (const token of ['40001', '40P01', 'REPEATABLE READ', 'SERIALIZABLE']) {
+      expect(SPEC, `section 3a-ter does not name ${token}`).toContain(token);
+    }
+    // AND THE DECLARATION IS NO LONGER STRONGER THAN THE CODE
+    // (`TL-P4-COORD-R52` ordered item 5, F-5). «Ascending by `id`» is what a
+    // BEFORE ROW trigger can order WITHIN ONE INVOCATION; across the rows of
+    // one statement the order taken is ROW order, measured `55P03` in both
+    // heap orders. The multi-row shape is DECLARED as a `P4-AL-41` rank 3
+    // obligation this slice does not discharge, in the same section, beside
+    // the DELETE arm that was already declared there.
+    expect(SPEC).toContain('ACROSS THE ROWS OF ONE STATEMENT');
+    expect(SPEC).toContain('55P03');
+    expect(SPEC).toContain('ONE INVOICE PER STATEMENT');
+    expect(SPEC, 'the unscoped ascending claim is back').not.toContain('the rows this takes are taken ASCENDING BY `id`');
+  });
+
+  /**
+   * ── H9a. THE SCHEDULE HAZARD IS DECLARED ONLY WITH ELIMINATION SHOWN
+   *    IMPOSSIBLE, AND THE REMEDY REACHES IT
+   *    (`TL-P4-COORD-R59` ordered item 3; `R55` §4 made general by `R59` §4;
+   *     F14-5) ──────────────────────────────────────────────────────────────
+   *
+   * Round 14 applied the structural-elimination preference to the FACT
+   * triggers -- by a trigger NAME -- and left the SCHEDULE triggers merely
+   * DECLARING the same class of hazard. `R59` §4 permits a declared hazard
+   * ONLY where elimination is shown impossible, so the showing is now IN THE
+   * FILE as section 3a-quater, and this is the law over it. It is a law about
+   * three things a reader can check: that the argument is there, that it is an
+   * argument about REFERENTIAL order rather than trigger order (which is what
+   * makes it different from the fact case), and that the section ends in a
+   * statement the caller can actually write.
+   */
+  it('H9a THE SCHEDULE HAZARD CARRIES AN IMPOSSIBILITY ARGUMENT AND A REMEDY THAT REACHES IT', () => {
+    expect(SPEC, 'section 3a-quater is not in the file').toContain('3a-quater');
+    const a = SPEC.indexOf('-- ── 3a-quater.');
+    expect(a, 'section 3a-quater does not open with a section rule').toBeGreaterThan(-1);
+    const b = SPEC.indexOf('-- ── 4. WHAT THIS SPECIFICATION DELIBERATELY DOES NOT CREATE', a);
+    expect(b, 'section 3a-quater has no end').toBeGreaterThan(a);
+    const quater = SPEC.slice(a, b);
+    // (1) IT IS SCOPED TO THE RULING THAT ASKED FOR IT.
+    expect(quater).toContain('TL-P4-COORD-R59');
+    // (2) IT SAYS WHY THE FACT REMEDY -- A TRIGGER NAME -- CANNOT TRANSFER,
+    //     and the reason is REFERENTIAL ORDER and not trigger order. That
+    //     distinction is the whole argument: a name orders a queue, and no
+    //     queue order can make rows exist that no statement has written.
+    expect(quater).toContain('installments_plan_fk');
+    expect(quater).toContain('REFERENTIAL ORDER');
+    expect(quater).toContain('TRIGGER ORDER');
+    expect(quater).toContain('cannot make rows exist that no statement has written');
+    // (3) IT ENUMERATES THE TRANSACTION-END HOOKS, so «no other mechanism
+    //     escapes SET CONSTRAINTS» is an enumeration and not a feeling.
+    for (const hook of ['DEFERRABLE `UNIQUE`', 'EXCLUDE', 'FOREIGN KEY', 'ON COMMIT', 'TEMPORARY', 'NOT DEFERRABLE']) {
+      expect(quater, `the hook enumeration does not name ${hook}`).toContain(hook);
+    }
+    expect(quater).toContain('SET CONSTRAINTS ALL IMMEDIATE');
+    expect(quater).toContain('ELIMINATION IS SHOWN IMPOSSIBLE');
+    // (4) AND IT ENDS IN A STATEMENT THE CALLER CAN WRITE -- the one-statement
+    //     data-modifying CTE -- rather than in a declaration they can do
+    //     nothing with. The spelling is named, so the remedy is checkable.
+    expect(quater).toContain('data-modifying CTE');
+    expect(quater).toContain('RETURNING id');
+    expect(quater).toContain('tests/integration/phase4-s7-installment-concurrency-db.test.ts');
+    // (5) AND THE REFUSAL IT DESCRIBES REALLY DOES NAME BOTH CAUSES, in the
+    //     body, on the one event where the forced-early state is reachable:
+    //     a plan's own INSERT with zero instalment rows. A section may not
+    //     describe a message the code does not carry.
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER');
+    expect(verify).toContain("IF v_rows = 0 AND TG_TABLE_NAME = 'installment_plans' AND TG_OP = 'INSERT' THEN");
+    const both = verify.slice(verify.indexOf('IF v_rows = 0 AND TG_TABLE_NAME'), verify.indexOf('-- (b) AT LEAST ONE INSTALMENT ROW'));
+    for (const token of ['TWO STATES REACH THIS', 'SET CONSTRAINTS ALL IMMEDIATE', 'NO instalment row at all', 'ONE statement', 'data-modifying CTE']) {
+      expect(both, `the both-causes refusal does not name ${token}`).toContain(token);
+    }
+    // ...and it does not ASSERT the cause it cannot observe.
+    expect(both).toContain('This refusal cannot tell the two apart');
+    // ...and the generic obligation-(a) message is still there for every other
+    //    event, so the new branch ADDED a case and did not replace the law.
+    expect(verify).toContain("RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to % and the invoice total is %',");
+  });
+
+  /**
+   * ── H10. THE COUNT IS NOT ANSWERED FROM THE INDEX IT MEASURES
+   *    (`TL-P4-COORD-R52` ordered item 1, F-2) ────────────────────────────
+   *
+   * `EXPLAIN (COSTS OFF)` of the previous spelling was `Index Only Scan using
+   * installment_plans_one_active_per_invoice_uq`, identically with
+   * `enable_seqscan = off`, because the predicate WAS that index's definition.
+   * This is the TEXT half; the plan itself is read at apply time by part 9c
+   * and in CI by the fact suite, which is where a plan can be read at all.
+   */
+  it('H10 THE ACTIVE-PLAN COUNTS ARE TAKEN BY A PATH THE PARTIAL INDEX CANNOT SERVE, in both write-path routines', () => {
+    const code = sqlCodeOnly(SPEC);
+    // the index-independent spelling, once per routine that counts
+    const independent = code.match(/count\(\*\) FILTER \(WHERE p\.status = 'active'\) INTO v_active\b/g) ?? [];
+    expect(independent, 'the sync and the deferred verifier must each take the index-independent count').toHaveLength(2);
+    // and each one's scan carries NO `status` qualifier, which is what makes
+    // the partial index unusable by the implication rule
+    for (const m of code.matchAll(/count\(\*\) FILTER \(WHERE p\.status = 'active'\) INTO v_active\b[\s\S]{0,200}?;/g)) {
+      expect(m[0].slice(m[0].indexOf('FROM public.installment_plans')), 'the index-independent count restricts status in its WHERE after all').not.toMatch(
+        /p\.status/,
+      );
+    }
+    // the index-served reading is ALSO taken, twice, so the two can disagree
+    expect(code.match(/count\(\*\) INTO v_active_ix\b/g) ?? []).toHaveLength(2);
+    // and the disagreement IS the refusal, in each of the two routines —
+    // asserted per body and not as a total over the file, because the name
+    // also appears in `plan_fact_blind`'s message, which points the reader at
+    // it rather than at `pg_policy`.
+    for (const head of [
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER',
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER',
+    ]) {
+      const body = dollarQuotedBody(SPEC, head);
+      expect(body, `${head} does not raise plan_index_disagrees`).toMatch(/RAISE EXCEPTION 'installment\.plan_index_disagrees:/);
+      expect(body, `${head} does not take the index-independent count`).toContain("count(*) FILTER (WHERE p.status = 'active') INTO v_active");
+    }
+    // part 9c reads the plan at apply time, with the planner pushed at the index
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    expect(block).toContain('EXPLAIN (COSTS OFF)');
+    expect(block).toContain('SET LOCAL enable_seqscan = off');
+    // ── THE LAW IS OVER A CLASS OF INDEX, NOT OVER ONE NAME
+    //    (`TL-P4-COORD-R55` ordered items 3 and 4). It used to `strpos` for
+    //    one index name. The argument it rests on — a PARTIAL index may serve
+    //    only a query whose own qualifiers imply its predicate — is about
+    //    every partial index of the relation, so the law is now a loop over
+    //    them. The NON-partial ones are deliberately not forbidden: the
+    //    primary key DOES serve this count, which is exactly what F13-3
+    //    found the previous round's prose denying.
+    expect(block).toMatch(/FOR v_ix IN SELECT ic\.relname FROM pg_index x[\s\S]{0,400}?x\.indpred IS NOT NULL/);
+    expect(block).toContain('pg_catalog.strpos(v_plan, v_ix)');
+    // ── AND `enable_seqscan` IS RESTORED, WHICH IT WAS NOT
+    //    (`TL-P4-COORD-R55` ordered item 4, F13-4). A `DO` block is anonymous
+    //    and has no `proconfig`, so its `SET LOCAL` is not restored on exit:
+    //    measured `on` before the block and `off` after it, for the rest of
+    //    the MIGRATION's own transaction.
+    expect(block).toContain("v_seqscan := pg_catalog.current_setting('enable_seqscan')");
+    expect(block).toContain("pg_catalog.set_config('enable_seqscan', v_seqscan, true)");
+    // AND THE APPLY-TIME PROBE'S TEXT IS THE TEXT THE ROUTINES TAKE. A law
+    // whose subject is a DIFFERENT query than the one it certifies is the
+    // defect of this whole family, so the probe's own `FILTER` is pinned.
+    expect(block).toContain("count(*) FILTER (WHERE p.status = ''active'')");
+  });
+
+  /**
+   * ── H10b. PART 9c'S SUBJECT IS THE INSTALLED BODY'S QUERY, AND THE
+   *    COUPLING IS A LAW (`TL-P4-COORD-R55` ordered item 4, F13-4) ────────
+   *
+   * `c_plan_probe` is a TRANSCRIPTION of a parameterised query, with literals
+   * in place of the two plpgsql variables, and `c_plan_probe` occurred 2 times
+   * in the specification and 0 times in any test: NOTHING compared it to the
+   * body. An edit to a body's query would leave part 9c reading the retired
+   * text and still passing — a law whose subject is a copy of its subject is
+   * one edit from measuring nothing.
+   *
+   * It cannot be compared INSIDE the block: the only SQL instrument for that
+   * is a `prosrc` substring function, which `TL-P4-COORD-R46` and `R50` §5
+   * rule cannot establish a property of code and which H14 forbids in that
+   * block in every spelling. So the comparison is here, over the FILE, where
+   * the digest coupling already lives — and with part 6b's digests beside it a
+   * body cannot change without the digest changing, and the digest cannot be
+   * regenerated without this comparison running.
+   */
+  it('H10b PART 9c PROBES THE EXACT QUERY ALL THREE ROUTINES TAKE, parameters substituted — nothing may drift', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    // THE PROBE, as the block really declares it: the SQL string with `''`
+    // un-doubled, which is what PostgreSQL will execute.
+    const decl = /c_plan_probe CONSTANT TEXT :=([\s\S]*?);\n/.exec(block);
+    expect(decl, 'the end-state block declares no c_plan_probe').not.toBeNull();
+    const probe = [...(decl?.[1] ?? '').matchAll(/'((?:[^']|'')*)'/g)]
+      .map((m) => (m[1] as string).replace(/''/g, "'"))
+      .join('')
+      .replace(/\s+/g, ' ')
+      .trim();
+    expect(probe.startsWith('EXPLAIN (COSTS OFF) '), `the probe is not an EXPLAIN: ${probe}`).toBe(true);
+    const probedQuery = probe.slice('EXPLAIN (COSTS OFF) '.length);
+
+    // THE SUBJECT, read out of each routine body: the `FILTER`-spelled count,
+    // with the `INTO` removed and the two plpgsql variables replaced by the
+    // literals the probe uses. The reader's copy is spelled over its own CTE
+    // and is pinned by H10's own reading instead, so the two WRITE-path
+    // bodies are the subject here — they are the two that raise
+    // `plan_index_disagrees`.
+    const ZERO = "'00000000-0000-0000-0000-000000000000'::UUID";
+    for (const head of [
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER',
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER',
+    ]) {
+      const body = dollarQuotedBody(SPEC, head);
+      const m = /SELECT pg_catalog\.count\(\*\) FILTER \(WHERE p\.status = 'active'\) INTO v_active\b([\s\S]*?);/.exec(body);
+      expect(m, `${head} carries no FILTER-spelled active count`).not.toBeNull();
+      const asQuery = `SELECT pg_catalog.count(*) FILTER (WHERE p.status = 'active')${(m?.[1] ?? '')
+        .replace(/--[^\n]*/g, ' ')
+        .replace(/v_business/g, ZERO)
+        .replace(/v_invoice\b/g, ZERO)}`
+        .replace(/\s+/g, ' ')
+        .trim();
+      expect(asQuery, `part 9c does not probe the query ${head} takes`).toBe(probedQuery);
+    }
+  });
+
+  /**
+   * ── H11. THE ORDERING IS MADE NOT TO MATTER BY A NAME, AND THE NAME ORDER
+   *    IS READ FROM THE CATALOGUE (`TL-P4-COORD-R55` ordered item 1, F13-1)
+   *
+   * `SET CONSTRAINTS ALL IMMEDIATE` is unprivileged SQL that both app roles
+   * may issue, and PostgreSQL then fires the immediate `AFTER ROW` triggers of
+   * one relation for one event IN TRIGGER-NAME ORDER. While the plan-side fact
+   * verifier was called `installment_plans_fact_agrees` it sorted BEFORE
+   * `installment_plans_fact_sync`, so the verifier ran before the writer and
+   * refused a LAWFUL plan write under a FALSE name rendered 500.
+   *
+   * ROUND 13 DETECTED THAT WITH A TRANSACTION-LOCAL CUSTOM GUC COUNTER, AND
+   * THE CALLER OWNED THE EVIDENCE. PostgreSQL places no privilege on an
+   * unreserved two-part custom setting: one `SET LOCAL` made an ORDINARY
+   * LAWFUL plan write refuse under `installment.plan_fact_unordered` — a false
+   * diagnosis of a lawful sale rendered `500 INTERNAL_ERROR` — another
+   * defeated the detector for one statement, and a session-level `SET` turned
+   * it off for the life of a pooled connection while lawful writes still
+   * committed. So the counter is GONE and the hazard is removed instead of
+   * detected: the writer's trigger name sorts first, and that premise is READ
+   * from `pg_trigger` in two places rather than believed in a comment.
+   */
+  it('H11 THE WRITER TRIGGER SORTS BEFORE THE PLAN-SIDE VERIFIER, THE ORDER IS READ FROM pg_trigger, AND THE FORGEABLE COUNTER IS GONE', () => {
+    const code = sqlCodeOnly(SPEC);
+    // ── THE NAMES, AND THE BYTE ORDER THAT IS THE WHOLE REPAIR.
+    expect(code).toContain('CREATE TRIGGER installment_plans_fact_sync');
+    expect(code).toContain('CREATE CONSTRAINT TRIGGER installment_plans_fact_verified');
+    expect('installment_plans_fact_sync' < 'installment_plans_fact_verified', 'the writer no longer sorts before the verifier').toBe(true);
+    // and the retired name is nowhere in the CODE (prose keeps the history).
+    expect(code, 'the old verifier trigger name is still installed somewhere').not.toContain('installment_plans_fact_agrees');
+    // ── THE FORGEABLE COUNTER IS GONE FROM EVERY PROJECTION OF THE CODE.
+    for (const guc of ['installment.plan_fact_sync_events', 'installment.plan_fact_verify_events']) {
+      expect(code, `the caller-writable counter ${guc} is still read or written`).not.toContain(guc);
+    }
+    expect(code, 'a session setting is still written somewhere in this slice').not.toMatch(/set_config\('installment\./);
+    // ── THE PREMISE IS READ: part 9e, at apply time.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    expect(block).toContain('INTO v_writer_tg, v_verify_tg');
+    expect(block).toMatch(/NOT \(v_writer_tg < v_verify_tg\)/);
+    expect(block).toContain('installment.migration_end_state_invalid: the ENABLED (tgenabled = O) trigger executing installment_plan_fact_sync');
+    // ...and part 9e reads the SAME premise the runtime verifier reads, which
+    // it did not (`TL-P4-COORD-R59` ordered item 10): the runtime read
+    // qualifies the writer row `tgenabled = 'O'` and the apply-time one did
+    // not, so one premise had two readings and the apply-time one was weaker.
+    // Both sides of 9e now carry the qualification.
+    const nineE = block.slice(block.indexOf('-- 9e.'), block.indexOf('-- 9b.'));
+    expect(nineE.split("AND t.tgenabled = 'O'").length - 1, 'part 9e does not read tgenabled on both sides').toBe(2);
+    // ── AND AT RUNTIME, PER PLAN EVENT, INSIDE THE VERIFIER ITSELF.
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
+    expect(verify).toContain("f.proname = 'installment_plan_fact_sync'");
+    expect(verify, 'the runtime verifier stopped qualifying the writer row on tgenabled').toContain("t.tgenabled = 'O'");
+    expect(verify).toContain('v_self := TG_NAME;');
+    expect(verify).toMatch(/IF v_writer IS NOT NULL AND NOT \(v_writer < v_self\) THEN/);
+    expect(verify).toContain('installment.plan_fact_unordered');
+    // ...and it does NOT refuse when there is no writer at all, because that
+    // state is section 2c's declared escape and has its own name.
+    expect(verify).toContain('v_writer IS NOT NULL');
+    // ...and the invoice side is not subject to it, because no sync runs there.
+    expect(verify).toMatch(/IF TG_TABLE_NAME = 'installment_plans' THEN[\s\S]{0,400}?pg_catalog\.pg_trigger/);
+    // ── AND THE STATEMENT AND THE MECHANISM ARE NAMED IN THE FILE.
+    expect(SPEC).toContain('SET CONSTRAINTS ALL IMMEDIATE');
+    expect(SPEC).toContain('TRIGGER-NAME ORDER');
+    // ── THE HALF A RENAME CANNOT FIX IS DECLARED AND NOT CLAIMED SHUT: the
+    //    schedule verifier still fires into a transaction whose `installments`
+    //    rows do not exist, and fails closed under a name true of the instant.
+    expect(SPEC).toContain('installment_plans_schedule_complete fires into a transaction');
+    expect(SPEC).toContain('R-94');
+  });
+
+  /**
+   * ── H12. THE PINNED-BODY LIST IS THE COMPLETE SET, ENFORCED
+   *    (`TL-P4-COORD-R52` ordered item 4, F-6) ────────────────────────────
+   *
+   * The list covered FIVE of the six routines, and the omitted one was
+   * `installment_plan_fact_assert` — the single site of all five of the
+   * reader's refusals, which a stub conforming to every pinned attribute
+   * replaced while every law in the end-state block reported OK. The
+   * extractor's own comment said «a digest list that quietly covers four of
+   * five routines is worse than none» and the list was exactly that.
+   */
+  it('H12 THE COMPLETENESS LAW FIRES on a routine the list does not name, and passes on the shipped file', () => {
+    // CONTROL: the shipped file.
+    expect(() => assertPinnedBodiesComplete(SPEC)).not.toThrow();
+    // RED: a seventh routine, installed and unpinned.
+    const planted = `${SPEC}\nCREATE OR REPLACE FUNCTION installment_plan_fact_shadow() RETURNS BOOLEAN\nLANGUAGE plpgsql AS $fn$\nBEGIN RETURN true; END;\n$fn$;\n`;
+    expect(() => assertPinnedBodiesComplete(planted)).toThrow(/installed and NOT pinned: installment_plan_fact_shadow/);
+    expect(() => bodyDigests(planted)).toThrow(/installed and NOT pinned/);
+    // RED, the other direction: a pinned routine the file does not install.
+    const removed = SPEC.replace(
+      'CREATE OR REPLACE FUNCTION installment_plan_fact_assert(p_unreadable_plan BIGINT,',
+      'CREATE OR REPLACE FUNCTION zzz_other(p_unreadable_plan BIGINT,',
+    );
+    expect(removed).not.toBe(SPEC);
+    expect(() => assertPinnedBodiesComplete(removed)).toThrow(/pinned and NOT installed: installment_plan_fact_assert/);
+    // and a head mentioned in PROSE is not a routine: the file's own header
+    // discusses `CREATE OR REPLACE FUNCTION` inside a comment box.
+    expect(SPEC).toContain('`CREATE OR REPLACE FUNCTION` may not change a `RETURNS');
+    expect(routineHeads(SPEC)).toHaveLength(6);
+
+    // ── THE EIGHT SPELLINGS THAT USED TO BE INVISIBLE, EACH NOW SEEN
+    //    (`TL-P4-COORD-R55` ordered item 5, F13-5). The law was a
+    //    line-anchored, case-sensitive, single-space regex: a seventh routine
+    //    in any of these installed with the entire end-state block reporting
+    //    OK. The pattern is widened rather than argued about — and the
+    //    DECIDING law is now the catalogue diff in
+    //    `tests/integration/phase4-s7-installment-aging-db.test.ts`, which
+    //    reads what the specification really installed and is blind to no
+    //    spelling at all, this one included.
+    for (const spelling of [
+      '  create function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'create function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'Create Function chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE FUNCTION\n  chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE OR REPLACE  FUNCTION chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE PROCEDURE chal_seventh(x INT) LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      'CREATE FUNCTION Chal_Seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+      '\tCREATE FUNCTION chal_seventh(x INT) RETURNS INT LANGUAGE sql AS $f$ SELECT 1 $f$;',
+    ]) {
+      const heads = routineHeads(`${SPEC}\n${spelling}\n`);
+      expect(heads.length, `the completeness law cannot see: ${spelling.slice(0, 44)}`).toBe(7);
+      expect(() => assertPinnedBodiesComplete(`${SPEC}\n${spelling}\n`), spelling.slice(0, 44)).toThrow(/installed and NOT pinned/);
+    }
+    // AND THE ONE SPELLING NO PATTERN OVER THIS FILE CAN SEE IS DECLARED
+    // RATHER THAN CERTIFIED ABSENT (`TL-P4-COORD-R50` §5): a routine created
+    // from a dynamic `EXECUTE` is a string at the point of creation, so the
+    // text instrument is blind to it BY CONSTRUCTION and only the catalogue
+    // diff covers it. Measured here, as a declaration with a reading behind
+    // it, not as an assumption.
+    const dynamic = `${SPEC}\nDO $x$ BEGIN EXECUTE 'CREATE FUNCTION chal_dyn() RETURNS INT LANGUAGE sql AS $$SELECT 1$$'; END $x$;\n`;
+    expect(routineHeads(dynamic), 'the declared blindness changed shape; re-read the declaration').toHaveLength(6);
+    const extractor = readFileSync(join(__dirname, '..', '..', '..', 'scripts', 'guards', 'p4s7-body-digests.ts'), 'utf8');
+    expect(extractor, 'the extractor no longer declares which law decides completeness').toContain('tests/integration/phase4-s7-installment-aging-db.test.ts');
+    expect(extractor).toContain('DECLARED AND NOT CERTIFIED ABSENT');
+    // part 6c closes the one shape a digest of a signature cannot see.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    expect(block).toContain('c_routines');
+    expect(block).toContain('p.proname = c_routines[v_i]');
+  });
+
+  /**
+   * ── H13. THE LEXER'S LATENT DEFECTS, FIXED AND MEASURED
+   *    (`TL-P4-COORD-R52` ordered item 8, F-9) ────────────────────────────
+   *
+   * None of these is reachable by the specification's current text — the
+   * round-12 challenger measured them on a verbatim copy and said so. They are
+   * repaired anyway, because the next author adds the construct and the
+   * instrument inverts silently.
+   */
+  it('H13 THE LEXER HANDLES A DIGIT TAG, A NESTED BLOCK COMMENT AND AN E-STRING, and raises on an unterminated tag', () => {
+    // a tag with a DIGIT is a body: its literal survives `sqlCodeOnly`
+    const digitTag = `CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $q1$\nBEGIN PERFORM 'it''s data'; END;\n$q1$;`;
+    expect(sqlCodeOnly(digitTag)).toContain("PERFORM 'it''s data'");
+    // a tag LONGER THAN 64 CHARACTERS is still a tag
+    const longTag = `$${'t'.repeat(80)}$`;
+    expect(sqlCodeOnly(`SELECT 1; AS ${longTag}\nPERFORM 'kept';\n${longTag};`)).toContain("PERFORM 'kept'");
+    // NESTED block comments nest, and nothing leaks out of them
+    const nested = '/* outer /* inner */ FORBIDDEN_TOKEN */ SELECT 1;';
+    expect(sqlCodeOnly(nested)).not.toContain('FORBIDDEN_TOKEN');
+    expect(sqlCodeOnly(nested)).not.toContain('*/');
+    expect(sqlCodeOnly(nested)).toContain('SELECT 1');
+    // an `E'...'` escape string ends where PostgreSQL ends it, so the
+    // statement after it is NOT deleted from the code projection
+    expect(sqlCodeOnly("SELECT E'a\\'b' ; CREATE UNIQUE INDEX u ON a (c);")).toContain('CREATE UNIQUE INDEX u ON a (c)');
+    // `U&'...'` is a STANDARD literal: only `''` doubles, no backslash rule
+    expect(sqlCodeOnly("SELECT U&'d\\' ; CREATE UNIQUE INDEX v ON a (c);")).toContain('CREATE UNIQUE INDEX v ON a (c)');
+    // an UNTERMINATED tag RAISES instead of swallowing the rest in silence
+    expect(() => sqlCodeOnly('SELECT 1; AS $open$ BEGIN END;')).toThrow(/never closed/);
+    // ── AND SO DO THE OTHER TWO SILENT-SWALLOW SITES, WHICH THE PREVIOUS
+    //    ROUND'S REPAIR DID NOT REACH (`TL-P4-COORD-R55` ordered item 10,
+    //    F13-7). «An unterminated tag now RAISES» covered ONE of three.
+    //
+    //    (2) A NESTED unterminated tag INSIDE a body: `stripCommentsQuoteAware`
+    //    carried the identical `close === -1` branch and RETURNED the
+    //    remainder as one literal, so the body's `--` comments were copied
+    //    into the CODE projection — the inversion class that cost one run six
+    //    laws. Latent on the shipped bytes (zero dollar tags inside all six
+    //    bodies) and repaired anyway.
+    const nestedOpen = 'CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN $q$ -- FORBIDDEN_TOKEN\nEND;\n$fn$;';
+    expect(() => sqlCodeOnly(nestedOpen)).toThrow(/never closed/);
+    //    ...and the BALANCED nested case is still copied through as data,
+    //    which is the control that stops the repair being a refusal of
+    //    everything.
+    const nestedOk = 'CREATE FUNCTION f() RETURNS void LANGUAGE plpgsql AS $fn$\nBEGIN PERFORM $q$kept -- here$q$; -- stripped\nEND;\n$fn$;';
+    expect(sqlCodeOnly(nestedOk)).toContain('kept -- here');
+    expect(sqlCodeOnly(nestedOk)).not.toContain('-- stripped');
+    //    (3) AN UNTERMINATED SINGLE-QUOTED LITERAL: `endOfLiteral` returned
+    //    `s.length`, which swallowed every statement after it with no error —
+    //    measured on a copy, a whole `CREATE UNIQUE INDEX` lost from the
+    //    projection.
+    expect(() => sqlCodeOnly("SELECT 'open ; CREATE UNIQUE INDEX u ON a (c);")).toThrow(/never closed/);
+    expect(() => sqlSchemaOnly("SELECT 'open ; CREATE UNIQUE INDEX u ON a (c);")).toThrow(/never closed/);
+    //    ...and a BALANCED literal still ends where PostgreSQL ends it.
+    expect(sqlCodeOnly("SELECT 'closed' ; CREATE UNIQUE INDEX u ON a (c);")).toContain('CREATE UNIQUE INDEX u ON a (c)');
+    //    (4) AN UNTERMINATED BLOCK COMMENT -- THE FOURTH SILENT-SWALLOW SITE
+    //    OF THE SAME LEXER (`TL-P4-COORD-R59` ordered item 5, F14-8).
+    //    `endOfBlockComment` returned `s.length`, so an unclosed opening
+    //    delimiter consumed the entire remainder of the subject in BOTH
+    //    projections with no error, while its two siblings raised. The round
+    //    that reported «all three silent-swallow sites now raise» had four.
+    //    It now raises, and the depth counter is reported in the message.
+    const openBlock = '/* an unterminated block comment\nCREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0;\n';
+    expect(() => sqlCodeOnly(openBlock)).toThrow(/never closed/);
+    expect(() => sqlSchemaOnly(openBlock)).toThrow(/never closed/);
+    //    ...an unterminated INNER comment inside a closed outer one is also
+    //    unbalanced and also raises: the depth never returns to zero.
+    expect(() => sqlCodeOnly('/* outer /* inner */ SELECT 1;')).toThrow(/never closed/);
+    //    ...and THE BALANCED CONTROL, which is what stops the repair being a
+    //    refusal of everything: the same subject with the comment CLOSED
+    //    keeps the statement that follows it in both projections.
+    const closedBlock = '/* a terminated block comment */\nCREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0;\n';
+    expect(sqlCodeOnly(closedBlock)).toContain('CREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0');
+    expect(sqlSchemaOnly(closedBlock)).toContain('CREATE UNIQUE INDEX a_uq ON a (id) WHERE id > 0');
+    expect(sqlCodeOnly(closedBlock), 'the comment body leaked into the code projection').not.toContain('terminated block comment');
+    //    ...and the LATENCY on the shipped bytes is MEASURED, not assumed:
+    //    the raise cannot change a projection of a subject that never opens a
+    //    block comment.
+    expect(SPEC.split('/*').length - 1, 'the specification now opens a block comment').toBe(0);
+    expect(SPEC.split('*/').length - 1, 'the specification now closes a block comment').toBe(0);
+    // A DOUBLE-QUOTED IDENTIFIER IS ORDINARY TEXT HERE, AND THAT IS A
+    // DECLARED REMAINDER AND NOT AN OVERSIGHT: it survives verbatim, and one
+    // holding a comment marker would lose the rest of its line. The repair
+    // was implemented and measured and it INVERTED six laws on this subject,
+    // because the specification's own prose is full of quotation marks; see
+    // `lexSql`. The specification contains no such identifier.
+    expect(sqlCodeOnly('SELECT v."QUERY PLAN" FROM x;')).toContain('"QUERY PLAN"');
+    expect(sqlCodeOnly('SELECT a."it--s" , 1 FROM x;'), 'the declared remainder changed shape').not.toContain('1 FROM x');
+    expect(sqlCodeOnly(SPEC), 'the file now carries a double-quoted identifier with a comment marker in it').not.toMatch(/"[^"\n]*--[^"\n]*"/);
+    // PARITY ON THE SHIPPED BYTES, so the repairs changed no projection of
+    // the subject: both projections still carry the index and the digest law.
+    expect(sqlSchemaOnly(SPEC)).toContain('CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq');
+    expect(sqlCodeOnly(SPEC)).toContain('CREATE UNIQUE INDEX installment_plans_one_active_per_invoice_uq');
+    expect(sqlCodeOnly(SPEC)).toContain('pg_catalog.sha256');
+  });
+
+  /**
+   * ── H15. EVERY INDEX OF BOTH RELATIONS IS READ, AND AN INDEX MUST
+   *    PHYSICALLY DESCRIBE ITS OWN HEAP (`TL-P4-COORD-R55` ordered items 2,
+   *    3 and 7; F13-2, F13-3, F13-9) ──────────────────────────────────────
+   *
+   * `installment_plans_pkey` occurred ZERO times in this specification. Part 9
+   * read the three enforcement flags of exactly ONE index, and the writer's
+   * blindness probe reads the handed row BY PRIMARY KEY — so one catalogue
+   * flag on the primary key made A lawful plan write fail, under a name
+   * whose message said the cause was row security and told the operator not to
+   * look in `pg_index`, while the whole end-state block reported OK and the
+   * reader served a figure.
+   *
+   * «EVERY» STOOD HERE AND WAS FALSE OF THE ROUND IT DESCRIBES
+   * (`TL-P4-COORD-R90` §6's fourth copy, ordered in `TL-P4-COORD-R93` §6
+   * item 6; round 29 FINDING 5). In round 13 the detection was conditional on
+   * the planner choosing the unenforcing index, and on a `Seq Scan` the probe
+   * found the row and nothing refused — so the universal was never true of
+   * round 13. Since `27a7c998` the runtime reading is unconditional on every
+   * non-DELETE plan event, which makes the universal true of THIS head; it is
+   * not back-dated to the round that measured the single write.
+   *
+   * And there was NO law anywhere that an index physically describes its own
+   * heap: the round-12 corruption was repaired with two executable `REINDEX`
+   * statements in two test teardowns, and a measurement in a teardown is a
+   * fixture habit rather than an invariant.
+   */
+  it('H15 PART 9a READS EVERY INDEX OF BOTH RELATIONS, PART 9d REINDEXES AND CROSS-COUNTS, AND THE REFUSALS READ pg_index BEFORE BLAMING pg_policy', () => {
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    // ── 9a: every index of BOTH relations, by the relation list and not by a
+    //    hand-written index name, and the offenders NAMED with their flags.
+    expect(block).toMatch(/FROM pg_index x[\s\S]{0,400}?x\.indrelid = ANY \(SELECT \('public\.' \|\| y\)::regclass FROM unnest\(c_relations\) y\)/);
+    expect(block).toMatch(/NOT \(x\.indisvalid AND x\.indisready AND x\.indislive\)/);
+    expect(block).toContain('these indexes of the P4-S7 relations are present and NOT ENFORCING');
+    // and the primary key is now a NAMED subject of this file, which it was not
+    expect(SPEC).toContain('installment_plans_pkey');
+    // ── 9d: the physical instruments. A `REINDEX` per index of both
+    //    relations, and the two-path count over the whole relation.
+    expect(block).toMatch(/EXECUTE 'REINDEX INDEX public\.' \|\| pg_catalog\.quote_ident\(v_ix\)/);
+    expect(block).toContain("count(*) FILTER (WHERE p.status = 'active') INTO v_heap");
+    expect(block).toContain('INTO v_served FROM public.installment_plans p WHERE p.status');
+    expect(block).toMatch(/v_heap IS DISTINCT FROM v_served/);
+    // ...THE COUNT IS TAKEN BEFORE THE REBUILD, so the refusal that reaches
+    // an operator is this slice's own named one and not `23505 could not
+    // create unique index` (`TL-P4-COORD-R55` ordered item 2). Measured as an
+    // ORDER in the text, which is what decides which fires first.
+    expect(block.indexOf('v_heap IS DISTINCT FROM v_served')).toBeLessThan(block.indexOf("EXECUTE 'REINDEX INDEX public.'"));
+    // ...AND THE REBUILD'S OWN REFUSAL IS CAUGHT AND RE-RAISED UNDER THAT
+    // NAME, because the two-path count is PLANNER-DEPENDENT and is declared a
+    // belt while the rebuild is EXECUTION.
+    // ...AND EVERY FAILURE THE REBUILD CAN RAISE IS NAMED, NOT ONLY THE ONE
+    //    THAT WAS ANTICIPATED (`TL-P4-COORD-R59` ordered item 6, F14-6).
+    //    `WHEN unique_violation` renamed exactly one of `REINDEX`'s failures
+    //    and let a `42501` (measured: as `daftar_app`), a `55P03` or a lock
+    //    timeout surface raw out of the block naming no invariant of this
+    //    slice — the same shape the two-path count above it exists to repair.
+    //    The handler is `WHEN OTHERS` and it decides by `SQLSTATE` rather
+    //    than by assuming which failure arrived.
+    const nine_d = block.slice(block.indexOf('-- 9d.'));
+    expect(nine_d, 'part 9d still catches only unique_violation').not.toContain('EXCEPTION WHEN unique_violation');
+    expect(nine_d).toMatch(/EXECUTE 'REINDEX INDEX public\.' \|\| pg_catalog\.quote_ident\(v_ix\);\s*\n\s*EXCEPTION WHEN OTHERS THEN/);
+    expect(nine_d).toMatch(/IF SQLSTATE <> '23505' THEN/);
+    expect(nine_d).toContain('could not be REBUILT AT ALL');
+    expect(nine_d).toMatch(/RAISE EXCEPTION 'installment\.migration_end_state_invalid: index % cannot be rebuilt from the heap of its own relation/);
+    // ...and BOTH arms report the server's own SQLSTATE, so neither asserts a
+    //    cause it did not read.
+    expect((nine_d.match(/SQLSTATE, SQLERRM/g) ?? []).length, 'a 9d refusal states a cause without reporting the SQLSTATE it read').toBeGreaterThanOrEqual(2);
+    expect(block).toContain('THIS IS NOT A CATALOGUE FLAG AND NO FLAG CAN SHOW IT');
+    // ...and the forced index path is SAVED AND RESTORED, so part 9d does not
+    // reintroduce the leak part 9c shipped (F13-4) — AND THE RESTORE IS NOW
+    // EXCEPTION-SAFE IN CODE rather than resting on the transaction abort
+    // nothing stated (`TL-P4-COORD-R59` ordered item 6, F14-7): three
+    // `set_config` calls, one to force it and one restore on EACH path.
+    expect((nine_d.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9d sets enable_seqscan without restoring it on every path').toBe(3);
+    expect(nine_d).toContain("v_seqscan := pg_catalog.current_setting('enable_seqscan')");
+    expect(nine_d).toMatch(/EXCEPTION WHEN OTHERS THEN\s*\n\s*PERFORM pg_catalog\.set_config\('enable_seqscan', v_seqscan, true\);/);
+    // ...and part 9c's restore the same way: forced, read, restored on the
+    //    success path AND in a handler that re-raises under this slice's name.
+    const nine_c = block.slice(block.indexOf('-- 9c.'), block.indexOf('-- 9d.'));
+    expect((nine_c.match(/pg_catalog\.set_config\('enable_seqscan'/g) ?? []).length, 'part 9c does not restore enable_seqscan on every path').toBe(2);
+    expect(nine_c).toMatch(/EXCEPTION WHEN OTHERS THEN\s*\n\s*PERFORM pg_catalog\.set_config\('enable_seqscan', v_seqscan, true\);/);
+    expect(nine_c).toContain('part 9c could not read the plan of the index-independent active-plan count at all');
+    // ...and the apply-time VACUITY is declared rather than hidden: both
+    // relations are created in this same transaction, so they are empty here.
+    expect(SPEC).toContain('IT IS VACUOUS AT APPLY TIME AND THAT IS DECLARED, NOT HIDDEN');
+    // ── 9e exists and is read by H11.
+    expect(block).toContain('v_verify_tg');
+    // ── THE THREE RUNTIME REFUSALS READ `pg_index` BEFORE ATTRIBUTING A
+    //    CAUSE, and the categorical sentence that was false is gone.
+    expect(SPEC, 'the categorical row-security attribution is back').not.toContain('look in pg_policy and not in pg_index. Writing from a blinded read');
+    const sync = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_sync() RETURNS TRIGGER');
+    const verify = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_plan_fact_verify() RETURNS TRIGGER');
+    // two in the writer (the by-primary-key probe and the cross-check), one in
+    // the deferred verifier (the flag comparison).
+    expect((sync.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length, 'the writer does not name the index cause twice').toBe(2);
+    expect((verify.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length, 'the deferred verifier does not name the index cause').toBe(
+      1,
+    );
+    // ── AND THE SCHEDULE VERIFIER NAMES IT TOO, OVER **BOTH** RELATIONS
+    //    (`TL-P4-COORD-R59` ordered item 8, F14-9). The three runtime
+    //    readings covered `installment_plans` alone; `installments` was read
+    //    at APPLY TIME only, and the schedule sum is taken on the leading
+    //    pair of `installments_plan_schedule_idx` — measured index-served
+    //    with the planner FREE — so `schedule_incomplete: (a) the schedule
+    //    sums to X` could state an X that is an artifact of an unenforcing
+    //    `installments` index with nothing reading to exclude it.
+    const sched = dollarQuotedBody(SPEC, 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER');
+    expect(
+      (sched.match(/RAISE EXCEPTION 'installment\.plan_index_unenforcing:/g) ?? []).length,
+      'the schedule verifier states a sum without reading whether an index of installments is enforcing',
+    ).toBe(1);
+    expect(sched).toContain("WHERE x.indrelid IN ('public.installments'::regclass, 'public.installment_plans'::regclass)");
+    expect(sched).toContain('NOT (x.indisvalid AND x.indisready AND x.indislive)');
+    // ...and it is read BEFORE the figure is stated, which is the whole point.
+    expect(sched.indexOf('INTO v_unenforcing'), 'the index reading comes after the obligation that states the figure').toBeLessThan(
+      sched.indexOf("RAISE EXCEPTION 'installment.schedule_incomplete: (a) the schedule sums to"),
+    );
+    // ...and it cannot refuse lawful work: the read is GUARDED by one of the
+    //    obligations already having failed, so a sound schedule never reaches
+    //    the catalogue query at all.
+    expect(sched).toMatch(
+      /IF v_down \+ v_sched <> v_total OR v_rows < 1 OR v_max_seq <> v_rows OR v_distinct <> v_rows THEN\s*\n\s*SELECT pg_catalog\.string_agg/,
+    );
+    for (const body of [sync, verify]) {
+      expect((body.match(/INTO v_unenforcing/g) ?? []).length, 'a refusal attributes a cause it did not read').toBeGreaterThanOrEqual(1);
+      expect(body).toContain("WHERE x.indrelid = 'public.installment_plans'::regclass");
+    }
+    // ...and each surviving `plan_fact_blind` says what the reading EXCLUDED,
+    // rather than asserting a cause outright.
+    for (const m of sync.matchAll(/RAISE EXCEPTION 'installment\.plan_fact_blind:[^']*(?:''[^']*)*'/g)) {
+      expect(m[0], 'a plan_fact_blind message does not state what it observed').toContain('WHAT WAS OBSERVED');
+    }
+    expect((sync.match(/RAISE EXCEPTION 'installment\.plan_fact_blind:/g) ?? []).length).toBe(2);
+    // ...and the phrase that was FALSE AS WRITTEN is gone from every message.
+    expect(SPEC, 'the «counted over the rows themselves» claim is back').not.toContain("''active'' when counted over the rows themselves");
+  });
+
+  /**
+   * ── H14. THE ABSENCE LAW IS ABOUT THE INSTRUMENT AND NOT THE SPELLING
+   *    (`TL-P4-COORD-R52` ordered item 7) ─────────────────────────────────
+   *
+   * `~~` IS `LIKE`. The binding ruling is that a substring test cannot
+   * establish a property of code, nor a negated one an absence, because a
+   * comment and an identifier are both strings — which is true of every
+   * operator and every function in the class, and the law forbade one token.
+   */
+  it('H14 EVERY SPELLING OF A prosrc SUBSTRING TEST IS CAUGHT, and the shipped block passes', () => {
+    const matchers: readonly RegExp[] = [
+      /prosrc\s+(NOT\s+)?LIKE/i,
+      /prosrc\s+(NOT\s+)?ILIKE/i,
+      /prosrc\s*!?~~\*?/,
+      /prosrc\s*!?~\*?\s*'/,
+      /prosrc\s+(NOT\s+)?SIMILAR\s+TO/i,
+      /(position|strpos|substring|left|right)\s*\([^)]*prosrc/i,
+      /prosrc\s*(LIKE|ILIKE|SIMILAR)/i,
+      // ── A CAST BREAKS EVERY MATCHER ABOVE, AND THAT WAS THE SIMPLEST
+      //    ESCAPE OF THE TEN (`TL-P4-COORD-R55` ordered item 10, F13-8):
+      //    `p.prosrc::TEXT LIKE '%token%'` satisfies none of the seven,
+      //    because each requires `LIKE` to follow `prosrc` with only
+      //    whitespace between. A CAST of `prosrc` has no legitimate use in
+      //    this block — the digest law reads
+      //    `sha256(convert_to(p.prosrc,'UTF8'))`, which casts nothing — so
+      //    the whole cast family is forbidden with one matcher rather than
+      //    enumerated operator by operator. Same for an explicit COLLATE and
+      //    for the prefix operator.
+      /prosrc\s*::/i,
+      /prosrc\s+COLLATE/i,
+      /prosrc\s*\^@/,
+      /(regexp_like|regexp_count|regexp_match|regexp_replace|regexp_substr|starts_with|split_part|replace|translate|to_tsvector)\s*\([^)]*prosrc/i,
+      /prosrc[^\n]{0,40}@@/,
+      // NOT `encode(` and NOT `convert_to(`: the digest law this block DOES
+      // carry is `encode(pg_catalog.sha256(convert_to(p.prosrc, 'UTF8')), 'hex')`,
+      // and a matcher that refused it would refuse the one honest instrument.
+      /(md5|sha224|sha384|sha512)\s*\([^)]*prosrc/i,
+    ];
+    const caught = (line: string): boolean => matchers.some((m) => m.test(line));
+    for (const spelling of [
+      "p.prosrc LIKE '%token%'",
+      "p.prosrc NOT LIKE '%token%'",
+      'p.prosrc LIKE v_pat',
+      'p.prosrc LIKE $q$%token%$q$',
+      "p.prosrc ILIKE '%token%'",
+      "p.prosrc ~~ '%token%'",
+      "p.prosrc !~~ '%token%'",
+      "p.prosrc ~~* '%token%'",
+      "p.prosrc ~ 'token'",
+      "p.prosrc !~ 'token'",
+      "p.prosrc SIMILAR TO '%token%'",
+      "strpos(p.prosrc, 'token') > 0",
+      "position('token' in p.prosrc) > 0",
+      // the ten the round-13 challenger measured escaping, each now caught
+      // except where the escape is DECLARED below.
+      "p.prosrc::TEXT LIKE '%token%'",
+      'p.prosrc COLLATE "C" LIKE \'%token%\'',
+      "regexp_like(p.prosrc,'token')",
+      "starts_with(p.prosrc,'token')",
+      "split_part(p.prosrc,'token',2)",
+      "p.prosrc ^@ 'token'",
+      "replace(p.prosrc,'token','') <> p.prosrc",
+      "regexp_count(p.prosrc,'token')",
+      "to_tsvector(p.prosrc) @@ to_tsquery('token')",
+      "md5(p.prosrc) = 'abc'",
+    ]) {
+      expect(caught(spelling), `the absence law does not catch: ${spelling}`).toBe(true);
+    }
+    // AND THE SHIPPED BLOCK PASSES, which is the control that stops the law
+    // being satisfied by refusing everything. The subject is the block's SQL
+    // and not its prose, because the refusal messages QUOTE the ruling.
+    const block = SPEC.slice(SPEC.indexOf('\nDO $end$'));
+    const sql = block
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('--'))
+      .filter((l) => !l.includes('RAISE EXCEPTION') && !l.trimStart().startsWith("'"))
+      .join('\n');
+    for (const m of matchers) expect(sql, `the shipped block trips ${String(m)}`).not.toMatch(m);
+    // and the file DOES still name the forbidden operators, in prose, which
+    // is where a ruling is quoted and not applied.
+    expect(SPEC).toContain('`~~`');
+    // ── AND THE LIST IS DECLARED NON-EXHAUSTIVE, which `TL-P4-COORD-R50` §5
+    //    permits and which this law may not quietly stop doing. A substring
+    //    test can be spelled through any function that takes text, including
+    //    one a later PostgreSQL adds, so what is established here is that the
+    //    twenty-three spellings written out are caught — never that no
+    //    spelling escapes. The DECIDING instrument is the digest: an installed
+    //    body that is not byte-identical to the shipped text is refused
+    //    whatever it contains.
+    expect(matchers.length, 'the matcher list shrank').toBeGreaterThanOrEqual(13);
+    expect(sql).toContain('pg_catalog.sha256');
+  });
+
+  /**
+   * ── H16 THE FILE'S OWN READINESS HEADER IS UNDER A LAW NOW
+   *    (`TL-P4-COORD-R63` ordered item 3 — the structural fix, and the reason
+   *    round 16 exists) ─────────────────────────────────────────────────────
+   *
+   * WHY THIS LAW EXISTS. For fifteen rounds the specification's own header box
+   * said, in the present tense, that the file «has never been applied to a
+   * cluster, never parsed by PostgreSQL and never executed», that «the two
+   * constraint triggers have never fired», that `installment_schedule_verify()`
+   * «has never been compiled by the parser» and that «at the DATABASE level,
+   * not in TypeScript only» was NOT MET. Four integration suites apply the
+   * whole file to a real cluster; the aging-db suite passes a case asserting
+   * the routine WAS compiled and that THREE constraint triggers run it. Five
+   * independent challengers read this file and none found it, and the reason is
+   * structural rather than careless: every text law of this file looks at its
+   * DDL, its projection sketch, its end-state block and its digests — and none
+   * looked at the paragraph a reader actually consults to decide whether the
+   * file is ready. `R62` §2 said the specification's laws are blind outside the
+   * specification. They were also blind to its own header.
+   *
+   * WHAT THIS LAW CAN CATCH:
+   *   * a readiness claim that CONTRADICTS a measurement this tree makes — the
+   *     four refuted claims above, each keyed to the thing that refutes it;
+   *   * a header that has gone SILENT or VAGUE: the five positive claims below
+   *     are MANDATORY, and their subjects are derived from the tree (the suite
+   *     file names are discovered by scanning for the statement that applies
+   *     the file; the trigger counts are counted out of the specification), so
+   *     a paragraph that says nothing specific fails exactly as one that says
+   *     something false does;
+   *   * drift: a suite renamed, deleted, or stopping applying the file, and a
+   *     constraint trigger added or removed, all move the derived facts and the
+   *     header must move with them.
+   *
+   * WHAT THIS LAW CANNOT CATCH, STATED SO IT IS NOT TAKEN FOR MORE:
+   *   * it does not run those suites and cannot know they PASS. It reads that
+   *     they exist and that they apply this file; their verdict is their own
+   *     exit code, in CI, and this law would stay green against four suites
+   *     that all failed. That is deliberate: a pure-function test may not
+   *     depend on a cluster (this file creates none).
+   *   * it is scoped to the readiness paragraph. Prose elsewhere in the
+   *     specification, and in the API or the suites, is outside it — the three
+   *     stale sentences round 16 corrected in `selling-errors.ts` and in the
+   *     concurrency suite would NOT have been caught here.
+   *   * it is keyed to the claims that have actually been made false. A NEW
+   *     false readiness claim, about a mechanism nobody has keyed a measurement
+   *     to, passes. This is a ratchet over known falsehoods plus a floor of
+   *     mandatory specifics, not a truth oracle over English.
+   *   * it reads the file, not a cluster. It cannot tell whether a deployed
+   *     database carries any of this, which is why «no deployed cluster carries
+   *     any of it» is required to STAY in the paragraph as the `SPEC ONLY` half.
+   *   * it cannot tell a QUOTATION from an ASSERTION. The refuted sentences may
+   *     not appear in the readiness paragraph at all, not even as history of
+   *     what the paragraph used to say — and the first draft of round 16's own
+   *     header tripped this law for exactly that, which is the one case of it
+   *     going red that was not planted. The strictness is kept rather than
+   *     relaxed: «I was only quoting it» is the escape hatch a law over English
+   *     cannot afford, and the history belongs in the round report, which is
+   *     where it now is.
+   */
+  it('H16 THE READINESS HEADER IS READ BY A LAW: a stale readiness claim REDS, and so does a vague one', () => {
+    // ── THE SUBJECT: the readiness paragraph of the header box, sliced on its
+    //    own heading and the box's closing border. A missing heading is a
+    //    FINDING and never an empty subject — deleting the paragraph must red.
+    const HEADING = 'WHAT THIS FILE IS, MEASURED';
+    const readinessSection = (spec: string): string | null => {
+      const a = spec.indexOf(`-- │ ${HEADING}`);
+      if (a < 0) return null;
+      const b = spec.indexOf('\n-- └', a);
+      if (b < 0) return null;
+      return spec.slice(a, b);
+    };
+    // The box frame is removed and the lines are joined before anything is
+    // matched, so no claim of this law depends on where a sentence happens to
+    // wrap inside the box. A predicate that broke when one word moved to the
+    // next line would be a law about formatting.
+    const flatten = (s: string): string =>
+      s
+        .split('\n')
+        .map((l) =>
+          l
+            .replace(/^--\s*│/, '')
+            .replace(/│\s*$/, '')
+            .trim(),
+        )
+        .join(' ')
+        .replace(/\s+/g, ' ');
+
+    // ── THE FACTS, DERIVED FROM THE TREE AND NEVER TYPED HERE ────────────
+    //
+    // (1) WHICH SUITES APPLY THE WHOLE FILE. Discovered by reading every
+    //     integration suite and keeping the ones that execute `SPEC` itself.
+    //     The round-15 challenger said three; it is FOUR — the live suite
+    //     applies it as the routines' owner with `ownerPool().query(SPEC)`,
+    //     which is why the pattern is the CALL and not one spelling of the
+    //     pool variable.
+    const INTEGRATION = join(REPO, 'tests', 'integration');
+    const appliers = readdirSync(INTEGRATION)
+      .filter((f) => f.endsWith('.test.ts'))
+      .filter((f) => /\.query\(SPEC\)/.test(readFileSync(join(INTEGRATION, f), 'utf8')))
+      .sort();
+    expect(appliers.length, 'no integration suite applies the specification, so this law has no subject').toBeGreaterThan(0);
+    // (2) THE CONSTRAINT TRIGGERS, COUNTED OUT OF THE SPECIFICATION. The
+    //     statement and the function it runs are read together, because the
+    //     header's falsehood was a COUNT: it said two, and three run the
+    //     schedule verifier while five constraint triggers exist in all.
+    const constraintTriggers = [...SPEC.matchAll(/CREATE CONSTRAINT TRIGGER\s+(\w+)[\s\S]*?EXECUTE FUNCTION\s+(\w+)\(\)/g)].map((m) => ({
+      name: m[1] as string,
+      fn: m[2] as string,
+    }));
+    const scheduleTriggers = constraintTriggers.filter((t) => t.fn === 'installment_schedule_verify');
+    expect(constraintTriggers.length, 'no CREATE CONSTRAINT TRIGGER in the specification').toBeGreaterThan(0);
+    expect(scheduleTriggers.length, 'no constraint trigger runs the schedule verifier').toBeGreaterThan(0);
+    // (3) AND THE CASES THE HEADER LEANS ON REALLY EXIST, read as test titles
+    //     out of the suite that owns them. A header may claim the parser
+    //     compiled the routine only while a case says so.
+    const agingDb = readFileSync(join(INTEGRATION, 'phase4-s7-installment-aging-db.test.ts'), 'utf8');
+    const compiledCase = /it\('`installment_schedule_verify\(\)` was COMPILED/.test(agingDb);
+    const triggerCase = /it\('the THREE constraint triggers EXIST/.test(agingDb);
+    expect(compiledCase, 'the aging-db suite no longer carries the COMPILED case the header cites').toBe(true);
+    expect(triggerCase, 'the aging-db suite no longer carries the constraint-trigger case the header cites').toBe(true);
+
+    const WORDS = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'] as const;
+    const word = (n: number): string => WORDS[n] ?? String(n);
+
+    // ── THE LAW ──────────────────────────────────────────────────────────
+    //
+    // Two halves, and the second is what stops a vague paragraph passing:
+    // REFUTED claims may not appear, and MANDATORY specifics must.
+    const REFUTED: readonly { readonly kind: string; readonly re: RegExp; readonly refutedBy: string }[] = [
+      {
+        kind: 'refuted/never-applied',
+        re: /never (?:been )?applied to a cluster/i,
+        refutedBy: `${String(appliers.length)} integration suite(s) execute the whole file: ${appliers.join(', ')}`,
+      },
+      { kind: 'refuted/never-parsed', re: /never parsed by PostgreSQL/i, refutedBy: 'the same suites apply it, and the aging-db COMPILED case reads pg_proc' },
+      { kind: 'refuted/never-executed', re: /never executed/i, refutedBy: 'the live suite fires the schedule verifier at COMMIT in four directions' },
+      { kind: 'refuted/never-fired', re: /triggers? (?:have|has) never fired/i, refutedBy: 'the live and concurrency suites fire them' },
+      { kind: 'refuted/never-compiled', re: /never been compiled/i, refutedBy: 'the aging-db suite reads prosecdef and the owner out of pg_proc' },
+      { kind: 'refuted/not-met', re: /is NOT\s+MET/i, refutedBy: '«at the DATABASE level» is met for the obligations the live suite fires' },
+      {
+        kind: 'refuted/trigger-count',
+        re: /the two constraint triggers/i,
+        refutedBy: `${word(scheduleTriggers.length)} constraint triggers run installment_schedule_verify()`,
+      },
+      {
+        kind: 'refuted/every-statement-spec-only',
+        re: /EVERY STATEMENT BELOW IS `SPEC ONLY`/i,
+        refutedBy: 'the statements below are applied, parsed and executed',
+      },
+    ];
+    // ── THE SECOND HALF NOW ASSERTS THE **CLAIMS** AND NOT THE TOKENS
+    //    (`TL-P4-COORD-R69` ordered item 2, R16-1) ───────────────────────
+    //
+    // Round 16's five `MANDATORY` predicates tested TOKEN PRESENCE, and the
+    // round-16 challenger replicated them and passed a header through that was
+    // specific, mandatory-complete and the EXACT NEGATION of the truth:
+    // `/COMPILED/` matches «NOT COMPILED», `s.includes('THREE run')` matches
+    // «THREE run … ON PAPER ONLY», and naming the four suites in order to DENY
+    // them satisfied `appliers.every(…)`. Zero findings. So the floor meant to
+    // stop a vague header passing constrained VOCABULARY and not TRUTH on the
+    // five facts this law derives from the tree, and `R67` §3's reading of item
+    // 3 as the structural fix was withdrawn until this was repaired.
+    //
+    // Each predicate below requires the AFFIRMATIVE PROPOSITION: the verb
+    // phrase, not the noun. «FOUR integration suites EXECUTE THE WHOLE OF THIS
+    // FILE» rather than «FOUR integration suites»; «`installment_schedule_verify()`
+    // IS COMPILED» rather than the token `COMPILED`; «THE CONSTRAINT TRIGGERS
+    // FIRE» in terms; «NO DEPLOYED CLUSTER CARRIES ANY OF IT» in terms. Arm (vi)
+    // below is the negation header itself, as a permanent red proof.
+    //
+    // AND EVERY PREDICATE IS CASE-INSENSITIVE, which is `R69` item 2's third
+    // clause (R16-5): round 16's predicates reded a TRUE header written in
+    // lowercase on two of five, and a law that polices capitalisation while
+    // passing a negation is measuring the wrong thing. Arm (v) is a true
+    // lowercase header and it must produce NO finding.
+    //
+    // WHAT THIS STILL DOES NOT ESTABLISH, said plainly rather than left for a
+    // sixth challenger: these are predicates over PHRASING. A header that
+    // asserts each proposition in these words and then appends a defeater to
+    // it -- «… on paper» after the claim rather than inside it -- satisfies
+    // them. What is established is that the proposition must be ASSERTED and
+    // that its negation in place of the assertion REDS, which is the class the
+    // challenger exhibited; English is not decidable and this law does not
+    // pretend to decide it.
+    const CLAIMS: readonly { readonly kind: string; readonly holds: (s: string) => boolean; readonly want: string }[] = [
+      {
+        kind: 'claim/applied-parsed-executed',
+        holds: (s) => /IT IS APPLIED, PARSED AND EXECUTED/i.test(s),
+        want: 'in terms, that the file IS APPLIED, PARSED AND EXECUTED',
+      },
+      {
+        kind: 'claim/appliers',
+        holds: (s) => appliers.every((f) => s.includes(f)),
+        want: `every suite that applies this file, by name: ${appliers.join(', ')}`,
+      },
+      {
+        kind: 'claim/applier-count',
+        holds: (s) => new RegExp(`(?:${word(appliers.length)}|${String(appliers.length)}) integration suites execute the whole of this file`, 'i').test(s),
+        want: `the ASSERTION «${word(appliers.length)} integration suites execute the whole of this file», and not merely the count`,
+      },
+      {
+        kind: 'claim/parsed',
+        holds: (s) => /`?installment_schedule_verify\(\)`? is\s+COMPILED/i.test(s),
+        want: 'that `installment_schedule_verify()` IS COMPILED — the assertion, not the token, which «NOT COMPILED» also carries',
+      },
+      {
+        kind: 'claim/triggers-fire',
+        holds: (s) => /THE CONSTRAINT TRIGGERS FIRE/i.test(s),
+        want: 'in terms, that THE CONSTRAINT TRIGGERS FIRE',
+      },
+      {
+        kind: 'claim/trigger-count',
+        holds: (s) =>
+          new RegExp(
+            `(?:${word(constraintTriggers.length)}|${String(constraintTriggers.length)}) \`CREATE CONSTRAINT TRIGGER\` statements are below`,
+            'i',
+          ).test(s) &&
+          new RegExp(`(?:${word(scheduleTriggers.length)}|${String(scheduleTriggers.length)}) run\\s+\`installment_schedule_verify\\(\\)\``, 'i').test(s),
+        want: `both counts AS CLAIMS: «${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\` statements are below» and «${word(scheduleTriggers.length)} run \`installment_schedule_verify()\`»`,
+      },
+      {
+        kind: 'claim/spec-only',
+        holds: (s) =>
+          /SPEC ONLY/i.test(s) &&
+          /migrations\//i.test(s) &&
+          /manifest/i.test(s) &&
+          /PR-6/i.test(s) &&
+          /PR-8/i.test(s) &&
+          /NO DEPLOYED CLUSTER CARRIES ANY OF IT/i.test(s),
+        want: 'what is STILL `SPEC ONLY`, naming `migrations/`, the manifest, PR-6 and PR-8, AND the assertion that NO DEPLOYED CLUSTER CARRIES ANY OF IT',
+      },
+    ];
+    const findings = (section: string | null): readonly string[] => {
+      if (section === null) return ['missing/section: the readiness paragraph is not in the header box at all'];
+      const text = flatten(section);
+      const out: string[] = [];
+      for (const r of REFUTED) if (r.re.test(text)) out.push(`${r.kind}: the header claims ${String(r.re)} — refuted by ${r.refutedBy}`);
+      for (const m of CLAIMS) if (!m.holds(text)) out.push(`${m.kind}: the header does not assert ${m.want}`);
+      return out;
+    };
+
+    // ── (i) THE SHIPPED HEADER IS CLEAN ──────────────────────────────────
+    const live = readinessSection(SPEC);
+    expect(live, 'the readiness paragraph could not be sliced').not.toBeNull();
+    expect(findings(live)).toEqual([]);
+
+    // ── (ii) RED PROOF, THE STALE-CLAIM ARM: the exact sentences that stood
+    //         in this box for fifteen rounds, planted back one at a time.
+    for (const [planted, kind] of [
+      ['This file has never been applied to a cluster, never parsed by PostgreSQL and never executed.', 'refuted/never-applied'],
+      ['So the two constraint triggers have never fired.', 'refuted/trigger-count'],
+      ['«at the DATABASE level, not in TypeScript only» is NOT MET.', 'refuted/not-met'],
+      ['`installment_schedule_verify()` has never been compiled by the parser.', 'refuted/never-compiled'],
+      ['EVERY STATEMENT BELOW IS `SPEC ONLY`.', 'refuted/every-statement-spec-only'],
+    ] as const) {
+      const stale = `${String(live)}\n-- │ ${planted}`;
+      const got = findings(stale);
+      expect(
+        got.some((f) => f.startsWith(kind)),
+        `planting «${planted}» did not red the law; findings: ${got.join(' | ')}`,
+      ).toBe(true);
+    }
+
+    // ── (iii) RED PROOF, THE VAGUENESS ARM — the escape a ratchet over
+    //          falsehoods alone would leave open. A paragraph that asserts
+    //          nothing checkable must fail too, and it fails on FOUR of the
+    //          five mandatory specifics at once.
+    const vague = `-- │ ${HEADING}: readiness is a matter for the reader; see the suites.`;
+    const vagueFindings = findings(vague);
+    expect(vagueFindings.length, `a vague header produced only: ${vagueFindings.join(' | ')}`).toBeGreaterThanOrEqual(4);
+    for (const kind of [
+      'claim/appliers',
+      'claim/parsed',
+      'claim/trigger-count',
+      'claim/spec-only',
+      'claim/applied-parsed-executed',
+      'claim/triggers-fire',
+      'claim/applier-count',
+    ]) {
+      expect(
+        vagueFindings.some((f) => f.startsWith(kind)),
+        `a vague header passed ${kind}`,
+      ).toBe(true);
+    }
+    // ...and a header that was DELETED outright is a finding and not a pass.
+    expect(findings(readinessSection('-- nothing here\n'))).toEqual(['missing/section: the readiness paragraph is not in the header box at all']);
+
+    // ── (iv) RED PROOF, THE DRIFT ARM: the facts move with the tree, so a
+    //         fifth suite that applied the file would red the header until the
+    //         header named it. Simulated by naming a suite the section cannot
+    //         contain, which is exactly what a rename produces.
+    const drifted = [...appliers, 'phase4-s7-installment-not-yet-written-db.test.ts'];
+    expect(drifted.every((f) => String(live).includes(f))).toBe(false);
+
+    // ── (v) THE ORTHOGRAPHY SENSITIVITY IS GONE (`TL-P4-COORD-R69` item 2,
+    //         R16-5): the shipped header, true, written in lower case,
+    //         produces NO finding. Round 16's predicates reded it on two of
+    //         five.
+    expect(findings(String(live).toLowerCase()), 'a TRUE header in lower case reds, which is a law about capitalisation').toEqual([]);
+
+    // ── (vi) RED PROOF, THE NEGATION ARM — THE SIXTH ONE, AND THE ONE THIS
+    //          ROUND EXISTS FOR (`TL-P4-COORD-R69` item 2, R16-1).
+    //
+    //  A header that is SPECIFIC, carries every mandatory subject, names all
+    //  four suites, and asserts the EXACT NEGATION of all five derived facts.
+    //  The round-16 challenger fed exactly this to round 16's predicates and
+    //  got ZERO findings. Here it must red, and it must red on the CLAIMS it
+    //  negates and not merely somewhere: that is the difference between
+    //  asserting a proposition and mentioning its vocabulary. The subjects are
+    //  derived, so this arm tracks the tree with the law.
+    const negation =
+      `-- │ ${HEADING}, NEGATED:\n` +
+      `-- │ ${word(appliers.length)} integration suites exist -- ${appliers.join(', ')} -- and NOT ONE OF THEM\n` +
+      `-- │ reaches a cluster; the parser has never had sight of this file, so\n` +
+      `-- │ \`installment_schedule_verify()\` is NOT COMPILED and could not be.\n` +
+      `-- │ ${word(constraintTriggers.length)} \`CREATE CONSTRAINT TRIGGER\` statements are written below and\n` +
+      `-- │ ${word(scheduleTriggers.length)} run the schedule verifier ON PAPER ONLY; none has ever fired.\n` +
+      `-- │ What is SPEC ONLY is all of it: no \`migrations/\` entry, no manifest\n` +
+      `-- │ entry, PR-6 and PR-8 outstanding.`;
+    const negationFindings = findings(negation);
+    for (const kind of [
+      'claim/applied-parsed-executed',
+      'claim/applier-count',
+      'claim/parsed',
+      'claim/triggers-fire',
+      'claim/trigger-count',
+      'claim/spec-only',
+    ]) {
+      expect(
+        negationFindings.some((f) => f.startsWith(kind)),
+        `the NEGATION header satisfied ${kind}; findings: ${negationFindings.join(' | ')}`,
+      ).toBe(true);
+    }
+    // AND THE NEGATION PASSES `claim/appliers` ON PURPOSE, recorded rather
+    // than hidden: naming the four suites is what that predicate asks, and a
+    // header may name them in order to deny them. The denial is caught by the
+    // five claims above, which is where it belongs — a NAME is not a CLAIM.
+    expect(negationFindings.some((f) => f.startsWith('claim/appliers'))).toBe(false);
+  });
+
+  /**
+   * ── H17 THE GATE PARAGRAPH'S OFFSETS AND ITS EXIT COUNT ARE READ OUT OF
+   *    THE BODY (`TL-P4-COORD-R69` ordered items 3 and 5; R16-3 and R16-6) ──
+   *
+   * WHY THIS LAW EXISTS. Section 3's gate paragraph locates itself and four
+   * other sites by BYTE OFFSET into `installment_schedule_verify()`'s own
+   * dollar-quoted body, and it ENUMERATES the `RETURN NULL` exits above the
+   * gate. Round 16 typed both: six offsets it had to iterate to a fixed point
+   * (writing the numbers into the body moves the body, and therefore the
+   * numbers) and a count of «three» exits when there are FOUR — the
+   * `IF v_status <> 'active'` exit was unlisted. That count had moved three
+   * times by then, every time because it was read off a sentence. Round 16
+   * disclosed the offset hole in its own report and said plainly that NO LAW
+   * READ THEM; the round-16 challenger measured that all six were correct at
+   * that SHA and that the exposure was any future edit above offset 6172.
+   *
+   * SO THE PARAGRAPH IS NOW A SUBJECT AND NOT AN ASSERTION. Every number in
+   * it, and the count word, are derived here out of the body text and compared
+   * against what the paragraph says. An edit anywhere in this routine that
+   * moves any landmark reds HERE, in a pure-function suite that needs no
+   * cluster, instead of leaving a stale number for a sixth challenger.
+   *
+   * THE PREMISE THIS LAW DEPENDS ON, NAMED. The offsets are offsets into the
+   * `$fn$`-quoted body as the FILE ships it. That the installed `prosrc` is
+   * byte-identical to that text is a separate claim, and it is established by
+   * a separate instrument — the `c_bodies` digest coupling, asserted in both
+   * directions by the digest laws of this same file. This law establishes the
+   * paragraph against the FILE and claims nothing about a cluster.
+   *
+   * WHAT IT DOES NOT CATCH: it reads the four landmarks the paragraph names.
+   * A landmark the paragraph stops naming altogether is caught (the slice
+   * fails), but a NEW site the paragraph should have named and does not is
+   * outside it — except for the exit enumeration, which IS exhaustive, because
+   * every `RETURN NULL` occurrence above the gate must be one of the exits it
+   * lists.
+   */
+  it('H17 THE GATE PARAGRAPH IS READ: every printed offset and the exit COUNT are derived from the routine body', () => {
+    // ── THE BODY, sliced exactly as the digest extractor slices it: the
+    //    characters between the opening and closing dollar quotes of this one
+    //    routine, taken literally and never normalised.
+    const head = 'CREATE OR REPLACE FUNCTION installment_schedule_verify() RETURNS TRIGGER';
+    const h = SPEC.indexOf(head);
+    expect(h, 'the schedule verifier is no longer in the specification').toBeGreaterThan(-1);
+    const open = SPEC.indexOf('$fn$', h);
+    const close = SPEC.indexOf('$fn$', open + 4);
+    expect(close, 'the schedule verifier body is not dollar-quoted').toBeGreaterThan(open);
+    const body = SPEC.slice(open + 4, close);
+    expect(body.length, 'the sliced body is too short to be this routine').toBeGreaterThan(5000);
+
+    // ── THE LANDMARKS, DERIVED. Each is located by the text of the statement
+    //    itself, never by a number.
+    const gate = body.indexOf('IF v_down + v_sched <> v_total OR v_rows < 1');
+    const ceiling = body.indexOf('IF v_rows > 60');
+    const invoiceArm = body.indexOf("RAISE EXCEPTION 'installment.schedule_incomplete: (a) invoice");
+    for (const [name, at] of [
+      ['the gate IF', gate],
+      ['obligation (d)', ceiling],
+      ['the invoices-arm refusal of (a)', invoiceArm],
+    ] as const) {
+      expect(at, `${name} is not in the body, so this law has no subject`).toBeGreaterThan(-1);
+    }
+    const inComment = (at: number): boolean => {
+      const ls = body.lastIndexOf('\n', at) + 1;
+      return body.slice(ls, at).trimStart().startsWith('--');
+    };
+    const guardedExits = [...body.matchAll(/IF[^\n]*RETURN NULL;/g)].map((m) => m.index ?? -1).filter((at) => !inComment(at));
+    const exitsAboveGate = guardedExits.filter((at) => at < gate).sort((a, b) => a - b);
+    expect(exitsAboveGate.length, 'no guarded RETURN NULL exit above the gate').toBeGreaterThan(0);
+    // AND THE ENUMERATION IS EXHAUSTIVE OVER THE TOKEN, which is the half the
+    // count kept failing: EVERY `RETURN NULL` occurrence above the gate must
+    // be one of the guarded exits, so a new unguarded one cannot hide.
+    // The scan is over the CODE and not the comments: this very paragraph
+    // writes the token `RETURN NULL` in prose, and a law that counted its own
+    // subject's description would be measuring itself.
+    const everyReturnNull = [...body.matchAll(/RETURN NULL/g)].map((m) => m.index ?? -1).filter((at) => at < gate && !inComment(at));
+    expect(
+      everyReturnNull.every((at) => exitsAboveGate.some((e) => at >= e && at <= e + 60)),
+      'a RETURN NULL above the gate is not one of the guarded exits the paragraph enumerates',
+    ).toBe(true);
+    expect(everyReturnNull.length, 'the token scan and the guarded-exit scan disagree above the gate').toBe(exitsAboveGate.length);
+    expect(ceiling, 'obligation (d) is not below the gate, so the paragraph describes a different routine').toBeGreaterThan(gate);
+
+    // ── THE PARAGRAPH, SLICED on its own heading and its last bullet.
+    const pa = body.indexOf('-- THE SCOPE IS (a), (b) AND (c), AND NOT (d), AND NOT EVERY EXIT ABOVE');
+    expect(pa, 'the gate paragraph is no longer in the body').toBeGreaterThan(-1);
+    const pb = body.indexOf('conditions of the `IF`', pa);
+    expect(pb, 'the gate paragraph does not reach its obligation-(d) bullet').toBeGreaterThan(pa);
+    const para = body.slice(pa, pb);
+
+    // ── AND NOW THE COMPARISONS. Printed against derived, one landmark at a
+    //    time, with the finding naming both numbers.
+    const printed = (re: RegExp, what: string): number => {
+      const m = re.exec(para);
+      expect(m, `the gate paragraph no longer states ${what}`).not.toBeNull();
+      return Number((m as RegExpExecArray)[1]);
+    };
+    expect(printed(/the gate's `IF` is at (\d+)/, "the gate's own offset"), "the gate's printed offset").toBe(gate);
+    expect(printed(/refusal of \(a\) at (\d+)/, "the invoices-arm refusal's offset"), "the (a) arm's printed offset").toBe(invoiceArm);
+    expect(printed(/obligation \(d\) at (\d+)/, "obligation (d)'s offset"), "obligation (d)'s printed offset").toBe(ceiling);
+
+    // THE EXIT LIST: the parenthesised offsets of the enumeration bullet, in
+    // the order it writes them, against the derived exits in body order.
+    const bullet = para.slice(para.indexOf('`RETURN NULL` exits above it'));
+    const printedExits = [...bullet.matchAll(/\((\d{3,6})\)/g)].map((m) => Number(m[1]));
+    expect(printedExits, 'the enumerated exit offsets disagree with the body').toEqual(exitsAboveGate);
+
+    // AND THE COUNT WORD, which is the number R16-3 found wrong — taken from
+    // the body here and not from the sentence.
+    const WORDS = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'] as const;
+    const countWord = /the (ZERO|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE) `RETURN NULL` exits above it/i.exec(para);
+    expect(countWord, 'the gate paragraph no longer states the exit count as a word').not.toBeNull();
+    expect(String((countWord as RegExpExecArray)[1]).toUpperCase(), 'the printed exit COUNT disagrees with the body').toBe(
+      WORDS[exitsAboveGate.length] ?? String(exitsAboveGate.length),
+    );
+
+    // ── RED PROOFS, IN MEMORY: the law must red on a stale number, on a stale
+    //    COUNT, and on a dropped exit — the three ways this paragraph has
+    //    actually gone wrong.
+    const findingsOf = (p: string): readonly string[] => {
+      const out: string[] = [];
+      const g = /the gate's `IF` is at (\d+)/.exec(p);
+      if (g === null || Number(g[1]) !== gate) out.push('stale/gate');
+      const d = /obligation \(d\) at (\d+)/.exec(p);
+      if (d === null || Number(d[1]) !== ceiling) out.push('stale/ceiling');
+      const b = p.slice(p.indexOf('`RETURN NULL` exits above it'));
+      const pe = [...b.matchAll(/\((\d{3,6})\)/g)].map((m) => Number(m[1]));
+      if (pe.length !== exitsAboveGate.length || pe.some((v, i) => v !== exitsAboveGate[i])) out.push('stale/exits');
+      const cw = /the (ZERO|ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE) `RETURN NULL` exits above it/i.exec(p);
+      if (cw === null || String(cw[1]).toUpperCase() !== (WORDS[exitsAboveGate.length] ?? '')) out.push('stale/count');
+      return out;
+    };
+    // The live paragraph is clean, which is the control that stops the three
+    // arms below passing for want of a working predicate.
+    expect(findingsOf(para)).toEqual([]);
+    expect(findingsOf(para.replace(`is at ${String(gate)}`, `is at ${String(gate + 1)}`))).toContain('stale/gate');
+    expect(findingsOf(para.replace(`obligation (d) at ${String(ceiling)}`, `obligation (d) at ${String(ceiling - 7)}`))).toContain('stale/ceiling');
+    // THE ROUND-16 DEFECT ITSELF, planted back: the count said THREE and the
+    // last exit was not listed. Both arms must fire.
+    const asRound16 = para
+      .replace(/the FOUR `RETURN NULL` exits above it/i, 'the THREE `RETURN NULL` exits above it')
+      .replace(` and\n  --     the plan not active (${String(exitsAboveGate[exitsAboveGate.length - 1] ?? 0)})`, '');
+    const r16 = findingsOf(asRound16);
+    expect(r16, `round 16's own enumeration did not red; findings: ${r16.join(' | ')}`).toContain('stale/count');
+    expect(r16, `dropping the fourth exit did not red; findings: ${r16.join(' | ')}`).toContain('stale/exits');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-13-SPEC — THE TERMLESS RECEIVABLE, IN EVERY ARM OF THIS SPECIFICATION.
+//
+// DR-13 (owner, 2026-10-26) and DR-21 (owner, 2026-10-27). `0084:727` already
+// ages an invoice with no stated term from its own issue date. THIS
+// SPECIFICATION REPLACED THAT BODY AND DID NOT CARRY THE DECISION: it derived
+// its bucket date from `due_date` ALONE and guarded the band arithmetic with
+// `bucket_date IS NOT NULL AND …`, so a receivable with no stated term
+// exceeded NO threshold however old it got and sat in the first band for ever
+// — debt leaving an aging report BY OMISSION rather than by payment. The
+// reference model and the oracles carried the same rule, which is why the
+// money proofs above could not see it: every one of them holds identically
+// under the defect, because the TOTALS are untouched and only the BAND moves.
+//
+// DR-21 settles the open accounting question S-15 for both arms at once:
+//
+//   * an amount with no stated term — the whole invoice, or the RESIDUAL the
+//     schedule does not declare — ages from `coalesce(due_date, issue_date)`;
+//   * a SCHEDULED instalment ages from ITS OWN due date and from nothing else,
+//     so the two arms are NOT levelled;
+//   * and no path takes a receivable out of the report except payment.
+//
+// The substitution has a SIGNED direction and it is the safe one:
+// `invoices.issue_date` is `NOT NULL` and `invoices_due_date_ck` enforces
+// `due_date >= issue_date`, so the substitute can only ever make a receivable
+// MORE overdue than the absent date did, never less.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('DR-13-SPEC the termless receivable ages from its issue date in every arm', () => {
+  it('dr13_1: a termless invoice 400 days old is reported in the OLDEST band, not the first', () => {
+    const row = termlessRow(400);
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — the planless arm emitted nothing, so the band below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('whole_invoice');
+    // THE ASSERTION THAT GOES RED ON THE DEFECT, and it is on the BAND NUMBER:
+    // under the retired rule this is 1 — `not-due` — for a receivable 400 days
+    // past its own issue date.
+    expect(only.bucketNo, 'a termless receivable 400 days old reported as not-due is debt leaving the report by omission').toBe(OLDEST_STANDARD);
+    expect((agingBucketLabels([...STANDARD]) as readonly string[])[only.bucketNo - 1]).toBe('over-90');
+    // The date the projection SAYS it used is the issue date, so the figure
+    // and its stated date cannot disagree.
+    expect(only.scheduleDate).toBe(row.issueDate);
+    // CONSERVATION, as an absolute value against the authoritative figure.
+    expect(sum(c)).toBe(100_000n);
+  });
+
+  it('dr13_2: the unscheduled RESIDUAL of a termless invoice ages from the issue date too (DR-21)', () => {
+    // A plan that declares 40 000 of a 100 000 invoice: 60 000 is residual,
+    // and the schedule gives it no date of its own.
+    const row = termlessRow(400, { outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n });
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(395),
+      installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 40_000n }],
+    };
+    const c = projectInvoice(row, plan, AS_OF, STANDARD);
+    const residual = c.filter((x) => x.origin === 'residual');
+    expect(residual, 'NO SUBJECT — no residual was emitted, so DR-21 has nothing to be wrong about').toHaveLength(1);
+    const r = residual[0] as AgingContribution;
+    expect(r.txnMinor).toBe(60_000n);
+    expect(r.bucketNo, 'an unscheduled residual reported as not-due is the same omission by another arm').toBe(OLDEST_STANDARD);
+    expect(r.scheduleDate).toBe(row.issueDate);
+    // And the arms still PARTITION the authoritative outstanding exactly.
+    expect(sum(c)).toBe(100_000n);
+  });
+
+  it('dr13_3: a SCHEDULED instalment ages from its OWN due date and not from the issue date (DR-21)', () => {
+    // The two arms are not levelled: this instalment is not yet due although
+    // the invoice was issued 400 days ago.
+    const row = termlessRow(400, { outstandingTxnMinor: 40_000n, outstandingBaseMinor: 33_801n });
+    const plan: InstallmentPlan = {
+      invoiceId: 'inv-termless',
+      status: 'active',
+      downPaymentMinor: 0n,
+      downPaymentDueDate: daysBefore(-60),
+      installments: [{ seqNo: 1, dueDate: daysBefore(-30), amountTxnMinor: 40_000n }],
+    };
+    const c = projectInvoice(row, plan, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('installment');
+    expect(only.bucketNo, 'a future instalment aged from the invoice issue date would be the opposite error').toBe(1);
+    expect(only.scheduleDate).toBe(plan.installments[0]?.dueDate);
+  });
+
+  it('dr13_4: a STATED due date still governs, and the older issue date does not pull it older', () => {
+    const row: OpenInvoiceRow = { ...termlessRow(400), dueDate: daysBefore(0) };
+    const c = projectInvoice(row, undefined, AS_OF, STANDARD);
+    const only = c[0] as AgingContribution;
+    // Nothing is overdue on the due date itself: `>` is strict.
+    expect(only.bucketNo).toBe(1);
+    expect(only.scheduleDate).toBe(row.dueDate);
+  });
+
+  it('dr13_5: every boundary of the fallback, on each side and ON it', () => {
+    // The thresholds are `[0, 30, 60, 90]` and the comparison is STRICT `>`,
+    // so the issue date itself is band 1 and one day later is band 2.
+    const expected: readonly [number, number][] = [
+      [0, 1], // the issue day itself — nothing is overdue yet
+      [1, 2],
+      [29, 2],
+      [30, 2], // ON the boundary: `>` is strict, so still `1-30`
+      [31, 3],
+      [59, 3],
+      [60, 3],
+      [61, 4],
+      [89, 4],
+      [90, 4],
+      [91, 5],
+      [3650, 5],
+    ];
+    for (const [age, band] of expected) {
+      const c = projectInvoice(termlessRow(age), undefined, AS_OF, STANDARD);
+      expect((c[0] as AgingContribution).bucketNo, `a termless receivable ${age} day(s) past its issue date`).toBe(band);
+    }
+    // A FUTURE issue date is not negatively overdue; it is not overdue.
+    expect((projectInvoice(termlessRow(-45), undefined, AS_OF, STANDARD)[0] as AgingContribution).bucketNo).toBe(1);
+  });
+
+  it('dr13_6: the fallback is a CIVIL date difference — leap day, year end, month end, and a DST crossing', () => {
+    // Each pair is (issue date, as-of) with the EXACT number of civil days
+    // between them, so no host offset and no clock can move a band.
+    const pairs: readonly { issue: string; asOf: string; days: number }[] = [
+      { issue: '2024-02-29', asOf: '2024-03-30', days: 30 }, // a leap day, ON the boundary
+      { issue: '2024-02-29', asOf: '2024-03-31', days: 31 },
+      { issue: '2025-12-31', asOf: '2026-01-30', days: 30 }, // across a year end
+      { issue: '2026-01-31', asOf: '2026-03-02', days: 30 }, // across a short month
+      { issue: '2026-03-27', asOf: '2026-04-26', days: 30 }, // across a spring DST change
+      { issue: '2026-10-23', asOf: '2026-11-22', days: 30 }, // across an autumn DST change
+    ];
+    for (const { issue, asOf, days } of pairs) {
+      expect(epochDay(asOf) - epochDay(issue), `${issue} to ${asOf}`).toBe(days);
+      const row = termlessRow(0, { issueDate: issue });
+      const c = projectInvoice(row, undefined, asOf, STANDARD);
+      expect((c[0] as AgingContribution).bucketNo, `${issue} to ${asOf} is ${days} civil days`).toBe(days > 30 ? 3 : 2);
+    }
+  });
+
+  it('dr13_7: the money — one minor unit on each side, a negative, and a figure above 2^53', () => {
+    // ONE MINOR UNIT, aged past the oldest boundary. The smallest amount the
+    // report can carry must still move bands.
+    const tiny = projectInvoice(termlessRow(91, { outstandingTxnMinor: 1n, outstandingBaseMinor: 1n }), undefined, AS_OF, STANDARD);
+    expect((tiny[0] as AgingContribution).txnMinor).toBe(1n);
+    expect((tiny[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // And one minor unit on the YOUNG side of the same boundary.
+    const tinyYoung = projectInvoice(termlessRow(90, { outstandingTxnMinor: 1n, outstandingBaseMinor: 1n }), undefined, AS_OF, STANDARD);
+    expect((tinyYoung[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD - 1);
+
+    // A CUSTOMER IN CREDIT on a termless document — a negative is a fact, not
+    // an error, and it must age rather than vanish.
+    const credit = projectInvoice(termlessRow(400, { outstandingTxnMinor: -2_500n, outstandingBaseMinor: -2_113n }), undefined, AS_OF, STANDARD);
+    expect((credit[0] as AgingContribution).txnMinor).toBe(-2_500n);
+    expect((credit[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    expect(sum(credit)).toBe(-2_500n);
+
+    // ABOVE 2^53, so a float would lose minor units. `9007199254740993` is
+    // 2^53 + 1 and is NOT representable as a double.
+    const huge = 9_007_199_254_740_993n;
+    expect(BigInt(Number(huge)), '2^53 + 1 survived a round trip through a double, so this case proves nothing').not.toBe(huge);
+    const big = projectInvoice(termlessRow(400, { outstandingTxnMinor: huge, outstandingBaseMinor: huge - 1n }), undefined, AS_OF, STANDARD);
+    expect((big[0] as AgingContribution).txnMinor).toBe(huge);
+    expect((big[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    // CONSERVATION as an ABSOLUTE value, not as an identity between two sums
+    // computed the same way.
+    expect(sum(big)).toBe(huge);
+  });
+
+  it('dr13_8: NO INVOICE WITHOUT AN ACTIVE PLAN leaves the aging report — the bands total its authoritative outstanding, termless or not', () => {
+    // THE TITLE IS NARROW ON PURPOSE, AND THE NARROWING IS THE POINT.
+    //
+    // This case passes `[]` for the plans, so the ONLY arm it measures is arm
+    // (c): the whole figure of an invoice with no active plan. Its first
+    // title claimed «no receivable leaves the aging report», which is a
+    // UNIVERSAL claim over all three arms, and a universal claim measured on
+    // one arm is exactly what let the termless defect live the whole life of
+    // this slice: ten money proofs asserted conservation, none of them
+    // asserted PLACEMENT, and the titles did not say so.
+    //
+    // WHAT NO TEST IN THIS SUITE MEASURED, WHEN THIS CASE WAS WRITTEN, WAS
+    // THE BODY'S BEHAVIOUR IN ONE STATE — and the state itself WAS measured,
+    // on the model, which is why this heading says «the body's behaviour»
+    // and not «the state». An earlier draft of it read «what is not measured
+    // here, or anywhere in this suite», and that was the very sin the
+    // narrowing above indicts: a universal claim standing over a part. The
+    // state was named rather than left to be discovered again, and the
+    // TRACKED record of it is `TECHNICAL_DEBT.md`, «Phase 4 money cards and
+    // decisions (DR-24)», card `OVERPAY-AGING`:
+    //
+    //   AN INVOICE UNDER AN ACTIVE PLAN WITH A NEGATIVE OUTSTANDING — an
+    //   OVERPAYMENT. `installment_schedule_verify()` holds
+    //   `down + Σ instalments = total` by strict equality, so the schedule
+    //   total always equals the invoice total; and the body's levels were
+    //   `least(greatest(c, paid), total)`, so when `paid > total` EVERY level
+    //   collapsed to `total`. Arm (a)'s consecutive differences were then all
+    //   zero and `declared_end = total` made arm (b)'s residual zero, so the
+    //   invoice contributed NOTHING and the customer's credit balance left
+    //   the report by omission rather than by payment.
+    //
+    //   IT WAS A DIVERGENCE BETWEEN THIS MODEL AND THE BODY, not a defect of
+    //   the model: `projectInvoice` carries a totality arm for `O <= 0n`
+    //   (`phase4-s7-aging-reference-model.ts`) that emits the whole figure as
+    //   a residual, and the SQL body had no such arm. The MODEL side was
+    //   already measured — `a negative outstanding is carried too, rather
+    //   than clamped away` puts `-5_000n` on `PLANNED_INVOICE` under `PLAN`,
+    //   whose `status` is `'active'`, and requires the contributions to total
+    //   `-5_000n`. So the model was right where the body was wrong.
+    //
+    //   DR-23 (owner, 2026-10-27) RULED THE MODEL CORRECT AND CLOSED THE
+    //   DIVERGENCE: the body now carries the same arm, and the `DR-23`
+    //   describe block at the end of this file holds it — `dr23_1` to
+    //   `dr23_4` on the model's behaviour, `dr23_5` to `dr23_7` on the
+    //   body's TEXT, with `dr23_6` as the negative control. WHAT IS STILL
+    //   NOT MEASURED ANYWHERE is the INSTALLED routine answering `-5 000`
+    //   for this fixture: that needs PostgreSQL, it is NOT_RUN, and it is
+    //   owed by the seal run rather than implied by any law in this package.
+    //
+    //   The state is reachable with NO guard weakened: the invoice total is
+    //   immutable and a payment does not touch `installments`. It was PRIOR
+    //   to DR-13-SPEC, and it is neither repaired nor attributed in THIS
+    //   case, whose own subject stays arm (c).
+    const rows: readonly OpenInvoiceRow[] = [
+      termlessRow(400, { invoiceId: 'a', outstandingTxnMinor: 100_000n, outstandingBaseMinor: 84_503n }),
+      { ...termlessRow(400, { invoiceId: 'b' }), dueDate: daysBefore(31), outstandingTxnMinor: 7n, outstandingBaseMinor: 6n },
+      termlessRow(0, { invoiceId: 'c', outstandingTxnMinor: -2_500n, outstandingBaseMinor: -2_113n }),
+      termlessRow(91, { invoiceId: 'd', outstandingTxnMinor: 9_007_199_254_740_993n, outstandingBaseMinor: 9_007_199_254_740_992n }),
+    ];
+    // `[]` PLANS: arm (c) only, which is what the narrowed title says.
+    const buckets = projectCustomerAging(rows, [], AS_OF, STANDARD);
+    const total = rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n);
+    expect(
+      buckets.reduce((a, b) => a + b.txnMinor, 0n),
+      'the bands must total the authoritative outstanding EXACTLY',
+    ).toBe(total);
+    // And the 400-day termless receivable is really in the oldest band, so the
+    // identity above is not being satisfied by everything sitting in band 1.
+    const oldest = buckets.find((b) => b.bucketNo === OLDEST_STANDARD);
+    expect(oldest, 'NO SUBJECT — nothing reached the oldest band, so the totality law holds vacuously').toBeDefined();
+    expect((oldest as { txnMinor: bigint }).txnMinor).toBe(100_000n + 9_007_199_254_740_993n);
+  });
+
+  it('dr13_9: the SPECIFICATION resolves its bucket date the way `0084` does, and keeps no `IS NOT NULL` that drops a receivable', () => {
+    // CODE, not prose: `sqlCodeOnly` blanks comments and string literals
+    // outside a dollar-quoted body, which is the trap `TL-P4-COORD-R46` ruled
+    // on — the previous version of this law matched `o.due_date IS NOT NULL`
+    // in `0084` and was satisfied by a SENTENCE describing the retired guard.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch).toMatch(/coalesce\(oi\.due_date,\s*oi\.issue_date\)/);
+    // And the guard that dropped the receivable is gone from the band
+    // arithmetic.
+    expect(sketch, 'a bucket-date NULL guard counts zero thresholds and parks the receivable in band 1 for ever').not.toMatch(/bucket_date IS NOT NULL/i);
+    // `issue_date` is carried OFF THE AUTHORITATIVE CALL (R-104: one visit to
+    // `invoices`), not fetched by a second join.
+    expect(sketch).toMatch(/SELECT o\.invoice_id, o\.currency_code, o\.due_date, o\.issue_date,/);
+    expect(sketch).not.toMatch(/JOIN\s+public\.invoices/i);
+    // THE APPROVED BODY, measured rather than recalled: `0084` resolves the
+    // same way in CODE and its own `IS NOT NULL` survives only in a sentence.
+    const shipped = sqlCodeOnly(readFileSync(SHIPPED_AGING_PATH, 'utf8'));
+    expect(shipped).toMatch(/coalesce\(o\.due_date,\s*o\.issue_date\)/);
+    expect(shipped).not.toMatch(/o\.due_date IS NOT NULL/);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-23 (owner, 2026-10-27) — A CREDIT BALANCE NEVER LEAVES THE AGING REPORT.
+//
+// Card `OVERPAY-AGING`. The TRACKED record of it is this repository's own
+// `TECHNICAL_DEBT.md`, under «Phase 4 money cards and decisions (DR-24)» —
+// tracked, because a comment in a tracked file pointing at an untracked note
+// is a pointer nobody who clones this repository can follow, and that is
+// itself how a money defect goes quiet.
+//
+// THE DEFECT. An invoice under an ACTIVE installment plan whose outstanding is
+// NEGATIVE — an overpayment — contributed NOTHING to the aging report.
+// `installment_schedule_verify()` holds `down + SUM(instalments) = total` by
+// strict equality, so `schedule_total = total` always; the body's levels are
+// `least(greatest(c, paid), total)`, so when `paid > total` EVERY level
+// collapses to `total`. Arm (a)'s consecutive differences are then all zero
+// and `declared_end = total` zeroes arm (b)'s residual, so the customer's
+// credit left the report BY OMISSION rather than by payment and the bands
+// stopped totalling the authoritative outstanding. No guard has to be weakened
+// to reach the state: the invoice total is immutable and a payment does not
+// touch `installments` — total 1000, schedule 1000, paid 1200, so `O = -200`.
+//
+// THE DECISION. DR-23: a credit balance from an overpayment never leaves the
+// aging report; it is reported EXPLICITLY as a customer credit — a visible
+// negative value, never clamped and never folded into zero — and the bands
+// total NET receivables exactly. The reference model already behaved that way
+// (`phase4-s7-aging-reference-model.ts`, `if (O <= 0n || totalTxn <= 0n ||
+// totalBase <= 0n)`), so the owner ruled the MODEL correct and the SQL body
+// the deviant one. The body now carries the same arm.
+//
+// WHAT THESE LAWS CAN AND CANNOT SEE. There is no database in this package, so
+// nothing here EXECUTES the body. Two different subjects are measured instead
+// and they are not interchangeable: the MODEL's behaviour, which is executed;
+// and the body's TEXT, judged over `sqlCodeOnly` so that a sentence cannot
+// satisfy a law about code. The assertion that the INSTALLED routine returns
+// `-5 000` for this fixture needs PostgreSQL and is NOT_RUN — recorded as
+// owed in `TECHNICAL_DEBT.md`, not implied here.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The overpaid planned invoice, built so every figure of the authoritative row
+ * agrees: `paid + O = total` and `paid_base + O_base = total_base`, with the
+ * same pair `PLAN`'s schedule adds up to (12 x 100 000 = 1 200 000). So the
+ * sum law is NOT broken here — this is an ordinary, well-formed receivable
+ * that has simply been paid 5 000 too much.
+ */
+const OVERPAID_PLANNED_INVOICE: OpenInvoiceRow = Object.freeze({
+  ...PLANNED_INVOICE,
+  paidTxnMinor: 1_205_000n,
+  paidBaseMinor: 1_019_201n,
+  outstandingTxnMinor: -5_000n,
+  outstandingBaseMinor: -4_200n,
+});
+
+describe('DR-23 an overpayment is reported as a customer credit, never clamped out of the report', () => {
+  it('dr23_1: the MODEL reports the credit, at the document date, with the schedule arms silent', () => {
+    // NON-VACUITY FIRST: the fixture really is a well-formed overpaid invoice
+    // under an ACTIVE plan whose schedule adds up to the invoice total, so
+    // nothing below is explained by a broken sum law or by a dormant plan.
+    expect(PLAN.status).toBe('active');
+    const scheduleSum = PLAN.downPaymentMinor + PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    const total = OVERPAID_PLANNED_INVOICE.paidTxnMinor + OVERPAID_PLANNED_INVOICE.outstandingTxnMinor;
+    expect(scheduleSum, 'the schedule must add up to the total, or this is proof 4 and not DR-23').toBe(total);
+    expect(OVERPAID_PLANNED_INVOICE.outstandingTxnMinor).toBeLessThan(0n);
+
+    const c = projectInvoice(OVERPAID_PLANNED_INVOICE, PLAN, AS_OF, STANDARD);
+    // ONE contribution, and it is the whole credit: the schedule arms emit
+    // nothing at all, which is what «the totality arm runs instead of them»
+    // means.
+    expect(c, 'NO SUBJECT — the model emitted nothing, so the figure below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.origin).toBe('residual');
+    expect(only.txnMinor, 'a credit balance reported as zero is money leaving the report by omission').toBe(-5_000n);
+    expect(only.baseMinor).toBe(-4_200n);
+    // THE PLACEMENT, not only the figure: the document's own date governs, and
+    // for this fixture that is the stated `due_date`.
+    expect(only.scheduleDate).toBe(OVERPAID_PLANNED_INVOICE.dueDate);
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+    // CONSERVATION as an ABSOLUTE value against the authoritative figure, not
+    // as an identity between two sums computed the same way.
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_2: one minor unit on each side of zero, and the sign is the only difference', () => {
+    // MINUS ONE: degenerate, so the whole credit is reported at the document
+    // date.
+    const minusOne = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_200_001n, outstandingTxnMinor: -1n, outstandingBaseMinor: -1n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(minusOne).toHaveLength(1);
+    expect(sum(minusOne)).toBe(-1n);
+    // ZERO cannot occur in the body: `open_invoice` filters
+    // `outstanding_txn_minor <> 0`. The model emits nothing for it, which is
+    // the same answer reached by a different route.
+    const zero = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_200_000n, outstandingTxnMinor: 0n, outstandingBaseMinor: 0n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(zero).toHaveLength(0);
+    // PLUS ONE: NOT degenerate, so the schedule arms run — and the single
+    // minor unit still reaches a band rather than rounding away.
+    const plusOne = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: 1_199_999n, outstandingTxnMinor: 1n, outstandingBaseMinor: 1n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(sum(plusOne)).toBe(1n);
+  });
+
+  it('dr23_3: the two companion disjuncts are not dead code — a non-positive TOTAL routes here too', () => {
+    // UNREACHABLE IN A SOUND DATABASE, AND ASSERTED ANYWAY, because this is
+    // the one input on which `supplier_ap_release(total_base, total_txn, ...)`
+    // has no meaning at all: `invoices.total_txn_minor` is `NOT NULL` and
+    // `>= 1`, so `paid + O <= 0` cannot be committed. Calling a state
+    // «impossible» is exactly how an arm that handles it correctly comes to
+    // look like dead code and gets deleted.
+    const zeroTotal = projectInvoice(
+      { ...OVERPAID_PLANNED_INVOICE, paidTxnMinor: -10n, paidBaseMinor: -10n, outstandingTxnMinor: 10n, outstandingBaseMinor: 10n },
+      PLAN,
+      AS_OF,
+      STANDARD,
+    );
+    expect(zeroTotal).toHaveLength(1);
+    expect(sum(zeroTotal), 'a zero total must still carry its figure, not divide by it').toBe(10n);
+  });
+
+  it('dr23_4: the bands total NET receivables EXACTLY on a mixed-sign portfolio, above 2^53 included', () => {
+    // THE PORTFOLIO `dr13_8` COULD NOT HAVE. That case passes `[]` for the
+    // plans and therefore measures arm (c) alone, and the credit balance it
+    // carries sits on an invoice with NO plan — the arm that was never broken.
+    // This one puts the credit under an ACTIVE plan, which is the state the
+    // body dropped, and keeps an ordinary planned invoice beside it so the
+    // identity below cannot be satisfied by every arm falling silent.
+    const huge = 9_007_199_254_740_993n; // 2^53 + 1: not representable as a double
+    expect(Number(huge) === Number(huge - 1n), 'the figure no longer exceeds 2^53; pick a larger one').toBe(true);
+    const credit: OpenInvoiceRow = { ...OVERPAID_PLANNED_INVOICE, invoiceId: 'inv-credit' };
+    const rows: readonly OpenInvoiceRow[] = [
+      credit, //            -5 000, under an ACTIVE plan
+      PLANNED_INVOICE, //  900 000, under an ACTIVE plan
+      PLAINLESS_INVOICE, // 250 000, no plan
+      termlessRow(91, { invoiceId: 'inv-huge', outstandingTxnMinor: huge, outstandingBaseMinor: huge - 1n }),
+    ];
+    const plans: readonly InstallmentPlan[] = [PLAN, { ...PLAN, invoiceId: credit.invoiceId }];
+    const buckets = projectCustomerAging(rows, plans, AS_OF, STANDARD);
+    // THE LITERAL, computed by hand and written down, so the law is not an
+    // identity between two sums derived the same way:
+    //   -5 000 + 900 000 + 250 000 + 9 007 199 254 740 993
+    const expected = 9_007_199_255_885_993n;
+    // AND THE SAME FOR THE CARRYING VALUE, by hand as well:
+    //   -4 200 + 761 251 + 211 251 + 9 007 199 254 740 992
+    // The base was conserved only in `dr23_1`, on a single document. A law
+    // that conserves the transaction figure and not the carrying value is
+    // half a conservation law, and the half it omits is the one that passes
+    // through `supplier_ap_release`'s rounding.
+    const expectedBase = 9_007_199_255_709_294n;
+    expect(
+      rows.reduce((a, r) => a + r.outstandingTxnMinor, 0n),
+      'the fixture itself drifted away from the hand-computed figure',
+    ).toBe(expected);
+    expect(
+      rows.reduce((a, r) => a + r.outstandingBaseMinor, 0n),
+      'the fixture itself drifted away from the hand-computed carrying figure',
+    ).toBe(expectedBase);
+    expect(
+      buckets.reduce((a, b) => a + b.txnMinor, 0n),
+      'the bands must total NET receivables EXACTLY (DR-23)',
+    ).toBe(expected);
+    expect(
+      buckets.reduce((a, b) => a + b.baseMinor, 0n),
+      'the bands must total the NET CARRYING value exactly too (DR-23, R-81)',
+    ).toBe(expectedBase);
+    // AND THE CREDIT IS STILL VISIBLE AS A CREDIT rather than absorbed into a
+    // larger positive band by accident: asked on its own, the same fixture
+    // under the same plan reports the whole negative figure.
+    expect(sum(projectInvoice(credit, { ...PLAN, invoiceId: credit.invoiceId }, AS_OF, STANDARD))).toBe(-5_000n);
+  });
+
+  it('dr23_5: the SQL BODY carries the totality arm, judged over CODE, and the schedule arms are gated on it', () => {
+    // TEXT, NOT BEHAVIOUR. `sqlCodeOnly` blanks comments and string literals,
+    // which is the trap `TL-P4-COORD-R46` ruled on: a `prosrc LIKE` cannot
+    // establish a property of code, because a comment is a string too.
+    const sketch = sqlCodeOnly(projectionSketch(SPEC));
+    expect(sketch, 'the body has no totality arm, so an overpayment contributes nothing (DR-23)').toMatch(/\bdegenerate AS \(/);
+    // The arm's predicate, all three disjuncts, in CODE.
+    expect(sketch).toMatch(/oi\.outstanding_txn_minor <= 0/);
+    expect(sketch).toMatch(/oi\.total_txn_minor <= 0/);
+    expect(sketch).toMatch(/oi\.total_base_minor <= 0/);
+    // It is keyed on the INVOICE'S OWN FLAG — the same bit arm (c) reads — so
+    // the four arms partition the open invoices instead of overlapping.
+    expect(sketch).toMatch(/FROM open_invoice oi\s*\n\s*WHERE oi\.flagged/);
+    // THE GATE: the schedule arms all descend from `active_plan`, so one
+    // predicate there makes a degenerate invoice structurally unable to reach
+    // them.
+    expect(sketch, 'the schedule arms are not gated, so the levels still collapse to `total`').toMatch(
+      /NOT EXISTS \(SELECT 1 FROM degenerate d WHERE d\.invoice_id = v\.invoice_id\)/,
+    );
+    // ARM (d) EMITS THE AUTHORITATIVE PAIR and not a recomputation of it,
+    // exactly as arm (c) does and as the reference model does.
+    expect(sketch).toMatch(/g\.outstanding_txn_minor, g\.outstanding_base_minor\s*\n\s*FROM degenerate g/);
+
+    // ── THE ARM'S DATE, AND IT WAS ASSERTED BY NOTHING AT ALL ─────────────
+    //
+    // `coalesce(due_date, issue_date)` in this arm had no law over it,
+    // textual or behavioural: the one termless row in the suite is POSITIVE
+    // and has no plan, so it reaches arm (c) and never (d). Planting
+    // `oi.due_date` alone here tripped only the digest-freshness law — whose
+    // own documented remedy is «re-run the tool» — and regenerating the
+    // digest, which is what a developer would actually do, then gave a clean
+    // green with a TERMLESS CREDIT BALANCE PARKED IN BAND 1. Conservation
+    // held throughout, so both halves of DR-23 stayed true while DR-21's
+    // PLACEMENT rule was silently broken. That is the DR-13-SPEC defect class
+    // coming back as an unguarded surface inside the repair for it.
+    //
+    // ANCHORED, because `no_plan`'s SELECT list is byte-identical to this
+    // one and differs only in its `WHERE`: a bare `/coalesce\(oi\.due_date/`
+    // would be satisfied by the OTHER arm and would assert nothing about
+    // this one. The anchor runs date, authoritative pair, source and
+    // predicate in one match.
+    expect(sketch, "arm (d)'s bucket date is not `coalesce(due_date, issue_date)`, so a termless credit parks in band 1 (DR-21)").toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged\s*\n\s*AND \(oi\.outstanding_txn_minor <= 0/,
+    );
+    // AND A TOTAL LAW BESIDE THE ANCHORED ONE: the fallback stands in exactly
+    // THREE places — `residual` (b), `no_plan` (c) and `degenerate` (d) — so
+    // dropping it from ANY arm is a named failure and not a matter of which
+    // arm a pattern happened to find first.
+    expect(
+      (sketch.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length,
+      'the termless fallback is no longer in all three document-dated arms (DR-13, DR-21, DR-23)',
+    ).toBe(3);
+    // AND IT IS NOT THE RETIRED `NOT EXISTS` COMING BACK: that one was over
+    // `installment_plans`, read through the caller's row security, which
+    // answers «absent» and «invisible» alike. This one reads no relation.
+    expect(sketch).not.toMatch(/NOT EXISTS \(SELECT 1 FROM active_plan/);
+    expect(sketch).not.toMatch(/NOT EXISTS \(SELECT 1 FROM public\.installment_plans/);
+  });
+
+  it('dr23_6: that law FIRES when the arm is taken out, and prose does not satisfy it', () => {
+    // THE NEGATIVE CONTROL, on the REAL text rather than on a lookalike: take
+    // the gate out of `active_plan` and the law above must stop holding.
+    const gate = 'AND NOT EXISTS (SELECT 1 FROM degenerate d WHERE d.invoice_id = v.invoice_id)';
+    expect(SPEC, 'the gate changed spelling, so this control is measuring nothing').toContain(gate);
+    const ungated = sqlCodeOnly(projectionSketch(SPEC.replace(gate, '')));
+    expect(ungated).not.toMatch(/NOT EXISTS \(SELECT 1 FROM degenerate d/);
+    // ...and take the arm itself out.
+    const armless = sqlCodeOnly(projectionSketch(SPEC.replace('  degenerate AS (', '  degenerate_retired AS (')));
+    expect(armless).not.toMatch(/\bdegenerate AS \(/);
+    // PROSE IS NOT CODE: the same tokens living only in a comment satisfy
+    // nothing, which is what makes the laws above laws about the body.
+    expect(sqlCodeOnly('-- degenerate AS ( WHERE oi.outstanding_txn_minor <= 0\nSELECT 1;\n')).not.toMatch(/degenerate AS \(/);
+
+    // ── THE REVIEWER'S OWN MUTATION, REPRODUCED HERE ──────────────────────
+    //
+    // `oi.due_date` alone in place of the coalesce, IN ARM (d) and nowhere
+    // else — located by cutting the text at the CTE's own head, because the
+    // two arms' SELECT lists are identical and a blind `replace` would mutate
+    // `residual` instead and prove nothing about this arm.
+    //
+    // THE POINT OF REPRODUCING IT IS THE DIGEST. When the reviewer did this,
+    // the only law that fired was the digest-freshness ratchet, and
+    // regenerating the digest — the normal thing to do — made the suite
+    // green again with the placement rule broken. So the mutation is judged
+    // here by the laws of dr23_5, which no digest regeneration can satisfy.
+    const armHead = '  degenerate AS (';
+    const at = SPEC.indexOf(armHead);
+    expect(at, 'the arm head changed spelling, so this mutation is aimed at nothing').toBeGreaterThan(0);
+    const mutated = SPEC.slice(0, at) + SPEC.slice(at).replace('coalesce(oi.due_date, oi.issue_date) AS due_date', 'oi.due_date AS due_date');
+    expect(mutated, 'the mutation did not apply').not.toBe(SPEC);
+    const mutatedCode = sqlCodeOnly(projectionSketch(mutated));
+    // The anchored law fires...
+    expect(mutatedCode).not.toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE oi\.flagged/,
+    );
+    // ...and so does the counting law, independently of the anchor.
+    expect((mutatedCode.match(/coalesce\(oi\.due_date, oi\.issue_date\)/g) ?? []).length).toBe(2);
+    // AND THE OTHER TWO ARMS ARE UNTOUCHED BY IT, so the two laws above are
+    // reporting arm (d) and not collateral damage.
+    expect(mutatedCode).toMatch(
+      /coalesce\(oi\.due_date, oi\.issue_date\) AS due_date,\s*\n\s*oi\.outstanding_txn_minor, oi\.outstanding_base_minor\s*\n\s*FROM open_invoice oi\s*\n\s*WHERE NOT oi\.flagged/,
+    );
+  });
+
+  it('dr23_7: `0084` needed no change, and that is a MEASUREMENT and not an assumption', () => {
+    // `0084`'s own `customer_ar_aging` has NO plan arm at all: it bands the
+    // authoritative `outstanding_txn_minor` of each open invoice directly and
+    // filters only `<> 0`, so a NEGATIVE outstanding was always carried.
+    // There is nothing to clamp because there are no levels. The whole defect
+    // lives in the body the SPECIFICATION installs over the same signature.
+    const shipped = sqlCodeOnly(shippedAgingBody());
+    expect(shipped, 'the shipped body has levels after all, so it may clamp a credit too').not.toMatch(/least\(greatest\(/);
+    expect(shipped).toMatch(/o\.outstanding_txn_minor <> 0/);
+    expect(shipped).toMatch(/o\.outstanding_txn_minor AS txn_minor/);
+    // POSITIVE CONTROL for the detector that has just reported an absence: it
+    // does see the level expression where the level expression really is.
+    expect(sqlCodeOnly(specAgingBody()), 'the detector is blind, so the absence above means nothing').toMatch(/least\(greatest\(/);
+  });
+
+  /**
+   * A TERMLESS invoice under an ACTIVE plan, overpaid. The schedule declares
+   * the whole 100 000, so the sum law is intact; `paid` is 105 000, so
+   * `O = -5 000` and the arm applies. The document states NO term, which is
+   * what makes the arm's DATE the subject rather than its figure.
+   */
+  const termlessCreditRow = (age: number): OpenInvoiceRow =>
+    termlessRow(age, {
+      invoiceId: 'inv-termless-credit',
+      paidTxnMinor: 105_000n,
+      paidBaseMinor: 88_703n,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    });
+  const TERMLESS_CREDIT_PLAN: InstallmentPlan = Object.freeze({
+    invoiceId: 'inv-termless-credit',
+    status: 'active' as const,
+    downPaymentMinor: 0n,
+    downPaymentDueDate: daysBefore(395),
+    installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 100_000n }],
+  });
+
+  it('dr23_8: a TERMLESS credit balance under an active plan ages from its ISSUE date, not band 1', () => {
+    // THE CASE THE ARM'S DATE HAD NO LAW OVER. Every other fixture in this
+    // block STATES a due date, and the one termless row in the whole suite is
+    // positive and planless, so it reaches arm (c). Nothing measured arm (d)
+    // on a document with no term — which is how `oi.due_date` alone survived
+    // a full green run in the reviewer's mutation with the credit parked in
+    // the not-due band.
+    const row = termlessCreditRow(400);
+    expect(row.dueDate, 'the subject states a term, so this measures the wrong document').toBeNull();
+    expect(TERMLESS_CREDIT_PLAN.status).toBe('active');
+    const scheduleSum = TERMLESS_CREDIT_PLAN.downPaymentMinor + TERMLESS_CREDIT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    expect(scheduleSum, 'the schedule must add up to the total, or this is proof 4 and not DR-23').toBe(row.paidTxnMinor + row.outstandingTxnMinor);
+
+    const c = projectInvoice(row, TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the band below has nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // THE ASSERTION THAT GOES RED ON THE MUTATION, and it is on the BAND:
+    // with `oi.due_date` alone the date is NULL, no threshold is exceeded and
+    // this is 1 — `not-due` — for a credit 400 days past the issue date.
+    //
+    // THE RULE IN FORCE IS DR-30, which settled S-17: the governing principle
+    // is that no amount leaves the aging report except by payment, an amount
+    // ages from `coalesce(due_date, issue_date)` (DR-13, DR-21) and a
+    // scheduled instalment ages from its own due date. A credit balance is
+    // not exempt from that placement. The failure message names the DECISION
+    // rather than declaring a rule broken, because which rule is in force is
+    // what a reader hitting this line needs to know.
+    expect(
+      only.bucketNo,
+      'DR-30 governs this band: a termless amount ages from `coalesce(due_date, issue_date)` (DR-13, DR-21) and a credit balance is not exempt, so this credit belongs in the oldest band and not in `not-due`. Reported as not-due it would still look DR-23-satisfied on the total while the age is lost. If you believe DR-30 has changed, settle that in the decision record and rewrite this case there — do not relax it here.',
+    ).toBe(OLDEST_STANDARD);
+    // ...and the date the projection SAYS it used is the issue date, so the
+    // figure and its stated date cannot disagree.
+    expect(only.scheduleDate).toBe(row.issueDate);
+    expect(only.txnMinor).toBe(-5_000n);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_9: every standard boundary for a CREDIT, on each side and ON it', () => {
+    // NO `dr23` CASE PLACED A CREDIT AT A BOUNDARY. `>` is strict, so 30, 60
+    // and 90 stay in the younger band; the figure is negative throughout, so
+    // this also measures that the band arithmetic does not treat the sign of
+    // the money as part of the date comparison.
+    for (const [age, band] of [
+      [0, 1],
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+    ] as const) {
+      const c = projectInvoice(termlessCreditRow(age), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+      expect(c, `age ${age}: exactly one contribution carries the whole credit`).toHaveLength(1);
+      // THE RULE IN FORCE IS DR-30 here too: the age is taken from
+      // `coalesce(due_date, issue_date)` (DR-13, DR-21) for a credit as for a
+      // debt, and the thresholds are strict `>`, so 30, 60 and 90 stay in the
+      // younger band. The message names the decision, not a broken rule.
+      expect(
+        (c[0] as AgingContribution).bucketNo,
+        `DR-30 governs this band: a credit ${age} day(s) past its issue date is placed by that age — from \`coalesce(due_date, issue_date)\` per DR-13 and DR-21 — with the 30/60/90 thresholds strict, so band ${band} is the one in force. If you believe DR-30 has changed, settle that in the decision record and rewrite this case there — do not relax it here.`,
+      ).toBe(band);
+      expect(sum(c), `age ${age}: conservation`).toBe(-5_000n);
+    }
+  });
+
+  it('dr23_10: a FUTURE issue date puts the credit in the not-due band, which is the other side of the same law', () => {
+    // THE POSITIVE CONTROL FOR dr23_8's band: band 1 is reachable, and it is
+    // reachable for the RIGHT reason — a document not yet issued. Without
+    // this, «band 5 and not band 1» could be satisfied by a projection that
+    // can only ever answer 5.
+    const c = projectInvoice(termlessCreditRow(-45), TERMLESS_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect((c[0] as AgingContribution).bucketNo).toBe(1);
+    expect(sum(c)).toBe(-5_000n);
+  });
+
+  it('dr23_11: the overpayment may EXCEED the invoice, and the credit is still the whole authoritative figure', () => {
+    // EVERY OTHER FIXTURE HERE IS −1 OR −5 000 AGAINST 1 200 000, so `|O|`
+    // never came near the invoice total and a body that clamped at `-total`
+    // would have passed all of them. Paid 3 200 000 on a 1 200 000 invoice:
+    // the credit is 2 000 000, which is 1.67x the document.
+    const big: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: 3_200_000n,
+      paidBaseMinor: 2_707_001n,
+      outstandingTxnMinor: -2_000_000n,
+      outstandingBaseMinor: -1_692_000n,
+    };
+    expect(big.paidTxnMinor + big.outstandingTxnMinor, 'the total must stay 1 200 000 or the fixture is a different document').toBe(1_200_000n);
+    const c = projectInvoice(big, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    expect(only.txnMinor, 'the credit was clamped at the invoice total').toBe(-2_000_000n);
+    expect(only.baseMinor).toBe(-1_692_000n);
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+  });
+
+  it('dr23_12: a wholly NEGATIVE authoritative pair carries, rather than dividing by it', () => {
+    // UNREACHABLE IN A SOUND DATABASE, like `dr23_3`, and asserted for the
+    // same reason: this is the input on which the carrying-value law has no
+    // denominator. Paid −100 and outstanding −50, so the total is −150 and
+    // every one of the arm's three disjuncts is true at once.
+    const neg: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      paidTxnMinor: -100n,
+      paidBaseMinor: -100n,
+      outstandingTxnMinor: -50n,
+      outstandingBaseMinor: -50n,
+    };
+    const c = projectInvoice(neg, PLAN, AS_OF, STANDARD);
+    expect(c).toHaveLength(1);
+    expect(sum(c)).toBe(-50n);
+    expect((c[0] as AgingContribution).baseMinor).toBe(-50n);
+  });
+
+  it('dr23_13: RECORDED ASYMMETRY, NOT APPROVED BEHAVIOUR — a positive txn with a negative carrying amount breaks R-81, pinned so a silent change is caught', () => {
+    // THIS CASE BLESSES NOTHING. It pins today's answer because
+    // `TECHNICAL_DEBT.md` calls that answer «measured», and a money figure
+    // recorded as measured and reproducible by nothing is the defect class
+    // the register exists to prevent. Card `CARRY-CONSERVATION-R81` in that
+    // file carries the finding, its owner and its open reachability; this is
+    // only its guard. If the asymmetry is repaired, THIS CASE MUST BE
+    // REWRITTEN BY THE CARD THAT REPAIRS IT — it going red is the signal, not
+    // a regression.
+    //
+    // WHAT IT IS. The arm's three disjuncts are about the transaction figure
+    // and the two totals — `O <= 0`, `totalTxn <= 0`, `totalBase <= 0` — so a
+    // row whose TRANSACTION outstanding is positive while its CARRYING
+    // outstanding is negative is NOT degenerate and takes the schedule arms.
+    // There the carrying share is re-derived through
+    // `supplier_ap_release(total_base, total_txn, level, share)`, which is a
+    // law over a POSITIVE carrying window, and the figure it returns is `+8`
+    // against an authoritative `-10`: opposite in sign and different in
+    // magnitude.
+    //
+    // THE LAW THAT BREAKS IS THE ROW'S OWN. The routine's `COMMENT` in the
+    // specification asserts that the base shares «likewise total
+    // `outstanding_base_minor` EXACTLY» by the canonical cumulative
+    // carrying-value law (R-61, R-81). On this input they do not.
+    //
+    // IT IS NOT ATTRIBUTABLE TO `OVERPAY-AGING`. The reference model carries
+    // the SAME condition as the body, so there is no model/body divergence to
+    // choose between, and the behaviour predates the totality arm entirely.
+    // AND ITS REACHABILITY IS NOT_MEASURED: whether `invoice_outstanding` can
+    // produce that sign pairing at all is a question for a database.
+    const mixed: OpenInvoiceRow = {
+      ...OVERPAID_PLANNED_INVOICE,
+      invoiceId: 'inv-mixed-sign',
+      paidTxnMinor: 1_199_990n,
+      paidBaseMinor: 1_015_011n,
+      outstandingTxnMinor: 10n,
+      outstandingBaseMinor: -10n,
+    };
+    // NON-VACUITY: the authoritative pair still recomposes the SAME document
+    // every other case in this block is about, so the only thing that has
+    // changed is the SIGN of the carrying outstanding.
+    expect(mixed.paidTxnMinor + mixed.outstandingTxnMinor).toBe(1_200_000n);
+    expect(mixed.paidBaseMinor + mixed.outstandingBaseMinor).toBe(1_015_001n);
+    expect(mixed.outstandingTxnMinor).toBeGreaterThan(0n);
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+
+    const c = projectInvoice(mixed, { ...PLAN, invoiceId: mixed.invoiceId }, AS_OF, STANDARD);
+    expect(c, 'NO SUBJECT — nothing was emitted, so the figures below have nothing to be wrong about').toHaveLength(1);
+    const only = c[0] as AgingContribution;
+    // IT DID NOT TAKE ARM (d): the origin says so. If a future change adds
+    // `outstandingBaseMinor < 0` to the arm's condition, this is `residual`
+    // and the base below is `-10n`, and both assertions name it.
+    expect(only.origin, 'the row now reaches the totality arm — `CARRY-CONSERVATION-R81` may have been repaired; rewrite this case there').toBe('installment');
+    // THE TRANSACTION SIDE IS EXACT, as it is everywhere: integers only.
+    expect(only.txnMinor).toBe(10n);
+    // AND THE CARRYING SIDE IS NOT. `+8` against an authoritative `-10`.
+    expect(only.baseMinor, 'the re-derived carrying share moved; `TECHNICAL_DEBT.md` records +8 as measured, so one of the two is now wrong').toBe(8n);
+    // THE BREACH, STATED AS A BREACH: the bands do NOT total the
+    // authoritative carrying figure on this input. Asserted as an inequality
+    // on purpose — writing it as an equality against `8n` would record the
+    // wrong figure as the law.
+    expect(
+      c.reduce((a, x) => a + x.baseMinor, 0n),
+      'R-81 holds after all on this input, which would mean the register overstates the finding',
+    ).not.toBe(mixed.outstandingBaseMinor);
+    expect(c.reduce((a, x) => a + x.baseMinor, 0n)).toBe(8n);
+    // ...and the direction of the error is recorded, because a carrying share
+    // that reports a DEBIT where the authoritative figure is a CREDIT is the
+    // sign error, not a rounding one.
+    expect(mixed.outstandingBaseMinor).toBeLessThan(0n);
+    expect(only.baseMinor).toBeGreaterThan(0n);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DR-27 (owner, 2026-10-27) — A CREDIT BALANCE STAYS IN ITS OWN DOCUMENT'S
+// BAND, AND ITS POSITION THERE DOES NOT CHANGE WITH THE BUCKETING.
+//
+// THE DELIVERABLE THIS BLOCK IS. DR-27 settles S-20 — no automatic allocation
+// of a credit balance in the first release — and it ends with a requirement:
+// «a test proving that the credit's position in its band does not change with
+// bucketing». That requirement was recorded as DECIDED while its deliverable
+// was not written, which is how a requirement disappears; the owner confirmed
+// the finding. The TRACKED record is this repository's own
+// `TECHNICAL_DEBT.md`, under «Phase 4 money cards and decisions (DR-24)»,
+// card `OVERPAY-AGING`, entry `S-18`, which names these cases.
+//
+// WHAT «DOES NOT CHANGE WITH BUCKETING» MEANS HERE, STATED PRECISELY ENOUGH TO
+// BE FALSIFIABLE. For a credit balance on document D, the triple the report
+// shows for D — (band, transaction amount, carrying amount) — together with
+// the date the projection SAYS it placed D at, is a function of D's OWN date
+// and D's OWN value and of nothing else. Three «nothing else» clauses, and
+// each one is a separate case below:
+//
+//   (1) NOT OF THE OTHER DOCUMENTS. Asked alone and asked inside a portfolio,
+//       D's contributions are IDENTICAL — including when a debt sits in the
+//       very same band, which is the arrangement an oldest-first allocation
+//       would net it against. And not of the ORDER: reversing the rows
+//       changes nothing.  → `dr27_1`
+//
+//   (2) NOT OF THE BANDS' TOTALS. Adding D to a portfolio changes exactly ONE
+//       band — D's own — and changes it by exactly D's own figures, on both
+//       the transaction and the carrying side. Every other band is untouched
+//       to the minor unit. A credit SPREAD across bands, or applied to older
+//       debt before bucketing, moves two bands or more and this fails.
+//       → `dr27_2`
+//
+//   (3) NOT OF THE CHOICE OF THRESHOLDS. Re-expressed in a way that should not
+//       move it — the same thresholds permuted, a coarser set, a finer set,
+//       and a new threshold ON D's own age where `>` is strict — D keeps its
+//       amount, keeps the date it reports, and lands in the band D's own age
+//       falls in under the set in force. The expected band is a HAND-WRITTEN
+//       table, not a second call to the banding function, because a law that
+//       computes its expectation the way the subject does states `f(x) = f(x)`
+//       and can refuse nothing.  → `dr27_3`
+//
+// AND THE CONVERSE, WITHOUT WHICH ALL THREE ARE SATISFIED BY A PROJECTION THAT
+// ANSWERS ONE BAND FOR EVERY CREDIT: D's OWN date must move it, over the
+// standard boundaries, on each side and ON them, inside a portfolio held
+// fixed.  → `dr27_4`
+//
+// WHAT IS DELIBERATELY NOT HERE. `invoiceCount` is asserted nowhere in this
+// block: whether that counter is additive across bands is `S-19`, which stays
+// OPEN as DR-29's subject, and a case that pinned it here would decide it by
+// accident. Nor is the INSTALLED SQL body measured — there is no database in
+// this package — so what these cases establish is the REFERENCE MODEL's
+// behaviour, executed. DR-23 ruled the model correct and the body bound to
+// match it, and `dr23_5`–`dr23_7` judge the body's TEXT; the same fixtures
+// asked of the installed routine are owed by the seal run (DR-26) and are
+// NOT_RUN, recorded as owed rather than implied.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("DR-27 a credit's position in its band is a function of its own document, not of the bucketing", () => {
+  const CREDIT_ID = 'inv-dr27-credit';
+
+  /**
+   * THE SUBJECT: a TERMLESS invoice under an ACTIVE plan, overpaid by 5 000.
+   * Termless on purpose — a document that states no term is placed by
+   * `coalesce(due_date, issue_date)` (DR-13, DR-21, DR-30), so its date is the
+   * one a wrong implementation is most likely to re-derive from somewhere
+   * else. The schedule declares the whole 100 000, so the sum law is intact
+   * and nothing below is explained by a broken one.
+   */
+  const dr27Credit = (age: number): OpenInvoiceRow =>
+    termlessRow(age, {
+      invoiceId: CREDIT_ID,
+      paidTxnMinor: 105_000n,
+      paidBaseMinor: 88_703n,
+      outstandingTxnMinor: -5_000n,
+      outstandingBaseMinor: -4_200n,
+    });
+
+  const DR27_CREDIT_PLAN: InstallmentPlan = Object.freeze({
+    invoiceId: CREDIT_ID,
+    status: 'active' as const,
+    downPaymentMinor: 0n,
+    downPaymentDueDate: daysBefore(395),
+    installments: [{ seqNo: 1, dueDate: daysBefore(390), amountTxnMinor: 100_000n }],
+  });
+
+  /** 400 days old, so band 5 under `STANDARD` — the credit's own age for most cases here. */
+  const CREDIT_AGE = 400;
+  /** The civil date that age resolves to, written down so the fixture is not defined by its own helper. */
+  const DOC_DATE = '2025-09-02';
+
+  /**
+   * THE NEIGHBOURS. One debt in the credit's OWN band — the arrangement an
+   * oldest-first allocation would consume the credit against — and two in
+   * other bands, so «exactly one band changed» is a restriction over three
+   * bands and not a statement about an empty report.
+   */
+  const OLD_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(400, { invoiceId: 'inv-dr27-old-debt', outstandingTxnMinor: 700_000n, outstandingBaseMinor: 591_521n }),
+  );
+  const YOUNG_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(10, { invoiceId: 'inv-dr27-young-debt', outstandingTxnMinor: 250_000n, outstandingBaseMinor: 211_257n }),
+  );
+  const FUTURE_DEBT: OpenInvoiceRow = Object.freeze(
+    termlessRow(-20, { invoiceId: 'inv-dr27-future-debt', outstandingTxnMinor: 90_000n, outstandingBaseMinor: 76_052n }),
+  );
+  const NEIGHBOURS: readonly OpenInvoiceRow[] = Object.freeze([OLD_DEBT, YOUNG_DEBT, FUTURE_DEBT]);
+
+  /** The credit's own contributions, extracted from a whole-portfolio projection. */
+  const creditIn = (
+    rows: readonly OpenInvoiceRow[],
+    plans: readonly InstallmentPlan[],
+    thresholds: readonly number[],
+    policy: ProjectionPolicy = CORRECT_POLICY,
+  ): readonly AgingContribution[] => contributionsFor(rows, plans, AS_OF, thresholds, policy).filter((c) => c.invoiceId === CREDIT_ID);
+
+  /** Band totals keyed by band and currency, with `invoiceCount` deliberately dropped (S-19). */
+  const bandTotals = (
+    rows: readonly OpenInvoiceRow[],
+    plans: readonly InstallmentPlan[],
+    thresholds: readonly number[],
+  ): Map<string, readonly [bigint, bigint]> => {
+    const out = new Map<string, readonly [bigint, bigint]>();
+    for (const b of projectCustomerAging(rows, plans, AS_OF, thresholds)) {
+      out.set(`${b.bucketNo}\u0000${b.currencyCode}`, [b.txnMinor, b.baseMinor]);
+    }
+    return out;
+  };
+
+  const CREDIT_BAND_KEY = `${OLDEST_STANDARD}\u0000SAR`;
+
+  it('dr27_0: the fixtures are what the cases below claim they are — a well-formed overpaid termless document, and a neighbour in its own band', () => {
+    // NON-VACUITY FIRST, so no case below is explained by a dormant plan, a
+    // broken sum law, a document that states a term after all, or a civil date
+    // that drifted with the helper that builds it.
+    const row = dr27Credit(CREDIT_AGE);
+    expect(row.dueDate, 'the subject states a term, so these cases measure the wrong document').toBeNull();
+    expect(row.issueDate, 'the fixture drifted off its hand-written civil date').toBe(DOC_DATE);
+    expect(epochDay(AS_OF) - epochDay(DOC_DATE), '2025-09-02 to 2026-10-07 is 400 civil days: 30 to 2025-10-02, then 365, then 5').toBe(400);
+    expect(DR27_CREDIT_PLAN.status).toBe('active');
+    const scheduleSum = DR27_CREDIT_PLAN.downPaymentMinor + DR27_CREDIT_PLAN.installments.reduce((a, i) => a + i.amountTxnMinor, 0n);
+    expect(scheduleSum, 'the schedule must add up to the invoice total, or this is proof 4 and not DR-27').toBe(row.paidTxnMinor + row.outstandingTxnMinor);
+    expect(row.outstandingTxnMinor, 'the subject is not a credit at all').toBeLessThan(0n);
+    expect(row.outstandingBaseMinor).toBeLessThan(0n);
+    // THE NEIGHBOUR REALLY IS IN THE CREDIT'S OWN BAND. Without this, clause
+    // (1)'s «a debt in the very same band» is a claim about nothing.
+    const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, STANDARD);
+    expect(solo).toHaveLength(1);
+    expect((solo[0] as AgingContribution).bucketNo).toBe(OLDEST_STANDARD);
+    const neighbour = projectInvoice(OLD_DEBT, undefined, AS_OF, STANDARD);
+    expect(neighbour).toHaveLength(1);
+    const debt = neighbour[0] as AgingContribution;
+    expect(debt.bucketNo, 'the neighbour left the credit band, so nothing here could absorb the credit').toBe(OLDEST_STANDARD);
+    // AND IT IS BIGGER THAN THE CREDIT, so an allocation against it would be
+    // visible in full rather than capped and half-hidden.
+    expect(debt.txnMinor, 'the neighbour is smaller than the credit, so an allocation would be capped and harder to see').toBeGreaterThan(
+      -row.outstandingTxnMinor,
+    );
+  });
+
+  it('dr27_1: «يبقى في خانة وثيقته» — the same credit, asked alone and asked inside a portfolio, in any order, gives the IDENTICAL contribution', () => {
+    // DR-27's words carried here: the credit STAYS IN ITS OWN DOCUMENT'S BAND.
+    // The band, the two figures and the date are compared as a whole tuple, so
+    // a change to any one of them fails this.
+    const row = dr27Credit(CREDIT_AGE);
+    const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, STANDARD);
+    const only = solo[0] as AgingContribution;
+    // PINNED AS LITERALS, not as a comparison between two calls: this is the
+    // answer the report must show, written down.
+    expect(only.bucketNo).toBe(OLDEST_STANDARD);
+    expect(only.txnMinor, 'a credit reported as zero or clamped is money leaving the report by omission').toBe(-5_000n);
+    expect(only.baseMinor).toBe(-4_200n);
+    expect(only.scheduleDate, 'the credit reports a date other than its own document date').toBe(DOC_DATE);
+
+    // (1) THE PORTFOLIO DOES NOT MOVE IT — with a debt in its very own band.
+    expect(creditIn([row, OLD_DEBT], [DR27_CREDIT_PLAN], STANDARD), 'a debt in the credit band changed the credit').toEqual(solo);
+    expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD), 'the surrounding portfolio changed the credit').toEqual(solo);
+    // A neighbour LARGER than everything else, in the credit's band, is the
+    // shape that would swallow the credit whole. Above 2^53, so a float path
+    // would lose minor units here as well.
+    const huge = termlessRow(400, {
+      invoiceId: 'inv-dr27-huge-debt',
+      outstandingTxnMinor: 9_007_199_254_740_993n,
+      outstandingBaseMinor: 9_007_199_254_740_992n,
+    });
+    expect(creditIn([row, huge], [DR27_CREDIT_PLAN], STANDARD), 'a very large debt in the same band changed the credit').toEqual(solo);
+
+    // (1) AND THE ORDER DOES NOT MOVE IT. A reduction that folds documents in
+    // sequence is order-sensitive; this is the cheapest way to see that.
+    const reversed = creditIn([row, ...NEIGHBOURS].reverse(), [DR27_CREDIT_PLAN], STANDARD);
+    expect(reversed, 'the credit moved when the documents were processed in the other order').toEqual(solo);
+    // AND IT IS STILL THE WHOLE FIGURE IN ONE PLACE, asked as a length and as
+    // a sum, so a second contribution smuggling part of it elsewhere fails.
+    expect(reversed, 'the credit was split across more than one contribution').toHaveLength(1);
+    expect(sum(reversed)).toBe(-5_000n);
+  });
+
+  it('dr27_2: «لا تخصيص تلقائي» — adding the credit changes EXACTLY its own band, by exactly its own figures, and no other band by one minor unit', () => {
+    // DR-27's words carried here: NO AUTOMATIC ALLOCATION of a credit to other
+    // invoices, and «الصافي الكلي يبقى مطابقًا لـDR-23» — the overall net stays
+    // the one DR-23 fixed. This is the clause an allocating implementation
+    // breaks: applying the credit to the oldest debt first leaves the NET
+    // identical while moving money between bands, so a conservation law cannot
+    // see it and this difference law can.
+    const row = dr27Credit(CREDIT_AGE);
+    const without = bandTotals([...NEIGHBOURS], [], STANDARD);
+    const withCredit = bandTotals([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD);
+
+    // NON-VACUITY: three bands, and the credit's own band is NOT empty before
+    // the credit arrives, so «unchanged elsewhere» is a real restriction.
+    expect([...without.keys()].sort(), 'the portfolio stopped spanning bands 1, 2 and 5; the difference law below is weaker than it reads').toEqual(
+      ['1\u0000SAR', '2\u0000SAR', CREDIT_BAND_KEY].sort(),
+    );
+    expect(without.get(CREDIT_BAND_KEY)).toEqual([700_000n, 591_521n]);
+    expect(without.get('2\u0000SAR')).toEqual([250_000n, 211_257n]);
+    expect(without.get('1\u0000SAR')).toEqual([90_000n, 76_052n]);
+
+    // THE DIFFERENCE LAW, over the UNION of the two band sets so a band that
+    // appears in only one of them cannot escape it.
+    for (const key of new Set([...without.keys(), ...withCredit.keys()])) {
+      const [beforeTxn, beforeBase] = without.get(key) ?? ([0n, 0n] as const);
+      const [afterTxn, afterBase] = withCredit.get(key) ?? ([0n, 0n] as const);
+      const isCreditBand = key === CREDIT_BAND_KEY;
+      const where = key.replace('\u0000', '/');
+      expect(
+        afterTxn - beforeTxn,
+        `band ${where}: adding a credit must change its OWN band by exactly the credit and every other band by nothing — a credit allocated to older debt before bucketing moves two bands and leaves the net untouched (DR-27)`,
+      ).toBe(isCreditBand ? -5_000n : 0n);
+      expect(afterBase - beforeBase, `band ${where}: the same law on the CARRYING side, which is the half an allocation would hide (DR-27, R-81)`).toBe(
+        isCreditBand ? -4_200n : 0n,
+      );
+    }
+
+    // AND THE NET, by hand: 700 000 + 250 000 + 90 000 − 5 000.
+    expect(
+      [...withCredit.values()].reduce((a, [txn]) => a + txn, 0n),
+      'the bands must total NET receivables EXACTLY (DR-23)',
+    ).toBe(1_035_000n);
+    // ...and by hand on the carrying side: 591 521 + 211 257 + 76 052 − 4 200.
+    expect(
+      [...withCredit.values()].reduce((a, [, base]) => a + base, 0n),
+      'the bands must total the NET CARRYING value exactly too (DR-23, R-81)',
+    ).toBe(874_630n);
+    // THE CREDIT IS VISIBLE AS A CREDIT rather than absorbed into the positive
+    // band it shares: that band's total fell by the credit instead of standing
+    // still, and the figure is written down rather than derived.
+    expect(withCredit.get(CREDIT_BAND_KEY)).toEqual([695_000n, 587_321n]);
+  });
+
+  it('dr27_3: THE DELIVERABLE — re-expressing the thresholds does not move the credit: same amount, same date, and the band its own age earns', () => {
+    // DR-27's closing requirement, carried here: «ويُضاف اختبار يُثبت أن موقع
+    // الدائن في الخانة لا يتغيّر بالتبويب».
+    //
+    // WHAT MUST BE INVARIANT AND WHAT MAY NOT BE. The band NUMBER is an index
+    // into the set in force — `1 + |{t in S : age > t}|` — so a DIFFERENT set
+    // may legitimately give a different index, and demanding one number for
+    // every set would be demanding the wrong thing. What may not change is:
+    // the credit's AMOUNT, the DATE it reports, the fact that it is in exactly
+    // ONE band, and that the index is the one ITS OWN AGE earns under that
+    // set. The expectations are HAND-COMPUTED from age 400 and `>` strict, so
+    // this is not `bucketOf` checked against `bucketOf`.
+    const row = dr27Credit(CREDIT_AGE);
+    const table: readonly (readonly [readonly number[], number])[] = [
+      [[0, 30, 60, 90], 5], // the standard set (DR-10, DR-14): 400 > 0, 30, 60, 90 ⇒ 1 + 4
+      [[90, 60, 30, 0], 5], // THE SAME SET PERMUTED — a pure re-expression, and it must be a no-op
+      [[0, 90], 3], // coarser: 400 > 0, 90 ⇒ 1 + 2
+      [[0], 2], // coarsest that still has a boundary: 400 > 0 ⇒ 1 + 1
+      [[0, 30, 60, 90, 365], 6], // finer, and the credit crosses the new one ⇒ 1 + 5
+      [[0, 30, 60, 90, 400], 5], // A NEW THRESHOLD ON ITS OWN AGE: `>` is strict, so 400 > 400 is false ⇒ 1 + 4
+      [[0, 30, 60, 90, 500], 5], // finer, and the credit does not reach the new one ⇒ 1 + 4
+    ];
+    for (const [thresholds, band] of table) {
+      const solo = projectInvoice(row, DR27_CREDIT_PLAN, AS_OF, thresholds);
+      const label = `thresholds [${thresholds.join(', ')}]`;
+      expect(solo, `${label}: exactly one contribution must carry the whole credit`).toHaveLength(1);
+      const only = solo[0] as AgingContribution;
+      expect(
+        only.bucketNo,
+        `${label}: a credit 400 days past its own document date belongs in the band that age earns under the set in force — band ${band}, computed by hand with the thresholds strict. DR-27 forbids the bucketing from moving it anywhere else.`,
+      ).toBe(band);
+      // THE AMOUNT AND THE DATE ARE THE SAME UNDER EVERY SET — the literal
+      // reading of «does not change with bucketing».
+      expect(only.txnMinor, `${label}: the choice of thresholds changed the credit's amount`).toBe(-5_000n);
+      expect(only.baseMinor, `${label}: the choice of thresholds changed the credit's carrying amount`).toBe(-4_200n);
+      expect(only.scheduleDate, `${label}: the credit's date was re-derived from the bucketing`).toBe(DOC_DATE);
+      expect(sum(solo), `${label}: conservation`).toBe(-5_000n);
+      // AND THE PORTFOLIO STILL DOES NOT MOVE IT UNDER THIS SET: clause (1)
+      // and clause (3) hold TOGETHER, which neither case proves alone.
+      expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], thresholds), `${label}: the portfolio moved the credit under this set`).toEqual(solo);
+    }
+  });
+
+  it('dr27_4: THE CONVERSE — its OWN date does move it, over every standard boundary, inside a portfolio held fixed', () => {
+    // WITHOUT THIS, EVERY CASE ABOVE IS SATISFIED BY A PROJECTION THAT ANSWERS
+    // ONE BAND FOR EVERY CREDIT: «the portfolio did not move it» and «the
+    // thresholds did not move it» are both true of a constant. Here the
+    // portfolio is held fixed and only the credit's OWN issue date varies, so
+    // what is measured is that the placement is a function OF THAT DATE —
+    // the other half of «it stays in its own document's band».
+    //
+    // The boundaries are strict `>` (DR-10): 30, 60 and 90 stay in the younger
+    // band, and a document not yet issued is not yet due. `dr23_9` pins these
+    // for a credit asked ALONE; what is new here is that they survive a
+    // portfolio.
+    for (const [age, band] of [
+      [-45, 1],
+      [0, 1],
+      [30, 2],
+      [31, 3],
+      [60, 3],
+      [61, 4],
+      [90, 4],
+      [91, 5],
+      [400, 5],
+    ] as const) {
+      const row = dr27Credit(age);
+      const inPortfolio = creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD);
+      expect(inPortfolio, `age ${age}: exactly one contribution must carry the whole credit`).toHaveLength(1);
+      const only = inPortfolio[0] as AgingContribution;
+      expect(
+        only.bucketNo,
+        `age ${age}: the credit is placed by ITS OWN document date — ${age} day(s) past it, from \`coalesce(due_date, issue_date)\` per DR-13, DR-21 and DR-30, with the 30/60/90 thresholds strict — so band ${band} is the one in force, portfolio or no portfolio.`,
+      ).toBe(band);
+      expect(only.scheduleDate, `age ${age}: the date reported is not the document's own`).toBe(row.issueDate);
+      expect(only.txnMinor, `age ${age}: the amount moved with the date`).toBe(-5_000n);
+      expect(sum(inPortfolio), `age ${age}: conservation`).toBe(-5_000n);
+    }
+  });
+
+  it('dr27_5: THE POSITIVE CONTROL — these laws CAN fail: under the retired placement rule the same credit, in the same portfolio, lands elsewhere', () => {
+    // A GUARD THAT CANNOT GO RED IS A CLAIM. The retired rule is reachable
+    // through the `termlessFallback` knob — it is the pre-DR-13 behaviour, in
+    // which a document with no stated term had no bucket date at all — so this
+    // control needs no edit to any file: `mutate('termlessFallback', 'none')`.
+    //
+    // It shows that the band and the date asserted above are PRODUCED by the
+    // placement rule and are not constants of the fixture. It does NOT stand
+    // in for the two wrong implementations DR-27 is actually about — a credit
+    // ALLOCATED across bands, and a credit MOVED by a neighbour — which no
+    // policy knob expresses; those are planted by hand, and the card's
+    // evidence records the plant and the named failure, not this case.
+    const row = dr27Credit(CREDIT_AGE);
+    const retired = creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD, mutate('termlessFallback', 'none'));
+    expect(retired, 'the mutant emitted nothing, so the comparison below proves nothing').toHaveLength(1);
+    const only = retired[0] as AgingContribution;
+    expect(only.bucketNo, 'the retired rule no longer parks a termless credit in the first band, so this control is blind').toBe(1);
+    expect(only.scheduleDate, 'the retired rule now reports a date, so this control no longer reproduces it').toBeNull();
+    // THE FIGURES DO NOT MOVE EVEN UNDER THE MUTANT — the retired defect was
+    // always about PLACEMENT and never about the amount, and saying so keeps
+    // this control from being read as a conservation failure.
+    expect(only.txnMinor).toBe(-5_000n);
+    expect(sum(retired)).toBe(-5_000n);
+    // AND THE CORRECT POLICY ANSWERS DIFFERENTLY ON THE SAME INPUT, which is
+    // what makes the line above a control rather than a second fixture.
+    expect(creditIn([row, ...NEIGHBOURS], [DR27_CREDIT_PLAN], STANDARD)[0]?.bucketNo).toBe(OLDEST_STANDARD);
+  });
+});

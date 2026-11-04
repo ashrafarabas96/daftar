@@ -45,3 +45,341 @@
 ## Deferred decisions (not debt — see docs/DAFTAR_OPEN_DECISIONS.md)
 
 - OD-02 WhatsApp provider · OD-03 country tax rules · OD-04 payment gateways · OD-07 currency revaluation.
+
+## Phase 4 money cards and decisions (tracked record — DR-24)
+
+> **This section is not debt and nothing in it is accepted as debt.** The register above
+> forbids recording accounting, security or data-integrity defects, because those are fixed
+> immediately (Master §137) — and the first row below was fixed, not accepted. DR-24 (owner,
+> 2026-10-27) nevertheless requires every money card and every code-touching decision to have
+> a record in a **tracked** file inside the PR that carries it: `.local-context/` is notes
+> only, and a comment in tracked code pointing at an untracked note is a pointer nobody who
+> clones this repository can follow — which is itself how a money defect goes quiet. So this
+> is that tracked record: the card, the decision that settled it, what was changed, and what
+> is still unmeasured.
+>
+> **هذا القسم ليس دينًا تقنيًا.** هو السجل المتتبَّع الذي يفرضه DR-24 لبطاقات المال وقراراتها،
+> ويذكر صراحةً ما لم يُقَس بعد.
+
+| Card | Decision | What it was | Resolution | What is still NOT measured |
+|---|---|---|---|---|
+| `OVERPAY-AGING` | **DR-23** (owner, 2026-10-27): a credit balance arising from an overpayment never leaves the aging report — it appears **explicitly as a customer credit, a visible negative value**, never clamped and never folded into zero, and **the bands total net receivables exactly** | An invoice under an **active** installment plan with a **negative** outstanding (an overpayment) contributed **nothing** to `customer_ar_aging`. `installment_schedule_verify()` holds `down + Σ instalments = total` by strict equality, so `schedule_total = total` always; the body's levels are `least(greatest(c, paid), total)`, so when `paid > total` every level collapses to `total`. Arm (a)'s consecutive differences were then all zero and `declared_end = total` zeroed arm (b)'s residual — so the customer's credit left the report **by omission rather than by payment**, and the bands stopped totalling the authoritative outstanding. Reachable with **no guard weakened**: the invoice total is immutable and a payment does not touch `installments` (total 1000, schedule 1000, paid 1200 ⇒ `O = −200`) | **Fixed**, not registered. The deviant artefact was the **specification's** body (`infrastructure/database/specifications/p4s7-installment-aging.spec.sql`), which replaces `0084`'s `customer_ar_aging` under the same signature; `0084`'s own body has no plan arm, no levels and nothing to clamp, so it needed no change (measured by `dr23_7`). DR-23 ruled the **reference model** correct and the body deviant, so the body now carries the model's totality arm as its `degenerate` CTE — `oi.outstanding_txn_minor <= 0 OR oi.total_txn_minor <= 0 OR oi.total_base_minor <= 0` — gated at `active_plan` with a `NOT EXISTS` over that CTE, so the schedule arms are structurally unable to run for such an invoice, and arm (d) emits the **authoritative** pair at the document's own date `coalesce(due_date, issue_date)`. The four arms now partition the open invoices by two bits of the invoice's own row. The pinned body digest in the end-state block moved with it | **The INSTALLED routine's behaviour: NOT_RUN.** Nothing executes SQL without PostgreSQL, and every suite under `tests/**` loads it through an unconditional `ensurePostgres()`. The evidence today is the **model**, executed (`dr23_1`–`dr23_4`), and the body's **text**, judged over code with comments blanked (`dr23_5`–`dr23_7`, `dr23_6` the negative control). The live assertion owed is the same fixture asked of the installed function and expected to answer `−5 000`, plus the band total on a mixed-sign portfolio — owed by the seal run (DR-26), not implied here. The number of documents affected in any existing data is **UNKNOWN**: it needs a query for invoices with an active plan and a negative outstanding. <br><br>**A limit the phrase "never clamped" does not reach — and it is more than a footnote, so it has its own entry below as `CARRY-CONSERVATION-R81`:** a row with `outstanding_base_minor < 0` while `outstanding_txn_minor > 0` is **not** routed to arm (d) — all three disjuncts are about the transaction figure and the two totals — so it takes the schedule arms, where the carrying share is **re-derived** by `supplier_ap_release` and need not equal the authoritative figure. **Measured** on the reference model: a row carrying `txn +10, base -10` reports `base +8`, and `dr23_13` now **pins that figure** so the word "measured" here is reproducible rather than recalled. The reference model carries the **same** condition, so there is **no model/body divergence** and nothing here deviates from the ruling — the finding is **pre-existing and not attributable to this card**. **Its reachability is NOT_MEASURED:** whether `invoice_outstanding` can produce that sign pairing at all needs a database. <br><br>**S-17 (DECIDED by DR-30, 2026-10-27) — does a TERMLESS credit balance age from the issue date at all?** DR-21 governs an amount that is *due*, and a credit balance is not due, so this placement was implemented with no decision over it. **DR-30 settles it:** the governing principle is that **no debt leaves the aging report except by payment**, an amount ages from `coalesce(due_date, issue_date)`, and a **scheduled instalment ages from its own due date**. The reading consistent with that principle is adopted — and that is the reading already implemented (`coalesce(due_date, issue_date)`, consistent with arm (c) and with the reference model). `dr23_8` and `dr23_9` pin it, and their failure messages now name **DR-30** as the rule in force, with DR-21 and DR-13 as the placement rules it rests on, instead of announcing a rule as broken — the pattern `dr23_13` already uses. **Nothing changed in any assertion, figure or band when DR-30 was recorded:** it adopted the behaviour as implemented, which is why this is a record and not a repair. What DR-30 does **not** settle: how a credit is *presented* (S-18, below, closed by DR-27) and whether `invoice_count` is additive (**S-19 stays open**, and is DR-29’s subject). <br><br>**S-18 (DECIDED by DR-27, 2026-10-27) — what does “explicitly as a customer credit” mean in the output?** DR-23 requires the credit to appear explicitly. This implementation renders it as a **negative value inside an aging band**, not as a separate presentation line or its own field: the invoice is counted in that band’s `invoice_count`, and a band total may itself be negative. **DR-27 settles it:** the credit **stays in its own document’s band (by that document’s date) as a visible negative value, as in standard accounting aging reports**, with the overall net unchanged from DR-23. ⇒ the negative value inside the band **is** the explicit presentation; no separate presentation line is owed, and a band whose TOTAL is negative is acceptable output — which is what `dr23_4` measures. DR-27 also forbids any **automatic** allocation of a credit to other invoices: applying it is an explicit merchant action, recorded as an allocation entry, and belongs to card `PAY-ALLOC` after the seal. So the implemented rendering is decided, not merely implemented — and the questions DR-27 leaves standing are not S-18’s. <br><br>**THE DELIVERABLE DR-27 ENDS WITH IS NOW MET — and it was owed at the moment this row first said «DECIDED».** DR-27 closes with «ويُضاف اختبار يُثبت أن موقع الدائن في الخانة لا يتغيّر بالتبويب» — a test proving that the credit's position in its band does not change with bucketing. That test was not written while this row already recorded the decision as settled; an independent review of PR #24 raised the omission and the owner confirmed the finding (`OWNER_DECISIONS_AR.md`, **DR-27 «مستحقّ مؤكَّد»**, 2026-10-27). Recording a decision while silently dropping its deliverable is how a requirement disappears, so the deliverable is named here rather than assumed. **The test:** `packages/domain-core/test/phase4-s7-installment-aging.test.ts`, block «DR-27 a credit's position in its band is a function of its own document, not of the bucketing», cases `dr27_0` through `dr27_5`. It first states the property in a form that can be falsified — for a credit on document D, the band, the transaction amount, the carrying amount and the date the projection SAYS it placed D at are a function of D's own date and D's own value and of nothing else — and then pins the three «nothing else» clauses: (1) **not the other documents, and not their order** (`dr27_1`: the same credit asked alone and asked inside a portfolio gives the identical contribution, including with a debt in the credit's own band, with a debt above 2^53 in that band, and with the documents processed in reverse); (2) **not the bands' totals** (`dr27_2`: adding the credit changes EXACTLY its own band, by exactly its own figures, on both the transaction and the carrying side, and no other band by one minor unit — this is the clause an oldest-first automatic allocation breaks while leaving the NET identical, so no conservation law can see it and a difference law can); (3) **not the choice of thresholds** (`dr27_3`: a hand-written table of seven sets — the standard set, the same set permuted, coarser, coarsest, finer, a threshold ON the credit's own age where `>` is strict, and a threshold beyond it — under each of which the amount, the carrying amount and the reported date are unchanged and the band is the one the credit's own age earns, computed by hand rather than by a second call to the banding function). `dr27_4` is the **converse**, without which all three are satisfied by a projection that answers one band for every credit: the credit's OWN date must move it, over every standard boundary, on each side and ON it, inside a portfolio held fixed. `dr27_5` is the **positive control** — under the retired pre-DR-13 placement rule, reached through the `termlessFallback` policy knob and therefore needing no edit to any file, the same credit in the same portfolio lands in band 1 with no date at all. **No existing assertion, figure or band was changed; the block is additive.** **What it does NOT establish, stated rather than implied:** the INSTALLED SQL body is not executed — there is no database in this package — so the live assertion remains owed by the seal run (DR-26) and is **NOT_RUN**; the two wrong implementations DR-27 is actually about, a credit **allocated across bands** and a credit **moved by a neighbour**, are expressible through no policy knob, so they are planted by hand and the plant with its named failure belongs to this card's evidence rather than to a committed case; and **`invoiceCount` is asserted nowhere in the block**, because whether that counter is additive across bands is **S-19, which stays OPEN** as DR-29's subject and must not be decided here by accident. ⇒ **DR-27 has no part left unmet in this repository's own tests.** What remains for it is the live run above, and the merchant-initiated application of a credit, which DR-27 itself defers to card `PAY-ALLOC` after the seal. <br><br>**S-19 (OPEN FOR THE OWNER) — is `invoice_count` additive across bands?** One termless invoice under an active plan is counted in two bands under DR-21. **The money is partitioned, not duplicated** — `dr23_4` asserts that on both the transaction and the carrying side — but the document IDENTITY is repeated. This does not contradict the warning the project already carries: the routine’s own `COMMENT` in `infrastructure/database/specifications/p4s7-installment-aging.spec.sql` states that "an invoice may now appear in SEVERAL buckets, so `invoice_count` is `count(DISTINCT invoice_id)` and the sum of `invoice_count` over the buckets may exceed the number of open invoices", and the consumer note beside it says the same. So the **behaviour** is documented; what **no decision** states is whether that counter is contractually **non-additive**, which is what a client summing it would need to be told. |
+| `DR-13-MIG` | DR-03 freezes `0080`–`0086` as candidates; `frozenThrough` stays `0079` | `0075:809` and `0083:394` still carry, in live code, `WHERE i.due_date IS NOT NULL AND (p_as_of - i.due_date) > t.threshold` — the guard DR-13 retired. The end state is sound because `0084` drops the routine and recreates it with `coalesce(due_date, issue_date)`, **but any database applied only as far as `0083` carries the money defect** | **Open.** Outside this card's ownership (migrations, frozen as candidates by DR-03). The condition is to be stated explicitly in the deployment document, or handled if `0080`–`0086` are unfrozen | Whether any environment is sitting at `0083` or below: **UNKNOWN** |
+| `DR-21-PRESENT` | Pending owner — it changes a figure the merchant reads | `apps/api/src/modules/selling/customer-reads.ts:488` is `CASE WHEN o.due_date IS NULL THEN NULL ELSE ($3::date - o.due_date) END AS days_past_due`, so a termless invoice shows in the `over-90` band of the aging report and as `—` on the open-invoice page. By DR-21 the debt **is** overdue and is measured from the issue date, so the page hides an age the report asserts | **Open.** Outside this card's ownership. Likely repair `$3::date - coalesce(o.due_date, o.issue_date)`, by owner decision | Not measured against a database |
+| `CARRY-CONSERVATION-R81` | None yet — it needs one. Proposed owner `daftar-finance`, **double review required** (money) | **A breach of the carrying-amount conservation law the routine itself asserts.** The aging routine’s `COMMENT` in `infrastructure/database/specifications/p4s7-installment-aging.spec.sql` states that each row’s carrying share is taken through `supplier_ap_release`, "the canonical cumulative carrying-value law (R-61, R-81)", so that the base shares "likewise total `outstanding_base_minor` EXACTLY". On one input they do not. A row whose TRANSACTION outstanding is positive while its CARRYING outstanding is negative is not degenerate — the totality arm’s three disjuncts are about the transaction figure and the two totals — so it takes the schedule arms, the carrying share is re-derived over a window the law assumes positive, and the reported figure is `+8` against an authoritative `-10`: **opposite in sign**, not a rounding difference | **Open, and deliberately not repaired here.** It is **pre-existing and NOT attributable to `OVERPAY-AGING`**: the reference model carries the **same** condition as the SQL body, so there is no model/body divergence to choose between, and the behaviour predates the totality arm entirely. Repairing it means deciding what a negative carrying amount MEANS in a carrying-value release — an accounting question, not a programming one. What this card did do is **pin** today’s answer: `dr23_13` in `packages/domain-core/test/phase4-s7-installment-aging.test.ts` asserts the `+8`, states in its title that it records an asymmetry rather than approving it, and tells the repairing card to rewrite it. Two plants were measured against it: adding `outstandingBaseMinor < 0` to the arm’s condition, and shifting the re-derived share by one minor unit — each made it red **by name** | **Reachability: NOT_MEASURED.** Whether `invoice_outstanding` can produce a positive transaction outstanding beside a negative carrying one needs a database: it is computed from the reducer set and carries no `CHECK`, so nothing in the schema forbids it, and nothing measured shows it occurring. **The effect on any existing data is UNKNOWN** for the same reason |
+
+### Accounting questions this section raises and does not decide
+
+- **A net-zero customer is present in one reader and absent from the other.** `customer_ar_outstanding`
+  (`0084`) ends `HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0`, so a customer whose credits
+  exactly offset their debts returns **no row at all** from the receivable reader — while
+  `customer_ar_aging` has no such `HAVING` and still reports the offsetting bands, which now net to
+  zero rather than one of them vanishing. Both readers are internally consistent with DR-23 and with
+  each other's totals; what differs is **presence**. Whether a customer at net zero should disappear
+  from the receivable list while still appearing in the aging report is a presentation decision about
+  a figure the merchant reads, so it belongs to the owner and is **not** settled here. It is the same
+  family as `DR-21-PRESENT` and was measured, not inferred.
+- **A credit under a plan is aged by the DOCUMENT and not by the schedule.** The totality arm places
+  the whole credit in one band at `coalesce(due_date, issue_date)`, so an overpaid invoice with
+  future-dated instalments shows its credit against the document's age. This is the reference model's
+  behaviour and DR-23 adopts the model, so it is **decided** — recorded here only because it is an
+  unusual sight in an aging report and a reader may take it for a defect.
+
+### Open after the Phase 4 seal (2026-10-31, merge commit `58d24469739a2bc36346676637281f7a8951171b`)
+
+These are the follow-ups the seal explicitly does not close. None of them is an
+accounting, security or data-integrity **defect** — those are fixed and never
+registered. Each is either coverage not yet written, a limit of the tooling, or
+behaviour that is intended and recorded so it is not mistaken for a gap.
+
+**TD-23 — the eleven moderate advisories are untriaged.** `npm audit
+--audit-level=high` exits **0** on the sealed tree and `--audit-level=moderate`
+exits **1** reporting **11 moderate** advisories. The accurate statement is
+therefore **zero high and zero critical**, never "zero vulnerabilities": the
+zero is produced by the threshold and not by the tree, and the second command is
+the positive control proving the eleven are really there. *Why it is debt and
+not a defect:* the release gate is the high/critical threshold and it passes.
+*Repayment:* triage each advisory by **affected path actually used**, not by
+published severity — a generically moderate advisory can be high *here* if its
+path touches money or tenant isolation, and a generically high one can be
+irrelevant if the path is never reached. The card carries its own non-vacuity
+check: `--audit-level=moderate` must still exit non-zero, or the eleven are not
+where we think they are.
+
+**TD-24 — the request throttler counts per process, and must be settled before
+any launch.** The limiter holds its counters in process memory, so **each
+replica counts its own allowance**: the effective production limit is the stated
+limit multiplied by the replica count, and that count changes under autoscaling.
+A written policy of "N requests per client per minute" therefore becomes a
+ceiling the operator cannot state. This surfaced because the hardened
+measurement itself tripped the production limit — two magnitudes of 220 requests
+against one handler's allowance of 300 a minute — and the fix clears the counter
+between measurements. **That reset depends on the store being in process, and
+nothing in the tree pins it**, so moving to a shared store would break it
+silently and the returned rate-limit answers would read as a performance
+regression rather than as a changed store. *Repayment:* decide the store, or
+state explicitly and where an operator will see it that the limit is per
+replica; then add a law that pins the store or makes the reset fail loudly when
+it changes. **This one is not deferrable past a launch.**
+
+**TD-25 — the two budget negative controls are silent on success.** They invert
+the exit code and additionally require each budget's tag in the output, so a
+suite that cannot start fails them rather than satisfying them, and both ran in
+the decisive run for the first time ever. But they redirect the suite's output to
+a file and check tags with quiet greps, so **their logs hold no evidence of their
+own.**
+
+**⚠️ Two corrections to this card (DR-81, 2026-11-01), from the same external
+review.**
+
+1. **The duration inference is deleted, not softened.** This card read the
+   durations (109 s and 85 s) as part of a sound deduction that the controls ran
+   their sample loops. **That does not follow, and the log cannot repair it** —
+   measured on run `41248454929`, whose two control steps occupy
+   `00:56:24Z → 00:58:08Z` and `00:58:08Z → 00:59:30Z`, a search of those windows
+   for a sample count returns **zero lines** (the `200 samples` lines sit at
+   `00:59:39Z`, after both windows close, in a later step). ⇒ **the sample count
+   is not recoverable from the log**, and a duration is equally consistent with
+   completed loops and with a slow start. What is proven is the inverted exit
+   code plus tag presence, and nothing more.
+2. **The controls match the tag, and only the tag.** They match **neither the
+   budget's name, nor the measured value, nor the ceiling** ⇒ **any** failure of
+   that assertion, for **any** reason, satisfies them. So they prove *"this
+   assertion can fail"*, **not** *"this budget can detect an exceedance"*, and
+   must not be read as the second.
+
+*Repayment:* have each step print the assertion it matched, **and match each
+budget's own exceedance message — budget name, measured value, ceiling — rather
+than its tag alone.** A control that proves something and records nothing is one
+refactor away from proving nothing silently.
+
+**TD-26 — reaching a state the enforcement permits but the accounting does not
+want.** *This entry replaces an earlier one that described the closing of the
+carrying base as unenforced by the schema. That description was wrong, and it is
+withdrawn rather than quoted, because a sentence about money that is wrong
+should not stay quotable.* Measured at
+`58d24469739a2bc36346676637281f7a8951171b`: the telescoping identity
+`Sigma rel = HALF_EVEN(B · Sigma amount, T)` (`0081:38`, `:777`, `:1330`, the
+last of which states that this is what makes `outstanding_base = 0` exactly when
+the last reducer closes the invoice); `invoice_settlement_verify` (`0081:691`);
+**three deferred constraint triggers** that call it at commit —
+`payments_complete` (`:1276`), `payment_allocations_value_complete` (`:1282`),
+`customer_credit_applications_value_complete` (`:1291`), each `DEFERRABLE
+INITIALLY DEFERRED`; and `payment_allocations_invoice_uq` (`:326`) with
+`payment_allocations_level_uq` (`:334`). So a commit that leaves an invoice
+unbalanced is **refused at commit time**, and all of it ran in run
+`41213587774`.
+
+*Why it is debt and not a defect:* the enforcement holds; what is unmeasured is
+whether a lawful sequence can reach a state it permits and the accounting does
+not want — **the per-row sign path before closure**.
+
+**⚠️ Three claims this card carried are withdrawn (DR-81, 2026-11-01), after an
+external review found them internally contradictory. They are withdrawn rather
+than quoted, because a sentence about money that is wrong should not stay
+quotable.**
+
+1. **"a zero transaction figure with a non-zero base" — struck as malformed, and
+   the first attempt at striking it was itself wrong (DR-82).** That attempt
+   inferred, from closure, that no amount had been applied. **Closure means the
+   opposite: everything was applied.** With `T` the invoice total in the
+   transaction currency, `B` its stored base value, `amount` the amounts applied
+   and `rel` the base released:
+   `outstanding_txn = T - Σ amount = 0` ⇒ `Σ amount = T` ⇒
+   `Σ rel = HALF_EVEN(B*T, T) = B` ⇒ `outstanding_base = B - Σ rel = 0`.
+   **So the transaction side closing forces the base side to close**, and a
+   closed invoice cannot carry a non-zero base. The law binds the **sum**, so
+   only the per-row path remains open. Pinned in
+   `tests/integration/receivables-s4-fx-closure.test.ts` at `:495`, `:525`,
+   `:545` and `:497`/`:499`.
+2. **"a credit note and an overpayment both produce a lawful negative outstanding
+   figure" — withdrawn as false for the overpayment, and unmeasured for the
+   credit note.** `12-overpayment-customer-credit.golden.test.ts:453`, `:460`
+   measure the opposite: the surplus becomes a **customer credit** and the
+   invoice's outstanding is **exactly zero and never negative**. **No test in
+   this repository exhibits a negative invoice balance.** ⇒ the flat instruction
+   **"do not add a constraint forbidding the sign" falls with the claim it rested
+   on**, and this card now argues **neither for nor against** such a constraint.
+   Either direction needs a measured case naming the test and the figures.
+3. **The prescribed remedy is withdrawn, and no replacement is named (DR-82).**
+   This card previously ordered the release be fixed "by the remainder method" if
+   the sign path proved reachable. That is **deleted**, for two measured reasons:
+   it prescribed a repair for a behaviour **nobody has observed**, and **DR-72
+   had already withdrawn the remainder method** — so the card was re-proposing a
+   withdrawn remedy.
+
+*Repayment, restated:* **measure the per-row sign path first** on a real database
+— partial payments at different rates, a refund, a reversal. **Then let the
+result determine the correction, subject to preserving the conservation
+identity.** **No remedy is named here**: naming one before the measurement is a
+guess with a procedure attached, and the earlier wording of this line did exactly
+that.
+
+**TD-27 — the image dimension bound is not covered over HTTP.** The bound itself
+exists and is enforced before any decode, and it is **not** redundant with the
+imaging library's own default: measured by experiment, the library at its
+defaults decodes a decompression bomb while an explicit pixel limit refuses it,
+and the project's bound is strictly tighter than the library default. The new
+unit suite pins it, with a negative control. What is missing is the same refusal
+exercised **through the HTTP surface**: that suite asserts the error object's
+status rather than a response. *A specific trap is recorded with this card:* an
+existing integration case covers the **magic-byte** refusal on the same path
+with the same code and the same status, so **reading it as cover for the
+dimension refusal would be an empty pass.**
+
+**TD-28 — `B ≠ T` through the sale path: CLOSED by measurement, and its
+premise was wrong.** *This entry previously said an invoice in a currency other
+than the business base was unreachable, and justified it by two refusals —
+product creation rejecting a non-base `priceCurrency`, and product update
+refusing to change one. Those refusals are real; the inference from them was
+not, and it is withdrawn.* Changing the **business base currency** leaves an
+existing product's `price_currency` behind it, and the lock that prevents that
+change (`financial_started_at`) arms at the **first posted entry** — so the
+window is "before the first posting", not "never". A second base change after a
+posting is refused `409 BASE_CURRENCY_LOCKED`, which is the real shape of the
+restriction and the reason the stronger claim looked true.
+
+*Measured end to end through the API*, in
+`tests/integration/receivables-s4-fx-closure.test.ts` (8 cases, 8 passed): the
+base changed `ILS → USD` while `financial_started_at` was null; the product's
+`price_currency` stayed `ILS` under a `USD` base with **no row written by
+hand**; a credit sale committed an `ILS` invoice with `T = 3000`, `B = 721`;
+three payments on three dates at `0.2650 / 0.2750 / 0.2350`. At closure
+`outstanding_txn_minor = 0` **and** `outstanding_base_minor = 0`, state `paid`,
+and `Σ rel = 96 + 289 + 336 = 721`, equal to the invoice's **stored**
+`total_base_minor` — an absolute value, not an identity between two sums
+computed the same way. The realized difference is confined to
+`realized_fx_gain_loss_minor`, `+10 / +41 / −7` per leg (both signs), summing to
+`44 = 765 − 721`; the ledger moved `fx_gain` and `fx_loss` by that amount and
+left `rounding` unmoved, and AR went `721 → 0`.
+
+*So this is closed, not deferred:* the state is reachable **and** conservation
+holds on it. Two negative controls were run and restored byte-for-byte: forcing
+the domestic FX branch reddens seven named cases — and the **database** refuses
+with `sale.state_changed`, because `sale_commit` cross-checks the service's FX
+snapshot, so a service that takes the wrong branch cannot commit a sale at all;
+and replacing the telescoping release with a per-leg conversion is refused at
+**leg 2** with `customer_payment.settlement_changed` (409).
+
+*What remained was that the suite had not run in CI — **and that is now closed by
+measurement (DR-81, 2026-11-01).*** The statement "this suite has never run in
+CI" was true only of the decisive run, and necessarily so: **the file does not
+exist at that commit.** Measured against a positive control, so an empty result
+cannot pass for a negative — `git cat-file -e 58d24469:tests/integration/receivables-s4-fx-closure.test.ts`
+⇒ **EXIT 128**; the same on `1aff66c6` ⇒ **EXIT 0**; `58d24469:package.json`
+⇒ **EXIT 0** (the probe works). On the PR head `1aff66c6`, run `41248454929`, the
+`Integration + security` step's output **names the file with its cases passing**,
+which is exactly the standard this card demanded:
+
+```
+22:42:21.57Z  ✓ tests/integration/receivables-s4-fx-closure.test.ts (8 tests) 1475ms
+23:01:53.29Z  Test Files  358 passed (358)      Tests  6626 passed (6626)
+```
+
+`358 − 357 = 1` file and `6626 − 6618 = 8` tests against the decisive run's
+totals ⇒ **the delta is precisely this suite**, so the naming is corroborated by
+arithmetic and not by a tick alone. **What must not be done is to attribute that
+run to the sealed commit.** The residue is not missing execution but a missing
+guard, carried as **TD-30** below.
+
+*One guarantee stronger than anything this register previously named:*
+`payment_allocations_realized_ck` (`0081:336`) makes the realized figure
+**definitionally** the residual, so a leak of exchange difference into the
+carrying base is not representable rather than merely refused.
+
+**TD-29 — overpayment on an invoice whose own currency is not the base is
+uncovered.** In both golden suites that carry cross-currency settlement the
+**invoice** is in the business base currency and only the **payment** is not; and
+`receivables-s4-fx-closure.test.ts`, which does drive a non-base invoice, closes
+it **exactly**, so no surplus arises. ⇒ the combination **non-base invoice + an
+overpayment on it** is exercised nowhere. *Why it is debt and not a defect:*
+nothing measured shows it misbehaving — it is **declared uncovered rather than
+inferred safe**, which is the opposite of the reasoning error TD-28 withdrew.
+*Repayment:* extend the FX closure suite with an overpaying leg on the `ILS`
+invoice under the `USD` base, asserting the invoice closes at exactly zero, the
+surplus becomes a customer credit carried at its own rate, and conservation holds
+in the payment's currency and in base. **Money card ⇒ owner `daftar-finance`, and
+a second review is required.**
+
+**TD-30 — nothing keeps the FX closure suite in the CI lane.** TD-28 above
+establishes that `tests/integration/receivables-s4-fx-closure.test.ts` **does**
+run in CI, reached by `test:integration` (`vitest run tests/integration
+tests/security tests/guards`) through the root config's
+`include: ['tests/**/*.test.ts']`. But that is an observation of one run, not an
+enforced property: **if the file were renamed, moved out of the glob or filtered,
+the step would report success with its subject absent** — the very failure mode
+TD-28 named. *Repayment:* a roster test of the shape
+`tests-unit/test-lane-roster.test.ts` already uses for the unit lane, asserting
+this suite is reached by the lane `ci.yml` runs, **with a negative control that
+proves the guard fires when the suite is removed** — without which the roster is
+itself an empty pass. ⇒ "it runs" becomes enforced rather than observed once.
+
+**TD-31 — mail delivery is not exercised end to end, for want of a TLS
+fixture.** Three things are unproven: a **successful** end-to-end send, the
+**envelope as it goes on the wire**, and **non-ASCII address handling**. The
+current suite cannot produce them because it has no TLS fixture, and the ability
+to relax transport security is a constructor argument reachable only from tests,
+with a test pinning that production never passes it. *Why it is debt and not a
+defect:* nothing measured shows mail misbehaving — this is **absent coverage,
+declared rather than inferred safe**. *Repayment:* a TLS fixture, then the three
+assertions above, the non-ASCII one named explicitly so it cannot be quietly
+dropped. **Not a merge blocker** (DR-82).
+
+**TD-32 — no verification binds each plan-shape claim to a gate.** The claim
+inventory is counted, and the counts are sound: the parent holds **428** claims
+and the child **429**, genuinely new **1**, genuinely removed **0**. **But those
+figures support exactly one statement — that no item was deleted from the
+inventory — and not the broader one that "no claim lost its gate"**, which would
+require checking that each claim is still *bound* to a gate that can fail on it.
+**No such verification was ever run**, and no command or result for one exists
+(DR-81, DR-82). *Why it is debt and not a defect:* a claim silently unbound from
+its gate is how a requirement stops being enforced while the inventory still
+lists it — but nothing measured shows that has happened. *Repayment:* a check
+that, for every entry in the inventory, names the gate that would fail without
+it, **with a negative control that unbinds one claim and is shown to fire.**
+Until then, **the only sound wording is "no item was deleted from the
+inventory"**, and any broader phrasing is to be treated as withdrawn. **Not a
+merge blocker** (DR-82).
+
+### Also open, recorded earlier and unchanged by the seal
+
+**CRLF-PARSE** — the review-index parser slices the last character off every
+line, so under a CRLF checkout it reports every row stale. Measured: the same
+commit reports 620 problems in a CRLF tree and `PASS (full)` in an LF tree, so
+`main`'s index is not stale and nothing is blocked. The repayment is a parser
+that accepts both endings, a test over the same text with each, and
+`.gitattributes` forcing `eol=lf` on generated files.
+
+**DR-13-MIG** — two migrations below the frozen line still carry, in live code,
+the retired aging guard that DR-13 replaced, so aging correctness on a database
+that stops before the fixing migration is not what the current rule says. The
+accepted migrations are frozen, so this is recorded rather than edited.
+
+**DR-21-PRESENT** — the open-invoice page still reports no age for a document
+with no stated due date, while the aging report ages it from its issue date. The
+page therefore hides the age of a debt the report acknowledges. Changing it
+changes a number the merchant sees, so it needs the owner's decision and a
+double review.
+
+**CARRY-CONSERVATION-R81** — the routine's own comment states that the base
+shares total the authoritative base figure exactly, and a pinned case records a
+mixed-sign pair where they do not. The case asserts **inequality**, so it goes
+red if the law ever becomes true, and its failure message names this card. Its
+reachability is unmeasured.
+
+**POS-CART-ROSTER** — a cart law derives its code roster from raw text without
+stripping comments, so a prose mention inflates the set by one. The direction is
+safe — the law checks one extra code and passes — but a prose name that later
+becomes a real code with a different status would turn it into a false failure,
+which is how a law gets disabled.
+
+**TZ-PORTABILITY** — a concurrency suite reads a `DATE` column through a driver
+that converts it at the host's local midnight, so the assertion fails on any
+host east of UTC. CI runs on UTC and the runner was matched to UTC, so the
+symptom is invisible there; the fix is to read the column as text and to run the
+suite under three zones.
+
+**BUILD-ORDER** — the root build script builds workspaces alphabetically, so a
+clean tree fails on a library that an application needs before it exists. The
+repayment is a single source of build order shared with CI rather than a second
+copy of the list.

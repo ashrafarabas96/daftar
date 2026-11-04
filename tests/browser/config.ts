@@ -68,4 +68,30 @@ export const LOGIN_PER_ACCOUNT_BUDGET = 9; // API: 10 per address and account pe
  * reach that allowance in a fast run. The gate paces each route below it.
  */
 export const ROUTE_WINDOW_MS = 60_000;
-export const ROUTE_BUDGET = 270; // API: 300 per client and route handler per minute
+/**
+ * API: 300 per client and route handler per minute. The margin was 10% and it
+ * was not enough: on the 20-core self-hosted runner this repository used at
+ * the time, the gate drove the matrix several times faster than the 4-core
+ * hosted runner it was tuned on, and
+ * `GET /api/proxy/inventory/access` — the one route the header AND four page
+ * modules each read, so the busiest by a wide margin — answered 429 twelve
+ * times in one run. The budget is now 80% of the allowance, so the margin is
+ * a fifth of it rather than a tenth.
+ *
+ * The margin is what absorbs the gap between the moment this pacer releases a
+ * request and the moment the API counts it; it is not a licence to leave a
+ * request uncounted. `RouteCoverage` (pacer.ts) proves separately that every
+ * proxied request passes this budget, because a wider margin would otherwise
+ * hide an unpaced path instead of fixing it.
+ */
+export const ROUTE_BUDGET = 240;
+
+/**
+ * The negative control: with `BROWSER_GATE_NO_PACING=1` the budgets stop
+ * WAITING, and the run is expected to meet the API's limiter and report 429.
+ * Interception is untouched, so `RouteCoverage` still accounts for every
+ * request — the control removes the pacing, not the proof that pacing is in
+ * the path. Never set in CI's own gate steps; it exists so "the pacer is what
+ * keeps the gate green" can be measured rather than asserted.
+ */
+export const pacingDisabled = (): boolean => process.env['BROWSER_GATE_NO_PACING'] === '1';
