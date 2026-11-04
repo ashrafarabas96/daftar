@@ -56,10 +56,49 @@ import Redis from 'ioredis';
 import { RateLimiterUnavailableError, RedisRateLimiter } from '../apps/api/src/infra/redis';
 import type { AppConfig } from '../apps/api/src/config';
 
+/**
+ * A server that ACCEPTS the socket and never speaks — Redis loading an RDB,
+ * or a load balancer that accepts and swallows. This is not a hypothetical
+ * shape: it is what this host's own shared cluster on port 55432 was doing
+ * while this card was written (TCP accepted in 3ms, zero bytes back in 60s).
+ */
+async function startSilentServer(): Promise<{ url: string; close(): Promise<void> }> {
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => undefined);
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  if (address === null || typeof address === 'string') throw new Error('the silent server did not bind a port');
+  return {
+    url: `redis://127.0.0.1:${address.port}`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) socket.destroy();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+/** A port nothing listens on: bound, read, then released, so it is never a guess. */
+async function unusedPort(): Promise<number> {
+  const probe = createServer();
+  await new Promise<void>((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const address = probe.address();
+  if (address === null || typeof address === 'string') throw new Error('could not reserve a port to then release');
+  const { port } = address;
+  await new Promise<void>((resolve) => probe.close(() => resolve()));
+  return port;
+}
+
 interface FakeRedis {
   readonly url: string;
   /** The command names this server actually received, in order. */
   readonly seen: string[];
+  /** Drop every open connection, as a restarting Redis would. */
+  dropConnections(): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -109,6 +148,11 @@ async function startFakeRedis(): Promise<FakeRedis> {
   return {
     url: `redis://127.0.0.1:${address.port}`,
     seen,
+    dropConnections: async () => {
+      for (const socket of sockets) socket.destroy();
+      sockets.clear();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();
@@ -189,10 +233,58 @@ describe('TD-24 / finding 5 — a healthy Redis must not produce a 503', () => {
   }, 20_000);
 
   it('TD24-FIRST-CLOSED: a backend that is genuinely unreachable still fails closed', async () => {
-    // The fix must not turn an outage into a pass. 6399 is a port nothing
-    // listens on, and the answer must still be the fail-closed error that
-    // Directive §67 requires — never a silent "no limit".
-    limiter = new RedisRateLimiter(configFor('redis://127.0.0.1:6399'));
+    // The fix must not turn an outage into a pass: the answer must still be
+    // the fail-closed error §67 requires, never a silent "no limit". The port
+    // is RESERVED AND RELEASED rather than written down — a hardcoded number
+    // that something happened to be listening on would quietly turn this case
+    // into a different one.
+    const port = await unusedPort();
+    limiter = new RedisRateLimiter(configFor(`redis://127.0.0.1:${port}`));
     await expect(limiter.take('login:ip:198.51.100.9', 30, 300)).rejects.toBeInstanceOf(RateLimiterUnavailableError);
+  }, 15_000);
+
+  it('TD24-SILENT: a backend that accepts and never speaks is REFUSED, not waited on', async () => {
+    // The defect the first version of this fix introduced, and the reason the
+    // handshake wait is bounded. Measured then: the old code refused in 1ms,
+    // the awaited connect() was still pending at 8001ms. A hung login is
+    // worse than a wrong 503, and DR-90 §3 asks for a clear fail-closed 503.
+    const silent = await startSilentServer();
+    try {
+      limiter = new RedisRateLimiter(configFor(silent.url));
+      const started = Date.now();
+      await expect(limiter.take('login:ip:198.51.100.11', 30, 300)).rejects.toBeInstanceOf(RateLimiterUnavailableError);
+      // BOUNDED: the refusal arrives on the handshake budget, not when the
+      // test runner gives up. 5s is well inside this case's own timeout, so a
+      // regression to an unbounded wait fails here rather than timing out.
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      await limiter?.close().catch(() => undefined);
+      limiter = null;
+      await silent.close();
+    }
   }, 20_000);
+
+  it('TD24-REDIAL: after the connection drops, a later request connects again', async () => {
+    // The other half the review found untested: the re-dial. Without it,
+    // ioredis's retry budget — reset only on `ready` — leaves the client in
+    // `end` for the life of the process, so one blip refuses everything
+    // afterwards. The fake drops the socket, which is what a restart looks
+    // like from the client's side.
+    fake = await startFakeRedis();
+    limiter = new RedisRateLimiter(configFor(fake.url));
+    await expect(limiter.take('login:ip:198.51.100.13', 30, 300)).resolves.toBeUndefined();
+
+    await fake.dropConnections();
+    // A command may lose the race with the drop; what must NOT happen is that
+    // every later command fails for ever. Retried briefly, it must succeed.
+    let admitted = false;
+    for (let attempt = 0; attempt < 10 && !admitted; attempt += 1) {
+      admitted = await limiter.take('login:ip:198.51.100.13', 30, 300).then(
+        () => true,
+        () => false,
+      );
+      if (!admitted) await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect(admitted).toBe(true);
+  }, 25_000);
 });

@@ -2,6 +2,13 @@ import { Injectable, Inject } from '@nestjs/common';
 import Redis from 'ioredis';
 import type { AppConfig } from '../config';
 
+/**
+ * How long a command may wait for the handshake before the limiter answers
+ * fail-closed. It matches `connectTimeout` below, because the two cover the
+ * two halves of the same connection: the socket, and the protocol.
+ */
+const READY_TIMEOUT_MS = 2_000;
+
 export class RateLimitError extends Error {
   constructor(readonly retryAfterSeconds: number) {
     super('Rate limit exceeded');
@@ -58,50 +65,97 @@ export class RedisRateLimiter implements RateLimiter {
     this.redis.on('error', () => undefined);
   }
 
-  private connecting: Promise<unknown> | null = null;
+  private waiting: Promise<void> | null = null;
   private closed = false;
 
   /**
-   * Complete the handshake before issuing a command — and be able to do it
-   * AGAIN after an outage.
+   * Complete the handshake before issuing a command — WITHIN A BOUND, and
+   * without ever dialling a client that is already dialling.
    *
-   * Without this, `lazyConnect` and `enableOfflineQueue: false` combine into a
-   * refusal of real traffic: `sendCommand` sees status `wait`, starts
-   * `connect()`, and computes `writable` in the SAME TICK, when `this.stream`
-   * does not exist yet (ioredis `built/Redis.js:327-366`). The command is
-   * rejected with "Stream isn't writeable and enableOfflineQueue options is
-   * false", `guarded` reads that as a backend failure, and a login or a
-   * password reset is answered 503 while Redis is perfectly healthy. Measured
-   * against a real RESP handshake in
-   * `tests-unit/td24-redis-first-command.test.ts`: the refusals last as long
-   * as the handshake does, so a deploy refuses a RUN of requests, not one.
+   * ── WHY THE HANDSHAKE IS AWAITED AT ALL ──────────────────────────────
    *
-   * A finished attempt is cleared rather than kept as a standing liveness
-   * claim, and a client in `end` or `wait` is dialled again — `connect()`
-   * rejects only from `connecting`/`connect`/`ready` (`built/Redis.js:103-110`).
-   * Without the re-dial, ioredis's retry budget (which it resets only on
-   * `ready`) would leave the client in `end` for the life of the process and
-   * every later request would be refused, which is the same defect with a
-   * longer fuse.
+   * `lazyConnect` and `enableOfflineQueue: false` combine into a refusal of
+   * real traffic: `sendCommand` sees status `wait`, starts `connect()`, and
+   * computes `writable` in the SAME TICK, when `this.stream` does not exist
+   * (ioredis `built/Redis.js:327-366`). The command is rejected with "Stream
+   * isn't writeable and enableOfflineQueue options is false", `guarded` reads
+   * that as a backend failure, and a login or a password reset is answered
+   * 503 while Redis is perfectly healthy. The refusals last as long as the
+   * handshake does — in status `connect` only handshake commands are writable
+   * (`:345-349`), and `INCR` is not one — so a deploy refuses a RUN of
+   * requests, not one.
    *
-   * The offline queue stays OFF: a genuine outage must still surface as an
-   * error on the command rather than hang a request behind a reconnect, and
-   * `take` must still fail closed (§67).
+   * ── AND WHY IT IS A BOUNDED WAIT ON AN EVENT, NOT A DIAL ─────────────
+   *
+   * The first version of this fix awaited `connect()` and kept the promise in
+   * a field, and the independent review measured two defects in it that were
+   * worse than the one it removed. Both are now the reason for the shape
+   * below, so neither can come back quietly:
+   *
+   *   1. AN UNBOUNDED WAIT. `connectTimeout` is cleared when the SOCKET
+   *      connects, not when the handshake finishes (`Redis.js:163-184`), so a
+   *      backend that accepts TCP and never answers `INFO` — Redis loading an
+   *      RDB, or a load balancer that accepts and swallows — left the await
+   *      pending for ever. Measured on a server that accepts and stays
+   *      silent: the OLD code refused in 1ms, the awaited `connect()` was
+   *      still pending at 8001ms with status `connect`. Trading a wrong 503
+   *      for a hung login is not an improvement, and DR-90 §3 asks for "a
+   *      clear fail-closed 503". Hence `READY_TIMEOUT_MS`, after which this
+   *      throws and `guarded` answers 503 — the honest answer for a backend
+   *      that will not speak. The same bound covers `healthCheck`, so
+   *      `/ready` cannot hang on it either.
+   *
+   *   2. DIALLING A CLIENT THAT IS ALREADY DIALLING. ioredis reconnects on
+   *      its own timer after a drop (`event_handler.js`), which this class
+   *      does not see. A request arriving in status `connecting` or
+   *      `reconnecting` with no promise in hand called `connect()`, which
+   *      rejects from those states (`Redis.js:103-110`) — so a healthy
+   *      backend mid-reconnect produced a 503 from the very code meant to
+   *      stop that. So `connect()` is called ONLY from `wait` and `end`, the
+   *      two states it is legal from; every other state is waited out.
+   *
+   * One shared wait serves all concurrent callers, and it clears itself only
+   * if it is still the current one — a stale rejection must not wipe a live
+   * caller's wait, which was the second half of defect 2.
+   *
+   * The offline queue stays OFF: a genuine outage still surfaces as an error
+   * on the command, and `take` still fails closed (§67).
    */
   private async ready(): Promise<void> {
     if (this.closed) throw new Error('the rate limiter was closed and must not reconnect');
     if (this.redis.status === 'ready') return;
-    if (this.redis.status === 'end' || this.redis.status === 'wait') this.connecting = null;
-    this.connecting ??= this.redis.connect().then(
-      () => {
-        this.connecting = null;
-      },
-      (e: unknown) => {
-        this.connecting = null;
-        throw e;
-      },
-    );
-    await this.connecting;
+    this.waiting ??= this.awaitReady();
+    await this.waiting;
+  }
+
+  /** Resolve on `ready`, reject on `end` or on the bound — never hang. */
+  private awaitReady(): Promise<void> {
+    const promise = new Promise<void>((resolve, reject) => {
+      // `connect()` is legal only from these two states; from `connecting`,
+      // `connect` or `reconnecting` it rejects, and ioredis is already on its
+      // way without our help.
+      if (this.redis.status === 'wait' || this.redis.status === 'end') void this.redis.connect().catch(() => undefined);
+      const settle = (fn: () => void): void => {
+        clearTimeout(timer);
+        this.redis.off('ready', onReady);
+        this.redis.off('end', onEnd);
+        fn();
+      };
+      const onReady = (): void => settle(resolve);
+      const onEnd = (): void => settle(() => reject(new Error('the rate limiter backend connection ended before the handshake completed')));
+      const timer = setTimeout(
+        () => settle(() => reject(new Error(`the rate limiter backend did not complete its handshake within ${READY_TIMEOUT_MS}ms`))),
+        READY_TIMEOUT_MS,
+      );
+      this.redis.once('ready', onReady);
+      this.redis.once('end', onEnd);
+      if (this.redis.status === 'ready') settle(resolve); // became ready while we subscribed
+    });
+    return promise.finally(() => {
+      // Only the CURRENT wait may clear the field: a late rejection from a
+      // superseded attempt would otherwise erase a live one.
+      if (this.waiting === promise) this.waiting = null;
+    });
   }
 
   /** Wrap backend failures into the fail-closed error (RateLimitError passes through). */
@@ -150,9 +204,18 @@ export class RedisRateLimiter implements RateLimiter {
   }
   async close(): Promise<void> {
     this.closed = true;
-    // `quit` on a client that never connected rejects — a limiter that was
-    // built and never used must still close cleanly, and `disconnect` leaves
-    // no reconnect timer behind either way.
+    // `quit` on a client that never connected rejects, and a limiter that was
+    // built and never used must still close cleanly.
+    //
+    // Precisely, because the first wording of this comment over-claimed:
+    // `disconnect()` STOPS the reconnect loop (it clears any pending
+    // reconnect timer and marks the close as manual), but it is not a
+    // teardown of everything — it arms its own short `disconnectTimeout` and
+    // adds a `close` listener per call in the connector, and the
+    // client-level `error` listener this constructor attached is never
+    // removed. Nothing here is unbounded and nothing holds the event loop
+    // open, which is what matters at shutdown; "leaves no timer behind" was
+    // simply not true.
     if (this.redis.status === 'ready') await this.redis.quit().catch(() => undefined);
     else this.redis.disconnect();
   }
