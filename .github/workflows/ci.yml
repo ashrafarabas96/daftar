@@ -193,7 +193,22 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    runs-on: ubuntu-latest
+    # BROWSER-IMAGE-26, and DR-86. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04 and the pinned `playwright-core` had no Chromium for the new image,
+    # so this job skipped named gates. The image is therefore NAMED here rather
+    # than inherited, and the version named is the one MEASURED to work: on
+    # `measure/browser-26-04`, `playwright-core@1.60.0` on ubuntu-26.04 failed at
+    # the install step with zero bytes fetched (run 41785016875), and `1.61.0` on
+    # the same image installed chromium v1228 and passed every gate with zero
+    # skipped (run 41778343752). The difference is one dependency at one minor.
+    #
+    # 26.04 and not 24.04: the P4 lane measured the PERF01 tail nine times. It
+    # appears in all five 24.04 measurements (max 43.7 to 311 ms) and in zero of
+    # 800 samples on 26.04. So 24.04 is where the defect lives, not the cure.
+    #
+    # Nothing else moves with it: no budget, no sample count, no timeout, no
+    # retry, no `continue-on-error`.
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:16
@@ -1045,7 +1060,22 @@ jobs:
     # `laptop` (uid 1000); on a GitHub-hosted runner the job runs as `runner`.
     # Neither is root, which is all that routine requires — so do not read the
     # old reason as the current one.
-    runs-on: ubuntu-latest
+    # BROWSER-IMAGE-26, and DR-86. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04 and the pinned `playwright-core` had no Chromium for the new image,
+    # so this job skipped named gates. The image is therefore NAMED here rather
+    # than inherited, and the version named is the one MEASURED to work: on
+    # `measure/browser-26-04`, `playwright-core@1.60.0` on ubuntu-26.04 failed at
+    # the install step with zero bytes fetched (run 41785016875), and `1.61.0` on
+    # the same image installed chromium v1228 and passed every gate with zero
+    # skipped (run 41778343752). The difference is one dependency at one minor.
+    #
+    # 26.04 and not 24.04: the P4 lane measured the PERF01 tail nine times. It
+    # appears in all five 24.04 measurements (max 43.7 to 311 ms) and in zero of
+    # 800 samples on 26.04. So 24.04 is where the defect lives, not the cure.
+    #
+    # Nothing else moves with it: no budget, no sample count, no timeout, no
+    # retry, no `continue-on-error`.
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
@@ -1142,6 +1172,8 @@ jobs:
         # --dry-run` — the pinned version's own list, not a hand-written one —
         # and every package and version is recorded in the card's evidence.
         # Verified afterwards as the runner user: 33 installed, 0 missing.
+        # DR-86 has since moved the pin to 1.61.0, so read `1.56.1` above as
+        # what that one-off run used, not as the version pinned today.
         #
         # What does NOT change: the BROWSER is still installed per job, by the
         # pinned playwright-core, from the lockfile. Only the apt half is
