@@ -83,3 +83,12 @@ tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
 # The same quotation, in the decision note that explains the exception.
 # line-sha256 f7efa50dce9305f25f2882979dbdc00ea637e08403e09ef48699232b538c0bb8
 7f1d798ec72b6078ae5fcaa75359bb9e6b27f9ee:docs/decisions/2026-10-30-dr73-secret-scan-range-pin.md:generic-api-key:14
+
+# Test fixture, not a credential: an idempotency key in a vitest suite over
+# FakePaymentProvider, which performs no network call. Measured at the commit:
+# the literal occurs in 1 file of 1,282 and in 0 non-test and 0 config/.env
+# files; it is 27 chars, lowercase, no provider prefix and not a UUID v4.
+# Renamed at the head to 'idem-test-0001' (11e5b139), so only this one historic
+# commit still carries it, and history is not rewritten.
+# line-sha256 cfa9da8a82afa77aa8eefdd90c5cdbccc041360359ab5c43fceedad11337dda8
+f20fb527f16198398cd9078c21883c6a2d4d3136:packages/billing/test/fake-provider.test.ts:generic-api-key:20
