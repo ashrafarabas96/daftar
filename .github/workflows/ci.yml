@@ -1765,11 +1765,23 @@ jobs:
           // Negative control only. Never committed to the module: this file lives in a
           // throw-away copy under RUNNER_TEMP. These swallow what the suite used to
           // assert, so a planted defect cannot turn it red.
-          private fun sank_assertEquals(vararg ignored: Any?) {}
-          private fun sank_assertNotEquals(vararg ignored: Any?) {}
-          private fun sank_assertTrue(vararg ignored: Any?) {}
-          private fun sank_assertFalse(vararg ignored: Any?) {}
-          private fun sank_fail(vararg ignored: Any?): Nothing = throw IllegalStateException("control")
+          //
+          // The signatures MIRROR kotlin.test's, parameter for parameter, and that
+          // is not tidiness. Written as `vararg ignored: Any?` they did not
+          // type-check: `assertEquals(emptyList(), offenders, "...")` has nothing
+          // to infer its element type from once the expected argument is widened
+          // to `Any?`, so run 41867258780 reported `P7 SUITE DID NOT COMPILE` and
+          // the harness refused at `BASELINE IS NOT GREEN` without reading one
+          // proof. That refusal is honest -- a harness must not call a tree it
+          // cannot compile green -- but it is NOT this control's claim. A control
+          // that passes by a route other than the property it names is read as a
+          // measurement of that property, which is the failure mode the arms
+          // below exist to refuse.
+          private fun <T> sank_assertEquals(expected: T, actual: T, message: String? = null) {}
+          private fun <T> sank_assertNotEquals(illegal: T, actual: T, message: String? = null) {}
+          private fun sank_assertTrue(actual: Boolean, message: String? = null) {}
+          private fun sank_assertFalse(actual: Boolean, message: String? = null) {}
+          private fun sank_fail(message: String? = null): Nothing = throw IllegalStateException("control")
           KOTLIN
 
           cd "$CTRL/tools"
@@ -1784,6 +1796,29 @@ jobs:
             echo "detector neutered, so a green run of the step above proves nothing."
             exit 1
           fi
+
+          # A non-zero exit is necessary and NOT sufficient, measured: on run
+          # 41867258780 this step passed on `rc=1` produced by a COMPILE error,
+          # so the blinded suite never ran and no proof was ever asked to go
+          # red. The three arms below name the route the refusal has to take.
+          if grep -q "P7 SUITE DID NOT COMPILE" /tmp/p7-red-proofs-control.log; then
+            echo "NEGATIVE CONTROL INCONCLUSIVE: the plant broke the build, not the"
+            echo "detector, so this step measured the compiler and not the harness."
+            grep -n "P7 SUITE DID NOT COMPILE" -A 6 /tmp/p7-red-proofs-control.log
+            exit 1
+          fi
+          if grep -q "^BASELINE IS NOT GREEN" /tmp/p7-red-proofs-control.log; then
+            echo "NEGATIVE CONTROL INCONCLUSIVE: the harness refused before reading a"
+            echo "proof, so the blinded suite was never exercised."
+            exit 1
+          fi
+          grep -q "^BASELINE: exit 0" /tmp/p7-red-proofs-control.log
+          # And the refusal must be the one this control claims: proofs that can
+          # no longer go red, named as such by the harness itself.
+          grep -qE "^RED PROOFS FAILED \([0-9]+ of [0-9]+\):" /tmp/p7-red-proofs-control.log
+          grep -q "STAYED GREEN" /tmp/p7-red-proofs-control.log
+          echo "negative control: the blinded suite compiled, ran green, and the"
+          echo "harness refused it by name — $(grep -oE '^RED PROOFS FAILED \([0-9]+ of [0-9]+\)' /tmp/p7-red-proofs-control.log)"
 
           # The subject tree is untouched by any of this -- the control ran on a
           # copy -- and the pinned bytes are re-measured to say so rather than
