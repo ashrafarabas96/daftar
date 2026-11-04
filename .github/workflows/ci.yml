@@ -11,19 +11,19 @@ name: DAFTAR CI
 # the branch head, so it is equivalent-tree evidence only. The push trigger on
 # the long-lived phase branches gives every pushed head a run whose checkout is
 # that exact SHA (Phase 3 corrective audit, E-1).
+# THE TRIGGERS ARE UNCHANGED ON THIS DIAGNOSIS BRANCH, and `branches:` sits on
+# the line directly after `push:` because a guard depends on it:
+# tests/guards/required-ci-chain-composition.test.ts:760 plants "the push
+# trigger removed" by deleting the `  push:` line AND THE ONE AFTER IT. A
+# comment between the two leaves `branches:` behind, the plant stops being the
+# mutation it names, and the control can no longer fail -- measured: 36 passed
+# and that one red, against 37 passed on the untouched file. Adding 'diag/**'
+# to the list breaks the same control for the same kind of reason, so this
+# branch runs the real `backend` job through a draft pull request instead,
+# which ci.yml already triggers on, with the triggers left alone.
 on:
   push:
-    # DIAGNOSIS BRANCH ONLY, NEVER MERGED: `diag/**` is here so the real
-    # `backend` job runs on this branch. The tail that fails PERF01-BUDGET-A
-    # has been measured absent in every environment outside this job --
-    # locally alone and under contention, on an idle hosted runner, on one
-    # loaded for twenty minutes, and through the P2-S8 gate itself: 3,400
-    # samples, zero over the budget. The one difference left is WHEN the
-    # measurement happens: an hour and a half of continuous work precedes it
-    # here (job start 12:12:35Z, step 32 start 13:35:27Z on attempt 1;
-    # 13:50:24Z and 15:23:50Z on attempt 2). So measure the same budget
-    # TWICE in this job, at the start and where the gates already measure it.
-    branches: [main, 'phase/**', 'diag/**']
+    branches: [main, 'phase/**']
   pull_request:
 
 env:
