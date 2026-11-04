@@ -199,9 +199,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
   it('TD24-F (negative control for E): one client per replica admits both allowances', async () => {
     const clientA = freshClient();
     const clientB = freshClient();
-    const statuses = await Promise.all(
-      Array.from({ length: LIMIT * 2 }, (_, i) => (i % 2 === 0 ? hit(replicaA, clientA) : hit(replicaB, clientB))),
-    );
+    const statuses = await Promise.all(Array.from({ length: LIMIT * 2 }, (_, i) => (i % 2 === 0 ? hit(replicaA, clientA) : hit(replicaB, clientB))));
     expect(statuses.length).toBe(LIMIT * 2);
     // Two clients, two allowances: the shared store must not merge them, and
     // TD24-E's number is therefore a limit and not a saturated pool.
