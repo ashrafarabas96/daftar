@@ -193,7 +193,20 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    runs-on: ubuntu-latest
+    # PINNED FOR THE SAME MEASURED REASON AS `browser`, one run later. This
+    # job installs Chromium too, at step 33 for the real-browser matrix, and
+    # on run 41768239220 it met the identical refusal on `Image:
+    # ubuntu-26.04`: `ERROR: Playwright does not support chromium on
+    # ubuntu26.04-x64`. EIGHTEEN steps after it were skipped -- the four P4
+    # slice gates, the POS and receivables budgets, the two budget negative
+    # controls, the tampered-migration proof and the database contract from
+    # zero -- so the failure did not merely stop this job, it left those
+    # gates unmeasured. The previous commit pinned `browser` only and said
+    # this job was unmeasured on 26.04 rather than claiming it passed; this
+    # is that measurement, and the same narrow answer: the image these gates
+    # were measured on. Nothing disabled, no threshold moved, no test
+    # skipped, `timeout-minutes` untouched.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
