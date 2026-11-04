@@ -92,3 +92,13 @@ tree:tests/security/provisioner-boundary.test.ts:generic-api-key:336
 # commit still carries it, and history is not rewritten.
 # line-sha256 cfa9da8a82afa77aa8eefdd90c5cdbccc041360359ab5c43fceedad11337dda8
 f20fb527f16198398cd9078c21883c6a2d4d3136:packages/billing/test/fake-provider.test.ts:generic-api-key:20
+
+# Not a credential: a pin manifest. packages/billing/tools/runner-bytes.json
+# is a vitest dist inventory whose every row is "<dist file path>": "<sha256>"
+# (top-level keys: _what_this_is, package, version, lockfile_integrity, files),
+# and line 74 is the sha256 of dist/chunks/cli-api.CnMVyzaz.js. The rule matched
+# a 64-hex value next to a key-shaped string. The file is generated and still
+# present at the head, so the remedy cannot be a rename; the entry is pinned to
+# the one historic commit and the one line.
+# line-sha256 73f1dab909f651837ae0c993b86e43b4723c519474bb9b98585565676d211acf
+cccc04168826b8fc35e381d34a0f42ba52a8b21c:packages/billing/tools/runner-bytes.json:generic-api-key:74
