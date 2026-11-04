@@ -1,0 +1,115 @@
+# DIAGNOSIS WORKFLOW, NEVER MERGED. It exists on `diag/perf01-tail` only, and
+# PR #42 is marked DO NOT MERGE.
+#
+# What it is for: PERF01-BUDGET-A's tail was measured on `ubuntu-24.04` every
+# time (max 43.743 ms, 5 of 200 samples over the 15 ms budget, four minutes
+# into the job). The first measurement ever taken on `ubuntu-26.04` — attempt 2
+# of run 41755058087, same commit, same code byte for byte — came back with NO
+# tail at all: p99 4.476, max 4.479, 0 of 200 over budget. One sample is not a
+# finding, so this workflow takes three more on 26.04 to answer one question:
+# is the absence of the tail on 26.04 stable?
+#
+# Why it is a separate workflow and not a step in `ci.yml`: the `backend` job
+# installs Chromium at step 34 for the gate's real-browser matrix, and
+# Playwright has no Chromium build for 26.04, so the job dies there — AFTER
+# 2h40m and after the LATE measurement, but the run is then a failure that
+# carries no comparable late number. This job stops right after the early
+# measurement, so it reaches its evidence in minutes and never touches
+# Chromium.
+#
+# What is NOT changed, and must not be: the budget (15 ms), the iteration count
+# (200), the warm-up count (20), the p95 definition, every timeout. There is no
+# `retry`, no `continue-on-error` and no `if: always()` anywhere below. The
+# measurement is the suite as it stands in the tree; this file only chooses the
+# image it runs on and stops the job early.
+name: PERF01 image probe (diagnosis)
+
+on:
+  pull_request:
+
+env:
+  NODE_VERSION: '24.12.x'
+
+jobs:
+  perf01-early-on-2604:
+    # The whole point of the probe: the image is NAMED, not inherited from
+    # `ubuntu-latest`, which moved under us between attempt 1 (01:35Z, 24.04)
+    # and attempt 2 (04:17Z, 26.04) of the same run on the same commit.
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Report the image this measurement is taken on
+        run: |
+          set -euo pipefail
+          echo "PROBE image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
+          echo "PROBE kernel: $(uname -r)"
+          echo "PROBE cpus: $(nproc)"
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # Byte-for-byte the early diagnosis step of `ci.yml` on this branch, so
+      # the two are comparable: the same suite, the same budget, the same 200
+      # iterations and 20 warm-ups, the same assertion. It prints and does not
+      # fail the job, because a red here would hide the numbers that are the
+      # whole evidence; the shell branch is explicit and carries no
+      # `continue-on-error`.
+      - name: PROBE - PERF01 at the START of the job
+        run: |
+          set -u
+          echo "early measurement starting $(date -u +%H:%M:%SZ)"
+          if node_modules/.bin/vitest run tests/performance/accounting-budgets.test.ts; then
+            echo "EARLY: SUITE PASSED"
+          else
+            echo "EARLY: SUITE FAILED (printed, not fatal; the numbers are the evidence)"
+          fi
+          node -e "
+            const ev = require('./release/phase2-s8-performance-tier1.json');
+            for (const m of ev.measurements) {
+              const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+              console.log('EARLY ' + m.name + ': n=' + m.iterations + ' budget=' + m.budgetMs +
+                ' p50=' + m.p50.toFixed(3) + ' p95=' + m.p95.toFixed(3) +
+                ' p99=' + m.p99.toFixed(3) + ' max=' + m.max.toFixed(3) +
+                ' over=' + over + '/' + m.iterations);
+            }
+            const a = ev.measurements.find((m) => m.name.startsWith('A post'));
+            if (a) console.log('EARLY A samples: ' + JSON.stringify(a.samplesMs));
+          "
+          echo "early measurement done $(date -u +%H:%M:%SZ)"
+        env:
+          PG_PORT: '5432'
