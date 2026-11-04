@@ -217,20 +217,29 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     expect(await hit(replicaB, bystander)).not.toBe(TOO_MANY);
   }, 180_000);
 
+  /**
+   * The timeout is 55s and not a comfortable 300s ON PURPOSE. The window is
+   * 60s, and the in-process store decays each hit after its own ttl
+   * (`dist/throttler.service.js:25-33`), so a run that took longer than the
+   * window would see the earliest hits refunded and `2 * LIMIT` would stop
+   * being reachable — the suite would fail for a reason that is about the
+   * clock and not about the store. A timeout longer than the window the
+   * assertion depends on is a flake with permission.
+   */
   it('TD24-D: the admitted total over both replicas is the limit, or twice it when nothing is shared', async () => {
     const client = freshClient();
     const statuses: number[] = [];
     for (let i = 0; i < LIMIT * 2; i += 1) statuses.push(await hit(i % 2 === 0 ? replicaA : replicaB, client));
     expect(statuses.length).toBe(LIMIT * 2);
     expect(admitted(statuses)).toBe(sharedStore ? LIMIT : LIMIT * 2);
-  }, 300_000);
+  }, 55_000);
 
   it('TD24-E: the same total holds under concurrency, not only in sequence', async () => {
     const client = freshClient();
     const statuses = await Promise.all(Array.from({ length: LIMIT * 2 }, (_, i) => hit(i % 2 === 0 ? replicaA : replicaB, client)));
     expect(statuses.length).toBe(LIMIT * 2);
     expect(admitted(statuses)).toBe(sharedStore ? LIMIT : LIMIT * 2);
-  }, 300_000);
+  }, 55_000);
 
   it('TD24-F (negative control for E): one client per replica admits both allowances', async () => {
     const clientA = freshClient();
@@ -240,5 +249,5 @@ describe('TD-24 — the general allowance across two replicas of one database', 
     // Two clients, two allowances: the shared store must not merge them, and
     // TD24-E's number is therefore a limit and not a saturated pool.
     expect(admitted(statuses)).toBe(LIMIT * 2);
-  }, 300_000);
+  }, 55_000);
 });

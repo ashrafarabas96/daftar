@@ -106,6 +106,7 @@
  * `degraded` is readable so a test can assert the fallback actually happened
  * rather than inferring it from a count.
  */
+import type { OnApplicationShutdown } from '@nestjs/common';
 import type { ThrottlerStorage } from '@nestjs/throttler';
 import { ThrottlerStorageService } from '@nestjs/throttler';
 import type { ThrottlerStorageRecord } from '@nestjs/throttler/dist/throttler-storage-record.interface';
@@ -117,6 +118,9 @@ export const RATE_LIMIT_METRICS = {
   /** One per request answered from the per-replica fallback instead of the shared store. */
   storeDegradedTotal: 'rate_limit_store_degraded_total',
 } as const;
+
+/** At most one warning per minute while a degradation lasts (see `degrade`). */
+const WARN_COOLDOWN_MS = 60_000;
 
 /** The key prefix and format version. A format change must not read old counters. */
 export const RATE_LIMIT_KEY_PREFIX = 'rl:thr:v1';
@@ -132,15 +136,23 @@ export type RateLimitScope = { readonly kind: 'pre-auth' } | { readonly kind: 't
 
 export const PRE_AUTH_SCOPE: RateLimitScope = { kind: 'pre-auth' };
 
+/** The documented tenant form: a UUID, and nothing that could carry a separator. */
+const TENANT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** The scope segment of a key: `ip` for the pre-auth form, `t:<uuid>` for a verified tenant. */
 export function rateLimitScopeSegment(scope: RateLimitScope): string {
   if (scope.kind === 'tenant') {
     const tenantId = scope.tenantId.trim();
     // A scope that claims a tenant and carries none would silently collapse
     // two tenants into one counter, which is the defect this segment exists
-    // to prevent — so it is a refusal, not a default.
-    if (tenantId.length === 0)
-      throw new Error('a tenant-scoped rate limit key was asked for without a tenant id, which would merge two tenants into one allowance');
+    // to prevent — so it is a refusal, not a default. The SHAPE is checked
+    // too, and not for tidiness: the segments are joined with `:`, so a
+    // tenant id carrying one could be read as a different scope entirely.
+    // `t:<uuid>` is what this file documents, so `t:<uuid>` is what it takes.
+    if (!TENANT_ID.test(tenantId))
+      throw new Error(
+        `a tenant-scoped rate limit key needs a tenant id of the documented form, not ${JSON.stringify(scope.tenantId)} — anything else would merge or misattribute an allowance`,
+      );
     return `t:${tenantId}`;
   }
   return 'ip';
@@ -197,6 +209,8 @@ return { hits, pttl, 0, 0 }
 export interface RateLimitEvaluator {
   /** `EVAL script 2 counterKey blockKey limit windowMs blockMs` → the four numbers above. */
   eval(script: string, keys: readonly string[], args: readonly string[]): Promise<readonly number[]>;
+  /** Release the backend. Optional so a test fake need not implement it. */
+  close?(): Promise<void>;
 }
 
 /** Narrow logger seam: this store needs one level and no transport. */
@@ -221,20 +235,44 @@ const toSeconds = (ms: number): number => Math.ceil(ms / 1000);
  * real 429 on request `limit + 1` and not merely "the store is not the
  * in-process one".
  */
-export class RedisThrottlerStorage implements ThrottlerStorage {
+export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShutdown {
   readonly kind = 'redis';
-  /** True once an outage has pushed at least one request to the fallback. */
-  private degradedAt: number | null = null;
+  /**
+   * When the CURRENT run of degradation began, and `null` the moment the
+   * shared store answers again.
+   *
+   * It was a sticky flag in the first draft and that was a defect the review
+   * measured: a single failure anywhere in the life of the process made
+   * `degraded` true for ever, so the signal said nothing about now. It also
+   * burned the one-off warning, which — with the connection defect below —
+   * every process hit on its first request, leaving a REAL outage later to
+   * pass without a line in the log.
+   */
+  private degradedSince: number | null = null;
+  /** When the warning was last emitted, so an outage cannot amplify itself. */
+  private lastWarnedAt = 0;
+  /** Requests answered from the fallback, for the readiness surface to report. */
+  private degradedRequestCount = 0;
   private readonly fallback = new ThrottlerStorageService();
 
   constructor(
     private readonly redis: RateLimitEvaluator,
-    private readonly deps: { readonly logger?: DegradationLogger; readonly metrics?: Metrics; readonly scope?: RateLimitScope } = {},
+    private readonly deps: {
+      readonly logger?: DegradationLogger;
+      readonly metrics?: Metrics;
+      readonly scope?: RateLimitScope;
+      readonly now?: () => number;
+    } = {},
   ) {}
 
-  /** Whether any request has been answered from the per-replica fallback. */
+  /** Whether the shared store is unreachable RIGHT NOW, not ever. */
   get degraded(): boolean {
-    return this.degradedAt !== null;
+    return this.degradedSince !== null;
+  }
+
+  /** How many requests this replica has answered from its own store. */
+  get degradedRequests(): number {
+    return this.degradedRequestCount;
   }
 
   async increment(key: string, ttl: number, limit: number, blockDuration: number, throttlerName: string): Promise<ThrottlerStorageRecord> {
@@ -248,17 +286,30 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
     try {
       const out = await this.redis.eval(INCREMENT_LUA, [counterKey, blockKey], [String(limit), String(ttl), String(blockMs)]);
       const [totalHits, windowMs, blocked, blockMsLeft] = out;
-      if (typeof totalHits !== 'number' || typeof windowMs !== 'number' || typeof blocked !== 'number' || typeof blockMsLeft !== 'number')
-        throw new Error('the rate-limit script did not return the four numbers this store reads, so the answer cannot be trusted');
+      // `Number.isFinite`, not `typeof === 'number'`: the evaluator converts
+      // with `Number()`, and `NaN` is a number. A `NaN` count compares false
+      // against every limit, so it would admit every request for ever — the
+      // exact shape of defect this store exists to remove.
+      if (!Number.isFinite(totalHits) || !Number.isFinite(windowMs) || !Number.isFinite(blocked) || !Number.isFinite(blockMsLeft))
+        throw new Error('the rate-limit script did not return four finite numbers, so the answer cannot be trusted');
+      // The shared store answered: this replica is no longer degraded, and the
+      // next outage gets its own warning.
+      this.degradedSince = null;
       return {
-        totalHits,
-        timeToExpire: toSeconds(windowMs),
+        totalHits: totalHits as number,
+        timeToExpire: toSeconds(windowMs as number),
         isBlocked: blocked === 1,
-        timeToBlockExpire: toSeconds(blockMsLeft),
+        timeToBlockExpire: toSeconds(blockMsLeft as number),
       };
     } catch (cause) {
       return this.degrade(cause, key, ttl, limit, blockDuration, throttlerName);
     }
+  }
+
+  /** Release the backend with the application, so no client outlives `app.close()`. */
+  async onApplicationShutdown(): Promise<void> {
+    this.fallback.onApplicationShutdown();
+    await this.redis.close?.();
   }
 
   /**
@@ -277,16 +328,21 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
     blockDuration: number,
     throttlerName: string,
   ): Promise<ThrottlerStorageRecord> {
-    const first = this.degradedAt === null;
-    this.degradedAt = Date.now();
+    const now = (this.deps.now ?? Date.now)();
+    if (this.degradedSince === null) this.degradedSince = now;
+    this.degradedRequestCount += 1;
     this.deps.metrics?.increment(RATE_LIMIT_METRICS.storeDegradedTotal, { throttler: throttlerName });
-    // One line per request would become the outage's own amplifier, so the
-    // body is logged on the first degraded request and counted on every one.
-    if (first)
+    // A line per request would make the outage its own amplifier, and a
+    // once-per-process line would be spent by the first blip and say nothing
+    // about the outage that matters. So it is a COOLDOWN: the reason is
+    // repeated while the degradation lasts, at most once a window.
+    if (now - this.lastWarnedAt >= WARN_COOLDOWN_MS) {
+      this.lastWarnedAt = now;
       this.deps.logger?.warn(
-        { reason: cause instanceof Error ? cause.message : String(cause), throttler: throttlerName },
+        { reason: cause instanceof Error ? cause.message : String(cause), throttler: throttlerName, degradedRequests: this.degradedRequestCount },
         'rate limit store unreachable — the general allowance is counted PER REPLICA until it returns',
       );
+    }
     return this.fallback.increment(key, ttl, limit, blockDuration, throttlerName);
   }
 }
@@ -294,14 +350,35 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
 /**
  * An `ioredis` client as the one command this store needs.
  *
- * The connection options are the ones `RedisRateLimiter` already measured its
- * way to (`infra/redis.ts:49-58`): no offline queue, so an outage surfaces as
- * an error immediately instead of hanging a request behind a reconnect, and a
- * client-level `error` listener that exists only so an unhandled event cannot
- * take the process down — every failure that matters is caught per command,
- * at the call site that can answer for it.
+ * ── THE HANDSHAKE IS AWAITED, AND THAT IS NOT A STYLE CHOICE ─────────────
+ *
+ * The first draft copied `RedisRateLimiter`'s options verbatim
+ * (`infra/redis.ts:49-58`) — `lazyConnect: true` with `enableOfflineQueue:
+ * false` — and the review caught what that combination does. Measured in
+ * `node_modules/ioredis/built/Redis.js:327-366`: `sendCommand` sees status
+ * `wait`, kicks off `connect()`, and then computes `writable` IN THE SAME
+ * TICK, when the status is `connecting` and `this.stream` does not exist
+ * yet. `writable` is false, and with no offline queue the command is
+ * REJECTED — "Stream isn't writeable and enableOfflineQueue options is
+ * false", reproduced directly.
+ *
+ * So the FIRST request of every process would have been answered from the
+ * fallback against a perfectly healthy Redis. With a sticky flag and a
+ * once-per-process warning, that one unavoidable failure would have marked
+ * the replica degraded for its whole life and spent the only line a real
+ * outage had left to say anything with.
+ *
+ * `ready()` is therefore awaited before every evaluation: it performs the
+ * connect once, and a FAILED connect clears the promise so the next request
+ * tries again rather than inheriting a dead one. The offline queue stays off,
+ * so a real outage still surfaces as an error on the command rather than
+ * hanging a request behind a reconnect.
+ *
+ * The client-level `error` listener exists only so an unhandled event cannot
+ * take the process down; every failure that matters is caught per command, at
+ * the call site that can answer for it.
  */
-export function createRedisEvaluator(url: string): RateLimitEvaluator & { close(): Promise<void> } {
+export function createRedisEvaluator(url: string): RateLimitEvaluator {
   const redis = new Redis(url, {
     lazyConnect: true,
     maxRetriesPerRequest: 2,
@@ -310,14 +387,27 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator & { close(
     retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 1_000)),
   });
   redis.on('error', () => undefined);
+  let connecting: Promise<unknown> | null = null;
+  const ready = async (): Promise<void> => {
+    if (redis.status === 'ready') return;
+    connecting ??= redis.connect().catch((e: unknown) => {
+      connecting = null; // a dead attempt is not inherited by the next request
+      throw e;
+    });
+    await connecting;
+  };
   return {
     eval: async (script, keys, args) => {
+      await ready();
       const out: unknown = await redis.eval(script, keys.length, ...keys, ...args);
       if (!Array.isArray(out)) throw new Error('the rate-limit script did not return an array');
       return out.map((v) => Number(v));
     },
     close: async () => {
-      await redis.quit();
+      // `quit` on a client that never connected rejects; disconnecting is the
+      // honest shutdown either way and leaves no reconnect timer behind.
+      redis.disconnect();
+      await Promise.resolve();
     },
   };
 }

@@ -71,6 +71,7 @@ import {
   RedisThrottlerStorage,
   rateLimitKey,
   rateLimitScopeSegment,
+  createRedisEvaluator,
   type RateLimitEvaluator,
 } from '../apps/api/src/infra/rate-limit-store';
 import { InMemoryMetrics } from '../apps/api/src/infra/metrics';
@@ -208,17 +209,44 @@ describe('TD-24 — isolation is a property of the key (DR-90 §1)', () => {
     expect(first.totalHits).toBe(1);
   });
 
-  it('TD24-TEN-NEG (negative control): with the tenant dropped from the key, the isolation case fails', () => {
-    // The key the store actually builds differs between the two tenants ONLY
-    // because of the segment. Remove it — which is what a regression would do
-    // — and the two counters become one, which is the failure TD24-TEN
-    // catches. Asserted on the key builder so the control cannot pass by
-    // accident of a fixture.
-    expect(rateLimitKey({ kind: 'tenant', tenantId: TENANT_A }, 'k')).not.toBe(rateLimitKey({ kind: 'tenant', tenantId: TENANT_B }, 'k'));
+  it('TD24-TEN-NEG (negative control): running the same scenario on a scope-less key makes TD24-TEN fail', async () => {
+    // DR-90 §1 asks for the control by name: remove the tenant from the key
+    // and watch the isolation case fail. So it is RUN, not reasoned about —
+    // the first draft of this control asserted `x === x` about a key string,
+    // which is a tautology dressed as evidence.
+    //
+    // `ScopeBlindStore` is what a regression looks like: the same store with
+    // the scope segment dropped from the key it builds. Everything else —
+    // backend, limit, logical key, call order — is identical to TD24-TEN.
+    class ScopeBlindStore {
+      constructor(private readonly backend: FakeRedis) {}
+      async increment(key: string, ttl: number, limit: number, blockMs: number, name: string): Promise<{ isBlocked: boolean; totalHits: number }> {
+        const counterKey = `${RATE_LIMIT_KEY_PREFIX}:${name}:${key}`;
+        const out = await this.backend.eval('', [counterKey, `${counterKey}:blocked`], [String(limit), String(ttl), String(blockMs)]);
+        return { totalHits: out[0] ?? 0, isBlocked: out[2] === 1 };
+      }
+    }
 
-    const withoutScope = (key: string): string => `${RATE_LIMIT_KEY_PREFIX}:${key}`;
-    expect(withoutScope('k')).toBe(withoutScope('k')); // one counter for both tenants
-    expect(rateLimitKey({ kind: 'tenant', tenantId: TENANT_A }, 'k')).not.toBe(withoutScope('k'));
+    const backend = new FakeRedis();
+    const forA = new ScopeBlindStore(backend);
+    const forB = new ScopeBlindStore(backend);
+
+    let ok = 0;
+    for (let i = 0; i < LIMIT; i += 1) {
+      const r = await forA.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+      if (!r.isBlocked) ok += 1;
+    }
+    expect(ok).toBe(LIMIT);
+
+    // TD24-TEN's assertion on tenant B, verbatim — and it FAILS here, because
+    // without the segment tenant A has spent tenant B's allowance too.
+    const first = await forB.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+    expect(first.isBlocked).toBe(true);
+    expect(() => expect(first.isBlocked).toBe(false)).toThrow();
+
+    // And the keys themselves differ only by that segment, so nothing else
+    // can be the reason the real store passes TD24-TEN.
+    expect(rateLimitKey({ kind: 'tenant', tenantId: TENANT_A }, 'k')).not.toBe(rateLimitKey({ kind: 'tenant', tenantId: TENANT_B }, 'k'));
   });
 
   it('TD24-PRE: the pre-authentication scope is `ip`, and carries no tenant', () => {
@@ -227,7 +255,11 @@ describe('TD-24 — isolation is a property of the key (DR-90 §1)', () => {
     // A tenant-shaped scope with nothing in it is a refusal, not a default:
     // silently merging two tenants into one allowance is the defect the
     // segment exists to prevent.
-    expect(() => rateLimitScopeSegment({ kind: 'tenant', tenantId: '  ' })).toThrow(/without a tenant id/);
+    expect(() => rateLimitScopeSegment({ kind: 'tenant', tenantId: '  ' })).toThrow(/documented form/);
+    // And not merely non-empty: the segments are joined with `:`, so a tenant
+    // id carrying one could be read as a different scope entirely.
+    expect(() => rateLimitScopeSegment({ kind: 'tenant', tenantId: 'a:default' })).toThrow(/documented form/);
+    expect(rateLimitScopeSegment({ kind: 'tenant', tenantId: TENANT_A })).toBe(`t:${TENANT_A}`);
   });
 });
 
@@ -272,6 +304,79 @@ describe('TD-24 — an outage degrades and says so, and never becomes "no limit"
     // A fallback that admitted everything would be "no limit" wearing the
     // word fallback. It is the per-replica ceiling, which still refuses.
     expect((await store.increment('k', TTL_MS, LIMIT, TTL_MS, 'default')).isBlocked).toBe(true);
+  });
+
+  it('TD24-RECOVER: `degraded` describes now, not ever — one failure does not mark the replica for life', async () => {
+    // The first draft made this a sticky flag, and the review measured why
+    // that is a defect rather than a simplification: with the connection
+    // defect in `createRedisEvaluator`, EVERY process failed its first
+    // command against a healthy Redis, so `degraded` would have been true for
+    // the life of every replica and the signal would have said nothing about
+    // now. The warning was once-per-process too, so the one line a REAL
+    // outage had to say anything with was already spent.
+    let fail = true;
+    const flaky: RateLimitEvaluator = {
+      eval: (script, keys, args) => (fail ? Promise.reject(new Error('ECONNREFUSED')) : backend.eval(script, keys, args)),
+    };
+    const backend = new FakeRedis();
+    const store = new RedisThrottlerStorage(flaky);
+
+    await store.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+    expect(store.degraded).toBe(true);
+    expect(store.degradedRequests).toBe(1);
+
+    fail = false;
+    await store.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+    expect(store.degraded).toBe(false);
+    // The cumulative count is NOT reset: it is the record of what happened,
+    // and readiness reports both — `ok` for now, the count for the history.
+    expect(store.degradedRequests).toBe(1);
+  });
+
+  it('TD24-NAN: a non-numeric answer degrades instead of admitting every request for ever', async () => {
+    // `Number()` in the evaluator turns anything unparseable into NaN, and
+    // NaN compares false against every limit — so a store that accepted it
+    // would admit without end while reporting a shared store. `NaN` is a
+    // number, which is why the check is `Number.isFinite` and not `typeof`.
+    const garbage: RateLimitEvaluator = { eval: () => Promise.resolve([Number.NaN, 1, 0, 0]) };
+    const store = new RedisThrottlerStorage(garbage);
+    const r = await store.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+    expect(Number.isFinite(r.totalHits)).toBe(true);
+    expect(store.degraded).toBe(true); // it took the fallback, it did not admit blindly
+  });
+
+  it('TD24-SHUTDOWN: the backend is released with the application', async () => {
+    let closed = 0;
+    const counted: RateLimitEvaluator = {
+      eval: () => Promise.resolve([1, TTL_MS, 0, 0]),
+      close: () => {
+        closed += 1;
+        return Promise.resolve();
+      },
+    };
+    const store = new RedisThrottlerStorage(counted);
+    await store.increment('k', TTL_MS, LIMIT, TTL_MS, 'default');
+    expect(closed).toBe(0); // the positive control: it is shutdown that closes it
+    await store.onApplicationShutdown();
+    expect(closed).toBe(1);
+  });
+
+  it('TD24-HANDSHAKE: the real evaluator awaits the connection instead of failing the first command', async () => {
+    // The measurement this case pins: with `lazyConnect` and no offline
+    // queue, `sendCommand` computes `writable` before the stream exists
+    // (ioredis `built/Redis.js:327-366`) and rejects with "Stream isn't
+    // writeable and enableOfflineQueue options is false". That is the error a
+    // HEALTHY Redis would have produced on the first request of every
+    // process. Awaiting the handshake replaces it with a real connection
+    // failure — which is what an unreachable backend should look like.
+    const evaluator = createRedisEvaluator('redis://127.0.0.1:6399');
+    const reason = await evaluator.eval('return 1', [], []).then(
+      () => 'resolved against a port nothing is listening on',
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    expect(reason).not.toMatch(/Stream isn't writeable/);
+    expect(reason).toMatch(/ECONNREFUSED|connect|timeout/i);
+    await evaluator.close?.();
   });
 
   it('TD24-DEGRADE-STORE: the fallback is the in-process store, not a third implementation', async () => {

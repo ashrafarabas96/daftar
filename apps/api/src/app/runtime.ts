@@ -112,13 +112,24 @@ export interface RuntimeSeams {
  * forged X-Forwarded-For buys nothing. An IPv6 client counts per /64
  * (`limiterKey`, review L-3).
  */
-export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES' | 'REDIS_URL'>) {
+export function httpImports(config: Pick<AppConfig, 'TRUST_PROXY' | 'TRUSTED_PROXIES' | 'REDIS_URL' | 'LOG_LEVEL'>) {
   // TD-24 / DR-90: the counters live in the shared store wherever one is
   // configured, so two replicas hold ONE allowance per client per route
   // instead of one each. `undefined` leaves `forRoot` to bind its own
   // in-process store — see `createThrottlerStorage` for why the condition is
   // REDIS_URL and not isProd.
-  const storage = createThrottlerStorage(config);
+  //
+  // The logger is BUILT HERE and not injected, and that is forced rather than
+  // preferred: `ThrottlerModule` is `@Global()` and `forRoot` is the only
+  // seam that accepts a store (measured — a module-local `ThrottlerStorage`
+  // provider does NOT win over the global export, which is why the store
+  // cannot be a provider with `inject: ['LOGGER']`). A logger is a transport
+  // at a level, not a registry, so a second pino at the same level writes the
+  // same lines to the same place. The DEGRADATION COUNT is read back through
+  // the readiness surface instead, where an operator already looks
+  // (`platform.controller.ts`), because a metrics registry nothing can reach
+  // would be a number that exists and is never seen.
+  const storage = createThrottlerStorage(config, { logger: createLogger(config.LOG_LEVEL) });
   return [
     ThrottlerModule.forRoot({
       throttlers: [{ ttl: 60_000, limit: 300 }],

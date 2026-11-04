@@ -1,4 +1,5 @@
 import { Controller, Get, HttpException, HttpStatus, Inject, Optional, Req } from '@nestjs/common';
+import { ThrottlerStorage } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { getCountryDisplayName, getCurrencyDisplayName, supportedCurrencies, supportedCountries } from '@daftar/domain-core';
 import type { CountryDto, CurrencyDto, LocaleCode } from '@daftar/shared-contracts';
@@ -6,6 +7,7 @@ import { Public } from '../../common/guards';
 import type { AppConfig } from '../../config';
 import type { ObjectStorage } from '../../infra/storage';
 import type { RateLimiter } from '../../infra/redis';
+import { RedisThrottlerStorage } from '../../infra/rate-limit-store';
 import type { CredentialDelivery } from '../auth/tokens';
 
 /** Platform reference data — public, localized at the edge via Intl.DisplayNames (§20). */
@@ -54,6 +56,11 @@ export class HealthController {
     @Optional() @Inject('OBJECT_STORAGE') private readonly storage: ObjectStorage | null,
     @Optional() @Inject('CREDENTIAL_DELIVERY') private readonly delivery: CredentialDelivery | null,
     @Inject('RATE_LIMITER') private readonly limiter: RateLimiter,
+    // TD-24 / DR-90: the store behind the GENERAL allowance, which is a
+    // different thing from `RATE_LIMITER` above — see the readiness body.
+    // `@Optional` because a process configured with no shared store binds the
+    // library's in-process one, which is not this class.
+    @Optional() @Inject(ThrottlerStorage) private readonly throttlerStore: unknown,
   ) {}
 
   @Public()
@@ -73,10 +80,10 @@ export class HealthController {
    */
   @Public()
   @Get('ready')
-  async ready(): Promise<{ status: string; components: Record<string, { kind: string; ok: boolean }> }> {
+  async ready(): Promise<{ status: string; components: Record<string, { kind: string; ok: boolean; degradedRequests?: number }> }> {
     const mode = this.config.PROCESS_MODE;
     const db = await this.check();
-    const components: Record<string, { kind: string; ok: boolean }> = {
+    const components: Record<string, { kind: string; ok: boolean; degradedRequests?: number }> = {
       database: { kind: 'postgresql', ok: db },
     };
     let ok = db;
@@ -92,6 +99,22 @@ export class HealthController {
       components['rateLimiter'] = { kind: this.limiter.kind, ok: limiterOk };
       ok = ok && limiterOk;
       prodKindsOk = prodKindsOk && this.limiter.kind === 'redis';
+      // TD-24 / DR-90 §3. The general allowance degrades to a PER-REPLICA
+      // count when the shared store is unreachable — deliberately, because a
+      // 503 on every route would be an outage this limiter caused. A
+      // degradation that nothing reports would leave the operator reading a
+      // stated ceiling of 300 while the real one is 300 times the replica
+      // count, so it is reported HERE, where an operator already looks.
+      //
+      // It does NOT make the process unready: taking replicas out of service
+      // over a cache blip is the worse failure, and the count is the signal.
+      if (this.throttlerStore instanceof RedisThrottlerStorage) {
+        components['throttlerStore'] = {
+          kind: this.throttlerStore.kind,
+          ok: !this.throttlerStore.degraded,
+          degradedRequests: this.throttlerStore.degradedRequests,
+        };
+      }
     }
     if (mode === 'all' && this.delivery) {
       const deliveryOk =
