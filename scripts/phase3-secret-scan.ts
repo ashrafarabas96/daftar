@@ -196,6 +196,37 @@ function gitOk(repo: string, args: readonly string[]): boolean {
  * the pinned binary digest, and a download's archive must match the pinned
  * archive digest before anything is extracted from it.
  */
+/**
+ * Move a verified binary into its cache, across a filesystem boundary if
+ * there is one.
+ *
+ * `rename(2)` cannot cross filesystems. `os.tmpdir()` and the repository sit
+ * on one device on most machines and on two on others: the
+ * `ubuntu26/20261101.64` runner image put `/tmp` on a different device from
+ * the workspace, and the hygiene range scan died with `EXDEV` before it had
+ * read a single commit (job 126623991768; the same step passed on image
+ * `ubuntu26/20261025.179`).
+ *
+ * The fallback is `EXDEV` AND NOTHING ELSE. Any other error is rethrown
+ * untouched, because an environment failure inside a security gate reads
+ * exactly like a gate that found nothing, and a gate that swallows errors is
+ * not a gate. `tests-unit/p3c-secret-scan-exdev.test.ts` fails if this catch
+ * is ever widened.
+ *
+ * `rename` is a parameter so the boundary can be exercised on a machine with
+ * a single filesystem; nothing but that test passes it.
+ */
+export function moveIntoPlace(src: string, dest: string, rename: (from: string, to: string) => void = renameSync): void {
+  try {
+    rename(src, dest);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    copyFileSync(src, dest);
+    chmodSync(dest, 0o755);
+    rmSync(src, { force: true });
+  }
+}
+
 export function ensureGitleaks(explicit: string | undefined, root: string = ROOT): string {
   if (explicit !== undefined && explicit !== '') {
     const path = resolve(explicit);
@@ -225,7 +256,7 @@ export function ensureGitleaks(explicit: string | undefined, root: string = ROOT
     if (binDigest !== GITLEAKS_BINARY_SHA256)
       throw new SecretScanError(`the extracted gitleaks has SHA-256 ${binDigest}, not the pinned ${GITLEAKS_BINARY_SHA256}`);
     chmodSync(extracted, 0o755);
-    renameSync(extracted, bin);
+    moveIntoPlace(extracted, bin);
     return bin;
   } finally {
     rmSync(work, { recursive: true, force: true });
