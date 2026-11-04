@@ -16,7 +16,7 @@
  * gate — the second case below is that control, and it fails if the catch is
  * ever widened.
  */
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -56,6 +56,9 @@ describe('moveIntoPlace', () => {
     });
     expect(readFileSync(dest, 'utf8')).toBe(BODY);
     expect(existsSync(src)).toBe(false);
+    // The binary has to be runnable, and nothing may be left beside it.
+    if (process.platform !== 'win32') expect(statSync(dest).mode & 0o777).toBe(0o755);
+    expect(existsSync(`${dest}.partial`)).toBe(false);
   });
 
   it('NEGATIVE CONTROL: any other error still brings the scan down', () => {
@@ -100,5 +103,20 @@ describe('moveIntoPlace', () => {
     moveIntoPlace(src, dest);
     expect(readFileSync(dest, 'utf8')).toBe(BODY);
     expect(existsSync(src)).toBe(false);
+  });
+});
+
+/**
+ * The cases above exercise the helper. This one pins the CALL: deleting
+ *  and putting  back would leave
+ * every case above green, and the defect would be back.
+ */
+describe('ensureGitleaks installs through moveIntoPlace', () => {
+  it('the download path moves the verified binary with the helper, not with a bare rename', () => {
+    const source = readFileSync(join(__dirname, '..', 'scripts', 'phase3-secret-scan.ts'), 'utf8');
+    expect(source).toContain('moveIntoPlace(extracted, bin)');
+    expect(source).not.toContain('renameSync(extracted');
+    // positive control: the probe can see the line it is reading
+    expect(source).toContain('chmodSync(extracted, 0o755)');
   });
 });
