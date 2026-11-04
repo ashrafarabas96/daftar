@@ -66,6 +66,15 @@ android {
  */
 tasks.withType<Test>().configureEach {
     systemProperty("p7.src", file("src/main/java").absolutePath)
+    // And the TEST root, for the one convention check that reads its OWN
+    // source: `QueueModelCheckTest` derives it from `p7.test`, falling back
+    // to the sibling of `p7.src` -- which was `prep/phase7/kotlin/test` before
+    // the promotion and is `src/main/test` after it, a directory that has
+    // never existed. It failed closed for exactly that reason: "a convention
+    // check that silently reads an empty file is the one failure mode worse
+    // than the convention being unenforced". Measured on run 41762264315:
+    // 133 tests completed, 1 failed, and this was the one.
+    systemProperty("p7.test", file("src/test/java").absolutePath)
 }
 
 dependencies {

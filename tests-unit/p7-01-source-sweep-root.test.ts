@@ -57,6 +57,25 @@ describe('P7-01: the source-sweeping suites are given a root that exists', () =>
   });
 
   /**
+   * The second half of the same gap. One convention check reads its OWN
+   * source, so it needs the TEST root, and it derives that from `p7.test`
+   * falling back to the sibling of `p7.src` — `src/main/test` after the
+   * promotion, which has never existed. It was the single remaining failure
+   * when the other eight went green.
+   */
+  it('the test root is passed too, and holds the suite that reads its own source', () => {
+    expect(buildFile()).toMatch(/systemProperty\("p7\.test",\s*file\("src\/test\/java"\)\.absolutePath\)/);
+
+    const testRoot = join(MODULE, 'src', 'test', 'java');
+    expect(existsSync(testRoot)).toBe(true);
+    const names = kotlinFiles(testRoot).map((f) => f.split(/[\\/]/).pop());
+    expect(names).toContain('QueueModelCheckTest.kt');
+
+    // The fallback the Kotlin would use if the property were dropped again.
+    expect(existsSync(join(MODULE, 'src', 'main', 'test'))).toBe(false);
+  });
+
+  /**
    * The path is not merely spelled correctly: it holds the subject the sweeps
    * require. Each of them refuses to report on fewer than six sources, so a
    * root that exists but is nearly empty is still a blind sweep.

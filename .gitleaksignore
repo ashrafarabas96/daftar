@@ -159,3 +159,30 @@ tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/RecoveryTest.k
 
 # Test fixture, not a credential: a P7 offline-kernel idempotency key, promoted from 9ae37881. line-sha256 60fca9755ebb30a2790d4b1e1d3b4b338de2f5f9b7d7545b5974065ca9070b57
 tree:apps/android/offline-kernel/src/test/java/app/daftar/offline/ReentryAndRetentionTest.kt:generic-api-key:36
+
+# P7 DR-84 fixtures, two findings, one commit. Both are the SAME shape as the
+# six above: a UUID v4 idempotency key assigned to a `private val` in a Kotlin
+# unit test, 60 bytes, no credential. They were introduced by 3baacd8e, which
+# added the DR-84 suites.
+#
+# AND THE HEAD NO LONGER PRODUCES THEM. 07e02468 renamed the identifier to
+# `opId`, which the `generic-api-key` rule does not look for, so the tree scan
+# and every later commit are clean without an exception. Measured in WSL with
+# gitleaks 8.24.3 over the three suites: no leaks found, 20,423 bytes scanned,
+# after a positive control -- the same files with `private val key = "<uuid>"`
+# appended -- which the scanner found. That is why these two entries carry no
+# `tree:` twin: there is nothing in the tree left to cover.
+#
+# They exist only because the range scan reads HISTORY, and 3baacd8e is on
+# origin. Rewriting it would need a force push, which is prohibited, so the one
+# commit that carries the lines is pinned here per commit AND per path, with no
+# pattern and no path-wide or rule-wide mute. A new finding in these same files
+# tomorrow is still reported.
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test, renamed to `opId` at 07e02468.
+# line-sha256 4ca6b0bad7f22e47f915301f9f717a9e19ae1297d516d0cc654e7471080e96bf
+3baacd8e8570bad8f968b122faf6ae617724466b:apps/android/offline-kernel/src/test/java/app/daftar/offline/StoredBytesVerbatimTest.kt:generic-api-key:28
+
+# Test fixture, not a credential: a P7 offline-queue idempotency key in a unit test, renamed to `opId` at 07e02468.
+# line-sha256 e7e76697e6b16cca3d47f1e0b2c0aa517832cd472bf393ed524da1204edcf304
+3baacd8e8570bad8f968b122faf6ae617724466b:apps/android/offline-kernel/src/test/java/app/daftar/offline/ConflictNoAutoRetryTest.kt:generic-api-key:29
