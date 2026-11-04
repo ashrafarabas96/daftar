@@ -423,14 +423,30 @@ jobs:
           echo "initdb major = $v"
           test -n "$v"
           test "$v" = "16"
-          # And a positive control that the install was HARMLESS. `|| true`
-          # is deliberately absent: a listing command that itself failed would
-          # otherwise be counted as zero clusters, which is the empty-probe
-          # trap this project has been bitten by.
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
           pg_lsclusters
           rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
-          echo "host clusters = $rows (must be 0; the container owns 5432)"
-          test "$rows" -eq 0
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
           pg_isready -h localhost -p 5432 -U postgres
       - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
         run: |
