@@ -1159,8 +1159,12 @@ jobs:
     # ubuntu-26.04 on every job), and the pinned playwright-core has no
     # Chromium build for the new one: `ERROR: Playwright does not support
     # chromium on ubuntu26.04-x64`, step 8, with the four steps after it
-    # skipped and therefore unmeasured. The other five jobs pass on 26.04,
-    # measured in that same run, so this pin is the narrowest thing that
+    # skipped and therefore unmeasured. Four of the other five -- workspaces,
+    # android, web-admin and hygiene -- are measured green on 26.04 in that
+    # same run; `backend` was CANCELLED there by a later push, and a cancelled
+    # job is an interrupted session and not a pass (RULE-5), so it is
+    # unmeasured on 26.04 and left on `ubuntu-latest` rather than pinned on a
+    # claim nobody took. This pin is the narrowest thing that
     # restores a measured environment: nothing is disabled, no threshold
     # moves, no test is skipped. Supporting 26.04 needs the browser lane's
     # own pinned dependency to move, which is card BROWSER-IMAGE-26 and not

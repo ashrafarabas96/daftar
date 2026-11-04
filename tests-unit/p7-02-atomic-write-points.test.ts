@@ -243,13 +243,25 @@ describe('P7-02: the payload never reaches the database in the clear', () => {
    * `payload` is assigned to it. It does NOT claim the metadata is encrypted —
    * it deliberately is not, and `Persistence.kt` says why.
    */
+  /**
+   * The control this case used to carry was
+   * `expect(['payload'].filter((rhs) => rhs === 'payload')).toEqual(['payload'])`
+   * — a predicate applied to a hand-made array. It exercised neither the
+   * extraction nor the file, so it could not have failed, and the equality it
+   * tested also missed `payload.copyOf()`, which is the plaintext by another
+   * name. Found by independent review. The control is now the same extraction
+   * and the same predicate run over a PLANTED text that carries both shapes.
+   */
+  const rawAssignments = (text: string): string[] =>
+    [...text.matchAll(/sealedPayload = ([A-Za-z0-9_.()]+)/g)].map((m) => m[1] ?? '').filter((rhs) => /^payload(\b|\.)/.test(rhs));
+
   it('assigns sealedPayload only from the cipher', () => {
+    const planted = 'StoredRow(\n  sealedPayload = payload,\n)\nStoredRow(\n  sealedPayload = payload.copyOf(),\n)\n';
+    expect(rawAssignments(planted)).toEqual(['payload', 'payload.copyOf()']);
+
     const assignments = [...persistence().matchAll(/sealedPayload = ([A-Za-z0-9_.()]+)/g)].map((m) => m[1] ?? '');
     expect(assignments.length).toBeGreaterThan(0);
-    const fromRawPayload = assignments.filter((rhs) => rhs === 'payload');
-    // Probe proven able to find the defect it denies.
-    expect(['payload'].filter((rhs) => rhs === 'payload')).toEqual(['payload']);
-    expect(fromRawPayload).toEqual([]);
+    expect(rawAssignments(persistence())).toEqual([]);
   });
 
   it('declares a schema version on every row it writes (L13)', () => {

@@ -18,8 +18,9 @@ import kotlin.test.assertTrue
  * whose bytes are pinned by the 27/27 P7-01 promotion proof.
  *
  * MEASURED, so that the gap is recorded at its true size. Every
- * `Operation.capture` call in this repository is in a test: eighteen call
- * sites, all under `src/test`. `SendAttempt` is emitted in exactly one place,
+ * `Operation.capture` call in this repository is in a test: twenty call sites
+ * at 5f5083ab, all under `src/test`, and the count is dated because adding a
+ * suite moves it. `SendAttempt` is emitted in exactly one place,
  * `Queue.kt:655`, carrying the operation's own digest. Every caller of the
  * store is a test too. And `apps/android/app` does not depend on this module
  * at all — zero `project(` and zero `offline-kernel` in its build file. So
@@ -143,11 +144,22 @@ class FakeDigestOnTheWireTest {
     }
 
     /**
-     * The gap is one door wide, and this says which. The store's door is shut
-     * for both halves of DR-84 — a digest that is not its payload's cannot be
-     * written, and bytes that no longer hash to the frozen digest cannot be
-     * read back — so the only way to a fake digest on the wire is to not use
-     * the store at all.
+     * Which door is shut, and which is not.
+     *
+     * An earlier version of this comment said the store was shut "for both
+     * halves of DR-84 — so the only way to a fake digest on the wire is to not
+     * use the store at all". Independent review falsified it: a SECOND capture
+     * under a key already on disk replaced the frozen row, with its own correct
+     * digest, and neither half could see it because neither compared the row
+     * with the row already there. That is now a third refusal, with
+     * `CaptureIsFrozenTest` behind it, and the sentence is corrected here
+     * rather than removed, because a comment that overstated a guard is how a
+     * reader comes to trust one.
+     *
+     * So the store refuses three things — a digest that is not its payload's,
+     * bytes that no longer hash to the frozen digest, and a capture under a key
+     * that is taken — and what remains open is the state machine's own door,
+     * which is this suite's subject and card P7-CAPTURE-DIGEST-FORM.
      */
     @Test
     fun `the store refuses both a wrong digest going in and changed bytes coming out`() {

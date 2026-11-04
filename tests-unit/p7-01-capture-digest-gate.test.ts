@@ -9,8 +9,8 @@ import { describe, expect, it } from 'vitest';
  * `Operation.capture` accepts any non-empty string as a digest (`Queue.kt:358`)
  * and an `Operation` holds no bytes, so it cannot verify one. The store's two
  * doors do verify — that is DR-84 — and today nothing reaches `capture` except
- * tests: measured, eighteen call sites, all under `src/test`, with no
- * production caller and no file wiring the store to the state machine.
+ * tests: measured at 5f5083ab, twenty call sites, all under `src/test`, with
+ * no production caller and no file wiring the store to the state machine.
  *
  * The day `apps/android/app` depends on `:offline-kernel` is the day that stops
  * being true, and it is the day the wiring must pass the store's verified

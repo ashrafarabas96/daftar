@@ -272,6 +272,31 @@ class EncryptedQueueStore(
         )
         db.begin()
         try {
+            // L2's other half, and the one DR-84 did not cover: A KEY ON DISK IS
+            // FROZEN. The digest guards above compare a payload with its own
+            // digest, so a SECOND capture under this key with different bytes and
+            // their own correct digest is internally consistent -- it would
+            // replace the frozen row, hash correctly, read back, and send a
+            // different intent under a key the server already holds. Neither
+            // door could see it, because neither compares the row with the row
+            // that is already there.
+            //
+            // The read is INSIDE the transaction on purpose: outside it, two
+            // captures racing on one key could both find nothing and both write.
+            // And `Transactional.write` is no help here -- it promises neither
+            // insert nor replace, mirroring `SupportSQLiteDatabase`, whose row
+            // write replaces on conflict.
+            //
+            // Found by independent review. An identical second capture is
+            // refused too: this store cannot tell a caller retrying from a
+            // caller replacing, and a key whose row exists has already decided
+            // its payload.
+            if (db.read(idempotencyKey) != null) {
+                throw PayloadRefused(
+                    "the key $idempotencyKey is already captured; refusing to replace a frozen payload. " +
+                        "A caller that needs those bytes reads the row, it does not capture them again",
+                )
+            }
             db.write(row)
             db.markSuccessful()
         } finally {

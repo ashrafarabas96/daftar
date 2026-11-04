@@ -36,7 +36,9 @@ result.
 an `Operation` holds no bytes, so it cannot verify one. Measured:
 
 - every `Operation.capture` call in this repository is under `src/test` —
-  eighteen call sites, no production caller;
+  twenty call sites at 5f5083ab, no production caller. The count is dated
+  because adding a suite moves it; what does not move is that none of them is
+  production code;
 - `SideEffect.SendAttempt` is emitted in exactly one place, `Queue.kt:655`,
   carrying the operation's own digest;
 - every caller of the store is a test too;
@@ -59,6 +61,19 @@ one appears, and it ships its own negative control: the same check applied to a
 build file that declares the dependency must fail, and applied with the status
 set to CLOSED must pass, so the gate is proved able to refuse and able to be
 lifted — deliberately, here.
+
+## The three things this wave deferred, recorded here because this is tracked
+
+Independent review pointed out that all three lived only in
+`.local-context/`, which is excluded from git — the same reason this record
+exists rather than a card. So each is named here, with what it is and what
+holds the line until it is done.
+
+| Deferred | What it is | What holds the line |
+|---|---|---|
+| `P7-INVPL-KOTLIN` | a device-side encoder for the server's `invpl/1` stream, so a shared golden vector could be pinned on both sides | DR-84 item 1: the device computes no intent at all, and `SyncEnvelope.intentSha256` is documented as an unwired contract slot. The vector `S3-TRF-01` in `packages/inventory/vectors/invpl-s3-vectors.json` is what it would have to reproduce: 257 bytes ending in LF, digest `4b6ca130…`. |
+| `P7-CAPTURE-DIGEST-FORM` | strengthening `Operation.capture` to require the digest's form, which re-pins the 27/27 promotion digests and touches five pinned suites | the gate in this record, and `FakeDigestOnTheWireTest` |
+| `BROWSER-IMAGE-26` | moving the browser lane's pinned `playwright-core` so Chromium installs on `ubuntu-26.04` | the `browser` job is pinned to `ubuntu-24.04`, the image its gates were measured on, with its acceptance criterion written at the pin: step 8 passes AND no step after it is skipped |
 
 What keeps the gap measured meanwhile is
 `apps/android/offline-kernel/src/test/java/app/daftar/offline/FakeDigestOnTheWireTest.kt`:
