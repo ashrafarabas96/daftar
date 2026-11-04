@@ -48,8 +48,12 @@ import kotlin.test.assertTrue
  */
 class PersistenceCrashSafetyTest {
     private val key = "9f8e7d6c-5b4a-4938-8271-615243f5e6d7"
-    private val digest = "sha256:a1b2c3d4"
     private val payload = "12500 SAR".toByteArray()
+
+    // DR-84: the real sha256 of the bytes above, taken from the one
+    // implementation there is. A literal here would be a second
+    // implementation of the same value, and the two would drift.
+    private val digest = QueueDigest.of(payload)
 
     /** The modelled process death. An `Error`, so no `catch (Exception)` hides it. */
     private class ProcessDied(val atMutation: Int) : Error("process died at mutation $atMutation")

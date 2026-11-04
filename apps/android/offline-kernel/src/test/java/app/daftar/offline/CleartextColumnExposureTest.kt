@@ -147,6 +147,6 @@ class CleartextColumnExposureTest {
             override fun keysByState(state: OperationState): List<String> = emptyList()
         }
         return EncryptedQueueStore(db, Marker())
-            .captureWithKey("11111111-2222-4333-8444-555555555555", payload, "sha256:deadbeef")
+            .captureWithKey("11111111-2222-4333-8444-555555555555", payload, QueueDigest.of(payload))
     }
 }

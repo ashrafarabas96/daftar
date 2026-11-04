@@ -63,10 +63,21 @@ const val SCHEMA_VERSION: Int = 1
  *                          is readable. Not WHAT any of them says.
  *   * `attempts`         — a small integer. How many sends were tried.
  *   * `payloadDigest`    — sha256 OF the payload, never the payload. A digest
- *                          is one-way; it is also exactly what the server
- *                          compares to refuse a replayed key carrying a
- *                          different intent, so it cannot be encrypted without
- *                          losing replay suppression.
+ *                          is one-way, and it is a LOCAL integrity check on
+ *                          this queue: [QueueDigest] computes it over the
+ *                          captured bytes, this store refuses a row whose
+ *                          digest is not theirs, and a read recomputes it
+ *                          before handing the bytes back. It is NEVER compared
+ *                          with the server, which computes its own proof of
+ *                          intent from the request it received (owner decision
+ *                          DR-84, 2026-11-04). It cannot be encrypted for that
+ *                          local use: a column that must be decrypted to be
+ *                          compared cannot be indexed, and recomputing it on
+ *                          every read is what detects a changed byte.
+ *                          An earlier version of this line said it was
+ *                          "exactly what the server compares". Measured: the
+ *                          server accepts no client digest at all, so that
+ *                          sentence described a comparison that never happens.
  *
  * WHAT MAY NEVER APPEAR IN ANY OF THEM: a customer name, a phone number, an
  * amount, a note, or any other personal or financial datum. That is not a
@@ -230,6 +241,21 @@ class EncryptedQueueStore(
         payload: ByteArray,
         payloadDigest: String,
     ): StoredRow {
+        // DR-84: the digest offered must BE the digest of the bytes offered.
+        // Before this check the only requirement anywhere was that a digest be
+        // non-empty, so `"sha256:a1b2c3d4"` was a legal digest for any payload
+        // at all — and a digest that cannot detect a change is not an integrity
+        // check, it is a field that looks like one. Enforced here rather than
+        // in the state machine because this is the one place the bytes and the
+        // digest are both in hand, and because the state machine's file is
+        // byte-pinned by the P7-01 promotion proof.
+        val offered = QueueDigest.of(payload)
+        if (payloadDigest != offered) {
+            throw PayloadRefused(
+                "the digest offered for $idempotencyKey is not the sha256 of its payload; " +
+                    "refusing to store a row whose digest could not detect a changed byte",
+            )
+        }
         // Sealing happens BEFORE the transaction opens. A cipher that throws
         // would otherwise do so with a transaction held open, and the row would
         // be rolled back by the `finally` — correct, but it would also mean the
@@ -343,7 +369,21 @@ class EncryptedQueueStore(
         if (row.schemaVersion != SCHEMA_VERSION) {
             throw SchemaVersionRefused(row.schemaVersion, SCHEMA_VERSION)
         }
-        return row to cipher.open(row.sealedPayload)
+        val opened = cipher.open(row.sealedPayload)
+        // The other half of DR-84, and the half a flipped byte meets. The
+        // digest was frozen over the plaintext at capture; recomputing it from
+        // what comes back out says whether these are still those bytes. A
+        // single byte changed in `sealedPayload` on disk opens to different
+        // plaintext — or fails to open at all under an authenticated cipher —
+        // and either way the read is refused rather than handed to a sender.
+        val found = QueueDigest.of(opened)
+        if (found != row.payloadDigest) {
+            throw PayloadRefused(
+                "the payload stored for $idempotencyKey no longer hashes to the digest frozen with it; " +
+                    "refusing to hand back bytes that are not the ones captured",
+            )
+        }
+        return row to opened
     }
 
     fun keysByState(state: OperationState): List<String> = db.keysByState(state)

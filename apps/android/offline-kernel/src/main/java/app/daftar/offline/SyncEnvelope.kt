@@ -43,11 +43,26 @@ const val ENVELOPE_VERSION: Int = 1
  * byte-identically on every later attempt (L2): the key is minted once, and the
  * intent digest is computed once over the payload as captured.
  *
- * [intentSha256] is the whole of replay suppression on the server side. A
- * retry carrying the same key and the same digest is a replay and returns the
- * stored truth; a retry carrying the same key and a DIFFERENT digest is a
- * different intent wearing an old key, and the server refuses it rather than
- * guessing which one the merchant meant.
+ * [intentSha256] IS NOT THE SERVER'S PROOF OF INTENT, and this envelope does
+ * not supply one. Owner decision DR-84, 2026-11-04, after measurement: the
+ * server computes the proof itself, from the fields of the request it actually
+ * received, and accepts no digest from a client — the inventory movement
+ * schemas carry no such field at all, and the column that stores the result
+ * admits only 64 lowercase hex characters, which no value this kernel has ever
+ * produced would satisfy. An earlier version of this paragraph called the
+ * field "the whole of replay suppression on the server side"; that was wrong,
+ * and it is corrected here rather than quietly dropped, because a wire field
+ * documented as the thing that prevents double-charging is how a later
+ * implementer comes to rely on it.
+ *
+ * What replay suppression actually rests on is the KEY: the same key with the
+ * intent the server already holds is a safe replay that returns the stored
+ * truth, and the same key with a different intent is refused — computed and
+ * compared on the server, not here. A device-side encoder for the server's
+ * canonical byte stream is deferred under DR-05 as card P7-INVPL-KOTLIN, and
+ * until it exists this field is an unwired contract slot: it is never filled
+ * from [QueueDigest] or from a row's local integrity digest, which are a
+ * different value for a different purpose and in a different shape.
  */
 data class SyncEnvelope(
     /** The client-minted document id, which IS the idempotency key. */
@@ -56,7 +71,11 @@ data class SyncEnvelope(
     val envelopeVersion: Int,
     /** The queue-row schema the payload was persisted under (L13). */
     val payloadSchemaVersion: Int,
-    /** sha256 over the payload exactly as captured, frozen with it. */
+    /**
+     * The contract slot for a proof of intent, NOT a value this kernel can
+     * produce (DR-84). It is never compared with anything the server computes,
+     * and it is never filled from a row's local integrity digest.
+     */
     val intentSha256: String,
     /** The captured intent. Never rebuilt from current state on a retry. */
     val payload: Map<String, String>,
