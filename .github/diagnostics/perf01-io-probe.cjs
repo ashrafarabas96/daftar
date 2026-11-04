@@ -53,7 +53,7 @@ async function loop(label, once) {
   await c.connect();
   const v = await c.query('show server_version');
   const sets = await c.query(
-    "select name, setting from pg_settings where name in " +
+    'select name, setting from pg_settings where name in ' +
       "('fsync','synchronous_commit','wal_sync_method','wal_level','full_page_writes','max_wal_size','checkpoint_timeout','shared_buffers','track_io_timing') order by name",
   );
   console.log('server_version:', v.rows[0].server_version);
