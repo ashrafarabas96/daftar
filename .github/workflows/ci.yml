@@ -193,7 +193,28 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    runs-on: ubuntu-latest
+    # PINNED, NOT WEAKENED. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04. Measured on both sides: run 41531741433 (main at 4d65304f)
+    # reported `Image: ubuntu-24.04` with all six jobs green; runs
+    # 41765693794 and 41768239220 reported `Image: ubuntu-26.04`, and the
+    # pinned playwright-core has no Chromium for it --
+    # `ERROR: Playwright does not support chromium on ubuntu26.04-x64`.
+    # This job installs Chromium too, for the real-browser matrix, and the
+    # same refusal at step 33 left EIGHTEEN steps skipped behind it -- the
+    # four P4 slice gates, the POS and receivables budgets, both budget
+    # negative controls, the tampered-migration proof, the database
+    # contract from zero and the API build. Reading that run as one
+    # environmental failure would read eighteen unmeasured gates as green.
+    #
+    # This is the image these gates were measured on: nothing is disabled,
+    # no threshold moves, no test is skipped, no timeout changes. A hold,
+    # not a cure, and its limit is stated: 24.04 will be withdrawn from the
+    # hosted runners eventually, and that date is not measured here. Card
+    # BROWSER-IMAGE-26 carries the remedy -- moving the browser lane's own
+    # pinned dependency -- with the acceptance criterion that the Chromium
+    # install passes AND no step after it is skipped, since a job that stops
+    # early proves nothing about the gates it never reached.
+    runs-on: ubuntu-24.04
     services:
       postgres:
         image: postgres:16
@@ -1045,7 +1066,24 @@ jobs:
     # `laptop` (uid 1000); on a GitHub-hosted runner the job runs as `runner`.
     # Neither is root, which is all that routine requires — so do not read the
     # old reason as the current one.
-    runs-on: ubuntu-latest
+    # PINNED, NOT WEAKENED. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04. Measured on both sides: run 41531741433 (main at 4d65304f)
+    # reported `Image: ubuntu-24.04` with all six jobs green; runs
+    # 41765693794 and 41768239220 reported `Image: ubuntu-26.04`, and the
+    # pinned playwright-core has no Chromium for it --
+    # `ERROR: Playwright does not support chromium on ubuntu26.04-x64`.
+    # Here it was step 8, and the four steps after it were skipped, so they
+    # were not merely red: they were unmeasured.
+    #
+    # This is the image these gates were measured on: nothing is disabled,
+    # no threshold moves, no test is skipped, no timeout changes. A hold,
+    # not a cure, and its limit is stated: 24.04 will be withdrawn from the
+    # hosted runners eventually, and that date is not measured here. Card
+    # BROWSER-IMAGE-26 carries the remedy -- moving the browser lane's own
+    # pinned dependency -- with the acceptance criterion that the Chromium
+    # install passes AND no step after it is skipped, since a job that stops
+    # early proves nothing about the gates it never reached.
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
