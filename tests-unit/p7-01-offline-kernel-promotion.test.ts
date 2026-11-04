@@ -133,8 +133,12 @@ describe('P7-01: the CI command already in place reaches the module', () => {
    *
    * A RETRACTION, and the reason the next test exists. This comment used to
    * say that `.github/**` was NOT touched. That was false when it was written:
-   * measured with `--numstat` against `origin/main`, this branch adds 140 lines
-   * to `ci.yml` and removes 3. A sentence in a comment is not a measurement,
+   * measured with `--numstat` against `origin/main`, this branch added 140
+   * lines to `ci.yml` and removed 3 on the head of the day — and 445 / 3 two
+   * heads later, which is why no figure here is the live one: a count written
+   * into prose goes stale the next commit, so the live count belongs to
+   * `--numstat` and this sentence only records that it was measured, never
+   * what it said. A sentence in a comment is not a measurement,
    * and a false one inside an evidence file is worse than no sentence, so the
    * claim is withdrawn here and replaced by the test below, which MEASURES.
    *
@@ -167,7 +171,7 @@ describe('DR-85: what this lane touches in .github is measured, not claimed in p
   /**
    * The defect this test exists for happened in this very file: a comment
    * denied that this lane had altered the workflow directory, while the branch
-   * was adding 140 lines to `ci.yml`. The independent review caught it, not
+   * was adding lines to `ci.yml` by the hundred. The independent review caught it, not
    * CI, because nothing here measured prose. (Phrased WITHOUT the claim form,
    * on purpose: the sweep below is sensitive enough to flag its own
    * description of the defect, and it did, which is how I know it works.)

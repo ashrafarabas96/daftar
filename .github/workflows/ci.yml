@@ -1672,12 +1672,41 @@ jobs:
           # the path this harness probes, instead of assumed from one earlier
           # run's output -- and the banner line itself is required present, so
           # a log that never printed it cannot read as agreement.
-          grep -q "P7 TOOLCHAIN" /tmp/p7-red-proofs.log
-          if grep -q "UNREADABLE" /tmp/p7-red-proofs.log; then
-            echo "the harness probed a toolchain path this job did not provision:"
-            grep -n "UNREADABLE" /tmp/p7-red-proofs.log
+          #
+          # The probe is the banner ROW, not the word. A bare `grep UNREADABLE`
+          # also matches proof [17]'s own name,
+          # P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED, which is how this guard
+          # failed run 41839813663 while the harness itself exited 0 and
+          # printed its verdict. The banner prints one row per file, two spaces
+          # then the absolute path, then either `sha256 <hex>` or
+          # `UNREADABLE (<reason>)`; and `P7 TOOLCHAIN UNDERIVABLE` is the
+          # second way the banner reports a toolchain it could not read at all.
+          grep -q "^P7 TOOLCHAIN (MEASURED" /tmp/p7-red-proofs.log
+          if grep -q "^P7 TOOLCHAIN UNDERIVABLE" /tmp/p7-red-proofs.log; then
+            echo "the harness could not name the files it compiled with:"
+            grep -n "^P7 TOOLCHAIN UNDERIVABLE" /tmp/p7-red-proofs.log
             exit 1
           fi
+          BANNER_UNREADABLE='^  /.* UNREADABLE \('
+          if grep -qE "$BANNER_UNREADABLE" /tmp/p7-red-proofs.log; then
+            echo "the harness probed a toolchain path this job did not provision:"
+            grep -nE "$BANNER_UNREADABLE" /tmp/p7-red-proofs.log
+            exit 1
+          fi
+          # A tightened matcher reading green must be proved able to read red,
+          # or the tightening is how the guard was disabled. Both arms, on
+          # files of this step's own making: the banner row it must catch, and
+          # the proof name it must not.
+          printf '%s\n' '  /tmp/daftar-p7-kotlin/kotlinc/bin/kotlinc UNREADABLE (No such file or directory)' \
+            > /tmp/p7-banner-arm-red.log
+          grep -qE "$BANNER_UNREADABLE" /tmp/p7-banner-arm-red.log
+          printf '%s\n' '  [17] P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED' \
+            > /tmp/p7-banner-arm-green.log
+          if grep -qE "$BANNER_UNREADABLE" /tmp/p7-banner-arm-green.log; then
+            echo "the row matcher still matches a proof NAME, so it is not a row matcher"
+            exit 1
+          fi
+          echo "banner matcher: armed on a row, blind to a proof name"
           test "$rc" -eq 0
 
           # An exit code is not a presence check. The verdict sentence is
