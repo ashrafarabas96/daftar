@@ -39,8 +39,8 @@ class CleartextColumnExposureTest {
     )
 
     private val payload: ByteArray =
-        "{\"customer\":\"$customerName\",\"phone\":\"$phone\"," +
-            "\"totalMinor\":$amount,\"note\":\"$note\"}".toByteArray()
+        ("{\"customer\":\"$customerName\",\"phone\":\"$phone\"," +
+            "\"totalMinor\":$amount,\"note\":\"$note\"}").toByteArray()
 
     private class Marker : PayloadCipher {
         override fun seal(plaintext: ByteArray) =
