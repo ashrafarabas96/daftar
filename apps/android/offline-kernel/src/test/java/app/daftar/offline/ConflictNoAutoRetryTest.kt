@@ -26,7 +26,7 @@ import kotlin.test.assertTrue
  * retry.
  */
 class ConflictNoAutoRetryTest {
-    private val key = "8c7b6a59-4d3e-4f21-9a08-1b2c3d4e5f60"
+    private val opId = "8c7b6a59-4d3e-4f21-9a08-1b2c3d4e5f60"
     private val scope = OwnerScope("tenant-1", "business-1", "member-1")
     private val digest = QueueDigest.of("{\"totalMinor\":12500}".toByteArray())
 
@@ -39,7 +39,7 @@ class ConflictNoAutoRetryTest {
     /** A row that has been sent once and is waiting for its answer. */
     private fun inFlight(): Operation {
         var (op, _) = moved(
-            Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
+            Operation.capture(opId, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
             QueueEvent.Release(scope),
         )
         val (sent, _) = moved(op, QueueEvent.Send(digest, scope))
@@ -87,7 +87,7 @@ class ConflictNoAutoRetryTest {
     fun `the decision for a conflict is attention with divergence, never a retry`() {
         val decision = Outcome.classify(
             AttemptResult.Answered(409, IDEMPOTENCY_CONFLICT, false, null),
-            key,
+            opId,
             1,
         )
         assertIs<Decision.NeedsAttention>(decision, "a conflict was classified as something other than attention")
@@ -103,11 +103,11 @@ class ConflictNoAutoRetryTest {
      */
     @Test
     fun `something else does retry, so the refusal above is the conflict and not the kernel`() {
-        val retry = Outcome.classify(AttemptResult.Answered(429, null, null, 2), key, 1)
+        val retry = Outcome.classify(AttemptResult.Answered(429, null, null, 2), opId, 1)
         assertIs<Decision.Retry>(retry, "a 429 is a plain retry; if it is not, the conflict case proves nothing")
         assertTrue(retry.afterMs > 0)
 
-        val lost = Outcome.classify(AttemptResult.NoAnswer, key, 1)
+        val lost = Outcome.classify(AttemptResult.NoAnswer, opId, 1)
         assertIs<Decision.ResolveByReplay>(lost, "a lost answer is resolved by replaying the same key")
     }
 
@@ -141,7 +141,7 @@ class ConflictNoAutoRetryTest {
     fun `a conflict from a domain this kernel has never heard of is still a conflict`() {
         val decision = Outcome.classify(
             AttemptResult.Answered(409, "receivables.idempotency_conflict", false, null),
-            key,
+            opId,
             1,
         )
         assertIs<Decision.NeedsAttention>(decision)
@@ -152,7 +152,7 @@ class ConflictNoAutoRetryTest {
         // business conflict, and the two must not be conflated.
         val business = Outcome.classify(
             AttemptResult.Answered(409, "inventory.insufficient_stock", false, null),
-            key,
+            opId,
             1,
         )
         assertIs<Decision.NeedsAttention>(business)

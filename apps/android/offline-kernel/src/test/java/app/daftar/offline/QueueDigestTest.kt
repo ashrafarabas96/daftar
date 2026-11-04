@@ -50,7 +50,7 @@ class QueueDigestTest {
     }
 
     @Test
-    fun `the shape is the server's: lowercase hex, sixty-four characters, no prefix`() {
+    fun `the shape is the server's own -- lowercase hex, sixty-four characters, no prefix`() {
         val digest = QueueDigest.of(vector1)
         assertEquals(64, digest.length)
         assertTrue(QueueDigest.FORM.matches(digest), "$digest is not 64 lowercase hex characters")

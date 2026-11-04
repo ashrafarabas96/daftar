@@ -25,7 +25,7 @@ import kotlin.test.assertTrue
  * equality of things it built from one source proves the source, not the law.
  */
 class StoredBytesVerbatimTest {
-    private val key = "4f3c2b1a-9e8d-4c7b-8a69-5d4c3b2a1908"
+    private val opId = "4f3c2b1a-9e8d-4c7b-8a69-5d4c3b2a1908"
     private val scope = OwnerScope("tenant-1", "business-1", "member-1")
 
     /** The request body as the capturing surface stated it, once. */
@@ -52,11 +52,11 @@ class StoredBytesVerbatimTest {
             rows[row.idempotencyKey] = row
         }
 
-        override fun delete(key: String) {
-            rows.remove(key)
+        override fun delete(opId: String) {
+            rows.remove(opId)
         }
 
-        override fun read(key: String): StoredRow? = rows[key]
+        override fun read(opId: String): StoredRow? = rows[opId]
 
         override fun keysByState(state: OperationState): List<String> =
             rows.values.filter { it.state == state }.map { it.idempotencyKey }
@@ -75,10 +75,10 @@ class StoredBytesVerbatimTest {
         val disk = Disk()
         val store = store(disk)
         val digest = QueueDigest.of(body)
-        store.captureWithKey(key, body, digest)
+        store.captureWithKey(opId, body, digest)
 
         // Three independent reads, as three attempts would make.
-        val reads = (1..3).map { store.load(key) ?: error("the capture did not persist") }
+        val reads = (1..3).map { store.load(opId) ?: error("the capture did not persist") }
         for ((index, read) in reads.withIndex()) {
             assertEquals(body.toList(), read.second.toList(), "read ${index + 1} did not return the captured bytes")
             assertEquals(digest, read.first.payloadDigest, "the row's digest moved between reads")
@@ -88,7 +88,7 @@ class StoredBytesVerbatimTest {
         // And the kernel's own two attempts carry that same digest, which is
         // the only thing a sender is allowed to put on the wire.
         var (op, _) = moved(
-            Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
+            Operation.capture(opId, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
             QueueEvent.Release(scope),
         )
         val (afterFirst, firstEffects) = moved(op, QueueEvent.Send(QueueDigest.of(reads[0].second), scope))
@@ -119,7 +119,7 @@ class StoredBytesVerbatimTest {
         val disk = Disk()
         val store = store(disk)
         val digest = QueueDigest.of(body)
-        store.captureWithKey(key, body, digest)
+        store.captureWithKey(opId, body, digest)
 
         // Same facts, re-serialized: a decimal amount, a different key order.
         val rebuilt = "{\"note\":\"blue door\",\"customer\":\"Fulana\",\"totalMinor\":12500.00}".toByteArray()
@@ -128,7 +128,7 @@ class StoredBytesVerbatimTest {
         assertNotEquals(digest, rebuiltDigest, "the control's bytes hash to the captured digest, so it proves nothing")
 
         var (op, _) = moved(
-            Operation.capture(key, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
+            Operation.capture(opId, scope, EffectClass.FINANCIAL, digest, 12_500, "SAR"),
             QueueEvent.Release(scope),
         )
         val refused = op.step(QueueEvent.Send(rebuiltDigest, scope))
@@ -157,9 +157,9 @@ class StoredBytesVerbatimTest {
     fun `one byte changed on disk is refused on the way back out`() {
         val disk = Disk()
         val store = store(disk)
-        store.captureWithKey(key, body, QueueDigest.of(body))
+        store.captureWithKey(opId, body, QueueDigest.of(body))
 
-        val stored = disk.rows.getValue(key)
+        val stored = disk.rows.getValue(opId)
         val tampered = stored.sealedPayload.copyOf()
         tampered[3] = (tampered[3] + 1).toByte()
         assertNotEquals(
@@ -167,15 +167,15 @@ class StoredBytesVerbatimTest {
             tampered.toList(),
             "the plant did not change a byte, so its result is not a measurement",
         )
-        disk.rows[key] = stored.copy(sealedPayload = tampered)
+        disk.rows[opId] = stored.copy(sealedPayload = tampered)
 
-        val refusal = assertFailsWith<PayloadRefused> { store.load(key) }
-        assertTrue(refusal.message!!.contains(key), "the refusal must name the row it refused")
+        val refusal = assertFailsWith<PayloadRefused> { store.load(opId) }
+        assertTrue(refusal.message!!.contains(opId), "the refusal must name the row it refused")
 
         // Restored byte for byte, the same read succeeds — so the refusal was
         // the tampering and not the store.
-        disk.rows[key] = stored
-        val (row, opened) = store.load(key) ?: error("the restored row did not read back")
+        disk.rows[opId] = stored
+        val (row, opened) = store.load(opId) ?: error("the restored row did not read back")
         assertEquals(body.toList(), opened.toList())
         assertEquals(QueueDigest.of(body), row.payloadDigest)
     }
@@ -185,12 +185,12 @@ class StoredBytesVerbatimTest {
         val disk = Disk()
         val store = store(disk)
 
-        val refusal = assertFailsWith<PayloadRefused> { store.captureWithKey(key, body, "sha256:a1b2c3d4") }
-        assertTrue(refusal.message!!.contains(key))
+        val refusal = assertFailsWith<PayloadRefused> { store.captureWithKey(opId, body, "sha256:a1b2c3d4") }
+        assertTrue(refusal.message!!.contains(opId))
         assertTrue(disk.rows.isEmpty(), "a refused capture must leave nothing on disk")
 
         // The same call with the real digest writes exactly one row.
-        store.captureWithKey(key, body, QueueDigest.of(body))
+        store.captureWithKey(opId, body, QueueDigest.of(body))
         assertEquals(1, disk.rows.size)
     }
 }
