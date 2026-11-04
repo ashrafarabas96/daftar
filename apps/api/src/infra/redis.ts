@@ -6,6 +6,16 @@ import type { AppConfig } from '../config';
  * How long a command may wait for the handshake before the limiter answers
  * fail-closed. It matches `connectTimeout` below, because the two cover the
  * two halves of the same connection: the socket, and the protocol.
+ *
+ * THIS IS A TIGHTENING, NOT A RAISED TIMEOUT (DR-92). There was no timeout on
+ * this path at all: `connectTimeout` is cleared when the SOCKET connects, not
+ * when the handshake finishes (`ioredis/built/Redis.js:163-184`), so a
+ * backend that accepted TCP and never answered `INFO` was waited on
+ * FOR EVER. Measured on a server that accepts and stays silent: the
+ * unbounded version was still pending at 8001ms where the code before it
+ * refused in 1ms. So this value bounds an unbounded wait, which is why it is
+ * not read under DR-41/DR-74 ("no raised performance limit or timeout") —
+ * what has no bound cannot be raised.
  */
 const READY_TIMEOUT_MS = 2_000;
 
