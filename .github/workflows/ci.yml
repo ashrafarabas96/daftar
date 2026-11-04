@@ -1744,21 +1744,42 @@ jobs:
           # substitution that matched nothing would otherwise be read as a
           # passing control -- worse than a failure, because it is read as a
           # measurement.
+          # WHICH names, and why `fail` is NOT among them: the four assertion
+          # names are DETECTORS -- they read a value and refuse it -- so
+          # swallowing them hides a planted defect, which is the whole point.
+          # `fail(...)` is not a detector. It is an unconditional refusal
+          # reached only on a path the suite has already decided is wrong, and
+          # this suite deliberately exercises such a path: `judged()` at
+          # QueueModelCheckTest.kt:858 calls it, and an arm above the walk
+          # requires that refusal and catches its `AssertionError`. Swallowing
+          # it therefore does not blind anything -- it changes CONTROL FLOW.
+          # Measured on run 41897923336, where a sink that threw
+          # IllegalStateException escaped that arm and left the blinded
+          # baseline at 138 of 139: the control reported INCONCLUSIVE by its
+          # own second arm, which is the arm working. So `fail` stays live, by
+          # measurement rather than by omission -- the count below says so.
           before=$(sha256sum "$TARGET" | cut -d' ' -f1)
-          sed -i -E 's/\b(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(/sank_\1(/g' "$TARGET"
+          sed -i -E 's/\b(assertEquals|assertNotEquals|assertTrue|assertFalse)\(/sank_\1(/g' "$TARGET"
           after=$(sha256sum "$TARGET" | cut -d' ' -f1)
           echo "plant: $before -> $after"
           test "$before" != "$after"
 
-          # Applied by COUNT as well as by hash: the 113 assertion sites
-          # measured in this suite must all be gone and the sinks there in
-          # their place. A hash change on its own could come from the appended
-          # block below with every assertion left intact.
-          live=$(grep -cE '(^|[^_[:alnum:]])(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(' "$TARGET" || true)
-          sunk=$(grep -cE 'sank_(assertEquals|assertNotEquals|assertTrue|assertFalse|fail)\(' "$TARGET" || true)
-          echo "live assertion lines after the plant = $live ; sink lines = $sunk"
+          # Applied by COUNT as well as by hash: the detector sites measured in
+          # this suite must all be gone and the sinks there in their place. A
+          # hash change on its own could come from the appended block below
+          # with every assertion left intact. The identity of the count, since
+          # `grep -c` counts LINES: 109 detector lines and 109 detector
+          # occurrences, 4 and 4 for `fail(` -- measured, and equal here, so
+          # the two readings cannot be confused for one another.
+          live=$(grep -cE '(^|[^_[:alnum:]])(assertEquals|assertNotEquals|assertTrue|assertFalse)\(' "$TARGET" || true)
+          sunk=$(grep -cE 'sank_(assertEquals|assertNotEquals|assertTrue|assertFalse)\(' "$TARGET" || true)
+          kept=$(grep -cE '(^|[^_[:alnum:]])fail\(' "$TARGET" || true)
+          echo "live detector lines after the plant = $live ; sink lines = $sunk ; fail() left live = $kept"
           test "$live" -eq 0
           test "$sunk" -gt 0
+          # Left live DELIBERATELY, and a plant that swallowed it too would be
+          # caught here rather than two arms later.
+          test "$kept" -gt 0
 
           cat >> "$TARGET" <<'KOTLIN'
 
@@ -1781,7 +1802,6 @@ jobs:
           private fun <T> sank_assertNotEquals(illegal: T, actual: T, message: String? = null) {}
           private fun sank_assertTrue(actual: Boolean, message: String? = null) {}
           private fun sank_assertFalse(actual: Boolean, message: String? = null) {}
-          private fun sank_fail(message: String? = null): Nothing = throw IllegalStateException("control")
           KOTLIN
 
           cd "$CTRL/tools"
