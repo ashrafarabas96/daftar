@@ -13,7 +13,17 @@ name: DAFTAR CI
 # that exact SHA (Phase 3 corrective audit, E-1).
 on:
   push:
-    branches: [main, 'phase/**']
+    # DIAGNOSIS BRANCH ONLY, NEVER MERGED: `diag/**` is here so the real
+    # `backend` job runs on this branch. The tail that fails PERF01-BUDGET-A
+    # has been measured absent in every environment outside this job --
+    # locally alone and under contention, on an idle hosted runner, on one
+    # loaded for twenty minutes, and through the P2-S8 gate itself: 3,400
+    # samples, zero over the budget. The one difference left is WHEN the
+    # measurement happens: an hour and a half of continuous work precedes it
+    # here (job start 12:12:35Z, step 32 start 13:35:27Z on attempt 1;
+    # 13:50:24Z and 15:23:50Z on attempt 2). So measure the same budget
+    # TWICE in this job, at the start and where the gates already measure it.
+    branches: [main, 'phase/**', 'diag/**']
   pull_request:
 
 env:
@@ -368,6 +378,37 @@ jobs:
         run: npm run migrate -w @daftar/api
         env:
           MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # DIAGNOSIS STEP, NEVER MERGED. The same suite, the same budget, the same
+      # 200 iterations and 20 warm-ups, the same assertion -- nothing about the
+      # measurement is changed. Only its PLACE is: here the job is minutes old.
+      # It prints and does not fail the job, because the whole experiment needs
+      # the LATE measurement to happen as well; the shell branch is explicit,
+      # and this step carries no `continue-on-error`.
+      - name: DIAGNOSIS - PERF01 at the START of the job
+        run: |
+          set -u
+          echo "early measurement starting $(date -u +%H:%M:%SZ)"
+          if node_modules/.bin/vitest run tests/performance/accounting-budgets.test.ts; then
+            echo "EARLY: SUITE PASSED"
+          else
+            echo "EARLY: SUITE FAILED (printed, not fatal; the late measurement must still run)"
+          fi
+          node -e "
+            const ev = require('./release/phase2-s8-performance-tier1.json');
+            for (const m of ev.measurements) {
+              const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+              console.log('EARLY ' + m.name + ': n=' + m.iterations + ' budget=' + m.budgetMs +
+                ' p50=' + m.p50.toFixed(3) + ' p95=' + m.p95.toFixed(3) +
+                ' p99=' + m.p99.toFixed(3) + ' max=' + m.max.toFixed(3) +
+                ' over=' + over + '/' + m.iterations);
+            }
+            const a = ev.measurements.find((m) => m.name.startsWith('A post'));
+            if (a) console.log('EARLY A samples: ' + JSON.stringify(a.samplesMs));
+          "
+          cp release/phase2-s8-performance-tier1.json early-perf-evidence.json
+          echo "early measurement done $(date -u +%H:%M:%SZ)"
+        env:
+          PG_PORT: '5432'
       - name: Re-migrate latest → no-op
         run: npm run migrate -w @daftar/api
         env:
@@ -542,6 +583,31 @@ jobs:
           # The range scan's head: the PR head on a pull_request run (the
           # checkout is GitHub's merge commit), the pushed SHA on a push run.
           PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+      # DIAGNOSIS STEP, NEVER MERGED. `always()` so the comparison survives a red
+      # gate: a failing budget is the measurement this experiment is about.
+      - name: DIAGNOSIS - PERF01 as the gates left it, beside the early numbers
+        if: always()
+        run: |
+          set -u
+          echo "late read at $(date -u +%H:%M:%SZ)"
+          node -e "
+            const fs = require('fs');
+            const show = (tag, f) => {
+              if (!fs.existsSync(f)) { console.log(tag + ': NO EVIDENCE FILE AT ' + f); return; }
+              const ev = JSON.parse(fs.readFileSync(f, 'utf8'));
+              for (const m of ev.measurements) {
+                const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+                console.log(tag + ' ' + m.name + ': n=' + m.iterations + ' budget=' + m.budgetMs +
+                  ' p50=' + m.p50.toFixed(3) + ' p95=' + m.p95.toFixed(3) +
+                  ' p99=' + m.p99.toFixed(3) + ' max=' + m.max.toFixed(3) +
+                  ' over=' + over + '/' + m.iterations);
+              }
+              const a = ev.measurements.find((m) => m.name.startsWith('A post'));
+              if (a) console.log(tag + ' A samples: ' + JSON.stringify(a.samplesMs));
+            };
+            show('EARLY(recap)', 'early-perf-evidence.json');
+            show('LATE', 'release/phase2-s8-performance-tier1.json');
+          "
       # TL-P4-S2-R3 — REQUIRED-CI CHAIN COMPOSITION. The P4-S2 gate is a DELTA
       # gate: it does not re-execute the ~50-minute P4-S1 predecessor inside
       # itself. The composition the Architecture Lock requires is satisfied
