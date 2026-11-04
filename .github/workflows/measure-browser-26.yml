@@ -1,0 +1,121 @@
+# MEASUREMENT ONLY -- THIS FILE AND THIS BRANCH ARE NEVER MERGED.
+#
+# The question: which is the first playwright-core that installs Chromium on
+# the image `ubuntu-latest` now resolves to, measured as ubuntu-26.04 on runs
+# 41765693794 and 41768239220. The claim from the release notes is 1.61; this
+# file is how that claim gets measured instead of relayed.
+#
+# The job below is `ci.yml`’s own `browser` job, copied by parsing that file
+# rather than retyped: the same eleven steps, the same gates, the same red
+# proofs. Two things differ, and only these two: `needs: workspaces` is
+# dropped (it is an ordering gate -- the job downloads no artifact and no step
+# reads a `needs.*` expression, measured), and `runs-on` is `ubuntu-latest` so
+# that the subject of the measurement is the new image.
+#
+# `ci.yml` triggers on push only for `main` and `phase/**`, and on any pull
+# request. This branch is neither and has no PR, so nothing else runs here:
+# the browser job alone, which is what was asked for.
+name: measure-browser-26
+'on':
+  push:
+    branches:
+      - measure/browser-26-04
+concurrency:
+  group: measure-browser-26-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build the library packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Build the merchant API and the production web app
+        run: |
+          npm run build -w @daftar/api
+          npm run build -w @daftar/web
+      - name: Install Chromium for the pinned playwright-core
+        run: |
+          if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            npx playwright-core install chromium
+          else
+            npx playwright-core install --with-deps chromium
+          fi
+      - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red
+      - name: POS browser red proof (planted overflow, raw key, console error, missing string)
+        run: npm run gate:browser -- --plant=all --steps=p4-pos-till,p4-pos-sale,p4-pos-discount,p4-pos-close --out=release/browser-red-proof-pos
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg-red-pos
+      - name: Browser gate (ar/en/tr x phone/tablet/desktop)
+        run: npm run gate:browser
+        env:
+          BROWSER_PG_DIR: ${{ runner.temp }}/browser-pg
+      - name: Keep the screenshots and results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-gate-evidence
+          path: |
+            release/browser
+            release/browser-red-proof
+          retention-days: 30
