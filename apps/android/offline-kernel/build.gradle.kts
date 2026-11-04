@@ -41,6 +41,33 @@ android {
     }
 }
 
+/**
+ * Where the source-sweeping suites look for the kernel's own text.
+ *
+ * Five suites read the kernel as TEXT -- `CommandEffectsTest`,
+ * `CrashSafetyTest`, `QueueModelCheckTest`, `RecoveryTest` and
+ * `ReentryAndRetentionTest` -- because the laws they defend are not ones a
+ * type system can observe: no defaulted `EffectClass`, no fallback to
+ * `BENIGN`, no refusal code that no sweep can see. Each reads its root from
+ * the system property `p7.src` and falls back to `prep/phase7/kotlin/src`,
+ * the path the kernel lived at BEFORE P7-01 promoted it. Nothing set the
+ * property, that path does not exist in this repository, and every one of
+ * those sweeps therefore found no subject and failed closed -- by design:
+ * "an empty file list is a FAILURE, never a quiet pass".
+ *
+ * Measured on the first run that ever executed them (run 41749455670, job
+ * 126310932907): 119 tests completed, 9 failed, and all nine are those
+ * sweeps. The promotion moved the files and could not move a property it
+ * had no way to discover was unset until the module compiled.
+ *
+ * The root is the promoted main source set, as an absolute path: the test
+ * JVM's working directory is the module directory, and a relative root
+ * would make the sweeps depend on it.
+ */
+tasks.withType<Test>().configureEach {
+    systemProperty("p7.src", file("src/main/java").absolutePath)
+}
+
 dependencies {
     // The suites are written against `kotlin.test`, not against JUnit's own
     // annotations: all ten import `kotlin.test.Test`. On the JVM that facade
