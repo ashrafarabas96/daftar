@@ -57,9 +57,57 @@ export class RedisRateLimiter implements RateLimiter {
     // prevents an unhandled 'error' event from crashing the process.
     this.redis.on('error', () => undefined);
   }
+
+  private connecting: Promise<unknown> | null = null;
+  private closed = false;
+
+  /**
+   * Complete the handshake before issuing a command — and be able to do it
+   * AGAIN after an outage.
+   *
+   * Without this, `lazyConnect` and `enableOfflineQueue: false` combine into a
+   * refusal of real traffic: `sendCommand` sees status `wait`, starts
+   * `connect()`, and computes `writable` in the SAME TICK, when `this.stream`
+   * does not exist yet (ioredis `built/Redis.js:327-366`). The command is
+   * rejected with "Stream isn't writeable and enableOfflineQueue options is
+   * false", `guarded` reads that as a backend failure, and a login or a
+   * password reset is answered 503 while Redis is perfectly healthy. Measured
+   * against a real RESP handshake in
+   * `tests-unit/td24-redis-first-command.test.ts`: the refusals last as long
+   * as the handshake does, so a deploy refuses a RUN of requests, not one.
+   *
+   * A finished attempt is cleared rather than kept as a standing liveness
+   * claim, and a client in `end` or `wait` is dialled again — `connect()`
+   * rejects only from `connecting`/`connect`/`ready` (`built/Redis.js:103-110`).
+   * Without the re-dial, ioredis's retry budget (which it resets only on
+   * `ready`) would leave the client in `end` for the life of the process and
+   * every later request would be refused, which is the same defect with a
+   * longer fuse.
+   *
+   * The offline queue stays OFF: a genuine outage must still surface as an
+   * error on the command rather than hang a request behind a reconnect, and
+   * `take` must still fail closed (§67).
+   */
+  private async ready(): Promise<void> {
+    if (this.closed) throw new Error('the rate limiter was closed and must not reconnect');
+    if (this.redis.status === 'ready') return;
+    if (this.redis.status === 'end' || this.redis.status === 'wait') this.connecting = null;
+    this.connecting ??= this.redis.connect().then(
+      () => {
+        this.connecting = null;
+      },
+      (e: unknown) => {
+        this.connecting = null;
+        throw e;
+      },
+    );
+    await this.connecting;
+  }
+
   /** Wrap backend failures into the fail-closed error (RateLimitError passes through). */
   private async guarded<T>(fn: () => Promise<T>): Promise<T> {
     try {
+      await this.ready();
       return await fn();
     } catch (e) {
       if (e instanceof RateLimitError) throw e;
@@ -90,13 +138,23 @@ export class RedisRateLimiter implements RateLimiter {
   }
   async healthCheck(): Promise<boolean> {
     try {
+      // Readiness asked this BEFORE the handshake and read `false` from a
+      // healthy backend, which is the same defect wearing a different answer:
+      // a process could report itself not ready for as long as it took to
+      // connect.
+      await this.ready();
       return (await this.redis.ping()) === 'PONG';
     } catch {
       return false;
     }
   }
   async close(): Promise<void> {
-    await this.redis.quit();
+    this.closed = true;
+    // `quit` on a client that never connected rejects — a limiter that was
+    // built and never used must still close cleanly, and `disconnect` leaves
+    // no reconnect timer behind either way.
+    if (this.redis.status === 'ready') await this.redis.quit().catch(() => undefined);
+    else this.redis.disconnect();
   }
 }
 
