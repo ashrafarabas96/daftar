@@ -17,7 +17,7 @@ async function expectRefusal(fn: () => Promise<unknown> | unknown, code: string)
 const request = (overrides: Partial<ChargeRequest> = {}): ChargeRequest => ({
   businessId: 'b-1',
   amount: { amountMinor: 30_000n, currency: 'ILS' },
-  idempotencyKey: 'charge-2026-04-b1-attempt-1',
+  idempotencyKey: 'idem-test-0001',
   instrumentRef: 'card_ok',
   ...overrides,
 });
