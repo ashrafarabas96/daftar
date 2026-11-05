@@ -68,6 +68,7 @@ const ALLOWED_NUMERIC: Readonly<Record<string, string>> = {
   '11': 'a month index in the 30/31-day table',
   '12': 'the twelve months of a year',
   '18n': 'the exponent of the money cap, matching MAX_MONEY_MINOR',
+  '24': 'the hours in a day, in MAX_DUNNING_WINDOW_HOURS — the bound is stated in hours because a dunning policy is',
   '28': 'February in a common year',
   '29': 'February in a leap year',
   '30': 'a 30-day month',

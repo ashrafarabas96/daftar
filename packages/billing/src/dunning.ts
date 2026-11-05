@@ -36,9 +36,35 @@
  * the effective one from it.
  */
 import { refuse } from './errors';
-import { SUBSCRIPTION_STATES, type SubscriptionState } from './types';
+import { monthsPerInterval } from './period';
+import { BILLING_INTERVALS, SUBSCRIPTION_STATES, type SubscriptionState } from './types';
 
 const HOUR_MS = 3_600_000;
+
+/**
+ * The longest dunning window this module will accept, in whole hours.
+ *
+ * B2. Every value in a policy was checked for being a non-negative whole
+ * number and for strictly increasing, and NOTHING bounded it above. The
+ * instants are then formatted — `new Date(periodEndMs + offset * HOUR_MS)` —
+ * so a policy of `1e13` hours left this module through a `RangeError: Invalid
+ * time value` carrying no `billing.*` code at all, which a caller handling
+ * `BillingError` does not handle; and in the branch where no further attempt
+ * is scheduled, the same policy returned `grace_period` with
+ * `exhausted: true` instead, a window with no meaning accepted in silence.
+ *
+ * The bound is DERIVED from the subscription policy rather than chosen: a
+ * dunning window may not outlast the longest billing cycle the plans support,
+ * because a merchant cannot be in collection for one period past the start of
+ * the period after next. `BILLING_INTERVALS` is `['month', 'year']`, so that
+ * is twelve months, over-approximated at 31 days each — a bound that depends
+ * on which year it falls in is not a bound.
+ *
+ * Adding a longer interval to `BILLING_INTERVALS` without revisiting this is
+ * a NAMED failure in `test/dunning-window-bound.test.ts`, not a quietly
+ * shorter window.
+ */
+export const MAX_DUNNING_WINDOW_HOURS = Math.max(...BILLING_INTERVALS.map((interval) => monthsPerInterval(interval))) * 31 * 24;
 
 /**
  * The collection outcomes a recorded attempt can have.
@@ -189,10 +215,18 @@ function assertPolicy(policy: DunningPolicy | undefined): DunningPolicy {
     if (offset <= previous) {
       refuse('billing.dunning_policy_invalid', 'retry offsets must strictly increase, or two attempts fall due together', { attemptNo: i + 1 });
     }
+    if (offset > MAX_DUNNING_WINDOW_HOURS) {
+      // Per value, not on the last one alone: the offsets are only known to
+      // increase, and a bound checked once is a bound on one number.
+      refuse('billing.dunning_policy_invalid', 'a retry offset may not outlast the longest supported billing cycle', { attemptNo: i + 1 });
+    }
     previous = offset;
   }
   if (!Number.isInteger(policy.graceHours) || policy.graceHours < 0) {
     refuse('billing.dunning_policy_invalid', 'the grace window must be a non-negative whole number of hours');
+  }
+  if (policy.graceHours > MAX_DUNNING_WINDOW_HOURS) {
+    refuse('billing.dunning_policy_invalid', 'a grace window may not outlast the longest supported billing cycle');
   }
   if (policy.graceHours < previous) {
     refuse('billing.dunning_policy_invalid', 'a grace window shorter than the last retry would suspend a merchant the policy still means to retry');
