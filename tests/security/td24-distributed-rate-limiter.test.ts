@@ -72,8 +72,10 @@
  *           the two replicas: the number of non-429 answers must be exactly
  *           `LIMIT`. Today it is `2 * LIMIT`, which is the TD-24 sentence as
  *           a number.
- *   TD24-E  CONCURRENCY. The same magnitude under `Promise.all` rather than
- *           in sequence, so the answer cannot come from the ordering.
+ *   TD24-E  CONCURRENCY. The same magnitude with requests in flight at once
+ *           rather than in sequence, so the answer cannot come from the
+ *           ordering. The width of a wave is bounded for a measured reason
+ *           that is about `supertest`, not about the store — see `WAVE`.
  *   TD24-F  NEGATIVE CONTROL for E. The same concurrent shape with a
  *           DIFFERENT client per replica admits `2 * LIMIT` — so E's number
  *           is a limit being shared and not a connection pool saturating.
@@ -103,7 +105,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import { createTestApp, type TestApp } from '../helpers/test-app';
-import { RedisThrottlerStorage } from '../../apps/api/src/infra/rate-limit-store';
 
 /**
  * The production limit, read from `apps/api/src/app/runtime.ts:117`
@@ -114,6 +115,14 @@ import { RedisThrottlerStorage } from '../../apps/api/src/infra/rate-limit-store
 const LIMIT = 300;
 const ROUTE = '/v1/me/businesses';
 const TOO_MANY = 429;
+/**
+ * `RedisThrottlerStorage.kind` (`rate-limit-store.ts:250`), the value
+ * readiness reports for a shared store. A renamed kind does NOT silently read
+ * as "no shared store configured": the configuration/report check in
+ * `beforeAll` refuses the run by name, because `REDIS_URL` would be set while
+ * nothing matched here.
+ */
+const SHARED_KIND = 'redis';
 
 /** A fresh client address per case, so no case can spend another's allowance. */
 let nextClient = 1;
@@ -141,6 +150,41 @@ function admitted(statuses: readonly number[]): number {
 }
 
 /**
+ * The width of a concurrent wave, and why it is not `LIMIT * 2`.
+ *
+ * MEASURED, and the measurement is about the harness, not the subject: 600
+ * `supertest` calls issued at once against one application reset most of
+ * their own sockets. `createTestApp()` leaves the server UNLISTENING (it
+ * calls `app.init()`, never `listen`), so every `supertest` call starts its
+ * own `listen(0)` on that same server; 600 of them in one tick is a storm the
+ * server does not survive. Probed on a bare `node:http` server with no Nest
+ * and no database: 600-at-once admitted 65 and rejected 535 with
+ * `Error: read ECONNRESET`, while waves of 25 admitted 600 of 600. That is
+ * the same error TD24-E and TD24-F failed with on CI in runs 41848410636 and
+ * 42059258777 — so those two cases have never measured the subject at all.
+ *
+ * A wave is still genuinely concurrent, and concurrency is all TD24-E claims:
+ * 25 requests in flight at once, alternating replicas, is a window in which a
+ * read-then-write store overcounts and an atomic one does not. Widening the
+ * wave to the whole run would only reinstate a harness failure, and a case
+ * that cannot run proves nothing.
+ */
+const WAVE = 25;
+
+/**
+ * `calls` run concurrently in waves of `WAVE`, and every status is returned.
+ * A rejection is NOT swallowed: a reset socket would otherwise be counted as
+ * an admitted request and inflate the total silently.
+ */
+async function inWaves(calls: readonly (() => Promise<number>)[]): Promise<number[]> {
+  const out: number[] = [];
+  for (let i = 0; i < calls.length; i += WAVE) {
+    out.push(...(await Promise.all(calls.slice(i, i + WAVE).map((call) => call()))));
+  }
+  return out;
+}
+
+/**
  * Whether THIS environment configures a shared store, read off the running
  * application rather than off an environment variable.
  *
@@ -160,6 +204,66 @@ function admitted(statuses: readonly number[]): number {
  */
 let sharedStore = false;
 
+/**
+ * The store the GUARD holds, read from WHAT THE APPLICATION ITSELF REPORTS.
+ *
+ * Three readings were tried and two were measured wrong, so the comment
+ * records all three rather than only the survivor:
+ *
+ *   1. `app.get(ThrottlerStorage)` on the ROOT. WRONG, and it cost a CI run.
+ *      The store is a provider of `AppModule` (`runtime.ts:556-565`) while
+ *      `createTestApp()` imports `AppModule` into a
+ *      `Test.createTestingModule` ROOT, which provides that token nowhere —
+ *      so the root answers with the `@Global()` `ThrottlerModule`'s own
+ *      in-process instance, a DIFFERENT object from the one the guard in
+ *      `AppModule` holds. With the `backend` job's real Redis attached this
+ *      probe read `ThrottlerStorageService` and set `sharedStore = false`,
+ *      while the application refused the spent client on replica B and
+ *      admitted exactly 300 of 600 — the shared behaviour. Both decisive
+ *      cases then failed against the wrong branch of their own assertion
+ *      (run 42059258777: "expected 429 to be 401", "expected 300 to be
+ *      600").
+ *   2. `app.select(AppModule).get(ThrottlerStorage, { strict: true })`, the
+ *      injector the guard does resolve from. ALSO WRONG: `select` cannot
+ *      reach a module registered DYNAMICALLY, which is what
+ *      `AppModule.register({ config })` is — it refuses with "does not exist
+ *      in current context". Measured in
+ *      `tests-unit/td24-limiter-store-law.test.ts` (TD24-LAW-D2) before it
+ *      could cost a second run; TD24-LAW-D there pins reading 1's defect.
+ *   3. THE PRODUCT'S OWN REPORT, used below. `/v1/health/ready` names the
+ *      store under `components.throttlerStore.kind` when the process holds a
+ *      shared one, and omits the component when it does not
+ *      (`platform.controller.ts:111-124`) — read through the same HTTP
+ *      surface everything else in this file is read through, with no
+ *      injector and no private field. It is also the only reading an
+ *      operator can make, so a disagreement between it and the behaviour
+ *      below is a defect in something a human already relies on.
+ *
+ * `null` is the reading "this process holds no shared store", which is how it
+ * keeps the library's own instance.
+ */
+async function reportedStoreKind(replica: TestApp): Promise<string | null> {
+  const res = await replica.request.get('/v1/health/ready');
+  // 200 ready / 503 not-ready are both reports; anything else is not one.
+  if (res.status !== 200 && res.status !== 503)
+    throw new Error(`/v1/health/ready answered ${res.status}, so this suite cannot read which store the process holds`);
+  const body: unknown = res.body;
+  const components: unknown = typeof body === 'object' && body !== null ? (body as { components?: unknown }).components : undefined;
+  if (typeof components !== 'object' || components === null)
+    throw new Error('/v1/health/ready reported no components, so this suite cannot read which store the process holds');
+  // POSITIVE CONTROL on the probe itself: the component that is always
+  // there. Without it, a readiness shape that stopped reporting stores
+  // altogether would read as "no shared store configured" in every
+  // environment — the same silent inversion reading 1 produced.
+  if (!('database' in components))
+    throw new Error('/v1/health/ready no longer reports the database component, so this probe is reading a shape it does not know');
+  const store: unknown = (components as Record<string, unknown>)['throttlerStore'];
+  if (store === undefined) return null;
+  const kind: unknown = typeof store === 'object' && store !== null ? (store as { kind?: unknown }).kind : undefined;
+  if (typeof kind !== 'string' || kind.length === 0) throw new Error('/v1/health/ready reported a throttlerStore component with no kind');
+  return kind;
+}
+
 beforeAll(async () => {
   // TRUST_PROXY is the dev/test addressing mode (`client-ip.ts:15-21`);
   // production refuses it at startup, which is why it is safe to use here to
@@ -174,18 +278,37 @@ beforeAll(async () => {
   const overrides: Record<string, string> = { TRUST_PROXY: 'true', ...(sharedUrl ? { REDIS_URL: sharedUrl } : {}) };
   replicaA = await createTestApp({ configOverrides: overrides });
   replicaB = await createTestApp({ configOverrides: overrides });
-  // The class the guard actually holds, taken from the injector of a running
-  // app — not from `process.env`, which would be a claim about intent.
-  const storeA: unknown = replicaA.app.get<unknown>(ThrottlerStorage);
-  const storeB: unknown = replicaB.app.get<unknown>(ThrottlerStorage);
-  const inProcess = storeA instanceof ThrottlerStorageService && storeB instanceof ThrottlerStorageService;
-  const shared = storeA instanceof RedisThrottlerStorage && storeB instanceof RedisThrottlerStorage;
+  // What the store behind the general allowance is, taken from the running
+  // application's own report — not from `process.env`, which would be a
+  // claim about intent, and not from the root injector, which answers with a
+  // different object than the guard holds (see `reportedStoreKind`).
+  const kindA = await reportedStoreKind(replicaA);
+  const kindB = await reportedStoreKind(replicaB);
+  const shared = kindA === SHARED_KIND && kindB === SHARED_KIND;
+  // The in-process reading is BOTH halves: no store reported by either
+  // replica AND the library's own instance still answering at the root —
+  // the object `tests/performance/pos-s3-budgets.test.ts:549` clears.
+  const rootStore: unknown = replicaA.app.get<unknown>(ThrottlerStorage);
+  const inProcess = kindA === null && kindB === null && rootStore instanceof ThrottlerStorageService;
   if (!inProcess && !shared)
     throw new Error(
-      `neither replica's throttler store is a shape this suite knows (${storeA?.constructor.name} / ${storeB?.constructor.name}), so its two readings cannot be told apart`,
+      `neither replica reports a store shape this suite knows (reported: ${kindA ?? 'none'} / ${kindB ?? 'none'}, root: ${rootStore?.constructor.name}), so its two readings cannot be told apart`,
     );
+
+  // ── THE TWO-SIDED CHECK THAT MAKES A BLIND PROBE LOUD ──────────────────
+  // Intent and injector must agree. A probe that reads "no shared store" in
+  // an environment that configured one flips every assertion below to its
+  // opposite branch and fails with arithmetic that says nothing about the
+  // cause — which is precisely what run 42059258777 printed. Here it fails
+  // by its own name instead.
+  const configured = sharedUrl !== undefined && sharedUrl !== '';
+  if (shared !== configured)
+    throw new Error(
+      `the configuration and the application disagree about the store behind the general allowance: REDIS_URL is ${configured ? 'set' : 'absent'} while /v1/health/ready reports ${kindA ?? 'no shared store'} — this suite refuses to assert either reading until they agree`,
+    );
+
   sharedStore = shared;
-  console.info('[TD-24] throttler store', JSON.stringify({ kind: storeA?.constructor.name, sharedStore }));
+  console.info('[TD-24] throttler store', JSON.stringify({ reported: kindA, root: rootStore?.constructor.name, configured, sharedStore }));
 }, 180_000);
 
 afterAll(async () => {
@@ -244,7 +367,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
 
   it('TD24-E: the same total holds under concurrency, not only in sequence', async () => {
     const client = freshClient();
-    const statuses = await Promise.all(Array.from({ length: LIMIT * 2 }, (_, i) => hit(i % 2 === 0 ? replicaA : replicaB, client)));
+    const statuses = await inWaves(Array.from({ length: LIMIT * 2 }, (_, i) => () => hit(i % 2 === 0 ? replicaA : replicaB, client)));
     expect(statuses.length).toBe(LIMIT * 2);
     expect(admitted(statuses)).toBe(sharedStore ? LIMIT : LIMIT * 2);
   }, 55_000);
@@ -252,7 +375,7 @@ describe('TD-24 — the general allowance across two replicas of one database', 
   it('TD24-F (negative control for E): one client per replica admits both allowances', async () => {
     const clientA = freshClient();
     const clientB = freshClient();
-    const statuses = await Promise.all(Array.from({ length: LIMIT * 2 }, (_, i) => (i % 2 === 0 ? hit(replicaA, clientA) : hit(replicaB, clientB))));
+    const statuses = await inWaves(Array.from({ length: LIMIT * 2 }, (_, i) => () => (i % 2 === 0 ? hit(replicaA, clientA) : hit(replicaB, clientB))));
     expect(statuses.length).toBe(LIMIT * 2);
     // Two clients, two allowances: the shared store must not merge them, and
     // TD24-E's number is therefore a limit and not a saturated pool.

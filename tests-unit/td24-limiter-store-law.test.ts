@@ -34,6 +34,15 @@
  *   TD24-LAW-B  POSITIVE CONTROL: a development config must resolve to
  *               exactly that in-process store.
  *
+ * And a third half, added after a measurement cost a CI run: WHICH INJECTOR
+ * ANSWERS. TD24-LAW-D/E pin the fact the two cases above depend on — the
+ * module-local provider is what a consumer in that module receives, while the
+ * application ROOT answers with the `@Global()` module's own instance — so
+ * any probe that reads the store off a running app reads the right one.
+ * `tests/security/td24-distributed-rate-limiter.test.ts` read the ROOT, drew
+ * the opposite conclusion from a real Redis, and asserted both of its
+ * decisive cases against the wrong branch (run 42059258777).
+ *
  * B is what makes A a measurement. A rule that holds for every input is a
  * rule about nothing, and it would also be satisfied by a broken import or a
  * config loader that throws — both of which B catches in the same run. B is
@@ -61,8 +70,9 @@
  * as on CI.
  */
 import { describe, expect, it } from 'vitest';
-import { ThrottlerStorage } from '@nestjs/throttler';
-import type { FactoryProvider } from '@nestjs/common';
+import { ThrottlerModule, ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
+import { Inject, Injectable, Module, type DynamicModule, type FactoryProvider } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
 import { loadConfig, type AppConfig } from '../apps/api/src/config';
 import { httpProviders, NO_MERCHANT_CONTEXT } from '../apps/api/src/app/runtime';
 import type { RateLimiter } from '../apps/api/src/infra/redis';
@@ -186,5 +196,126 @@ describe('TD-24 law — the general allowance may not be counted in the process 
     // no-op.
     expect(configuredThrottlerStore(config)).toBe(null);
     expect(configuredLimiterKind(config)).toBe('memory-development-only');
+  });
+});
+
+/**
+ * ── THE INJECTOR LAW (TD24-LAW-D/E) ──────────────────────────────────────
+ *
+ * The shape below is `createTestApp()`'s shape, reduced to what the question
+ * needs: a ROOT module that provides no `ThrottlerStorage` and imports a
+ * feature module that does, with `ThrottlerModule` — which is `@Global()` —
+ * imported inside the feature module exactly as `httpImports` imports it.
+ *
+ * No database, no network, no HTTP: `NestFactory.createApplicationContext`
+ * builds the injector and nothing else, so this runs on the Windows
+ * development host.
+ */
+const LOCAL_STORE: ThrottlerStorage = {
+  increment: () => Promise.resolve({ totalHits: 1, timeToExpire: 60, isBlocked: false, timeToBlockExpire: 0 }),
+};
+
+/** A consumer in the SAME module as the store provider — the guard's position. */
+@Injectable()
+class StoreConsumer {
+  constructor(@Inject(ThrottlerStorage) readonly store: ThrottlerStorage) {}
+}
+
+const THROTTLERS = { throttlers: [{ ttl: 60_000, limit: 300 }] };
+
+/** The feature module WITH a module-local store: the shared-store composition. */
+@Module({ imports: [ThrottlerModule.forRoot(THROTTLERS)], providers: [{ provide: ThrottlerStorage, useValue: LOCAL_STORE }, StoreConsumer] })
+class WithLocalStore {}
+
+/** The same module WITHOUT one: the composition that keeps the library's instance. */
+@Module({ imports: [ThrottlerModule.forRoot(THROTTLERS)], providers: [StoreConsumer] })
+class WithoutLocalStore {}
+
+@Module({ imports: [WithLocalStore] })
+class RootOverLocal {}
+
+/**
+ * The same composition through a DYNAMIC module, because that is the shape
+ * `createTestApp()` actually builds: `AppModule.register({ config })`
+ * imported into a `Test.createTestingModule` root.
+ *
+ * MEASURED HERE, and it decided how the integration suite reads the store:
+ * `select` CANNOT reach a module registered dynamically — it refuses with
+ * "does not exist in current context". So there is no injector probe
+ * available to that suite at all, and it reads the store the product itself
+ * reports on `/v1/health/ready` instead. Asserted rather than assumed,
+ * because a probe that threw here would fail that suite's `beforeAll` and
+ * take all six cases with it.
+ */
+@Module({})
+class DynamicFeature {
+  static register(): DynamicModule {
+    return {
+      module: DynamicFeature,
+      imports: [ThrottlerModule.forRoot(THROTTLERS)],
+      providers: [{ provide: ThrottlerStorage, useValue: LOCAL_STORE }, StoreConsumer],
+    };
+  }
+}
+
+@Module({ imports: [DynamicFeature.register()] })
+class RootOverDynamic {}
+
+@Module({ imports: [WithoutLocalStore] })
+class RootOverNone {}
+
+describe('TD-24 law — which injector answers for the store the guard holds', () => {
+  it('TD24-LAW-D: the module-local provider is what the guard receives, and the ROOT answers with a different object', async () => {
+    const context = await NestFactory.createApplicationContext(RootOverLocal, { logger: false });
+    try {
+      // THE SUBJECT: a consumer in the module receives the module's provider,
+      // even though `ThrottlerModule` is `@Global()`.
+      expect(context.select(WithLocalStore).get(StoreConsumer).store).toBe(LOCAL_STORE);
+
+      // THE TRAP, asserted so it cannot be forgotten again: the ROOT answers
+      // with the global module's own in-process instance — a DIFFERENT
+      // object from the one the consumer holds.
+      const root: unknown = context.get<unknown>(ThrottlerStorage);
+      expect(root).toBeInstanceOf(ThrottlerStorageService);
+      expect(root).not.toBe(LOCAL_STORE);
+
+      // THE PROBE the integration suite uses: it agrees with the consumer.
+      expect(context.select(WithLocalStore).get<ThrottlerStorage>(ThrottlerStorage, { strict: true })).toBe(LOCAL_STORE);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('TD24-LAW-D2: a DYNAMIC module cannot be selected, so no injector probe is available to the integration suite', async () => {
+    const context = await NestFactory.createApplicationContext(RootOverDynamic, { logger: false });
+    try {
+      // The composition is sound — the consumer in the dynamic module does
+      // hold the module-local store, exactly as in TD24-LAW-D. POSITIVE
+      // CONTROL, so the refusal below cannot be read as a broken fixture.
+      expect(context.get(StoreConsumer).store).toBe(LOCAL_STORE);
+
+      // And it is UNREACHABLE by `select`, which is the whole reason
+      // `tests/security/td24-distributed-rate-limiter.test.ts` reads the
+      // store off `/v1/health/ready` instead of out of an injector.
+      expect(() => context.select(DynamicFeature)).toThrow(/does not exist in current context/);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it('TD24-LAW-E (negative control): with no module-local provider the probe reads unprovided, and the consumer holds the library instance', async () => {
+    const context = await NestFactory.createApplicationContext(RootOverNone, { logger: false });
+    try {
+      // Without this control, TD24-LAW-D would also pass against a `select`
+      // that answered with the global store for everything asked of it — and
+      // the integration suite's two readings could not be told apart.
+      expect(() => context.select(WithoutLocalStore).get<ThrottlerStorage>(ThrottlerStorage, { strict: true })).toThrow();
+
+      const held: unknown = context.select(WithoutLocalStore).get(StoreConsumer).store;
+      expect(held).toBeInstanceOf(ThrottlerStorageService);
+      expect(held).toBe(context.get<unknown>(ThrottlerStorage)); // the same instance the root answers with
+    } finally {
+      await context.close();
+    }
   });
 });
