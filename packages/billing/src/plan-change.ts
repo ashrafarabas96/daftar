@@ -48,7 +48,7 @@
 import { composeSubscriptionInvoice, type ComposedSubscriptionInvoice, type SubscriptionInvoiceLine } from './invoice';
 import { proratePlanChange, type ProrationInput, type ProrationResult } from './proration';
 import { refuse } from './errors';
-import type { CreditAdjustment } from './credit';
+import { foldCreditBalance, type CreditAdjustment } from './credit';
 
 export const PLAN_CHANGE_OUTCOMES = ['invoice', 'credit', 'nothing'] as const;
 export type PlanChangeOutcome = (typeof PLAN_CHANGE_OUTCOMES)[number];
@@ -72,6 +72,19 @@ export interface PlanChangeInput extends ProrationInput {
   readonly adjustmentId: string;
   /** Why the credit exists, if one is produced. Mandatory on the adjustment. */
   readonly creditReason: string;
+  /**
+   * The business's credit ledger as the database returns it
+   * (`ORDER BY created_at, id`). MANDATORY, and not defaulted to empty.
+   *
+   * DR-97: a credit ledger is scoped to ONE currency and this slice has no
+   * rate, no expiry and no reversal, so a plan change into another currency
+   * leaves whatever balance exists unspendable for good. The change is
+   * therefore refused while such a balance exists, which means this function
+   * has to be able to SEE the balance. A caller that cannot supply the ledger
+   * is a caller that does not know whether it is stranding money, and an empty
+   * default would read exactly like a business with no credit.
+   */
+  readonly ledger: readonly CreditAdjustment[];
 }
 
 export type PlanChangeBilling =
@@ -103,7 +116,31 @@ export function composePlanChangeBilling(input: PlanChangeInput): PlanChangeBill
     refuse('billing.credit_reason_required', 'a plan change must state why a credit it may create exists');
   }
 
+  if (!Array.isArray(input.ledger as unknown)) {
+    refuse('billing.payload_invalid', 'a plan change must carry the credit ledger it could strand');
+  }
+
   const proration = proratePlanChange(input);
+
+  // DR-97, prevention at the origin. The proration's own refusals come first
+  // on purpose: a change whose two prices disagree about currency is a payload
+  // the caller got wrong, and it is refused before anything reads a balance.
+  //
+  // The ledger's currency is read from the LEDGER, never assumed to be the
+  // plan's: that is the whole point. The fold is then asked for the balance in
+  // the ledger's own currency, so every rule it owns -- one business, one
+  // currency, append-only order, per-grant remainders -- still refuses by its
+  // own name, and this law neither restates nor relaxes them.
+  const ledgerCurrency = input.ledger[0]?.currency;
+  if (ledgerCurrency !== undefined) {
+    const held = foldCreditBalance(input.ledger, { businessId: input.businessId, currency: ledgerCurrency });
+    if (held.balanceMinor > 0n && ledgerCurrency !== proration.currency) {
+      refuse('billing.subscription_currency_locked_by_credit', 'this business holds unspent credit in another currency, and a plan change may not strand it', {
+        businessId: input.businessId,
+        currency: ledgerCurrency,
+      });
+    }
+  }
 
   if (proration.netMinor === 0n) {
     return { outcome: 'nothing', proration };

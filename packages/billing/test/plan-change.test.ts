@@ -32,6 +32,11 @@ function base(fromMinor: bigint, toMinor: bigint): PlanChangeInput {
     toPlanKey: 'PLAN_PRO',
     adjustmentId: 'adj-0001',
     creditReason: 'mid-period downgrade proration',
+    // DR-97: the ledger a plan change could strand is a mandatory input. These
+    // cases are about the SIGN of a proration, so they hand it an empty one —
+    // `test/plan-change-currency-lock.test.ts` is where a non-empty ledger and
+    // its refusal are the subject.
+    ledger: [],
   };
 }
 

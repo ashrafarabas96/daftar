@@ -1227,6 +1227,10 @@ const REFUSED_FILE_NOT_PUBLISHED = 'REFUSED-FILE-NO-PUBLISHER-BYTE-IN-THE-CLOSUR
 const REFUSED_PACKAGE_NAMED_NOT_INSTALLED = 'REFUSED-PACKAGE-NAMED-BUT-NOT-INSTALLED';
 const REFUSED_INTEGRITY_NOT_SHA512 = 'REFUSED-INTEGRITY-ALGORITHM-NOT-SHA512';
 const REFUSED_LOCKFILE_ROW_NOT_CLASSIFIED = 'REFUSED-LOCKFILE-ROW-NOT-CLASSIFIED';
+// DR-99: a row of the pin that sits inside a NESTED install and names no
+// lockfile row of its own. Its digest would then say only that the disk agrees
+// with itself, which is the one thing a pin must not be allowed to mean.
+const REFUSED_NESTED_ROW_NOT_DECLARED = 'REFUSED-NESTED-PIN-ROW-NOT-DECLARED';
 
 /**
  * THE PROGRAM THE RUNNER IS RUNNING, derived from the chain rather than from a
@@ -3755,7 +3759,7 @@ describe('every written invocation of the pack tools is isolated', () => {
     // A versioned spelling that is NOT this machine's minor stays
     // unclassifiable whatever flags it carries -- the negative control that
     // keeps the derivation from becoming an exemption.
-    expect(offencesIn('fixture', 'python9.99 -I tools/manifest-digests.py --check'), 'a foreign minor must not become classifiable').toHaveLength(1);
+    expect(offencesIn('fixture', 'python3.99 -I tools/manifest-digests.py --check'), 'a foreign minor must not become classifiable').toHaveLength(1);
     expect(offencesIn('fixture', 'python3 -I \\\n    tools/manifest-digests.py --check')).toStrictEqual([]);
     // And it must NOT red on the forms that are correct, or the law would be
     // unsatisfiable and someone would delete it.
@@ -5414,6 +5418,7 @@ describe('every written invocation of the pack tools is isolated', () => {
       lockfile_integrity: string;
       root: string;
       files: Record<string, string>;
+      nested?: readonly { row_prefix: string; lockfile_key: string; package: string; version: string; integrity: string }[];
     };
 
     // The pin moves in the commit that moves the lockfile, and this is what
@@ -5428,6 +5433,84 @@ describe('every written invocation of the pack tools is isolated', () => {
       [locked?.version, locked?.integrity],
       `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: package-lock.json holds ${JSON.stringify(locked)} for ${pin.lockfile_key}, and tools/runner-bytes.json was pinned against ${pin.version} / ${pin.lockfile_integrity}. A pin against a package the lockfile no longer names is a pin against nothing`,
     ).toStrictEqual([pin.version, pin.lockfile_integrity]);
+
+    // DR-99, THE NESTED INSTALL. Registering this package as a workspace gave
+    // its 4.1.11 runner a nested `@vitest/mocker` the hoisted tree does not
+    // have, and the census of the pinned root grew by 35 rows. A digest taken
+    // from the disk and compared with a pin this repository wrote says only
+    // that the disk agrees with itself, so every nested row is held to the
+    // LOCKFILE and to the PUBLISHER: the row the lockfile carries for that
+    // package, and the tarball its own sha512 integrity addresses in the npm
+    // cache. The owner's condition was "any row that does not match the lock
+    // stops the work", and this is that condition as code rather than as a
+    // sentence in a commit message.
+    const nested = pin.nested ?? [];
+    const nestedRows = Object.keys(pin.files).filter((row) => row === 'node_modules' || row.startsWith('node_modules/') || row.includes('/node_modules/'));
+    expect(
+      [nested.length > 0, nestedRows.length],
+      `${REFUSED_NESTED_ROW_NOT_DECLARED}: this package installs a nested dependency of its runner, so the pin must declare at least one and the row set must hold its rows. A control that measures an EMPTY set measures nothing`,
+    ).toStrictEqual([true, 35]);
+    for (const row of nestedRows) {
+      const inside = nested.filter((entry) => row === entry.row_prefix || row.startsWith(`${entry.row_prefix}/`));
+      // `node_modules` and `node_modules/@vitest` are the ANCESTOR directories
+      // of a declared prefix, not rows of a package: they are accepted as
+      // directories and nothing else, so a FILE appearing beside a nested
+      // package -- the shape an attacker would use -- is undeclared and
+      // refuses.
+      const ancestor = nested.some((entry) => entry.row_prefix.startsWith(`${row}/`)) && pin.files[row] === 'DIR';
+      expect(
+        inside.length === 1 || ancestor,
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned row ${JSON.stringify(row)} sits inside a nested install and ${inside.length} declared prefix(es) cover it. A row nobody declared is a row whose only oracle is the disk it was read from`,
+      ).toBe(true);
+    }
+    const cacheRoot = join(homedir(), '.npm', '_cacache');
+    for (const entry of nested) {
+      const lockedNested = lock.packages[entry.lockfile_key];
+      expect(
+        [lockedNested?.version, lockedNested?.integrity],
+        `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: package-lock.json holds ${JSON.stringify(lockedNested)} for ${entry.lockfile_key}, and the pin declares ${entry.version} / ${entry.integrity}`,
+      ).toStrictEqual([entry.version, entry.integrity]);
+      const installedManifest = join(repo, pin.root, entry.row_prefix, 'package.json');
+      expect(
+        existsSync(installedManifest),
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: ${installedManifest} is not there, so the declaration describes a package this tree does not have`,
+      ).toBe(true);
+      const manifest = JSON.parse(readFileSync(installedManifest, 'utf8')) as { name?: string; version?: string };
+      expect(
+        [manifest.name, manifest.version],
+        `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: the installed manifest under ${entry.row_prefix} reads ${JSON.stringify([manifest.name, manifest.version])}, and the lockfile row the pin names is ${entry.package}@${entry.version}`,
+      ).toStrictEqual([entry.package, entry.version]);
+
+      // THE PUBLISHER'S BYTES, addressed by the integrity the lockfile carries
+      // -- so the comparison is with the lock and not with the disk alone. An
+      // absent cache entry REFUSES; it does not become a package passed over,
+      // which is the same rule the closure arm follows.
+      const sha512 = entry.integrity.split(/\s+/).find((piece) => piece.startsWith('sha512-'));
+      expect(
+        typeof sha512,
+        `${REFUSED_INTEGRITY_NOT_SHA512}: ${entry.lockfile_key} carries ${JSON.stringify(entry.integrity)}, which holds no sha512 entry, and a weaker digest is one an attacker can meet`,
+      ).toBe('string');
+      const encoded = (sha512 as string).slice('sha512-'.length);
+      const hex = Buffer.from(encoded, 'base64').toString('hex');
+      const tarball = join(cacheRoot, 'content-v2', 'sha512', hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
+      expect(
+        existsSync(tarball),
+        `${REFUSED_PUBLISHER_BYTES_UNAVAILABLE}: no cached tarball for ${entry.lockfile_key} at ${tarball}. The publisher's bytes are the oracle and their ABSENCE is a refusal`,
+      ).toBe(true);
+      const raw = readFileSync(tarball);
+      expect(
+        createHash('sha512').update(raw).digest('base64'),
+        `${REFUSED_CACHE_BYTES_DISAGREE}: ${tarball} does not hash to the integrity ${entry.lockfile_key} carries, so these are not the publisher's bytes`,
+      ).toBe(encoded);
+      const theirs = publishedMembers(raw);
+      const mine: Record<string, string> = {};
+      for (const [row, value] of Object.entries(pin.files))
+        if (row.startsWith(`${entry.row_prefix}/`) && value !== 'DIR') mine[row.slice(entry.row_prefix.length + 1)] = value;
+      expect(
+        mine,
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned rows under ${entry.row_prefix} are not, member for member, what ${entry.package}@${entry.version} publishes in the tarball its lockfile integrity addresses. 31 members were measured at the declaration, all 31 equal and none missing on either side`,
+      ).toStrictEqual(theirs);
+    }
 
     // The program is taken from the CHAIN, not from a path this file writes:
     // whatever the runner is running is what gets hashed.
@@ -5687,7 +5770,7 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     const lockRows = (
       JSON.parse(readFileSync(join(repo, 'package-lock.json'), 'utf8')) as {
-        packages: Record<string, { integrity?: string }>;
+        packages: Record<string, { integrity?: string; link?: boolean }>;
       }
     ).packages;
 
@@ -5712,11 +5795,49 @@ describe('every written invocation of the pack tools is isolated', () => {
     // excluded from this machine by its own os/cpu, which is what the reader
     // refuses on, and the count is asserted so the class cannot quietly
     // swallow a row that stops being excluded.
+    //
+    // DR-99: the third class was the LITERAL `8`, and registering this package
+    // as a workspace made the lockfile carry a NINTH link row
+    // (`node_modules/@daftar/billing`), so the equation read 413 + 86 + 8 = 507
+    // against 508 rows and refused a tree nothing was wrong with. The class is
+    // derived POSITIVELY from the rows now -- `link: true`, the same positive
+    // test the arm above uses, never "the rows left over" -- and it is also
+    // NAMED, so a tenth workspace moves this list in a reviewed commit instead
+    // of silently widening the remainder. Nothing is weakened: a row that is
+    // neither compared, nor named-and-excluded, nor a declared link row still
+    // breaks the equation by name.
+    const underNodeModules = Object.keys(lockRows).filter((key) => key.startsWith('node_modules/') || key.includes('/node_modules/'));
+    const linkRows = underNodeModules.filter((key) => lockRows[key]?.link === true).sort();
     expect(
-      excluded > 0 &&
-        excluded + compared + 8 === Object.keys(lockRows).filter((key) => key.startsWith('node_modules/') || key.includes('/node_modules/')).length,
-      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: ${compared} package(s) compared, ${excluded} named-but-excluded, and 8 workspace link rows must together be every row under node_modules, or this arm is measuring a subset it has not named`,
+      linkRows,
+      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the workspace link rows are the one class this accounting does not compare against a publisher, so they are named here. A workspace added or removed moves this list in the same commit`,
+    ).toStrictEqual([
+      'node_modules/@daftar/accounting',
+      'node_modules/@daftar/admin',
+      'node_modules/@daftar/api',
+      'node_modules/@daftar/billing',
+      'node_modules/@daftar/design-system',
+      'node_modules/@daftar/domain-core',
+      'node_modules/@daftar/inventory',
+      'node_modules/@daftar/shared-contracts',
+      'node_modules/@daftar/web',
+    ]);
+    expect(
+      excluded > 0 && excluded + compared + linkRows.length === underNodeModules.length,
+      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: ${compared} package(s) compared, ${excluded} named-but-excluded, and ${linkRows.length} workspace link rows must together be every one of the ${underNodeModules.length} rows under node_modules, or this arm is measuring a subset it has not named`,
     ).toBe(true);
+    // The row set reaches NESTED installs, which is a claim about this filter
+    // and therefore gets a positive control rather than a reading of it: the
+    // eight rows under `packages/billing/node_modules` -- seven of them one hop
+    // deep and one of them two (`.../vitest/node_modules/@vitest/mocker`) --
+    // are inside the set the accounting above is taken over.
+    expect(
+      underNodeModules.filter((key) => key.startsWith('packages/billing/node_modules/')).length,
+      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: a nested install is matched by \`includes('/node_modules/')\` and not by the \`startsWith\` half, so a filter that lost the second clause would measure a tree with a whole package tree outside it`,
+    ).toBe(8);
+    expect(underNodeModules, `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the deepest nested row must be in the set, two hops down`).toContain(
+      'packages/billing/node_modules/vitest/node_modules/@vitest/mocker',
+    );
 
     // The `.bin` bound, asserted as a FLOOR so it cannot pass by reaching
     // nothing: 25 shims on this tree, each of which must resolve inside a
@@ -5770,6 +5891,36 @@ describe('every written invocation of the pack tools is isolated', () => {
 
     const named = (where: string): string[] => publisherBytes(fixtureRoot, cacheRoot, {}).problems.map((problem) => problem.split(':')[0] + ` <- ${where}`);
     expect(named('an honest copy'), 'the honest control must refuse nothing, or this arm refuses everything and measures nothing').toStrictEqual([]);
+
+    // DR-99, THE FIRST OF THE TWO CONTROLS THE OWNER ASKED FOR: a NESTED
+    // package planted outside the lockfile must refuse. The walk recurses into
+    // `node_modules` under every package it passes and over
+    // `<group>/<workspace>/node_modules` as well, and both halves are provoked
+    // here rather than read -- the live tree now HAS a two-hop install
+    // (`packages/billing/node_modules/vitest/node_modules/@vitest/mocker`), so
+    // a recursion that stopped at one hop would have passed a whole package
+    // tree nobody resolved. The file walker skips `node_modules` by name, so
+    // the planted package is an ARRIVAL and nothing else: one refusal, named.
+    const plantedNested = join(fixtureRoot, borrowed, 'node_modules', 'planted-two-hops-in');
+    mkdirSync(plantedNested, { recursive: true });
+    writeFileSync(join(plantedNested, 'package.json'), '{"name":"planted-two-hops-in","version":"0.0.0"}\n');
+    expect(named('a package planted two hops in'), `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: a nested arrival must refuse`).toStrictEqual([
+      `${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a package planted two hops in`,
+    ]);
+    rmSync(join(fixtureRoot, borrowed, 'node_modules'), { recursive: true, force: true });
+    expect(named('the nested plant removed'), 'the control must come back to zero, or what it measured was something else').toStrictEqual([]);
+
+    // The same plant under a WORKSPACE's own `node_modules`, which is the
+    // shape `packages/billing` now is and the half of the walk the group loop
+    // reaches.
+    const plantedWorkspace = join(fixtureRoot, 'packages', 'a-workspace', 'node_modules', 'planted-in-a-workspace');
+    mkdirSync(plantedWorkspace, { recursive: true });
+    writeFileSync(join(plantedWorkspace, 'package.json'), '{"name":"planted-in-a-workspace","version":"0.0.0"}\n');
+    expect(named('a package planted in a workspace'), `${REFUSED_PACKAGE_NOT_IN_LOCKFILE}: a workspace-nested arrival must refuse`).toStrictEqual([
+      `${REFUSED_PACKAGE_NOT_IN_LOCKFILE} <- a package planted in a workspace`,
+    ]);
+    rmSync(join(fixtureRoot, 'packages'), { recursive: true, force: true });
+    expect(named('the workspace plant removed'), 'the control must come back to zero').toStrictEqual([]);
 
     const victim = join(fixtureRoot, borrowed, 'package.json');
     writeFileSync(victim, `${readFileSync(victim, 'utf8')}\n`);

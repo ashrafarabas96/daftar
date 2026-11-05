@@ -338,6 +338,9 @@ REFUSED_RUNNER_NOT_PINNED = "REFUSED-RUNNER-NOT-A-PINNED-PROGRAM"
 # witness.
 REFUSED_RUNNER_PROGRAM_UNPINNED = "REFUSED-RUNNER-PROGRAM-NOT-PINNED"
 REFUSED_RUNNER_PACKAGE_NOT_LOCKED = "REFUSED-RUNNER-PACKAGE-NOT-THE-LOCKED-ONE"
+# DR-99: a row of the pin inside a NESTED install that names no lockfile row of
+# its own, the same name the TypeScript reader uses for the same defect.
+REFUSED_NESTED_ROW_NOT_DECLARED = "REFUSED-NESTED-PIN-ROW-NOT-DECLARED"
 
 # ROUND 71, THE COORDINATOR'S R68-C-01 (P3), the one-hop limit. The pin above
 # covers the runner's own package and says so; a patch one package deeper ran
@@ -424,6 +427,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/no-hardcoded-pricing.test.ts": 9,
     "test/no-merchant-posting.test.ts": 10,
     "test/period.test.ts": 19,
+    "test/plan-change-currency-lock.test.ts": 7,
     "test/plan-change.test.ts": 11,
     "test/platform-authority-law.test.ts": 9,
     "test/proration-rounding-policy.test.ts": 4,
@@ -441,7 +445,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 331
+EXPECTED_TOTAL_CASES = 338
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -875,6 +879,62 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
         )
     elif locked is None and not problems:
         problems.append(f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {lock_path} has no row for {pin.get('lockfile_key')!r}")
+
+    # DR-99. The pinned root now holds a NESTED install of the runner's own
+    # dependency, so the row set grew by 35 rows. A digest read from the disk
+    # and compared with a pin this repository wrote says only that the disk
+    # agrees with itself: each nested package is DECLARED in the pin with the
+    # lockfile key, version and sha512 integrity of its own row, this reader
+    # checks those three against `package-lock.json` and against the installed
+    # manifest, and a pinned row under `node_modules/` that no declared prefix
+    # covers refuses by name.
+    #
+    # DECLARED DIVISION OF LABOUR: the comparison of the nested rows with the
+    # PUBLISHER's tarball is done by the TypeScript reader, which has the npm
+    # cache reader already; this one compares the lockfile row and the installed
+    # manifest. So a nested package whose version or integrity does not match
+    # the lock stops BOTH readers, and the byte comparison is carried by the one
+    # arm named here rather than claimed by both.
+    try:
+        lock_rows = json.loads(lock_path.read_text(encoding="utf-8")).get("packages", {})
+    except (json.JSONDecodeError, OSError):
+        lock_rows = {}
+    nested = pin.get("nested", [])
+    nested_rows = [row for row in pin.get("files", {}) if row == "node_modules" or row.startswith("node_modules/") or "/node_modules/" in row]
+    if nested_rows and not nested:
+        problems.append(
+            f"{REFUSED_NESTED_ROW_NOT_DECLARED}: the pin holds {len(nested_rows)} row(s) inside a nested install and "
+            "declares no nested package at all, so those rows have no oracle but the disk they were read from"
+        )
+    for row in nested_rows:
+        inside = [entry for entry in nested if row == entry.get("row_prefix") or row.startswith(str(entry.get("row_prefix")) + "/")]
+        ancestor = pin.get("files", {}).get(row) == "DIR" and any(str(entry.get("row_prefix")).startswith(row + "/") for entry in nested)
+        if len(inside) != 1 and not ancestor:
+            problems.append(
+                f"{REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned row {row!r} sits inside a nested install and "
+                f"{len(inside)} declared prefix(es) cover it"
+            )
+    for entry in nested:
+        locked_nested = lock_rows.get(entry.get("lockfile_key"))
+        if locked_nested is None or (locked_nested.get("version"), locked_nested.get("integrity")) != (entry.get("version"), entry.get("integrity")):
+            problems.append(
+                f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {lock_path} holds {locked_nested!r} for "
+                f"{entry.get('lockfile_key')!r}, and the pin declares {entry.get('version')!r}/"
+                f"{str(entry.get('integrity'))[:24]}.... A nested row matched against the disk alone is a row that says "
+                "the disk agrees with itself"
+            )
+        manifest_path = root / pin.get("root", "node_modules/vitest") / str(entry.get("row_prefix")) / "package.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+            problems.append(f"{REFUSED_NESTED_ROW_NOT_DECLARED}: {manifest_path} cannot be read ({exc}), so the declaration describes nothing installed")
+            continue
+        if (manifest.get("name"), manifest.get("version")) != (entry.get("package"), entry.get("version")):
+            problems.append(
+                f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: the installed manifest at {manifest_path} reads "
+                f"{manifest.get('name')!r}@{manifest.get('version')!r} and the lockfile row the pin names is "
+                f"{entry.get('package')!r}@{entry.get('version')!r}"
+            )
 
     base = (root / pin.get("root", "node_modules/vitest")).resolve()
     try:

@@ -72,6 +72,20 @@ export type BillingErrorCode =
   | 'billing.credit_adjustment_replayed'
   | 'billing.credit_reason_required'
   | 'billing.credit_currency_mismatch'
+  /**
+   * DR-97. A credit ledger is scoped to ONE currency, and this slice holds no
+   * rate, no expiry and no reversal — so a balance left behind by a currency
+   * change can never be spent. The owner's ruling is that the CHANGE is
+   * refused while such a balance exists, not that the balance is converted:
+   * there is no rate here that anyone authorized, and inventing one would be a
+   * second financial truth. The way out is an explicit audited administrative
+   * command (a refund, or a write-off with a mandatory reason), which is a
+   * card of its own.
+   *
+   * It is a business outcome and not a payload defect: the command is
+   * well-formed, and the answer is no.
+   */
+  | 'billing.subscription_currency_locked_by_credit'
   | 'billing.credit_ledger_out_of_order'
   /**
    * `TL-P5-R5` (PART 25) — the credit APPLICATION law. One business only, no
