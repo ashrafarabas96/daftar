@@ -427,7 +427,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/no-hardcoded-pricing.test.ts": 9,
     "test/no-merchant-posting.test.ts": 10,
     "test/period.test.ts": 19,
-    "test/plan-change-currency-lock.test.ts": 7,
+    "test/plan-change-currency-lock.test.ts": 10,
     "test/plan-change.test.ts": 11,
     "test/platform-authority-law.test.ts": 9,
     "test/proration-rounding-policy.test.ts": 4,
@@ -445,7 +445,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 338
+EXPECTED_TOTAL_CASES = 341
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -894,7 +894,11 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
     # cache reader already; this one compares the lockfile row and the installed
     # manifest. So a nested package whose version or integrity does not match
     # the lock stops BOTH readers, and the byte comparison is carried by the one
-    # arm named here rather than claimed by both.
+    # arm named here rather than claimed by both. The TypeScript reader also
+    # holds the `DIR` rows to the publisher (a directory must have a published
+    # member inside it) and pins the row count; those two are its own, and this
+    # sentence is the declaration rather than a claim that both readers do all
+    # of it.
     try:
         lock_rows = json.loads(lock_path.read_text(encoding="utf-8")).get("packages", {})
     except (json.JSONDecodeError, OSError):
@@ -915,6 +919,22 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
                 f"{len(inside)} declared prefix(es) cover it"
             )
     for entry in nested:
+        # F5's tightening, in both readers: the nested key must be the pinned
+        # package's own key extended by the row prefix, so a declaration cannot
+        # borrow another package's lockfile row wholesale.
+        if entry.get("lockfile_key") != f"{pin.get('lockfile_key')}/{entry.get('row_prefix')}":
+            problems.append(
+                f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: {entry.get('lockfile_key')!r} is not {pin.get('lockfile_key')!r} "
+                f"extended by {entry.get('row_prefix')!r}, so the declaration names a row that is not this install's own"
+            )
+        # F7: the declared integrity must carry a sha512 entry, which the
+        # TypeScript reader checks and this one did not. A weaker digest is one
+        # an attacker can meet, so its ABSENCE refuses rather than being read.
+        if not any(piece.startswith("sha512-") for piece in str(entry.get("integrity")).split()):
+            problems.append(
+                f"{REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: the integrity declared for {entry.get('lockfile_key')!r} is "
+                f"{str(entry.get('integrity'))[:40]!r}, which holds no sha512 entry"
+            )
         locked_nested = lock_rows.get(entry.get("lockfile_key"))
         if locked_nested is None or (locked_nested.get("version"), locked_nested.get("integrity")) != (entry.get("version"), entry.get("integrity")):
             problems.append(

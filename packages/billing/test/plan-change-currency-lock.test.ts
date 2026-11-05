@@ -22,7 +22,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { composePlanChangeBilling, type PlanChangeInput } from '../src/plan-change';
-import { type CreditAdjustment } from '../src/credit';
+import { foldCreditBalance, type CreditAdjustment } from '../src/credit';
 import { BillingError } from '../src/errors';
 import type { BillingPeriod } from '../src/types';
 
@@ -121,9 +121,88 @@ describe('DR-97 — a plan change may not strand a credit balance in another cur
     expectRefusal(() => composePlanChangeBilling(crossing), 'billing.proration_currency_mismatch');
   });
 
-  it('NEGATIVE CONTROL: a ledger that mixes two currencies still refuses, by the older code', () => {
-    // The fold owns that rule and keeps it: this law reads a balance, it does
-    // not re-implement the ledger's own invariants.
-    expectRefusal(() => composePlanChangeBilling(change('ILS', [grant('g1', 5_000n, 'ILS'), grant('g2', 1_000n, 'USD')])), 'billing.credit_currency_mismatch');
+  it('NEGATIVE CONTROL: the fold still refuses a MIXED ledger by its own older code, which is where that rule lives', () => {
+    // The rule did not move and is not relaxed: ask the fold directly and it
+    // refuses, exactly as it did before this law existed. What changed is that
+    // the composer no longer asks the fold a question about a ledger it was
+    // never scoped to answer -- it folds each currency's own rows.
+    const mixed = [grant('g1', 5_000n, 'ILS'), grant('g2', 1_000n, 'USD')];
+    let caught: unknown;
+    try {
+      foldCreditBalance(mixed, { businessId: 'biz-1', currency: 'ILS' });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught, 'the fold was expected to refuse a mixed ledger and did not').toBeInstanceOf(BillingError);
+    expect((caught as BillingError).code).toBe('billing.credit_currency_mismatch');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // THE TWO DEFECTS REVIEW FOUND IN MY FIRST IMPLEMENTATION, each with the
+  // measurement that showed it. Both were in the same three lines.
+  // ─────────────────────────────────────────────────────────────────────
+
+  it('a ledger row with NO readable currency is a refusal, never a reason to skip the law', () => {
+    // MEASURED ON THE FIRST IMPLEMENTATION: with `input.ledger[0]?.currency`
+    // read as the scope and the law run only when it was not `undefined`, this
+    // exact ledger -- an unspent ILS grant whose FIRST row carries no currency
+    // -- was ACCEPTED on a change to USD, and granted a second credit in USD on
+    // top of the balance it had just stranded. The unsafe direction was the one
+    // the code took, so a row whose currency cannot be read now refuses.
+    const headless = { ...grant('g0', 1_000n, 'ILS') } as { currency?: string };
+    delete headless.currency;
+    expectRefusal(() => composePlanChangeBilling(change('USD', [headless as CreditAdjustment, grant('g1', 5_000n, 'ILS')])), 'billing.payload_invalid');
+    // A HOLE in the array is the same defect by another spelling, and it is the
+    // second shape the review measured as accepted.
+    const holed: CreditAdjustment[] = [];
+    holed[1] = grant('g1', 5_000n, 'ILS');
+    expectRefusal(() => composePlanChangeBilling(change('USD', holed)), 'billing.payload_invalid');
+    // POSITIVE CONTROL: the same two rows, both carrying their currency, reach
+    // the law itself and are refused by IT -- so what is measured above is the
+    // unreadable row and not the ledger.
+    expectRefusal(
+      () => composePlanChangeBilling(change('USD', [grant('g0', 1_000n, 'ILS'), grant('g1', 5_000n, 'ILS')])),
+      'billing.subscription_currency_locked_by_credit',
+    );
+    // And a lower-case code is not a currency either, which is the control that
+    // says the shape test is doing the work and not the `typeof`.
+    expectRefusal(() => composePlanChangeBilling(change('USD', [grant('g1', 5_000n, 'ils')])), 'billing.payload_invalid');
+  });
+
+  it('a HISTORY in another currency does not lock a business out of every plan change for good', () => {
+    // MEASURED ON THE FIRST IMPLEMENTATION: a ledger holding a fully consumed
+    // ILS history beside a live USD balance was refused
+    // `billing.credit_currency_mismatch` -- a PAYLOAD code -- for a change in
+    // EITHER direction, permanently. That is the normal state after the audited
+    // write-off this slice's own release-blocking card describes, so the older
+    // refusal was masking this law rather than the other way round.
+    const spentIlsLiveUsd = [grant('g1', 5_000n, 'ILS'), consumption('c1', 5_000n, 'ILS'), { ...grant('g2', 7_000n, 'USD'), id: 'g2' }];
+    // Nothing in ILS is left to strand, and the USD balance is in the currency
+    // the change is in, so there is nothing to refuse.
+    const allowed = composePlanChangeBilling(change('USD', spentIlsLiveUsd));
+    expect(['invoice', 'credit', 'nothing']).toContain(allowed.outcome);
+    // The mirror image, which is the whole point: moving BACK to ILS would
+    // strand the live USD balance, and that refuses by THIS law's name and
+    // names USD -- not by a payload code, and not by the first row's currency.
+    const refused = expectRefusal(() => composePlanChangeBilling(change('ILS', spentIlsLiveUsd)), 'billing.subscription_currency_locked_by_credit');
+    expect(JSON.stringify(refused.toSafeJSON())).toContain('USD');
+  });
+
+  it('every rule the fold owns still refuses on the per-currency slice', () => {
+    // The slice is not a way around the ledger's own invariants: it is the
+    // scope they were written for. Out of order by `occurredAt` inside ONE
+    // currency still refuses by the fold's own name, and so does a consumption
+    // drawing on a grant that is not in its slice.
+    const outOfOrder = [
+      { ...grant('g1', 5_000n, 'ILS'), occurredAt: '2026-03-20T00:00:00.000Z' },
+      { ...grant('g2', 1_000n, 'ILS'), occurredAt: '2026-03-01T00:00:00.000Z' },
+    ];
+    expectRefusal(() => composePlanChangeBilling(change('USD', outOfOrder)), 'billing.credit_ledger_out_of_order');
+    // The ILS slice is spent to zero first, on purpose: otherwise it would
+    // refuse by THIS law before the USD slice is ever folded, which is what
+    // happened when this case was first written -- the refusal order is first
+    // currency first, and that is deterministic rather than incidental.
+    const crossSlice = [grant('g1', 5_000n, 'ILS'), consumption('c1', 5_000n, 'ILS'), { ...consumption('c2', 1_000n, 'USD'), appliesToGrantId: 'g1' }];
+    expectRefusal(() => composePlanChangeBilling(change('ILS', crossSlice)), 'billing.credit_grant_unknown');
   });
 });

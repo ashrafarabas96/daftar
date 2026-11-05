@@ -1377,6 +1377,23 @@ const encodeZone = (zone: string): string => zone.split('%').join('%25').split('
 // that share an implementation are one reader. Long names arrive as a GNU `L`
 // record or a pax `x` record and override the next entry's name; a record this
 // does not understand is skipped as a non-file rather than guessed at.
+/**
+ * DR-99, AND A CLAIM OF MINE REVIEW MEASURED AS FALSE. The commit that added
+ * the nested rows said every one of them is held to the lockfile and to the
+ * publisher. It was false for FOUR of the thirty-five: `publishedMembers`
+ * emits regular FILES only, and the comparison dropped every row whose value
+ * is `DIR` -- so a row like `node_modules/@vitest/mocker/<anything>: "DIR"`
+ * passed with the disk as its only oracle, which is the one thing a pin must
+ * not be allowed to mean.
+ *
+ * A directory carries no bytes, so the only honest thing to ask of it is that
+ * the published member list puts something INSIDE it. That is what this does,
+ * and it is a pure function of its three arguments so it can be controlled by
+ * a table rather than by an environment.
+ */
+const nestedRowAccounted = (rel: string, value: string, members: Record<string, string>): boolean =>
+  value === 'DIR' ? Object.keys(members).some((member) => member.startsWith(`${rel}/`)) : members[rel] === value;
+
 const publishedMembers = (raw: Buffer): Record<string, string> => {
   const tar = gunzipSync(raw);
   const out: Record<string, string> = {};
@@ -5463,7 +5480,6 @@ describe('every written invocation of the pack tools is isolated', () => {
         `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned row ${JSON.stringify(row)} sits inside a nested install and ${inside.length} declared prefix(es) cover it. A row nobody declared is a row whose only oracle is the disk it was read from`,
       ).toBe(true);
     }
-    const cacheRoot = join(homedir(), '.npm', '_cacache');
     for (const entry of nested) {
       const lockedNested = lock.packages[entry.lockfile_key];
       expect(
@@ -5480,36 +5496,6 @@ describe('every written invocation of the pack tools is isolated', () => {
         [manifest.name, manifest.version],
         `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: the installed manifest under ${entry.row_prefix} reads ${JSON.stringify([manifest.name, manifest.version])}, and the lockfile row the pin names is ${entry.package}@${entry.version}`,
       ).toStrictEqual([entry.package, entry.version]);
-
-      // THE PUBLISHER'S BYTES, addressed by the integrity the lockfile carries
-      // -- so the comparison is with the lock and not with the disk alone. An
-      // absent cache entry REFUSES; it does not become a package passed over,
-      // which is the same rule the closure arm follows.
-      const sha512 = entry.integrity.split(/\s+/).find((piece) => piece.startsWith('sha512-'));
-      expect(
-        typeof sha512,
-        `${REFUSED_INTEGRITY_NOT_SHA512}: ${entry.lockfile_key} carries ${JSON.stringify(entry.integrity)}, which holds no sha512 entry, and a weaker digest is one an attacker can meet`,
-      ).toBe('string');
-      const encoded = (sha512 as string).slice('sha512-'.length);
-      const hex = Buffer.from(encoded, 'base64').toString('hex');
-      const tarball = join(cacheRoot, 'content-v2', 'sha512', hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
-      expect(
-        existsSync(tarball),
-        `${REFUSED_PUBLISHER_BYTES_UNAVAILABLE}: no cached tarball for ${entry.lockfile_key} at ${tarball}. The publisher's bytes are the oracle and their ABSENCE is a refusal`,
-      ).toBe(true);
-      const raw = readFileSync(tarball);
-      expect(
-        createHash('sha512').update(raw).digest('base64'),
-        `${REFUSED_CACHE_BYTES_DISAGREE}: ${tarball} does not hash to the integrity ${entry.lockfile_key} carries, so these are not the publisher's bytes`,
-      ).toBe(encoded);
-      const theirs = publishedMembers(raw);
-      const mine: Record<string, string> = {};
-      for (const [row, value] of Object.entries(pin.files))
-        if (row.startsWith(`${entry.row_prefix}/`) && value !== 'DIR') mine[row.slice(entry.row_prefix.length + 1)] = value;
-      expect(
-        mine,
-        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned rows under ${entry.row_prefix} are not, member for member, what ${entry.package}@${entry.version} publishes in the tarball its lockfile integrity addresses. 31 members were measured at the declaration, all 31 equal and none missing on either side`,
-      ).toStrictEqual(theirs);
     }
 
     // The program is taken from the CHAIN, not from a path this file writes:
@@ -5670,6 +5656,86 @@ describe('every written invocation of the pack tools is isolated', () => {
       bytesUnder(packageRoot, realpathSync(repo)),
       `${REFUSED_RUNNER_PROGRAM_UNPINNED}: the installed bytes of ${pin.package}@${pin.version} are not the pinned ones. If the change is intended it moves with package-lock.json, in the same commit, with the reason in the message`,
     ).toStrictEqual(pin.files);
+
+    // DR-99, AFTER THE CENSUS ON PURPOSE. This half reads the npm cache,
+    // and on a host with no cache entry for the nested package it refuses
+    // by `REFUSED-PUBLISHER-BYTES-UNAVAILABLE`. Placed BEFORE the census it
+    // took the case down first and the census verdict -- the one that says
+    // whether the installed bytes are the pinned ones -- was never reached,
+    // so a red run lost its diagnosis. The lockfile and manifest checks are
+    // cheap and stay above; this one runs last.
+    const cacheRoot = join(homedir(), '.npm', '_cacache');
+    for (const entry of nested) {
+      // THE PUBLISHER'S BYTES, addressed by the integrity the lockfile carries
+      // -- so the comparison is with the lock and not with the disk alone. An
+      // absent cache entry REFUSES; it does not become a package passed over,
+      // which is the same rule the closure arm follows.
+      const sha512 = entry.integrity.split(/\s+/).find((piece) => piece.startsWith('sha512-'));
+      expect(
+        typeof sha512,
+        `${REFUSED_INTEGRITY_NOT_SHA512}: ${entry.lockfile_key} carries ${JSON.stringify(entry.integrity)}, which holds no sha512 entry, and a weaker digest is one an attacker can meet`,
+      ).toBe('string');
+      const encoded = (sha512 as string).slice('sha512-'.length);
+      const hex = Buffer.from(encoded, 'base64').toString('hex');
+      const tarball = join(cacheRoot, 'content-v2', 'sha512', hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
+      expect(
+        existsSync(tarball),
+        `${REFUSED_PUBLISHER_BYTES_UNAVAILABLE}: no cached tarball for ${entry.lockfile_key} at ${tarball}. The publisher's bytes are the oracle and their ABSENCE is a refusal`,
+      ).toBe(true);
+      const raw = readFileSync(tarball);
+      expect(
+        createHash('sha512').update(raw).digest('base64'),
+        `${REFUSED_CACHE_BYTES_DISAGREE}: ${tarball} does not hash to the integrity ${entry.lockfile_key} carries, so these are not the publisher's bytes`,
+      ).toBe(encoded);
+      const theirs = publishedMembers(raw);
+      const mine: Record<string, string> = {};
+      const directories: string[] = [];
+      for (const [row, value] of Object.entries(pin.files)) {
+        if (!row.startsWith(`${entry.row_prefix}/`)) continue;
+        if (value === 'DIR') directories.push(row.slice(entry.row_prefix.length + 1));
+        else mine[row.slice(entry.row_prefix.length + 1)] = value;
+      }
+      expect(
+        mine,
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned rows under ${entry.row_prefix} are not, member for member, what ${entry.package}@${entry.version} publishes in the tarball its lockfile integrity addresses. 31 members were measured at the declaration, all 31 equal and none missing on either side`,
+      ).toStrictEqual(theirs);
+      // THE FOUR ROWS MY OWN CLAIM WAS FALSE ABOUT. A `DIR` row carries no
+      // bytes and was dropped by the comparison above, so until this check it
+      // had the disk as its only oracle. It is now held to the publisher too,
+      // in the only way a directory can be: the member list must put something
+      // inside it.
+      expect(
+        directories.filter((row) => !nestedRowAccounted(row, 'DIR', theirs)),
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: a DIRECTORY row under ${entry.row_prefix} that no published member sits inside is a row whose only oracle is the disk it was read from, and an empty directory planted under a declared prefix is exactly the shape that would use it`,
+      ).toStrictEqual([]);
+      expect(
+        directories.length > 0,
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the check above must be measured over a NON-EMPTY set, or it is a control that passes by reaching nothing`,
+      ).toBe(true);
+      // F5's cheap tightening: the nested package's lockfile key must be the
+      // pinned package's own key extended by the row prefix. True today,
+      // measured -- and unasserted until now, so a declaration could have
+      // borrowed another package's row wholesale.
+      expect(
+        entry.lockfile_key,
+        `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: ${entry.lockfile_key} is not ${pin.lockfile_key} extended by ${entry.row_prefix}, so the declaration names a lockfile row that is not this install's own`,
+      ).toBe(`${pin.lockfile_key}/${entry.row_prefix}`);
+    }
+
+    // THE CONTROL FOR `nestedRowAccounted`, as a table rather than an
+    // environment: it is a pure function, so the five ways a row can be wrong
+    // are measured here on every host, including this one.
+    const sampleMembers = { 'dist/index.js': 'aa', LICENSE: 'bb' };
+    expect(
+      [
+        nestedRowAccounted('dist', 'DIR', sampleMembers),
+        nestedRowAccounted('an-empty-directory', 'DIR', sampleMembers),
+        nestedRowAccounted('dist/index.js', 'aa', sampleMembers),
+        nestedRowAccounted('dist/index.js', 'cc', sampleMembers),
+        nestedRowAccounted('dist/gone.js', 'aa', sampleMembers),
+      ],
+      `${REFUSED_NESTED_ROW_NOT_DECLARED}: a directory is accounted for only when a published member sits inside it, a file only when its digest IS the published member's, and a row the publisher does not carry at all is accounted for by nothing`,
+    ).toStrictEqual([true, false, true, false, false]);
   });
 
   it('DR-96 arm 3: the exclusion rule reads libc like os and cpu, and an unknown libc excludes nothing', () => {

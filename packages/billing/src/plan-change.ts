@@ -73,8 +73,17 @@ export interface PlanChangeInput extends ProrationInput {
   /** Why the credit exists, if one is produced. Mandatory on the adjustment. */
   readonly creditReason: string;
   /**
-   * The business's credit ledger as the database returns it
-   * (`ORDER BY created_at, id`). MANDATORY, and not defaulted to empty.
+   * The business's credit ledger, EVERY row of it, in the order the ledger
+   * itself is ordered by (`occurredAt`, which is what `foldCreditBalance`
+   * measures monotonicity on). MANDATORY, and not defaulted to empty.
+   *
+   * DECLARED LIMIT, because it has no call site yet to pin it on: a caller that
+   * FILTERED this by the new plan's currency would hand this law a ledger with
+   * the stranded balance already removed from it, and the refusal below would
+   * never fire -- which is the one way to defeat DR-97 while appearing to obey
+   * it. The contract is "every row", and the first real call site is where it
+   * gets pinned by a test rather than by this sentence. Measured at this
+   * commit: zero callers in the repository outside this package's own tests.
    *
    * DR-97: a credit ledger is scoped to ONE currency and this slice has no
    * rate, no expiry and no reversal, so a plan change into another currency
@@ -131,14 +140,61 @@ export function composePlanChangeBilling(input: PlanChangeInput): PlanChangeBill
   // the ledger's own currency, so every rule it owns -- one business, one
   // currency, append-only order, per-grant remainders -- still refuses by its
   // own name, and this law neither restates nor relaxes them.
-  const ledgerCurrency = input.ledger[0]?.currency;
-  if (ledgerCurrency !== undefined) {
-    const held = foldCreditBalance(input.ledger, { businessId: input.businessId, currency: ledgerCurrency });
-    if (held.balanceMinor > 0n && ledgerCurrency !== proration.currency) {
-      refuse('billing.subscription_currency_locked_by_credit', 'this business holds unspent credit in another currency, and a plan change may not strand it', {
-        businessId: input.businessId,
-        currency: ledgerCurrency,
-      });
+  // TWO DEFECTS OF MY OWN, both found in review and both measured before this
+  // was rewritten. The first read `input.ledger[0]?.currency` and ran the law
+  // only `if (ledgerCurrency !== undefined)`: a ledger whose first row carried
+  // no currency -- or whose first element was a hole -- made that `undefined`,
+  // so the fold was never called and NOTHING was checked. Measured: a ledger
+  // whose second row is an unspent ILS grant, changed to USD, was ACCEPTED and
+  // granted a second credit in USD on top of the stranded one. A row whose
+  // currency cannot be read is a defect that REFUSES; the unsafe direction was
+  // the one the code took.
+  //
+  // The second handed the WHOLE ledger to a fold that refuses any mixture
+  // (`credit.ts`), so a business whose ledger held a spent ILS history beside a
+  // live USD balance was refused `billing.credit_currency_mismatch` -- a
+  // PAYLOAD code -- for every plan change in either direction, for good. That
+  // is the normal state after the administrative write-off this slice's own
+  // card describes, and the older refusal was MASKING this law rather than the
+  // other way round.
+  //
+  // So the balance is folded ONCE PER CURRENCY the ledger actually holds, over
+  // that currency's own rows. Every rule the fold owns still refuses by its own
+  // name on each slice -- one business, append-only order, per-grant remainders
+  // -- and this law neither restates nor relaxes them; what it no longer does
+  // is ask the fold a question about a ledger it was never scoped to answer.
+  // The currencies are visited in order of first appearance, so the refusal is
+  // deterministic and names the first currency that would be stranded.
+  if (input.ledger.length > 0) {
+    const currencies: string[] = [];
+    for (const row of input.ledger) {
+      const currency = row?.currency;
+      if (typeof currency !== 'string' || !/^[A-Z]{3}$/.test(currency)) {
+        refuse(
+          'billing.payload_invalid',
+          'a row of the credit ledger carries no readable currency, and a row whose currency cannot be read is not a row this law may pass over',
+          {
+            businessId: input.businessId,
+          },
+        );
+      }
+      if (!currencies.includes(currency)) currencies.push(currency);
+    }
+    for (const currency of currencies) {
+      const held = foldCreditBalance(
+        input.ledger.filter((row) => row.currency === currency),
+        { businessId: input.businessId, currency },
+      );
+      if (held.balanceMinor > 0n && currency !== proration.currency) {
+        refuse(
+          'billing.subscription_currency_locked_by_credit',
+          'this business holds unspent credit in another currency, and a plan change may not strand it',
+          {
+            businessId: input.businessId,
+            currency,
+          },
+        );
+      }
     }
   }
 
