@@ -3,6 +3,7 @@ package app.daftar.ui.settings
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import app.daftar.R
 import app.daftar.data.ApiClient
 import app.daftar.data.Result
+import app.daftar.ui.theme.ButtonMinHeight
 import kotlinx.coroutines.launch
 
 /** Settings subset (Android Phase 1 scope §33): business name + default language (read-only base currency) + logout. */
@@ -90,7 +92,7 @@ fun SettingsScreen(api: ApiClient, onLoggedOut: () -> Unit) {
                     }
                 },
                 enabled = !busy && name.isNotBlank(),
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp).heightIn(min = ButtonMinHeight),
             ) {
                 Text(stringResource(R.string.common_save))
             }
@@ -104,7 +106,7 @@ fun SettingsScreen(api: ApiClient, onLoggedOut: () -> Unit) {
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp).heightIn(min = ButtonMinHeight),
             ) {
                 Text(stringResource(R.string.auth_logout))
             }

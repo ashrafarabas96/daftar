@@ -1,7 +1,7 @@
 'use client';
 import { use, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Button, Card, PasswordField, TextField, spacing, typography, colors } from '@daftar/design-system';
+import { Button, Card, PasswordField, TextField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { setAccessToken } from '@/lib/client';
 
@@ -46,7 +46,7 @@ export default function LoginPage({ params }: { params: Promise<{ locale: Locale
           <TextField label={t('auth.email')} type="email" required value={email} onChange={setEmail} autoComplete="email" />
           <PasswordField label={t('auth.password')} required value={password} onChange={setPassword} />
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+            <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
               {error}
             </p>
           ) : null}

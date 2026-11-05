@@ -6,6 +6,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 
 // Mirrors @daftar/design-system tokens — single visual truth across surfaces.
 val BrandPrimary = Color(0xFF2563EB)
@@ -16,6 +17,11 @@ val SemanticDanger = Color(0xFFDC2626)
 val Neutral900 = Color(0xFF111827)
 val Neutral100 = Color(0xFFF3F4F6)
 val Neutral0 = Color(0xFFFFFFFF)
+
+// Touch and button sizes (governance 04 §3): every touch target >= 48dp, and a
+// button's visible height >= 48dp (Material3's default Button is 40dp tall).
+val TouchTargetMin = 48.dp
+val ButtonMinHeight = 48.dp
 
 private val LightColors = lightColorScheme(
     primary = BrandPrimary,

@@ -9,7 +9,7 @@ import {
   type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
-import { colors, radius, spacing, TOUCH_TARGET, typography } from '../tokens';
+import { colors, radius, spacing, textColors, TOUCH_TARGET, typography } from '../tokens';
 
 const fieldShell: CSSProperties = {
   display: 'flex',
@@ -33,8 +33,8 @@ const inputBase: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = { fontSize: typography.size.sm, fontWeight: typography.weight.medium, color: colors.neutral[700] };
-const hintStyle: CSSProperties = { fontSize: typography.size.xs, color: colors.neutral[500] };
-const errorStyle: CSSProperties = { ...hintStyle, color: colors.semantic.danger };
+const hintStyle: CSSProperties = { fontSize: typography.size.xs, color: textColors.secondary };
+const errorStyle: CSSProperties = { ...hintStyle, color: textColors.danger };
 
 export interface TextFieldProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'onChange'> {
   label: string;
@@ -88,7 +88,7 @@ export function PasswordField(props: TextFieldProps) {
           background: 'none',
           border: 'none',
           cursor: 'pointer',
-          color: colors.neutral[500],
+          color: textColors.secondary,
           minWidth: TOUCH_TARGET,
           minHeight: TOUCH_TARGET,
         }}
@@ -263,7 +263,7 @@ export function RadioCard({ name, value, title, description, checked, onChange }
       />
       <span>
         <span style={{ display: 'block', fontWeight: typography.weight.semibold, color: colors.neutral[900] }}>{title}</span>
-        {description ? <span style={{ display: 'block', fontSize: typography.size.sm, color: colors.neutral[500] }}>{description}</span> : null}
+        {description ? <span style={{ display: 'block', fontSize: typography.size.sm, color: textColors.secondary }}>{description}</span> : null}
       </span>
     </label>
   );
