@@ -105,6 +105,7 @@ import hashlib
 import io
 import json
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -429,7 +430,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 34,
+    "test/tool-commands-are-isolated.test.ts": 35,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
 # environment comparison -- the fourth rung of round 62's closure -- with a
@@ -440,7 +441,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 330
+EXPECTED_TOTAL_CASES = 331
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -567,7 +568,7 @@ EXPECTED: dict[str, int] = {
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 34,
+    "test/tool-commands-are-isolated.test.ts": 35,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
@@ -920,8 +921,8 @@ def runner_bytes_disagreements(package: Path, root: Path, runner: Path) -> list[
     return problems
 
 
-def platform_excludes(row: dict, sysname: "str | None" = None, machine: "str | None" = None) -> bool:
-    """Whether a lockfile row's own `os`/`cpu` exclude THIS machine.
+def platform_excludes(row: dict, sysname: "str | None" = None, machine: "str | None" = None, libc: "str | None" = None) -> bool:
+    """Whether a lockfile row's own `os`/`cpu`/`libc` exclude THIS machine.
 
     ROUND 71. npm writes these fields itself, in node's vocabulary (`linux`,
     `win32`, `x64`, `arm64`), with `!name` meaning everything but that one. The
@@ -935,6 +936,21 @@ def platform_excludes(row: dict, sysname: "str | None" = None, machine: "str | N
     hardware = machine if machine is not None else uname.machine
     node_os = {"linux": "linux", "darwin": "darwin", "freebsd": "freebsd", "openbsd": "openbsd", "sunos": "sunos", "aix": "aix"}.get(system)
     node_cpu = {"x86_64": "x64", "amd64": "x64", "aarch64": "arm64", "arm64": "arm64", "i386": "ia32", "i686": "ia32", "ppc64le": "ppc64", "s390x": "s390x", "riscv64": "riscv64"}.get(hardware)
+    # DR-96, arm 3: npm writes `libc` beside `os` and `cpu` and NOTHING here
+    # read it, so a musl-only optional package that is correctly absent on a
+    # glibc machine refused by name -- and the refusal printed `os` and `cpu`
+    # as its evidence for a verdict it had no business reaching. Measured on
+    # main's own lockfile: @img/sharp-linuxmusl-x64,
+    # @img/sharp-libvips-linuxmusl-x64 and @next/swc-linux-x64-musl all carry
+    # {optional: true, os: ["linux"], cpu: ["x64"], libc: ["musl"]}.
+    #
+    # The value comes from the RUN, like the other two: CPython reports the
+    # glibc version on a glibc build and an empty string elsewhere. An unknown
+    # libc yields NOT EXCLUDED, so an unrecognised machine still refuses.
+    if libc is not None:
+        node_libc: "str | None" = libc
+    else:
+        node_libc = "glibc" if (platform.libc_ver()[0] or "").startswith("glibc") else None
 
     def rules_out(field: str, mine: "str | None") -> bool:
         wanted = row.get(field)
@@ -946,7 +962,7 @@ def platform_excludes(row: dict, sysname: "str | None" = None, machine: "str | N
             return True
         return bool(wanted_positively) and mine not in wanted_positively
 
-    return rules_out("os", node_os) or rules_out("cpu", node_cpu)
+    return rules_out("os", node_os) or rules_out("cpu", node_cpu) or rules_out("libc", node_libc)
 
 
 def publisher_bytes_disagreements(
@@ -1069,7 +1085,7 @@ def publisher_bytes_disagreements(
                 problems.append(
                     f"{REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the lockfile names {key} and it is not installed, and "
                     f"its row does not say this machine is excluded from it (optional={row.get('optional')!r}, "
-                    f"os={row.get('os')!r}, cpu={row.get('cpu')!r}). A row nothing compares is a row the oracle is "
+                    f"os={row.get('os')!r}, cpu={row.get('cpu')!r}, libc={row.get('libc')!r}). A row nothing compares is a row the oracle is "
                     "silent about, and silence is not agreement"
                 )
             continue

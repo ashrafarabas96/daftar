@@ -3,10 +3,11 @@
   "_what_it_does_not_cover": "THIS PACKAGE ONLY, one hop deep, and the figure printed by the gate says so in those words. vitest imports vite, tinypool, chai and the rest of the installed tree IN THE SAME PROCESS; those files are NOT pinned here, and the measurement that says so is the attacker's own import placed in node_modules/vite/dist/node/index.js, which ran TWICE with the suite 33/33 green at rc 0 -- and, as the coordinator's R68-C-01 measured on the signed head, twice inside the GATE's own run at rc 0 with the full census printed. A list of names also has the enumeration's time hole at the PACKAGE boundary: a file arriving inside this package refuses, a whole package arriving beside it was never named. The pin narrows the attacker from 'anyone who can write under node_modules' to 'anyone who can write under node_modules outside this one package', and nothing more. Closing the class means deriving the set from EXECUTION -- what this run actually loaded -- rather than enumerating a tree, and the figures that sentence weighed are in `_how_the_tree_figures_were_counted` below, with the command and the rule that produced them. ",
   "package": "vitest",
   "version": "4.1.11",
+  "_why_the_key_and_root_are_the_nested_runner": "DR-96, arm 2: `lockfile_key` and `root` both named `node_modules/vitest` -- the HOISTED runner at the repository root. Registering this package as a workspace (q-1) gave it its own nested install, because its pinned runner is 4.1.11 while the repository's is 4.1.12, so the hoisted entry is no longer the program this package runs. Measured at the move: against the nested root the 118 rows are 114 digests matching, 0 mismatching, 0 missing and 4 directories; against the hoisted one, 3 mismatching and 2 missing, and the lockfile row there reads 4.1.12 against a pin of 4.1.11. Nothing is loosened -- both comparisons stay exact and every row stays -- the pin now names the tree it was taken from.",
   "lockfile_path": "package-lock.json",
-  "lockfile_key": "node_modules/vitest",
+  "lockfile_key": "packages/billing/node_modules/vitest",
   "lockfile_integrity": "sha512-fhACrNXUidIbGSBr5FlbuBkO7VWC1ZyLl0DO4CU2DrQoAPxX84Ysxs+HeGQpii5lZWV1Q4gBZTTu49mF+A6Edw==",
-  "root": "node_modules/vitest",
+  "root": "packages/billing/node_modules/vitest",
   "files": {
     "LICENSE.md": "881d660c26831481b697e39724d4a35c9f86e07b67156d4aeb693a0b39910435",
     "README.md": "1e870589f0aa14b261587531486354c4a87f78e8d3170c29b0fa3b74ccbe190e",

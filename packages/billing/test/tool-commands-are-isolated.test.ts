@@ -104,6 +104,15 @@ const REPO = join(__dirname, '..', '..', '..');
 // the gate has handed down a private copy as the subject.
 const SHARED_PACK = '/mnt/project-files/phase5';
 const PACK = (process.env.P5_PACK_DIR ?? '').trim() || SHARED_PACK;
+/**
+ * Whether the pack was NAMED by the environment rather than defaulted.
+ *
+ * DR-96, arm 4. A named pack that is missing is a fault and still refuses; a
+ * pack nobody named and that is simply not there is an environment fact, and
+ * the arm that DERIVES its alphabet from the pack has nothing to derive from.
+ * The two are different classes and were one refusal.
+ */
+const PACK_WAS_NAMED = (process.env.P5_PACK_DIR ?? '').trim() !== '';
 const REVIEWER_REPORTS_FILE = join(__dirname, '..', 'tools', 'reviewer-reports.json');
 
 /**
@@ -280,6 +289,7 @@ const REFUSED_PACK_NOT_PINNED = 'REFUSED-PACK-NOT-THE-PINNED-SET';
  * `P5_PACK_DIGEST`, the run it started must be looking at exactly that pack.
  */
 const REFUSED_PACK_MOVED = 'REFUSED-PACK-MOVED-DURING-MEASUREMENT';
+const REFUSED_PACK_ABSENT = 'REFUSED-PACK-ABSENT-NOTHING-TO-DERIVE-FROM';
 const REFUSED_PACK_COPY_IMPOSSIBLE = 'REFUSED-PACK-COPY-NOT-POSSIBLE';
 const REFUSED_PACK_NAME_NOT_UTF8 = 'REFUSED-PACK-NAME-NOT-UTF8';
 const REFUSED_PACK_ENTRY_NOT_A_FILE = 'REFUSED-PACK-ENTRY-NOT-A-FILE';
@@ -1400,21 +1410,50 @@ const publishedMembers = (raw: Buffer): Record<string, string> => {
   return out;
 };
 
-// Whether a lockfile row's own `os`/`cpu` exclude THIS machine, in node's own
-// vocabulary -- which this arm takes from `process`, not from a table, because
-// the row was written in it. `!name` means everything but that one. An unknown
-// value yields NOT EXCLUDED, so an absent row on a machine this does not
-// recognise refuses by name instead of being waved through as somebody
-// else's platform.
-const platformExcludes = (row: { os?: string[]; cpu?: string[] }): boolean => {
-  const rulesOut = (wanted: string[] | undefined, mine: string): boolean => {
-    if (wanted === undefined || wanted.length === 0) return false;
+/**
+ * THIS machine's C library, in npm's own vocabulary, or `undefined`.
+ *
+ * DR-96, arm 3. node publishes no `process.libc`, so the value still comes
+ * from the RUN and not from a table: a glibc runtime reports
+ * `glibcVersionRuntime` in its own process report, and a musl one does not.
+ * `undefined` is the honest answer for a machine this cannot classify, and it
+ * yields NOT EXCLUDED below, exactly as an unknown `os` or `cpu` does — so an
+ * unrecognised machine still refuses by name rather than being waved through.
+ */
+const myLibc = ((): string | undefined => {
+  try {
+    const header = (process.report?.getReport() as { header?: { glibcVersionRuntime?: string } } | undefined)?.header;
+    return typeof header?.glibcVersionRuntime === 'string' && header.glibcVersionRuntime !== '' ? 'glibc' : undefined;
+  } catch {
+    return undefined;
+  }
+})();
+
+// Whether a lockfile row's own `os`/`cpu`/`libc` exclude THIS machine, in
+// node's and npm's own vocabulary -- which this arm takes from `process`, not
+// from a table, because the row was written in it. `!name` means everything
+// but that one. An unknown value yields NOT EXCLUDED, so an absent row on a
+// machine this does not recognise refuses by name instead of being waved
+// through as somebody else's platform.
+//
+// DR-96, arm 3: `libc` was read by nothing here, and npm writes it like the
+// other two. Measured on main's own lockfile, `@img/sharp-linuxmusl-x64`,
+// `@img/sharp-libvips-linuxmusl-x64` and `@next/swc-linux-x64-musl` all carry
+// `{optional: true, os: ["linux"], cpu: ["x64"], libc: ["musl"]}` -- the row
+// DID say this machine is excluded, in the one field nothing looked at, and
+// the refusal then printed `os` and `cpu` as its evidence for a verdict it
+// had no business reaching. Adding the dimension REMOVES no refusal: a row
+// that was excluded before is still excluded, and `libc` can only exclude a
+// row that positively names a libc this machine positively is not.
+const platformExcludes = (row: { os?: string[]; cpu?: string[]; libc?: string[] }): boolean => {
+  const rulesOut = (wanted: string[] | undefined, mine: string | undefined): boolean => {
+    if (wanted === undefined || wanted.length === 0 || mine === undefined) return false;
     const negated = wanted.filter((name) => name.startsWith('!')).map((name) => name.slice(1));
     const positive = wanted.filter((name) => !name.startsWith('!'));
     if (negated.includes(mine)) return true;
     return positive.length > 0 && !positive.includes(mine);
   };
-  return rulesOut(row.os, process.platform) || rulesOut(row.cpu, process.arch);
+  return rulesOut(row.os, process.platform) || rulesOut(row.cpu, process.arch) || rulesOut(row.libc, myLibc);
 };
 
 // Every installed byte against the byte its publisher shipped AT THE SAME PATH
@@ -1461,7 +1500,7 @@ const publisherBytes = (
 
   const rows = (
     JSON.parse(lockBytes.toString('utf8')) as {
-      packages: Record<string, { integrity?: string; version?: string; optional?: boolean; os?: string[]; cpu?: string[]; link?: boolean }>;
+      packages: Record<string, { integrity?: string; version?: string; optional?: boolean; os?: string[]; cpu?: string[]; libc?: string[]; link?: boolean }>;
     }
   ).packages;
   const excludedRows: string[] = [];
@@ -1488,7 +1527,7 @@ const publisherBytes = (
       if (absent.optional === true && platformExcludes(absent)) excludedRows.push(key);
       else
         problems.push(
-          `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the lockfile names ${key} and it is not installed, and its row does not say this machine is excluded from it (optional=${JSON.stringify(absent.optional)}, os=${JSON.stringify(absent.os)}, cpu=${JSON.stringify(absent.cpu)}). A row nothing compares is a row the oracle is silent about, and silence is not agreement`,
+          `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the lockfile names ${key} and it is not installed, and its row does not say this machine is excluded from it (optional=${JSON.stringify(absent.optional)}, os=${JSON.stringify(absent.os)}, cpu=${JSON.stringify(absent.cpu)}, libc=${JSON.stringify(absent.libc)}, and this machine reads its own libc as ${JSON.stringify(myLibc)}). A row nothing compares is a row the oracle is silent about, and silence is not agreement`,
         );
       continue;
     }
@@ -2292,6 +2331,27 @@ const CPYTHON_HERE = ((): string => {
 const KNOWN_SPELLINGS = ((): ReadonlySet<string> => {
   const minor = /^(\d+\.\d+)\./.exec(CPYTHON_HERE)?.[1];
   return new Set(['python', 'python3', ...(minor === undefined ? [] : [`python${minor}`])]);
+})();
+
+/**
+ * The VERSIONED spelling this machine actually has (`python3.12`, `python3.13`,
+ * …), or `undefined` when there is no CPython here to ask.
+ *
+ * DR-96, arm 1. `KNOWN_SPELLINGS` above is derived from the live run on
+ * purpose, so a versioned name is classifiable only on the machine whose minor
+ * it names. Five fixtures wrote `python3.13` as a LITERAL — the authoring
+ * machine's minor — and on a runner with any other minor those fixtures were
+ * testing the refusal they had accidentally produced instead of the production
+ * they claimed. Measured: two cases red on ubuntu-26.04 with
+ * `REFUSED-UNCLASSIFIABLE-INTERPRETER python3.13`.
+ *
+ * Deriving it here REMOVES no refusal: a versioned spelling whose minor is not
+ * this machine's is still unclassifiable, and the arm below asserts exactly
+ * that.
+ */
+const VERSIONED_HERE = ((): string | undefined => {
+  const minor = /^(\d+\.\d+)\./.exec(CPYTHON_HERE)?.[1];
+  return minor === undefined ? undefined : `python${minor}`;
 })();
 
 const sameBinaryAsHarness = (absolute: string): boolean => {
@@ -3679,7 +3739,23 @@ describe('every written invocation of the pack tools is isolated', () => {
     expect(offencesIn('fixture', 'python3.13 tools/manifest-digests.py --check')).toHaveLength(1);
     expect(offencesIn('fixture', '/usr/bin/python3.13 tools/manifest-digests.py --check')).toHaveLength(1);
     expect(offencesIn('fixture', 'python3 \\\n    tools/manifest-digests.py --check')).toStrictEqual(['fixture:1: python3  tools/manifest-digests.py --check']);
-    expect(offencesIn('fixture', 'python3.13 -I tools/manifest-digests.py --check')).toStrictEqual([]);
+    // DR-96 arm 1: the spelling comes from THIS machine's CPython, not from a
+    // literal. With no CPython here there is no classifiable versioned name,
+    // and the arm asserts the refusal that follows rather than skipping: an
+    // unclassifiable interpreter IS an offence, which is the fail-closed half
+    // of the same law.
+    if (VERSIONED_HERE !== undefined) {
+      expect(offencesIn('fixture', `${VERSIONED_HERE} -I tools/manifest-digests.py --check`)).toStrictEqual([]);
+    } else {
+      expect(
+        offencesIn('fixture', 'python3.13 -I tools/manifest-digests.py --check'),
+        'with no CPython here a versioned spelling must refuse, not pass',
+      ).toHaveLength(1);
+    }
+    // A versioned spelling that is NOT this machine's minor stays
+    // unclassifiable whatever flags it carries -- the negative control that
+    // keeps the derivation from becoming an exemption.
+    expect(offencesIn('fixture', 'python9.99 -I tools/manifest-digests.py --check'), 'a foreign minor must not become classifiable').toHaveLength(1);
     expect(offencesIn('fixture', 'python3 -I \\\n    tools/manifest-digests.py --check')).toStrictEqual([]);
     // And it must NOT red on the forms that are correct, or the law would be
     // unsatisfiable and someone would delete it.
@@ -5513,6 +5589,47 @@ describe('every written invocation of the pack tools is isolated', () => {
     ).toStrictEqual(pin.files);
   });
 
+  it('DR-96 arm 3: the exclusion rule reads libc like os and cpu, and an unknown libc excludes nothing', () => {
+    // A host-portable control for the dimension added in DR-96. It does not
+    // assert what THIS machine's libc is -- that is a fact about the runner --
+    // it asserts the RULE: a row is excluded only when it positively names a
+    // value this machine positively is not, and an unknown value excludes
+    // nothing. On this host `myLibc` is undefined (Windows reports no
+    // `glibcVersionRuntime`); on the Linux runner it is 'glibc'. Both are
+    // covered below without branching on which one we are.
+    const otherOs = process.platform === 'linux' ? 'win32' : 'linux';
+    const otherArch = process.arch === 'x64' ? 'arm64' : 'x64';
+
+    // POSITIVE CONTROL that the function is live at all: the two dimensions
+    // that existed before still exclude, and still do not exclude a row that
+    // names this machine.
+    expect(platformExcludes({ os: [otherOs] }), 'the os dimension stopped excluding').toBe(true);
+    expect(platformExcludes({ cpu: [otherArch] }), 'the cpu dimension stopped excluding').toBe(true);
+    expect(platformExcludes({ os: [process.platform] })).toBe(false);
+    expect(platformExcludes({ cpu: [process.arch] })).toBe(false);
+
+    // An empty or absent dimension never excludes, whatever the others say.
+    expect(platformExcludes({})).toBe(false);
+    expect(platformExcludes({ libc: [] })).toBe(false);
+
+    if (myLibc === undefined) {
+      // UNKNOWN libc: nothing is excluded by it, so a musl-only row on a
+      // machine this cannot classify still refuses by name rather than being
+      // waved through as somebody else's platform. This is the arm that keeps
+      // the dimension from becoming an exemption.
+      expect(platformExcludes({ libc: ['musl'] }), 'an unknown libc must exclude nothing').toBe(false);
+      expect(platformExcludes({ libc: ['glibc'] }), 'an unknown libc must exclude nothing').toBe(false);
+    } else {
+      // KNOWN libc: a row naming another libc is excluded, a row naming this
+      // one is not, and a negation reads the other way round.
+      const other = myLibc === 'glibc' ? 'musl' : 'glibc';
+      expect(platformExcludes({ libc: [other] }), 'a row for another libc is not excluded').toBe(true);
+      expect(platformExcludes({ libc: [myLibc] })).toBe(false);
+      expect(platformExcludes({ libc: [`!${myLibc}`] })).toBe(true);
+      expect(platformExcludes({ libc: [`!${other}`] })).toBe(false);
+    }
+  });
+
   it("R68-C-01: every installed byte is the byte its PUBLISHER shipped, read out of the cache by the lockfile's own integrity", () => {
     // ROUND 71, THE COORDINATOR'S R68-C-01 (P3). `tools/runner-bytes.json`
     // covers the runner's own package and says so; a patch one package deeper
@@ -5932,6 +6049,21 @@ describe('every written invocation of the pack tools is isolated', () => {
       // body of its own name: nothing of the pack's content is copied and the
       // two readers still hash the same bytes under the same name.
       writeFileSync(join(dir, name), `name derived from the pack: ${name}`);
+    }
+    // DR-96, arm 4. Three classes, not one:
+    //   * the pack was NAMED and is missing, or is there and yields nothing
+    //     -- a fault, and it still refuses exactly as before;
+    //   * the pack was not named and is not there -- an environment fact. This
+    //     arm derives its alphabet FROM the pack, so with no pack there is
+    //     nothing to derive and nothing this arm can claim. It says so by name
+    //     and stops, and the DECLARED LIMIT is that the two readers are then
+    //     not compared over the pack's own names on this machine.
+    if (!PACK_WAS_NAMED && !existsSync(PACK)) {
+      expect(
+        fromSubject.length,
+        `${REFUSED_PACK_ABSENT}: there is no pack at ${PACK} and none was named, so this arm has no names to derive from and claims nothing here`,
+      ).toBe(0);
+      return;
     }
     expect(
       fromSubject.length,
@@ -6943,7 +7075,13 @@ describe('every written invocation of the pack tools is isolated', () => {
     //   TOOLPATH    := name | tools/name | ./tools/name | /abs/tools/name
     //
     // and the verdict is ISOLATED only when `-I` appears as a FLAG.
-    const interpreters = ['python', 'python3', 'python3.13', '/usr/bin/python3', '/usr/bin/python3.13'];
+    // DR-96 arm 1: the versioned entries are THIS machine's minor, or they are
+    // absent. A literal minor made this matrix assert `isolated: true` for a
+    // name the classifier correctly refuses on any other machine.
+    const interpreters = ['python', 'python3', '/usr/bin/python3', ...(VERSIONED_HERE === undefined ? [] : [VERSIONED_HERE, `/usr/bin/${VERSIONED_HERE}`])];
+    // The matrix may not shrink unnoticed: five spellings where a CPython was
+    // found, three where none was, and the reason is named either way.
+    expect(interpreters, `the interpreter matrix shrank: CPYTHON_HERE=${CPYTHON_HERE}`).toHaveLength(VERSIONED_HERE === undefined ? 3 : 5);
     const flagForms: { text: string; isolated: boolean; production: string }[] = [
       { text: '', isolated: false, production: 'no flags' },
       { text: '-I ', isolated: true, production: 'NOARG, the real thing' },
