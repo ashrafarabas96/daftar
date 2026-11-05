@@ -317,7 +317,6 @@ jobs:
           test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
           dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
           dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
-          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
           docker restart "$cid" >/dev/null
           ready=0
           for i in $(seq 1 60); do
@@ -325,6 +324,14 @@ jobs:
             sleep 1
           done
           test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          dsql "SELECT pg_reload_conf()" >/dev/null
           # Read back from the server, not assumed from what was written.
           libs=$(dsql "SHOW shared_preload_libraries")
           track=$(dsql "SHOW pg_stat_statements.track")
