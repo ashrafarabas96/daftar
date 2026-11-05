@@ -5,8 +5,8 @@ apps/api/src/common/error.filter.ts	3	formatter	safe	HAND	import { ZodError } fr
 apps/api/src/common/error.filter.ts	54	formatter	intended	HAND	if (exception instanceof ZodError) {
 apps/api/src/common/error.filter.ts	56	method	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
 apps/api/src/common/error.filter.ts	56	issues-access	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
-apps/api/src/config.ts	402	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-apps/api/src/config.ts	402	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	454	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	454	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 apps/api/src/modules/accounting/accounting-reconciliation.reader.ts	251	find-shift	safe	R-RECEIVER	const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
 apps/api/src/modules/catalog/media.service.ts	132	find-shift	safe	R-RECEIVER	const v = row.variants.find((x) => x.size === size);
 apps/api/src/modules/inventory/inventory-stock-read.ts	98	find-shift	safe	R-RECEIVER	const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);
@@ -120,6 +120,10 @@ apps/web/test/ux-review-fixes.test.tsx	232	find-shift	safe	R-RECEIVER	const dial
 apps/web/test/ux-review-fixes.test.tsx	242	find-shift	safe	R-RECEIVER	const finish = all(r, 'button').find((b) => textOf(b) === tr('en', 'stock.count.finish'));
 apps/web/test/ux-review-fixes.test.tsx	293	find-shift	safe	R-RECEIVER	const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog');
 apps/web/test/ux-review-fixes.test.tsx	333	find-shift	safe	R-RECEIVER	const pay = all(r, 'button').find((b) => textOf(b) === tr('en', 'payments.submit'));
+packages/billing/test/tool-commands-are-isolated.test.ts	1297	find-shift	safe	R-RECEIVER	const part = parts.shift() as string;
+packages/billing/test/tool-commands-are-isolated.test.ts	1499	find-shift	safe	R-RECEIVER	const sha512 = integrity.split(/\s+/).find((entry) => entry.startsWith('sha512-'));
+packages/billing/test/tool-commands-are-isolated.test.ts	3810	find-shift	safe	R-RECEIVER	const text = fixtures.find(([l]) => l === label)?.[1] ?? '';
+packages/billing/test/tool-commands-are-isolated.test.ts	3830	find-shift	safe	R-RECEIVER	scanLines('c01-two-backslashes', fixtures.find(([l]) => l === 'c01-two-backslashes')?.[1] ?? '', true).found,
 packages/domain-core/src/locale.ts	77	find-shift	safe	R-RECEIVER	const decimalSep = skeletonParts.find((p) => p.type === 'decimal')?.value ?? '.';
 packages/domain-core/src/locale.ts	90	find-shift	safe	R-RECEIVER	out += units > 0 ? (skeletonParts.find((p) => p.type === 'decimal')?.value ?? decimalSep) : '';
 packages/domain-core/src/locale.ts	116	find-shift	safe	R-RECEIVER	const dec = nf.formatToParts(1.1).find((p) => p.type === 'decimal')?.value ?? '.';
@@ -189,8 +193,8 @@ scripts/install-accounting-key.ts	56	find-shift	safe	R-RECEIVER	const retire = p
 scripts/install-inventory-key.ts	55	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
 scripts/install-provisioning-key.ts	51	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
 scripts/phase1-release-gate.ts	618	find-shift	safe	R-RECEIVER	const byName = (needle: string) => results.find((r) => r.name.toLowerCase().includes(needle));
-scripts/phase2-deployment-authority.ts	1462	find-shift	safe	R-RECEIVER	const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
-scripts/phase2-deployment-authority.ts	1464	find-shift	safe	R-RECEIVER	const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
+scripts/phase2-deployment-authority.ts	1479	find-shift	safe	R-RECEIVER	const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
+scripts/phase2-deployment-authority.ts	1481	find-shift	safe	R-RECEIVER	const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
 scripts/phase2-prefix.ts	154	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
 scripts/phase3-prefix.ts	184	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
 scripts/phase3-release-gate.ts	264	find-shift	safe	R-RECEIVER	const eq = argv.find((a) => a.startsWith(`--${name}=`));
@@ -198,9 +202,9 @@ scripts/phase3-review-index.ts	126	find-shift	safe	R-RECEIVER	return GROUP_RULES
 scripts/phase3-review-index.ts	433	find-shift	safe	R-RECEIVER	const h1 = lines.find((l) => /^#\s+\S/.test(l));
 scripts/phase3-review-index.ts	643	find-shift	safe	R-RECEIVER	const windowOf = (i: number): (typeof bounds)[number] | null => bounds.find((b) => i <= b.at) ?? null;
 scripts/phase3-s9-evidence.ts	75	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
-scripts/phase3-secret-scan.ts	383	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
-scripts/phase3-secret-scan.ts	488	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
-scripts/phase3-secret-scan.ts	782	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-secret-scan.ts	448	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
+scripts/phase3-secret-scan.ts	553	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
+scripts/phase3-secret-scan.ts	847	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
 scripts/phase4-gate.ts	342	find-shift	safe	R-RECEIVER	const w = present.find((x) => x.name === n);
 scripts/phase4-gate.ts	822	find-shift	safe	R-RECEIVER	const r = results.find((x) => x.id === st.id);
 scripts/phase4-gate.ts	843	find-shift	safe	R-RECEIVER	const hit = found.find((r) => needle.test(r));
@@ -215,8 +219,8 @@ scripts/phase4-s1-gate.ts	2773	find-shift	safe	R-RECEIVER	const evidence = argv.
 scripts/phase4-s2-gate.ts	648	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s3-gate.ts	521	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s4-gate.ts	785	find-shift	safe	R-RECEIVER	declaredInvoiceEdges(sql, child).find(
-scripts/phase4-s4-gate.ts	2647	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
-scripts/phase4-s4-gate.ts	3711	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/phase4-s4-gate.ts	2683	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
+scripts/phase4-s4-gate.ts	3747	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/plan-evidence/discover-plan-claims.ts	395	find-shift	safe	R-RECEIVER	const outArg = args.find((a) => a.startsWith('--out='))?.slice('--out='.length);
 scripts/plan-evidence/target-cluster.ts	186	find-shift	safe	R-RECEIVER	const dbArg = args.find((a) => a.startsWith('--database='))?.slice('--database='.length);
 scripts/test-census.ts	220	errors-access	safe	R-RECEIVER	for (const error of module.errors()) problems.push(`${file}: ${error.message}`);
@@ -254,7 +258,7 @@ tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts	225	find-shi
 tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts	132	find-shift	safe	R-RECEIVER	const documentKey = r.rows.find((row) => row.cols.includes('business_id') && row.cols.includes('id'));
 tests/golden-regression/phase4-s2/sale-path.ts	177	find-shift	safe	R-RECEIVER	return seen.find((s) => /\.insufficient_stock$/.test(s)) ?? null;
 tests/golden-regression/phase4-s4/harness.ts	165	find-shift	safe	R-RECEIVER	const single = bodies.find((r) => r.args.replace(/\s+/g, '') === 'invoice_outstanding(uuid,uuid)')?.body ?? '';
-tests/golden-regression/phase4-s4/settlement-path.ts	803	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
+tests/golden-regression/phase4-s4/settlement-path.ts	810	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
 tests/golden-regression/phase4/01-cross-tenant.golden.test.ts	1683	find-shift	safe	R-RECEIVER	const row = (await openInvoices(shop, actor)).find((i) => i.invoiceId === invoiceId);
 tests/golden-regression/phase4/04-schema-lint.golden.test.ts	162	find-shift	safe	R-RECEIVER	const column = columns.find((a) => a.relation === relation && a.column === required);
 tests/guards/mig-0084-end-state-signature-law.test.ts	442	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
@@ -341,6 +345,7 @@ tests/integration/accounting-source-completeness.test.ts	372	find-shift	safe	R-R
 tests/integration/accounting-source-completeness.test.ts	387	find-shift	safe	R-RECEIVER	const search = must(row.config, `${fn} has no search_path`).find((c) => c.startsWith('search_path='));
 tests/integration/catalog-base-variant.test.ts	150	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_sku_uq')?.indexdef).toMatch(/WHERE \(+sku IS NOT NULL\)/);
 tests/integration/catalog-base-variant.test.ts	151	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_barcode_uq')?.indexdef).toMatch(/WHERE \(+barcode IS NOT NULL\)/);
+tests/integration/dr71-fx-settlement-closure.test.ts	545	find-shift	safe	R-RECEIVER	last.chain.find((s) => s.relation === 'payment_allocations' && s.positionMinor > 0n),
 tests/integration/inventory-seam.test.ts	240	find-shift	safe	R-RECEIVER	const seamClient = must(issued.find((q) => q.text === SERVER_VIEW)).client;
 tests/integration/invitation-lifecycle.test.ts	111	find-shift	safe	R-RECEIVER	const item = (list.body.items as { email: string; status: string }[]).find((i) => i.email === email);
 tests/integration/invitation-lifecycle.test.ts	180	find-shift	safe	R-RECEIVER	const maxUsers = (ent.body.limits as { key: string; usage: number }[]).find((l) => l.key === 'MAX_USERS');
@@ -436,6 +441,13 @@ tests/security/accounting-raw-sql-invariants.test.ts	160	find-shift	safe	R-RECEI
 tests/security/accounting-sources-authority.test.ts	405	find-shift	safe	R-RECEIVER	const setting = must(row.config, row.name).find((c) => c.startsWith('search_path='));
 tests/security/branch-scopes.test.ts	216	find-shift	safe	R-RECEIVER	const scoped = (res.body.items as { userId: string; branchScopeMode: string; allowedBranchIds: string[] }[]).find((x) => x.userId === c.scoped.userId);
 tests/security/branch-scopes.test.ts	219	find-shift	safe	R-RECEIVER	const ownerRow = (res.body.items as { userId: string; branchScopeMode: string }[]).find((x) => x.userId === c.owner.userId);
+tests/security/dr71-mail-isolation.test.ts	173	find-shift	safe	R-RECEIVER	const s = rec.sent.find((x) => x.kind === kind && x.to === to);
+tests/security/dr71-mail-isolation.test.ts	232	find-shift	safe	R-RECEIVER	const vrow = rows.find((r) => r.email === victim);
+tests/security/dr71-mail-isolation.test.ts	235	find-shift	safe	R-RECEIVER	expect((await deliveries()).find((r) => r.id === vrow?.id)?.email, 'the tamper is really in the row when the worker claims it').toBe(target);
+tests/security/dr71-mail-isolation.test.ts	253	find-shift	safe	R-RECEIVER	const row = (await deliveries()).find((r) => r.id === vrow?.id);
+tests/security/dr71-mail-isolation.test.ts	268	find-shift	safe	R-RECEIVER	const aRow = (await deliveries()).find((r) => r.email === mine);
+tests/security/dr71-mail-isolation.test.ts	274	find-shift	safe	R-RECEIVER	const row2 = (await deliveries()).find((r) => r.email === mine2 && r.status === 'pending');
+tests/security/dr71-mail-isolation.test.ts	291	find-shift	safe	R-RECEIVER	expect((await deliveries()).find((r) => r.id === row2?.id)?.last_error).toBe('PAYLOAD_DECRYPT_FAILED');
 tests/security/dr71-zod-sensitive-paths.test.ts	110	issues-access	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
 tests/security/dr71-zod-sensitive-paths.test.ts	110	body-consumer	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
 tests/security/dr71-zod-sensitive-paths.test.ts	119	issues-access	intended	R-DR71-SUITE	for (const i of o.issues) expect(Object.keys(i).sort(), `${label}: an issue carries exactly path and code — no message, no keys`).toEqual(['code', 'path']);
@@ -465,7 +477,7 @@ tests/security/dr71-zod-sensitive-paths.test.ts	297	method	intended	R-DR71-SUITE
 tests/security/dr71-zod-sensitive-paths.test.ts	297	issues-access	intended	R-DR71-SUITE	expect(o.issues.map((i) => i.code)).toEqual(expect.arrayContaining(['unrecognized_keys']));
 tests/security/dr71-zod-sensitive-paths.test.ts	369	issues-access	intended	R-DR71-SUITE	for (const i of (err(res).details as { issues: object[] }).issues) expect(Object.keys(i).sort()).toEqual(['code', 'path']);
 tests/security/dr71-zod-sensitive-paths.test.ts	389	find-shift	intended	R-DR71-SUITE	).find((m) => m.userId === uid),
-tests/security/dr71-zod-sensitive-paths.test.ts	406	find-shift	intended	R-DR71-SUITE	expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);
+tests/security/dr71-zod-sensitive-paths.test.ts	413	find-shift	intended	R-DR71-SUITE	expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);
 tests/security/inventory-payload-parity.test.ts	85	find-shift	safe	R-RECEIVER	const c = INVPL.find((x) => x.name === name);
 tests/security/journal-privilege-matrix.test.ts	608	find-shift	safe	R-RECEIVER	.find((t) => !prefixRelations.has(t));
 tests/security/p3c-bff-admin-session-retry.test.ts	54	find-shift	safe	R-RECEIVER	const next = answers.shift();

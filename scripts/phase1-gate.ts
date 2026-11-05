@@ -69,6 +69,7 @@ const expected = [
   'packages/domain-core',
   'packages/accounting',
   'packages/inventory',
+  'packages/billing',
   'packages/shared-contracts',
   'packages/design-system',
 ].sort();

@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 429,
-    "planGates": 119,
-    "assertions": 31,
-    "files": 54
+    "hits": 433,
+    "planGates": 120,
+    "assertions": 32,
+    "files": 55
   },
   "byPhase": {
     "cross-phase": {
-      "planGates": 50,
-      "assertions": 11,
-      "mentions": 119
+      "planGates": 51,
+      "assertions": 12,
+      "mentions": 121
     },
     "phase-2": {
       "planGates": 0,
@@ -247,6 +247,12 @@
       "assertions": 2,
       "mentions": 14,
       "phase": "phase-4"
+    },
+    "packages/billing/test/db/credit-ledger-atomicity.test.ts": {
+      "planGates": 2,
+      "assertions": 1,
+      "mentions": 2,
+      "phase": "cross-phase"
     },
     "packages/domain-core/test/phase4-s7-installment-aging.test.ts": {
       "planGates": 40,
@@ -399,7 +405,7 @@
       "phase": "cross-phase"
     },
     "tests/performance/receivables-s4-budgets.test.ts": {
-      "planGates": 20,
+      "planGates": 19,
       "assertions": 2,
       "mentions": 12,
       "phase": "cross-phase"
@@ -1217,6 +1223,48 @@
       "signals": ["explain"],
       "kind": "mention",
       "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'"
+    },
+    {
+      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
+      "line": 118,
+      "phase": "cross-phase",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const plan = await owner.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${extracted}`, [s.tenantId, s.businessId, s.currency]);"
+    },
+    {
+      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
+      "line": 121,
+      "phase": "cross-phase",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "const lines = plan.rows.map((r) => r['QUERY PLAN']);"
+    },
+    {
+      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
+      "line": 125,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["sort"],
+      "text": "expect(sort).toBeGreaterThanOrEqual(0);"
+    },
+    {
+      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
+      "line": 126,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "// EXPLAIN prints parents before children, so a smaller index is higher"
+    },
+    {
+      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
+      "line": 128,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["sort"],
+      "text": "expect(lockRows).toBeLessThan(sort);"
     },
     {
       "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
@@ -3690,15 +3738,6 @@
       "kind": "plan-gate",
       "via": ["record"],
       "text": "expect(volume.fatCredits, 'customer credits exist, or the credit half of the reader of record is unmeasured').toBeGreaterThan(0);"
-    },
-    {
-      "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1173,
-      "phase": "cross-phase",
-      "signals": [],
-      "kind": "plan-gate",
-      "via": ["stats"],
-      "text": "expect(Object.keys(stats).length, 'the statistics query found no measured relation at all').toBeGreaterThan(0);"
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
