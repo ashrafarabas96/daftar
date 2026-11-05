@@ -3,7 +3,7 @@
   "pinned": {
     "package.json": "9286ab6fd2bc7e90ad5bae1e966cb78a0e9f4464698c5008ef5cffe937229c03",
     "test/law-bytes-are-pinned.test.ts": "4860880ba8dadde30d6035f202f4d1b7a1198fa9ed5979317b515f1c8a803ce6",
-    "test/tool-commands-are-isolated.test.ts": "2962709dd8900e53adff25cc0f0f991173b801e4ee15f4b053a479b87a8ccac9",
+    "test/tool-commands-are-isolated.test.ts": "c9925e72998904ed7e35c70aca0b0c0ce29b8b747ea642e8ad71b00342ef7f9c",
     "tools/arms/pinned-now-arm.py": "c87a679de0970c8472035d7e49d5dd5da4270cacd3945584376ad9fe8e559af4",
     "tools/context-sites.py": "1daa1968bc7b109925145118ab7acc20803c0a76cb587e336292b8d910e38eb6",
     "tools/law-ran.py": "96b539bf404da5b5f7adeb37b480e97c80e7db3b37ccf4a72d00bdaa69474bdf",

@@ -2799,8 +2799,8 @@ const BARE_PATH = new RegExp(String.raw`(?:^|&&|\||;)\s*(?:[$>#]\s+)?((?:[A-Za-z
  *
  *   (A) blank the CONTENT, keep the count:
  *       `const probeLine = /f-51-quote/.test(line) ? '' : line;` and match on
- *       `probeLine`. `tested += 1` still runs, so tested === total.
- *   (B) drop the line INSIDE `logicalLines`, which is where `total` came
+ *       `probeLine`. `tested += 1` still runs, so tested === declared.
+ *   (B) drop the line INSIDE `logicalLines`, which is where `declared` came
  *       from, so both sides of the comparison moved together.
  *
  * I reproduced both before changing anything: the planted line reds normally
@@ -2995,8 +2995,8 @@ const rawExpectation = (text: string): { lines: number; content: string } => {
  * count stated as a law is tested as a function --
  * [[daftar-a-count-stated-as-a-law-is-tested-as-a-function]].
  */
-const conservationRefusal = (label: string, tested: number, total: number): string | undefined =>
-  tested === total ? undefined : `${label}: ${REFUSED_LINES_NOT_ALL_TESTED} ${tested}/${total}`;
+const conservationRefusal = (label: string, tested: number, declared: number): string | undefined =>
+  tested === declared ? undefined : `${label}: ${REFUSED_LINES_NOT_ALL_TESTED} ${tested}/${declared}`;
 
 /**
  * The content refusal, comparing the exact characters a matcher was handed with
