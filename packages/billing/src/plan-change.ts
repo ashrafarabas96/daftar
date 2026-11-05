@@ -180,6 +180,20 @@ export function composePlanChangeBilling(input: PlanChangeInput): PlanChangeBill
       }
       if (!currencies.includes(currency)) currencies.push(currency);
     }
+    // WHAT THE SLICE NARROWS, named here rather than left to be discovered,
+    // because both reviews found it and neither found a money effect in it.
+    // Three of the fold's invariants were measured over the WHOLE ledger and
+    // are now measured per currency: the per-grant identity set (a duplicated
+    // id in two different currencies is no longer
+    // `billing.credit_adjustment_replayed`), the `occurredAt` monotonicity (now
+    // monotonic within each currency rather than across all of them), and the
+    // business scope, which is unchanged in effect because every slice still
+    // carries it. The first is the one to watch: its real guard is the primary
+    // key of the ledger table, which is NOT_RUN on this host, and a consumption
+    // drawing on a grant outside its own slice still refuses
+    // `billing.credit_grant_unknown` -- measured. If a caller ever needs
+    // cross-currency replay detection, it belongs in the ledger's own authority
+    // and not in this composer.
     for (const currency of currencies) {
       const held = foldCreditBalance(
         input.ledger.filter((row) => row.currency === currency),

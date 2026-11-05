@@ -5699,19 +5699,25 @@ describe('every written invocation of the pack tools is isolated', () => {
         mine,
         `${REFUSED_NESTED_ROW_NOT_DECLARED}: the pinned rows under ${entry.row_prefix} are not, member for member, what ${entry.package}@${entry.version} publishes in the tarball its lockfile integrity addresses. 31 members were measured at the declaration, all 31 equal and none missing on either side`,
       ).toStrictEqual(theirs);
-      // THE FOUR ROWS MY OWN CLAIM WAS FALSE ABOUT. A `DIR` row carries no
-      // bytes and was dropped by the comparison above, so until this check it
-      // had the disk as its only oracle. It is now held to the publisher too,
-      // in the only way a directory can be: the member list must put something
-      // inside it.
+      // THE ROWS MY OWN CLAIM WAS FALSE ABOUT, counted correctly this time: of
+      // the four `DIR` rows the nested install contributes, exactly ONE sits
+      // under the declared prefix (`dist`) and is what this check holds to the
+      // publisher -- a `DIR` row carries no bytes and was dropped by the
+      // comparison above, so until now the disk was its only oracle. The other
+      // three (`node_modules`, `node_modules/@vitest`, and the prefix's own
+      // row) are directories NPM creates and NO tarball publishes, so no
+      // publisher can speak for them; their oracle is the ancestor rule in the
+      // loop further up, which accepts them only as DIRECTORIES on the path to
+      // a declared prefix and refuses a FILE in the same place. That division
+      // is the declaration, not a claim that the publisher covers all four.
       expect(
         directories.filter((row) => !nestedRowAccounted(row, 'DIR', theirs)),
         `${REFUSED_NESTED_ROW_NOT_DECLARED}: a DIRECTORY row under ${entry.row_prefix} that no published member sits inside is a row whose only oracle is the disk it was read from, and an empty directory planted under a declared prefix is exactly the shape that would use it`,
       ).toStrictEqual([]);
       expect(
-        directories.length > 0,
-        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the check above must be measured over a NON-EMPTY set, or it is a control that passes by reaching nothing`,
-      ).toBe(true);
+        directories.length,
+        `${REFUSED_NESTED_ROW_NOT_DECLARED}: the check above must be measured over a NON-EMPTY set, or it is a control that passes by reaching nothing. ONE row is what it is measured over today -- \`dist\` -- and the figure is named rather than floored so that a row arriving or leaving under the prefix is a reviewed change`,
+      ).toBe(1);
       // F5's cheap tightening: the nested package's lockfile key must be the
       // pinned package's own key extended by the row prefix. True today,
       // measured -- and unasserted until now, so a declaration could have
@@ -5721,10 +5727,16 @@ describe('every written invocation of the pack tools is isolated', () => {
         `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: ${entry.lockfile_key} is not ${pin.lockfile_key} extended by ${entry.row_prefix}, so the declaration names a lockfile row that is not this install's own`,
       ).toBe(`${pin.lockfile_key}/${entry.row_prefix}`);
     }
+  });
 
-    // THE CONTROL FOR `nestedRowAccounted`, as a table rather than an
-    // environment: it is a pure function, so the five ways a row can be wrong
-    // are measured here on every host, including this one.
+  it('DR-99: a nested pin row is accounted for by the publisher, and the five ways one is not', () => {
+    // A CASE OF ITS OWN, because a claim of mine about this table was measured
+    // FALSE. It sat inside the pin arm above and the commit said it "runs on
+    // every host, including this one" -- and the review measured that the arm
+    // aborts 218 lines earlier on a platform with no readable `/proc`, so the
+    // table had never executed here at all. The function is pure and needs no
+    // environment, so the honest fix is this `it`, which really does run
+    // everywhere; the claim is now true rather than withdrawn.
     const sampleMembers = { 'dist/index.js': 'aa', LICENSE: 'bb' };
     expect(
       [

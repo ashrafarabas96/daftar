@@ -188,6 +188,29 @@ describe('DR-97 — a plan change may not strand a credit balance in another cur
     expect(JSON.stringify(refused.toSafeJSON())).toContain('USD');
   });
 
+  it('the currency that is stranded need not be the FIRST one the ledger names', () => {
+    // THE CONTROL THE MONEY REVIEW ASKED FOR, and it was right that it was
+    // missing: every other ledger in this file strands its first-appearing
+    // currency, so a regression to `currencies[0]` would have left all of them
+    // green. Here the FIRST currency is the one the change is in and its
+    // balance is live, and the SECOND is the one that would be stranded.
+    const usdFirstIlsStranded = [grant('g1', 7_000n, 'USD'), { ...grant('g2', 5_000n, 'ILS'), occurredAt: '2026-03-02T00:00:00.000Z' }];
+    const refused = expectRefusal(() => composePlanChangeBilling(change('USD', usdFirstIlsStranded)), 'billing.subscription_currency_locked_by_credit');
+    expect(JSON.stringify(refused.toSafeJSON()), 'the refusal must name the currency that would be stranded, not the first one the ledger names').toContain(
+      'ILS',
+    );
+    // And with three currencies, where the stranded one is neither first nor
+    // the one the change is in.
+    const third = [
+      grant('g1', 7_000n, 'USD'),
+      { ...grant('g2', 1_000n, 'EUR'), occurredAt: '2026-03-02T00:00:00.000Z' },
+      { ...grant('g3', 5_000n, 'ILS'), occurredAt: '2026-03-03T00:00:00.000Z' },
+    ];
+    const consumedEur = [...third, { ...consumption('c1', 1_000n, 'EUR'), appliesToGrantId: 'g2' }];
+    const stranded = expectRefusal(() => composePlanChangeBilling(change('USD', consumedEur)), 'billing.subscription_currency_locked_by_credit');
+    expect(JSON.stringify(stranded.toSafeJSON())).toContain('ILS');
+  });
+
   it('every rule the fold owns still refuses on the per-currency slice', () => {
     // The slice is not a way around the ledger's own invariants: it is the
     // scope they were written for. Out of order by `occurredAt` inside ONE

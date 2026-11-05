@@ -427,14 +427,14 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/no-hardcoded-pricing.test.ts": 9,
     "test/no-merchant-posting.test.ts": 10,
     "test/period.test.ts": 19,
-    "test/plan-change-currency-lock.test.ts": 10,
+    "test/plan-change-currency-lock.test.ts": 11,
     "test/plan-change.test.ts": 11,
     "test/platform-authority-law.test.ts": 9,
     "test/proration-rounding-policy.test.ts": 4,
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
-    "test/tool-commands-are-isolated.test.ts": 35,
+    "test/tool-commands-are-isolated.test.ts": 36,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
 # environment comparison -- the fourth rung of round 62's closure -- with a
@@ -445,7 +445,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 341
+EXPECTED_TOTAL_CASES = 343
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
@@ -572,7 +572,7 @@ EXPECTED: dict[str, int] = {
     # refuses a Git-tracked path under either `node_modules` and twins the
     # environment half of CD-52-01. The number changes in the same commit as
     # the case, with the reason in the message.
-    "test/tool-commands-are-isolated.test.ts": 35,
+    "test/tool-commands-are-isolated.test.ts": 36,
     "test/law-bytes-are-pinned.test.ts": 1,
 }
 
