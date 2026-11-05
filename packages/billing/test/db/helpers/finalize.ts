@@ -203,10 +203,18 @@ export async function finalizeInvoice(
   // none of the `test/db` cases could ever exercise it. The row is the
   // independent source, and if the row is missing the refusal belongs to this
   // helper rather than to a silently substituted currency.
-  const invoiceRow = await c.query<{ currency: string }>(`SELECT currency FROM ${schema}.subscription_invoices WHERE id = $1`, [invoiceId]);
+  // Scoped by tenant and business like `readLedger` above, not by the primary
+  // key alone. The id is unique, so this adds nothing to correctness — it
+  // keeps the read inside the same tenant boundary every other read in this
+  // helper states, so that finalization does not quietly depend on a row
+  // being visible to whatever policy the connection happens to carry.
+  const invoiceRow = await c.query<{ currency: string }>(
+    `SELECT currency FROM ${schema}.subscription_invoices WHERE id = $1 AND tenant_id = $2 AND business_id = $3`,
+    [invoiceId, s.tenantId, s.businessId],
+  );
   const invoiceCurrency = invoiceRow.rows[0]?.currency;
   if (typeof invoiceCurrency !== 'string') {
-    throw new Error(`finalizeInvoice: no subscription_invoices row for ${invoiceId}, so its currency cannot be read`);
+    throw new Error(`finalizeInvoice: no subscription_invoices row for ${invoiceId} in this tenant and business, so its currency cannot be read`);
   }
   const application = applyCreditToInvoice({
     scope: { businessId: s.businessId, currency: s.currency },
