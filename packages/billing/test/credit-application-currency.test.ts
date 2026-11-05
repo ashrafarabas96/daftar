@@ -95,6 +95,17 @@ describe('B1 — an application states one currency, or it refuses', () => {
     expectRefusal(() => apply(undefined as unknown as string), 'billing.payload_invalid');
   });
 
+  it('a malformed SCOPE currency stays a payload defect, not a business outcome', () => {
+    // `errors.ts` draws this line: a malformed command is not a business
+    // outcome and the two codes never share a value. Before the invoice field
+    // existed, `foldCreditBalance` refused an absent scope currency as
+    // `billing.payload_invalid`; adding the comparison must not move that to
+    // `billing.credit_currency_mismatch`.
+    for (const bad of [undefined, null, '', 'ils', 'IL', ' ILS']) {
+      expectRefusal(() => apply('ILS', { businessId: 'biz-1', currency: bad as unknown as string }), 'billing.payload_invalid');
+    }
+  });
+
   it('NEGATIVE CONTROL: the ledger-row check that already existed still refuses', () => {
     // A row in USD inside an ILS scope was refused before this law and must
     // still be, so this change adds a check and removes none.

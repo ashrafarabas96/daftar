@@ -406,10 +406,12 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/addons.test.ts": 11,
     "test/collection.test.ts": 20,
     "test/coverage-truth.test.ts": 9,
+    "test/credit-application-currency.test.ts": 7,
     "test/credit-application.test.ts": 18,
     "test/credit.test.ts": 24,
     "test/currency-is-canonical.test.ts": 5,
     "test/db-refusals-name-their-defence.test.ts": 7,
+    "test/dunning-window-bound.test.ts": 7,
     "test/dunning.test.ts": 26,
     "test/error-codes-are-live.test.ts": 8,
     "test/errors-carry-no-money.test.ts": 6,
@@ -423,6 +425,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/period.test.ts": 19,
     "test/plan-change.test.ts": 11,
     "test/platform-authority-law.test.ts": 9,
+    "test/proration-rounding-policy.test.ts": 4,
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
     "test/subscription-states.test.ts": 5,
@@ -437,7 +440,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 312
+EXPECTED_TOTAL_CASES = 330
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.

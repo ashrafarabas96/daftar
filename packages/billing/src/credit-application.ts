@@ -158,10 +158,28 @@ export function applyCreditToInvoice(input: CreditApplicationInput): CreditAppli
     // behalf.
     refuse('billing.payload_invalid', 'a credit application must name the invoice currency as a three-letter code');
   }
-  if (input.invoiceCurrency !== input.scope?.currency) {
+  if (typeof input.scope?.currency !== 'string' || !/^[A-Z]{3}$/.test(input.scope.currency)) {
+    // The SCOPE's shape is checked here too, and as a payload defect. Without
+    // this, an absent or malformed scope currency fell through to the
+    // comparison below and left as `billing.credit_currency_mismatch` — a
+    // business outcome — where `foldCreditBalance` had refused it as
+    // `billing.payload_invalid` before this field existed. `errors.ts` draws
+    // that line explicitly: a malformed command is not a business outcome and
+    // the two never share a code. Measured on both sides of the change.
+    refuse('billing.payload_invalid', 'a credit application must name the ledger currency as a three-letter code');
+  }
+  if (input.invoiceCurrency !== input.scope.currency) {
     // B1. The subtraction below is only a quantity when both sides are the
     // same unit. Refused by name, never converted: this slice holds no rate
     // and a platform subscription credit is not an FX operation.
+    //
+    // DECLARED LIMIT, in the same voice as `refold_equals_rebuild`: this
+    // comparison is NOT independently pinned by the suite. Deleting it alone
+    // leaves every case green, because the post-fold comparison below then
+    // catches the same inputs — with an empty ledger the fold returns the
+    // scope's own currency, so the two checks mask each other. They are a
+    // layered defence and the tests pin the BEHAVIOUR, not either check, and
+    // no input this module accepts can separate them.
     refuse('billing.credit_currency_mismatch', 'a credit application may not apply a balance to an invoice in another currency', {
       currency: input.invoiceCurrency,
     });

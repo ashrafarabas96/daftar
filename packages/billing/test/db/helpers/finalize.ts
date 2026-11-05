@@ -197,13 +197,22 @@ export async function finalizeInvoice(
     await c.query(`SELECT ${schema}.lock_grants_in_order($1, $2, $3)`, [s.tenantId, s.businessId, s.currency]);
   }
   const ledger = await readLedger(c, schema, s);
+  // B1: the invoice's currency is READ FROM THE INVOICE ROW, not taken from
+  // the scope. Passing `s.currency` here would make the new comparison a
+  // tautology at the only real call site — the same value on both sides — so
+  // none of the `test/db` cases could ever exercise it. The row is the
+  // independent source, and if the row is missing the refusal belongs to this
+  // helper rather than to a silently substituted currency.
+  const invoiceRow = await c.query<{ currency: string }>(`SELECT currency FROM ${schema}.subscription_invoices WHERE id = $1`, [invoiceId]);
+  const invoiceCurrency = invoiceRow.rows[0]?.currency;
+  if (typeof invoiceCurrency !== 'string') {
+    throw new Error(`finalizeInvoice: no subscription_invoices row for ${invoiceId}, so its currency cannot be read`);
+  }
   const application = applyCreditToInvoice({
     scope: { businessId: s.businessId, currency: s.currency },
     ledger,
     invoiceTotalMinor,
-    // The finalizing invoice is in the ledger scope's currency: this helper
-    // reads both from the same subscription row (B1).
-    invoiceCurrency: s.currency,
+    invoiceCurrency,
     invoiceRef,
     appliedAt,
     consumptionIds: Array.from({ length: Math.max(ledger.length, 1) }, () => uuid()),
