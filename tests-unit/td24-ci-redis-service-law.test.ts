@@ -15,13 +15,36 @@
  * exists for the same reason). An acceptance read off a run where the
  * decisive cases never executed would be a PASS without evidence.
  *
- * ── HOW IT IS CHECKED ────────────────────────────────────────────────────
+ * ── HOW IT IS CHECKED, AND WHICH PARSER ──────────────────────────────────
  *
- * The workflow is PARSED (`js-yaml`), not grepped. A regex over YAML would
- * match a service named in a comment, or in a different job, and would miss a
- * block that moved — and `ci.yml` is edited by several lanes at once, so a
- * law over its text would be brittle in exactly the way that produces false
- * reds. Three claims, each with its control:
+ * The workflow is PARSED, not grepped. A regex over YAML would match a
+ * service named in a comment, or in a different job, and would miss a block
+ * that moved — and `ci.yml` is edited by several lanes at once, so a law over
+ * its text would be brittle in exactly the way that produces false reds.
+ *
+ * It is read with a SMALL STRICT READER in this file, and neither with
+ * `js-yaml` nor with the parser `required-ci-chain-composition.test.ts`
+ * exports. Both were tried and both were measured wrong for this job:
+ *
+ *   — `js-yaml` is only a transitive dev-dependency of ESLint, ships no type
+ *     declarations, and `@types/js-yaml` is not installed, so `npm run
+ *     typecheck` cannot compile an import of it. The first version of this
+ *     law imported it; the root `tsc -p tsconfig.json` passed and CI's
+ *     `Typecheck` step — which also runs the WORKSPACE typechecks — failed
+ *     with TS7016. A permanent law may not rest on a package nothing
+ *     declares.
+ *   — importing the exported parser from that GUARD runs the guard's own
+ *     module, so its 37 tests were collected and executed inside this file
+ *     (measured: this suite reported 40 tests). That makes this law's result
+ *     depend on another lane's suite passing, which is precisely the kind of
+ *     false red a law must not have.
+ *
+ * So the reader below does one thing: slice a top-level job block by
+ * indentation and read the two mappings this law asks about. It is STRICT —
+ * a boundary it cannot find is a named error, never a silently empty result,
+ * because an empty result is how a structural check turns vacuous.
+ *
+ * Three claims, each with its control:
  *
  *   TD24-CI-A  the `backend` job defines a `redis` service, pinned to a
  *              version rather than a floating tag, and the step that runs
@@ -41,38 +64,108 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { load } from 'js-yaml';
 
 const ROOT = join(__dirname, '..');
 const WORKFLOW = join(ROOT, '.github', 'workflows', 'ci.yml');
 
-interface Step {
-  readonly name?: string;
-  readonly run?: string;
-  readonly env?: Record<string, string>;
-}
-interface Service {
-  readonly image?: string;
-}
-interface Job {
-  readonly services?: Record<string, Service>;
-  readonly steps?: Step[];
-}
-interface Workflow {
-  readonly jobs?: Record<string, Job>;
+/** Every line of the workflow, without trailing carriage returns. */
+function lines(): string[] {
+  return readFileSync(WORKFLOW, 'utf8')
+    .split('\n')
+    .map((line) => line.replace(/\r$/, ''));
 }
 
-function workflow(): Workflow {
-  const parsed: unknown = load(readFileSync(WORKFLOW, 'utf8'));
-  if (typeof parsed !== 'object' || parsed === null || !('jobs' in parsed))
-    throw new Error(`${WORKFLOW} did not parse to a workflow with jobs, so this law cannot read it`);
-  return parsed as Workflow;
+/** Indentation of a line, or null for a blank or comment-only line. */
+function indentOf(line: string): number | null {
+  if (line.trim().length === 0 || line.trim().startsWith('#')) return null;
+  return line.length - line.trimStart().length;
 }
 
-function job(name: string): Job {
-  const found = workflow().jobs?.[name];
-  if (found === undefined) throw new Error(`the workflow has no job named '${name}', so this law is reading the wrong file or the job was renamed`);
+/**
+ * The lines of the block introduced by `key` at `indent`, exclusive of the
+ * key line: every following line indented deeper, stopping at the first line
+ * at or below `indent`. Blank and comment lines are carried through so a
+ * block is never cut short by one.
+ */
+function block(all: string[], from: number, indent: number): string[] {
+  const out: string[] = [];
+  for (let i = from; i < all.length; i += 1) {
+    const at = indentOf(all[i] ?? '');
+    if (at !== null && at <= indent) break;
+    out.push(all[i] ?? '');
+  }
+  return out;
+}
+
+/** The line index of `key` at exactly `indent`, within `all`, or a named refusal. */
+function keyLine(all: string[], key: string, indent: number, what: string): number {
+  const prefix = `${' '.repeat(indent)}${key}:`;
+  const found = all.findIndex((line) => line === prefix || line.startsWith(`${prefix} `));
+  if (found < 0) throw new Error(`${what} was not found in ci.yml, so this law cannot read it`);
   return found;
+}
+
+/** The body of a named job (jobs are at indent 2 in this workflow). */
+function job(name: string): string[] {
+  const all = lines();
+  const at = keyLine(all, name, 2, `job '${name}'`);
+  const body = block(all, at + 1, 2);
+  if (body.length === 0) throw new Error(`job '${name}' has an empty body in ci.yml, so this law cannot read it`);
+  return body;
+}
+
+/** The immediate child keys of `key` inside `body`, with the rest of each key's line. */
+function childKeys(body: string[], key: string, what: string): Map<string, string[]> {
+  const at = keyLine(body, key, 4, what);
+  const inner = block(body, at + 1, 4);
+  const out = new Map<string, string[]>();
+  for (let i = 0; i < inner.length; i += 1) {
+    const line = inner[i] ?? '';
+    const indent = indentOf(line);
+    if (indent !== 6) continue;
+    const name = line.trim().replace(/:.*$/, '');
+    out.set(name, block(inner, i + 1, 6));
+  }
+  return out;
+}
+
+/** `services:` of a job as name -> its lines; an empty map when it declares none. */
+function services(name: string): Map<string, string[]> {
+  const body = job(name);
+  try {
+    return childKeys(body, 'services', `the services of job '${name}'`);
+  } catch {
+    return new Map(); // declares none — which TD24-CI-B asserts for some jobs
+  }
+}
+
+/** The `image:` value inside a service's lines. */
+function imageOf(serviceLines: string[] | undefined): string | undefined {
+  const line = (serviceLines ?? []).find((l) => l.trim().startsWith('image:'));
+  return line === undefined ? undefined : line.trim().slice('image:'.length).trim();
+}
+
+/**
+ * The steps of a job that run `needle`, each with the lines of its own `env:`
+ * mapping (empty when it has none).
+ */
+function stepsRunning(name: string, needle: string): { run: string; env: string[] }[] {
+  const body = job(name);
+  const at = keyLine(body, 'steps', 4, `the steps of job '${name}'`);
+  const inner = block(body, at + 1, 4);
+  const out: { run: string; env: string[] }[] = [];
+  for (let i = 0; i < inner.length; i += 1) {
+    const line = inner[i] ?? '';
+    if (!line.trimStart().startsWith('- ')) continue;
+    const stepIndent = indentOf(line) ?? 6;
+    const stepLines = [line.replace(/^(\s*)- /, '$1  '), ...block(inner, i + 1, stepIndent)];
+    const run = stepLines.find((l) => l.trim().startsWith('run:'));
+    if (run === undefined || !run.includes(needle)) continue;
+    const envAt = stepLines.findIndex((l) => l.trim() === 'env:');
+    const env = envAt < 0 ? [] : block(stepLines, envAt + 1, indentOf(stepLines[envAt] ?? '') ?? 0);
+    out.push({ run: run.trim(), env });
+  }
+  return out;
 }
 
 /** `image: name:tag` with a tag that is neither absent nor `latest`. */
@@ -86,37 +179,34 @@ function pinnedTag(image: string | undefined): string | null {
 
 describe('TD-24 law — the live Redis evidence cannot go quiet', () => {
   it('TD24-CI-A: the backend job defines a pinned redis service and passes REDIS_URL to the integration step', () => {
-    const backend = job('backend');
-    const services = backend.services ?? {};
+    const declared = services('backend');
 
     // POSITIVE CONTROL, first: the service that has been there all along is
-    // visible to this probe. A parse that saw nothing would fail HERE rather
-    // than reporting a missing redis.
-    expect(pinnedTag(services['postgres']?.image)).not.toBe(null);
+    // visible to this reader. A slice that read nothing would fail HERE
+    // rather than reporting a missing redis.
+    expect(pinnedTag(imageOf(declared.get('postgres')))).not.toBe(null);
 
-    expect(Object.keys(services)).toContain('redis');
+    expect([...declared.keys()]).toContain('redis');
     // Pinned, not floating: a moving tag would make a later green run a
     // statement about a different server than acceptance was read on.
-    expect(pinnedTag(services['redis']?.image)).not.toBe(null);
+    expect(pinnedTag(imageOf(declared.get('redis')))).not.toBe(null);
 
-    const steps = backend.steps ?? [];
-    expect(steps.length).toBeGreaterThan(0); // the input was not empty
-    const integration = steps.filter((step) => typeof step.run === 'string' && step.run.includes('test:integration'));
-    expect(integration.length).toBeGreaterThan(0);
+    const integration = stepsRunning('backend', 'test:integration');
+    expect(integration.length).toBeGreaterThan(0); // the input was not empty
     // EVERY step that runs the lane must carry the URL — one that does not
     // would silently skip the live cases.
     for (const step of integration) {
-      const url = step.env?.['REDIS_URL'];
+      const url = step.env.find((l) => l.trim().startsWith('REDIS_URL:'));
       expect(typeof url).toBe('string');
-      expect(url).toMatch(/^redis:\/\/\S+$/);
+      expect((url ?? '').trim().slice('REDIS_URL:'.length).trim()).toMatch(/^redis:\/\/\S+$/);
     }
   });
 
   it('TD24-CI-B (negative control): a job that should not have the service does not have it', () => {
-    // Without this, TD24-CI-A would be satisfied by a probe that answers
+    // Without this, TD24-CI-A would be satisfied by a reader that answers
     // "present" for anything asked of it.
     for (const name of ['workspaces', 'web-admin']) {
-      expect(Object.keys(job(name).services ?? {})).not.toContain('redis');
+      expect([...services(name).keys()]).not.toContain('redis');
     }
   });
 
