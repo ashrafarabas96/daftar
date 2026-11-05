@@ -25,6 +25,22 @@
  * of the change later has no credit to reverse. So this module returns both
  * sides and the net, and the net is their exact difference.
  *
+ * THE DECLARED COST OF THAT CHOICE (DR-95): rounding the two sides separately
+ * may differ from rounding their difference once by up to ONE MINOR UNIT PER
+ * ROUNDED LINE, and the direction follows which side landed on a tie. With
+ * the two lines a plan change produces, the net therefore moves by at most
+ * one minor unit against the single-rounding figure — each side's own error
+ * is at most half a unit, and only an exact tie sends it the whole way. The
+ * owner's ruling takes that cost knowingly: every line printed on the invoice
+ * must add up to the total printed on it, because that is what a reader
+ * auditing the document does, and a total rounded a second time would be
+ * right to the cent while disagreeing with the lines above it.
+ *
+ * The bound is not an estimate here. `test/proration-rounding-policy.test.ts`
+ * sweeps over a thousand pairs, asserts the drift never exceeds one minor
+ * unit, AND asserts that a case attaining it exists — a bound nothing reaches
+ * is a bound nobody has measured.
+ *
  * ── What this module does not do ─────────────────────────────────────────
  *
  * It does not post anything, does not touch AR, and does not know what a
