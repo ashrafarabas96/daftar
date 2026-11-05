@@ -34,6 +34,7 @@ import { PoolReconciliationConnection } from '../helpers/accounting-reconciliati
 import { DatabaseAccountingReconciliationReader } from '../../apps/api/src/modules/accounting/accounting-reconciliation.reader';
 import { accountTotalsSql } from '../../apps/api/src/modules/accounting/accounting-reports.reader';
 import { appClient, assertionFor, must, postAs, simpleCommand, todayIn } from '../helpers/accounting-posting';
+import { InDatabaseClock } from '../helpers/in-database-time';
 import {
   generateDataset,
   measuredTableStatistics,
@@ -142,6 +143,28 @@ const STABLE_WARMUP = 20;
  */
 const NEGATIVE_CONTROL_MS = Number(process.env['PERF01_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
 
+/**
+ * DR-98: WHAT THE TWO CONTROLS NOW MEAN. Budgets A and B assert on the time
+ * PostgreSQL spent executing (the in-database series), so the two knobs have
+ * opposite expected outcomes, and CI requires BOTH:
+ *
+ *   PERF01_IN_DB_DELAY_MS  - plants a real `pg_sleep` inside the database, on a
+ *     `daftar_app` connection, inside the measured window of every iteration of
+ *     A and of B. The server accounts it, so `p95 <= 15 ms` and `p95 <= 60 ms`
+ *     MUST both go red, on their own assertions (tags below). Inert unless set.
+ *     It is the control that proves the in-database series can still fail. It
+ *     must exceed the ceiling of the budget it is meant to break: B's ceiling
+ *     is 60 ms, and B's normal in-database p95 is a few milliseconds, so a
+ *     50 ms delay would leave B green; CI sets 200.
+ *
+ *   PERF01_NEGATIVE_CONTROL_MS (above) - a `setTimeout` OUTSIDE every query. It
+ *     inflates the wall clock and nothing the database does, so A and B MUST
+ *     STAY GREEN. It used to be the knob that had to turn the suite red, back
+ *     when the wall clock was the verdict; it is now the control that proves
+ *     the verdict no longer listens to anything outside PostgreSQL.
+ */
+const IN_DB_DELAY_MS = Number(process.env['PERF01_IN_DB_DELAY_MS'] ?? '0') || 0;
+
 interface Measurement {
   readonly name: string;
   readonly budgetMs: number;
@@ -162,6 +185,23 @@ interface Measurement {
    * percentiles; with it, a reader can see where the stall sat.
    */
   readonly samplesMs: readonly number[];
+  /**
+   * DR-98. Present on A and B only. `p50`..`min` and `samplesMs` above stay the
+   * WALL CLOCK the test process saw (what every earlier evidence file meant by
+   * them); this is the other series, the milliseconds PostgreSQL accounted to
+   * the statements run inside the same iterations, and it is the one A and B
+   * are judged on. Two series under two names, never one number that could be
+   * either.
+   */
+  readonly inDatabase?: SeriesStatistics & { readonly samplesMs: readonly number[]; readonly judgedOn: true };
+}
+
+interface SeriesStatistics {
+  readonly p50: number;
+  readonly p95: number;
+  readonly p99: number;
+  readonly max: number;
+  readonly min: number;
 }
 
 const measurements: Measurement[] = [];
@@ -180,34 +220,95 @@ const MONEY = {
   fxRateAt: '2026-03-14T09:15:00Z',
 } as const;
 
-function summarise(name: string, budgetMs: number, samples: number[]): Measurement {
+/**
+ * The estimator, unchanged: `sorted[min(N - 1, floor(q * N))]`. Pulled out of
+ * `summarise` so the wall-clock and the in-database series are computed by the
+ * SAME function rather than by two that could drift apart.
+ */
+function statistics(samples: readonly number[]): SeriesStatistics {
   const sorted = [...samples].sort((a, b) => a - b);
   const at = (q: number): number => must(sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]);
+  return { p50: at(0.5), p95: at(0.95), p99: at(0.99), max: must(sorted[sorted.length - 1]), min: must(sorted[0]) };
+}
+
+function summarise(name: string, budgetMs: number, samples: number[], inDatabaseSamples?: number[]): Measurement {
   const m: Measurement = {
     name,
     budgetMs,
-    iterations: sorted.length,
-    p50: at(0.5),
-    p95: at(0.95),
-    p99: at(0.99),
-    max: must(sorted[sorted.length - 1]),
-    min: must(sorted[0]),
+    iterations: samples.length,
+    ...statistics(samples),
     samplesMs: samples.map((v) => Number(v.toFixed(3))),
+    ...(inDatabaseSamples === undefined
+      ? {}
+      : { inDatabase: { ...statistics(inDatabaseSamples), samplesMs: inDatabaseSamples.map((v) => Number(v.toFixed(3))), judgedOn: true as const } }),
   };
   measurements.push(m);
   return m;
 }
 
-/** Warm up, then measure. The warm-up samples are discarded, never averaged in. */
-async function measure(name: string, budgetMs: number, once: () => Promise<void>, iterations = ITERATIONS, warmup = WARMUP): Promise<Measurement> {
+/**
+ * Warm up, then measure. The warm-up samples are discarded, never averaged in.
+ *
+ * With `inDatabase` given, every measured iteration is ALSO read off the
+ * database's own books: the cumulative executed milliseconds are read on a
+ * separate connection immediately before the wall-clock timer starts and
+ * immediately after it stops, so the two reads sit OUTSIDE the wall-clock
+ * window and cost it nothing, and their difference is what PostgreSQL spent on
+ * everything that ran inside it. Both series are kept, one per iteration, in
+ * the same order.
+ */
+async function measure(
+  name: string,
+  budgetMs: number,
+  once: () => Promise<void>,
+  iterations = ITERATIONS,
+  warmup = WARMUP,
+  inDatabase?: InDatabaseClock,
+): Promise<Measurement> {
   for (let i = 0; i < warmup; i += 1) await once();
   const samples: number[] = [];
+  const inDatabaseSamples: number[] = [];
   for (let i = 0; i < iterations; i += 1) {
+    const dbBefore = inDatabase === undefined ? 0 : await inDatabase.cumulativeMs();
     const started = process.hrtime.bigint();
     await once();
     samples.push(Number(process.hrtime.bigint() - started) / 1e6);
+    if (inDatabase !== undefined) inDatabaseSamples.push(InDatabaseClock.delta(dbBefore, await inDatabase.cumulativeMs()));
   }
-  return summarise(name, budgetMs, samples);
+  // A series that lost entries to eviction is not a series.
+  if (inDatabase !== undefined) await inDatabase.assertNoEviction();
+  return summarise(name, budgetMs, samples, inDatabase === undefined ? undefined : inDatabaseSamples);
+}
+
+/**
+ * The assertion payload for A and B (DR-98). It spells out WHICH series each
+ * block is, because a bare `p95` in this message used to mean the wall clock
+ * and now must not be mistaken for it: `inDatabaseExecMs` is the verdict,
+ * `wallClockClientMs` is what the test process saw and is monitoring only.
+ * Both full arrays follow, so a reader can see where a stall sat.
+ */
+function budgetReport(m: Measurement): Record<string, unknown> {
+  const inDb = must(m.inDatabase);
+  const pick = (s: SeriesStatistics): SeriesStatistics => ({ p50: s.p50, p95: s.p95, p99: s.p99, max: s.max, min: s.min });
+  return {
+    name: m.name,
+    budgetMs: m.budgetMs,
+    iterations: m.iterations,
+    judgedOn: 'inDatabaseExecMs',
+    inDatabaseExecMs: pick(inDb),
+    wallClockClientMs: pick(m),
+    inDatabaseSamplesMs: inDb.samplesMs,
+    wallClockSamplesMs: m.samplesMs,
+  };
+}
+
+/** Printed on every run, green or red: the wall clock stays on the log even though it no longer decides. */
+function printMonitor(tag: 'A' | 'B', m: Measurement): void {
+  const inDb = must(m.inDatabase);
+  console.log(
+    `PERF01-MONITOR-${tag} inDbP50=${inDb.p50.toFixed(3)} inDbP95=${inDb.p95.toFixed(3)} inDbMax=${inDb.max.toFixed(3)} ` +
+      `wallP50=${m.p50.toFixed(3)} wallP95=${m.p95.toFixed(3)} wallMax=${m.max.toFixed(3)} budgetMs=${m.budgetMs}`,
+  );
 }
 
 /**
@@ -263,6 +364,8 @@ let today = '';
 let accountId = '';
 let spec: DatasetSpec;
 let seededLines = 0;
+/** DR-98: the in-database instrument A and B are judged on. */
+let inDatabase: InDatabaseClock;
 /** What C, D and E actually read (§13: 100,000 at tier 2). */
 let reportingLines = 0;
 /** What F actually walks in its own business (§13: 1,000,000 at tier 2). */
@@ -346,6 +449,22 @@ beforeAll(async () => {
   // account for.
   await ownerPool().query('CHECKPOINT');
 
+  // DR-98. Open the instrument and prove it can see the application's own
+  // principal BEFORE any budget leans on it. The sleep below is 50 ms that a `daftar_app`
+  // session spends inside the database; the instrument must account at least
+  // that much, or A and B would read as a database that is simply very fast.
+  // If `pg_stat_statements` is not preloaded this throws a
+  // PERF01-INSTRUMENT-UNAVAILABLE error: there is no fallback to the wall clock.
+  inDatabase = await InDatabaseClock.open('daftar');
+  await inDatabase.calibrate(49, async () => {
+    const c = await appClient();
+    try {
+      await c.query('SELECT pg_sleep(0.05)');
+    } finally {
+      await c.end();
+    }
+  });
+
   // Read AFTER every business is seeded, so the snapshot describes the
   // database the budgets are about to be measured on and not an earlier one.
   planningStatistics = await measuredTableStatistics(ownerPool());
@@ -399,6 +518,9 @@ afterAll(async () => {
     cpuModel: cpus()[0]?.model ?? 'unknown',
     totalMemoryBytes: totalmem(),
     databaseSettings: settings,
+    /** DR-98: how the in-database series was taken, as the server reported it. */
+    inDatabaseInstrument: { source: 'pg_stat_statements.total_exec_time (delta, dbid-filtered, probe role excluded)', ...inDatabase.settings },
+    controls: { inDatabaseDelayMs: IN_DB_DELAY_MS, clientSideDelayMs: NEGATIVE_CONTROL_MS },
     // `reportingLines` and `reconciliationLines` are separate on purpose: §13
     // names two sizes, and one total would let a reader assume the wrong one
     // produced a given number.
@@ -418,6 +540,7 @@ afterAll(async () => {
   const dir = join(__dirname, '../../release');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, `phase2-s8-performance-tier${TIER}.json`), `${JSON.stringify(evidence, null, 2)}\n`);
+  await inDatabase?.close();
   await t?.close();
 });
 
@@ -432,6 +555,9 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
           // The negative control, in the same place B carries it: inside the
           // measured window, at its head. Inert unless the knob is set.
           if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
+          // DR-98 in-database control: a real delay INSIDE the database, on the
+          // measured connection, in the measured window. Inert unless set.
+          if (IN_DB_DELAY_MS > 0) await c.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
           const command = simpleCommand({ tenantId, businessId, userId } as never, randomUUID(), today, 12_345n);
           await c.query('BEGIN');
           await postAs(assertionFor(command, userId), command, {}, c);
@@ -443,11 +569,18 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
         },
         STABLE_ITERATIONS,
         STABLE_WARMUP,
+        inDatabase,
       );
+      printMonitor('A', m);
       // The tag is pure ASCII and stable, and the CI negative control greps
       // for it: an inverted run must fail on THIS assertion, not on a fixture
-      // that could not reach the budget at all.
-      expect(m.p95, `PERF01-BUDGET-A ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+      // that could not reach the budget at all. The verdict is the IN-DATABASE
+      // p95 (DR-98); the wall clock is in the message and on the log, not here.
+      expect(must(m.inDatabase).p95, `PERF01-BUDGET-A ${JSON.stringify(budgetReport(m))}`).toBeLessThanOrEqual(BUDGET.A_POST_P95);
+      // Printed only once the assertion held: the control that must PASS
+      // (client-side delay) requires this line, so a run that executed nothing
+      // cannot satisfy it.
+      console.log('PERF01-INDB-OK-A');
     } finally {
       await c.end();
     }
@@ -456,31 +589,43 @@ describe('A — the posting command, inside an existing transaction (§34 A)', (
 
 describe('B — the manual-adjustment endpoint, end to end (§34 B)', () => {
   it(`p95 ≤ ${BUDGET.B_ADJUSTMENT_ENDPOINT_P95} ms`, async () => {
-    const m = await measure(
-      'B manual adjustment endpoint',
-      BUDGET.B_ADJUSTMENT_ENDPOINT_P95,
-      async () => {
-        if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
-        const response = await t.request
-          .post(`/v1/businesses/${businessId}/accounting/adjustments`)
-          .set('Authorization', `Bearer ${token}`)
-          .set('X-Business-Id', businessId)
-          .set('Idempotency-Key', randomUUID())
-          .send({
-            entryDate: today,
-            description: 'budget measurement',
-            reason: 'budget measurement',
-            lines: [
-              { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
-              { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
-            ],
-          });
-        expect([200, 201]).toContain(response.status);
-      },
-      STABLE_ITERATIONS,
-      STABLE_WARMUP,
-    );
-    expect(m.p95, `PERF01-BUDGET-B ${JSON.stringify(m)}`).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+    // The in-database control needs a database connection of its own: the
+    // endpoint's SQL is production code and gets no test hook, so the delay is a
+    // separate `daftar_app` statement, awaited inside the measured window.
+    const delayer = IN_DB_DELAY_MS > 0 ? await appClient() : null;
+    try {
+      const m = await measure(
+        'B manual adjustment endpoint',
+        BUDGET.B_ADJUSTMENT_ENDPOINT_P95,
+        async () => {
+          if (NEGATIVE_CONTROL_MS > 0) await new Promise((r) => setTimeout(r, NEGATIVE_CONTROL_MS));
+          if (delayer !== null) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
+          const response = await t.request
+            .post(`/v1/businesses/${businessId}/accounting/adjustments`)
+            .set('Authorization', `Bearer ${token}`)
+            .set('X-Business-Id', businessId)
+            .set('Idempotency-Key', randomUUID())
+            .send({
+              entryDate: today,
+              description: 'budget measurement',
+              reason: 'budget measurement',
+              lines: [
+                { account: { kind: 'system', systemKey: 'cash' }, side: 'D', ...MONEY },
+                { account: { kind: 'system', systemKey: 'opening_equity' }, side: 'C', ...MONEY },
+              ],
+            });
+          expect([200, 201]).toContain(response.status);
+        },
+        STABLE_ITERATIONS,
+        STABLE_WARMUP,
+        inDatabase,
+      );
+      printMonitor('B', m);
+      expect(must(m.inDatabase).p95, `PERF01-BUDGET-B ${JSON.stringify(budgetReport(m))}`).toBeLessThanOrEqual(BUDGET.B_ADJUSTMENT_ENDPOINT_P95);
+      console.log('PERF01-INDB-OK-B');
+    } finally {
+      await delayer?.end();
+    }
   }, 900_000);
 });
 

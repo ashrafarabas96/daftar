@@ -295,6 +295,49 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
+      # DR-98. PERF01's budgets A and B are asserted on the time PostgreSQL
+      # spent EXECUTING (pg_stat_statements), not on the client's wall clock,
+      # so the `postgres` service container needs the library preloaded. A
+      # service container's command cannot be overridden from the `services:`
+      # block above, so it is enabled here: ALTER SYSTEM, restart THAT
+      # container, wait for it, and then READ the settings back. The read-back
+      # is the positive control: a restart that came up without the library
+      # fails this step by name instead of surfacing later as a suite that
+      # cannot measure. It sits before every step that uses the database
+      # (the first is "Create DAFTAR database", which creates `daftar` AFTER
+      # this restart) and uses `docker exec`, so it depends on no client
+      # installed on the runner.
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
       - run: npm ci
       - name: Build contract, accounting and design-system packages
         # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
@@ -892,21 +935,75 @@ jobs:
       # gone. The shell form keeps the control honest and the proof's subject
       # intact; it is also the shape the tampered-migration proof above
       # already uses, for the same reason: the exit code has to be inverted.
-      - name: Budget negative control — the accounting A and B budgets must be able to fail
+      # DR-98. Budgets A and B are asserted on the time PostgreSQL spent
+      # EXECUTING (pg_stat_statements), not on the client's wall clock, so the
+      # two controls below have OPPOSITE required outcomes, and both run:
+      #
+      #   1. a delay planted INSIDE the database (`pg_sleep`, 200 ms, on a
+      #      `daftar_app` connection, inside every measured window) must turn
+      #      the suite red, ON the A and B assertions, by their tags;
+      #   2. a delay planted OUTSIDE the database (`setTimeout`, 200 ms, around
+      #      the query) must leave A and B GREEN. It used to be the control that
+      #      had to fail the suite, back when the wall clock was the verdict.
+      #
+      # A step that merely runs a suite is not a control, and a pass is not
+      # evidence of anything unless the run provably took place. So control 2
+      # also reads the evidence file the run wrote (deleted first, so it cannot
+      # be a leftover) and requires, for A and for B: the wall clock really WAS
+      # inflated (p50 >= 200 ms) and the in-database p95 still sat inside its
+      # own ceiling. Without those two reads a suite that matched no tests, or
+      # a delay that never fired, would satisfy "it passed". The `-t` filter
+      # runs only the A and B cases: the control is about them, and a flake in
+      # C, D, E or F would be a failure of the control and not of anything it
+      # claims to prove. The 200 ms of control 1 exceeds B's 60 ms ceiling on
+      # purpose; a 50 ms delay would leave B green.
+      - name: Budget negative control — a delay INSIDE the database must fail the accounting A and B budgets
         run: |
           set -e
-          log="$RUNNER_TEMP/negative-control-accounting.log"
+          log="$RUNNER_TEMP/negative-control-accounting-in-db.log"
           if npx vitest run tests/performance/accounting-budgets.test.ts >"$log" 2>&1; then
             tail -80 "$log"
-            echo "the SLOWED accounting budgets PASSED — A and B cannot fail, so their green means nothing"; exit 1
+            echo "the in-database-SLOWED accounting budgets PASSED — A and B cannot fail on database time, so their green means nothing"; exit 1
           fi
           grep -q 'PERF01-BUDGET-A' "$log" || {
             tail -120 "$log"
-            echo "the slowed run failed, but NOT on budget A's assertion — the control proves nothing about A"; exit 1
+            echo "the in-database-slowed run failed, but NOT on budget A's assertion — the control proves nothing about A"; exit 1
           }
           grep -q 'PERF01-BUDGET-B' "$log" || {
             tail -120 "$log"
-            echo "the slowed run failed, but NOT on budget B's assertion — the control proves nothing about B"; exit 1
+            echo "the in-database-slowed run failed, but NOT on budget B's assertion — the control proves nothing about B"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          PERF01_IN_DB_DELAY_MS: '200'
+      - name: Budget negative control — a delay OUTSIDE the database must NOT fail the accounting A and B budgets
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-accounting-client-side.log"
+          evidence=release/phase2-s8-performance-tier1.json
+          rm -f "$evidence"
+          if ! npx vitest run tests/performance/accounting-budgets.test.ts -t 'the posting command|the manual-adjustment endpoint' >"$log" 2>&1; then
+            tail -120 "$log"
+            echo "a CLIENT-SIDE delay failed the accounting A and B budgets — the verdict still listens to something outside PostgreSQL"; exit 1
+          fi
+          test -s "$evidence" || {
+            tail -80 "$log"
+            echo "the client-side-delayed run passed but wrote no evidence — it did not measure A and B"; exit 1
+          }
+          node -e '
+            const e = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const want = [["A post() in an open transaction", 15], ["B manual adjustment endpoint", 60]];
+            let bad = 0;
+            for (const [name, ceiling] of want) {
+              const m = e.measurements.find((x) => x.name === name);
+              if (!m || !m.inDatabase) { console.log("MISSING in-database series for " + name); bad += 1; continue; }
+              const ok = m.p50 >= 200 && m.inDatabase.p95 <= ceiling;
+              console.log(name + ": wall p50 " + m.p50.toFixed(1) + " ms (must be >= 200), in-database p95 " + m.inDatabase.p95.toFixed(3) + " ms (ceiling " + ceiling + ")");
+              if (!ok) bad += 1;
+            }
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$evidence" || {
+            echo "the client-side control did not prove what it claims: either the delay never reached the wall clock or the in-database series missed its ceiling"; exit 1
           }
         env:
           PG_PORT: '5432'
