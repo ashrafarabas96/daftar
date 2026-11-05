@@ -164,8 +164,16 @@ beforeAll(async () => {
   // TRUST_PROXY is the dev/test addressing mode (`client-ip.ts:15-21`);
   // production refuses it at startup, which is why it is safe to use here to
   // name a client and would not be safe as a product setting.
-  replicaA = await createTestApp({ configOverrides: { TRUST_PROXY: 'true' } });
-  replicaB = await createTestApp({ configOverrides: { TRUST_PROXY: 'true' } });
+  // REDIS_URL is passed through the EXISTING `configOverrides` seam, so
+  // `tests/helpers/test-app.ts` is not touched: PR #7 owns that file and is
+  // frozen by DR-89. Where the environment configures a shared store — the
+  // `backend` job since DR-90 §5 — both replicas get it and the decisive
+  // branch below is the one that runs; with none, the branch that asserts the
+  // defect runs instead, and both are assertions.
+  const sharedUrl = process.env['REDIS_URL'];
+  const overrides: Record<string, string> = { TRUST_PROXY: 'true', ...(sharedUrl ? { REDIS_URL: sharedUrl } : {}) };
+  replicaA = await createTestApp({ configOverrides: overrides });
+  replicaB = await createTestApp({ configOverrides: overrides });
   // The class the guard actually holds, taken from the injector of a running
   // app — not from `process.env`, which would be a claim about intent.
   const storeA: unknown = replicaA.app.get<unknown>(ThrottlerStorage);
