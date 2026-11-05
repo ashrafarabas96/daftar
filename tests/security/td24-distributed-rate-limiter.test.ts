@@ -152,21 +152,37 @@ function admitted(statuses: readonly number[]): number {
 /**
  * The width of a concurrent wave, and why it is not `LIMIT * 2`.
  *
- * MEASURED, and the measurement is about the harness, not the subject: 600
- * `supertest` calls issued at once against one application reset most of
- * their own sockets. `createTestApp()` leaves the server UNLISTENING (it
- * calls `app.init()`, never `listen`), so every `supertest` call starts its
- * own `listen(0)` on that same server; 600 of them in one tick is a storm the
- * server does not survive. Probed on a bare `node:http` server with no Nest
- * and no database: 600-at-once admitted 65 and rejected 535 with
- * `Error: read ECONNRESET`, while waves of 25 admitted 600 of 600. That is
- * the same error TD24-E and TD24-F failed with on CI in runs 41848410636 and
- * 42059258777 — so those two cases have never measured the subject at all.
+ * TWO harness defects sat on TD24-E and TD24-F, and they are not the same
+ * one. Both were measured on a bare `node:http` server with no Nest and no
+ * database, since the development host has no cluster to reach.
  *
- * A wave is still genuinely concurrent, and concurrency is all TD24-E claims:
- * 25 requests in flight at once, alternating replicas, is a window in which a
- * read-then-write store overcounts and an atomic one does not. Widening the
- * wave to the whole run would only reinstate a harness failure, and a case
+ *   (1) THE SERVER WAS CLOSED UNDER THE WAVE — the cause of the
+ *       `read ECONNRESET` these two cases failed with in runs 41848410636
+ *       and 42073109330, where they failed in 9ms and 8ms, far too fast to
+ *       be 600 requests. `createTestApp()` calls `app.init()` and never
+ *       `listen`, so `supertest` opens the server itself: the FIRST `Test`
+ *       of a wave finds no address, calls `server.listen(0)`, keeps the
+ *       handle, and `close()`s it the moment ITS OWN request ends
+ *       (`node_modules/supertest/lib/test.js:63,134-149`) — while the other
+ *       24 requests of that wave are still in flight. Measured, and
+ *       deterministically, not by timing: against an unlistening server a
+ *       25-call wave leaves `server.listening === false` and no port, wave
+ *       after wave; against a server this suite listened on first, the port
+ *       is the same before and after every wave and the server is still
+ *       listening. Sequential cases never saw it, because there is nothing
+ *       in flight to reset. THE REMEDY IS IN `beforeAll`: each replica
+ *       listens once, so `supertest` finds an address and neither opens nor
+ *       closes anything. Pinned DB-free by
+ *       `tests-unit/td24-supertest-listen-law.test.ts`.
+ *   (2) A WAVE OF 600 IS A STORM IN ITS OWN RIGHT, listening or not. Even on
+ *       a server already listening, 600 calls issued in one tick measured
+ *       232 admitted and 368 refused with `ECONNREFUSED` — the accept
+ *       backlog, not the subject. So the wave stays bounded.
+ *
+ * A wave is still genuinely concurrent, and concurrency is all TD24-E
+ * claims: 25 requests in flight at once, alternating replicas, is a window
+ * in which a read-then-write store overcounts and an atomic one does not.
+ * Widening the wave to the whole run would only reinstate (2), and a case
  * that cannot run proves nothing.
  */
 const WAVE = 25;
@@ -278,6 +294,16 @@ beforeAll(async () => {
   const overrides: Record<string, string> = { TRUST_PROXY: 'true', ...(sharedUrl ? { REDIS_URL: sharedUrl } : {}) };
   replicaA = await createTestApp({ configOverrides: overrides });
   replicaB = await createTestApp({ configOverrides: overrides });
+  // EACH REPLICA LISTENS ONCE, and this line is the whole remedy for the
+  // `read ECONNRESET` that kept TD24-E and TD24-F from ever measuring
+  // anything (see `WAVE`): with an address already bound, `supertest` neither
+  // opens the server nor closes it under a wave that is still in flight. The
+  // same pattern the project already uses wherever a suite needs more than
+  // one request at a time (`tests/security/p3c-ipv6-limiter-key.test.ts:63`,
+  // `tests/integration/p3c-bff-route-throttle.test.ts:134`). Loopback only:
+  // nothing off this host may reach a test replica.
+  await replicaA.app.listen(0, '127.0.0.1');
+  await replicaB.app.listen(0, '127.0.0.1');
   // What the store behind the general allowance is, taken from the running
   // application's own report — not from `process.env`, which would be a
   // claim about intent, and not from the root injector, which answers with a
