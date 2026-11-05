@@ -69,6 +69,23 @@ export interface CreditApplicationInput {
   readonly ledger: readonly CreditAdjustment[];
   /** The finalized invoice's total. Positive; `invoice.ts` refuses the rest. */
   readonly invoiceTotalMinor: bigint;
+  /**
+   * The finalized invoice's currency. MANDATORY, and not defaulted from the
+   * ledger.
+   *
+   * B1: until this field existed the invoice side carried no currency at all,
+   * so `payableMinor = invoiceTotalMinor - appliedMinor` subtracted a balance
+   * in the LEDGER's currency from a total in no declared currency, and the
+   * result was stamped with the ledger's. Measured before the fix: an ILS
+   * balance of 5000 against a total of 10000 was accepted as
+   * `currency=ILS applied=5000 payable=5000`. A conservation proof stated in
+   * one unit cannot see that, because every figure in it came from the ledger.
+   *
+   * Optional-with-a-default would not have closed it: a caller that omits the
+   * currency is a caller that does not know it, and the quantity it is
+   * subtracting from is then unknown too.
+   */
+  readonly invoiceCurrency: string;
   /** The invoice being finalized. An identifier; it becomes each row's `ref`. */
   readonly invoiceRef: string;
   /** The finalization instant. Supplied by the command; never a clock. */
@@ -134,11 +151,38 @@ export function applyCreditToInvoice(input: CreditApplicationInput): CreditAppli
   if (!Array.isArray(input.consumptionIds as unknown)) {
     refuse('billing.payload_invalid', 'a credit application needs the identities its rows will carry');
   }
+  if (typeof input.invoiceCurrency !== 'string' || !/^[A-Z]{3}$/.test(input.invoiceCurrency)) {
+    // The shape is checked before the comparison so that `ils` refuses as a
+    // malformed payload and not as a mismatch: a lower-case code is a caller
+    // defect, and normalizing it here would decide a currency on the caller's
+    // behalf.
+    refuse('billing.payload_invalid', 'a credit application must name the invoice currency as a three-letter code');
+  }
+  if (input.invoiceCurrency !== input.scope?.currency) {
+    // B1. The subtraction below is only a quantity when both sides are the
+    // same unit. Refused by name, never converted: this slice holds no rate
+    // and a platform subscription credit is not an FX operation.
+    refuse('billing.credit_currency_mismatch', 'a credit application may not apply a balance to an invoice in another currency', {
+      currency: input.invoiceCurrency,
+    });
+  }
 
   // The balance authority is consulted, never re-implemented. Every ledger
   // rule — one business, one currency, append-only order, per-grant
   // remainders — is enforced by this call and not restated here.
   const before = foldCreditBalance(input.ledger, input.scope);
+
+  if (before.currency !== input.invoiceCurrency) {
+    // The fold already refuses a row whose currency is not the scope's, so
+    // with the check above this is unreachable through any input this module
+    // accepts. It is asserted anyway because `before.currency` is the value
+    // that LEAVES this function, stamped on every consumption row and on the
+    // application itself: a third currency arriving here would be published
+    // rather than refused, and an unreachable refusal costs one comparison.
+    refuse('billing.credit_currency_mismatch', 'the folded balance and the invoice do not state one currency', {
+      currency: before.currency,
+    });
+  }
 
   if (before.balanceMinor === 0n) {
     // "No zero-value noise rows." A business with no credit produces no rows

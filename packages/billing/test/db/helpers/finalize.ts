@@ -201,6 +201,9 @@ export async function finalizeInvoice(
     scope: { businessId: s.businessId, currency: s.currency },
     ledger,
     invoiceTotalMinor,
+    // The finalizing invoice is in the ledger scope's currency: this helper
+    // reads both from the same subscription row (B1).
+    invoiceCurrency: s.currency,
     invoiceRef,
     appliedAt,
     consumptionIds: Array.from({ length: Math.max(ledger.length, 1) }, () => uuid()),

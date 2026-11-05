@@ -31,6 +31,7 @@ function apply(ledger: readonly CreditAdjustment[], invoiceTotalMinor: bigint, i
     scope: SCOPE,
     ledger,
     invoiceTotalMinor,
+    invoiceCurrency: SCOPE.currency,
     invoiceRef: 'inv-2026-05',
     appliedAt: '2026-05-01T00:00:00.000Z',
     consumptionIds: ids,
@@ -225,7 +226,16 @@ describe('applyCreditToInvoice — the refusals', () => {
 
   it('REFUSES a missing invoice ref, reason or instant', () => {
     const ledger = [grant('g1', 1_000n, '2026-04-10T00:00:00.000Z')];
-    const good = { scope: SCOPE, ledger, invoiceTotalMinor: 500n, invoiceRef: 'inv', appliedAt: '2026-05-01T00:00:00.000Z', consumptionIds: IDS, reason: 'r' };
+    const good = {
+      scope: SCOPE,
+      ledger,
+      invoiceTotalMinor: 500n,
+      invoiceCurrency: SCOPE.currency,
+      invoiceRef: 'inv',
+      appliedAt: '2026-05-01T00:00:00.000Z',
+      consumptionIds: IDS,
+      reason: 'r',
+    };
     expectRefusal(() => applyCreditToInvoice({ ...good, invoiceRef: ' ' }), 'billing.payload_invalid');
     expectRefusal(() => applyCreditToInvoice({ ...good, reason: '' }), 'billing.credit_reason_required');
     expectRefusal(() => applyCreditToInvoice({ ...good, appliedAt: 'next Tuesday' }), 'billing.as_of_required');
