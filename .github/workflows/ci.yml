@@ -193,20 +193,22 @@ jobs:
     # through Docker and still publishes 5432, so every `psql
     # postgres://postgres:postgres@localhost:5432/...` in the steps resolves
     # exactly as it did on `ubuntu-latest`.
-    # PINNED FOR THE SAME MEASURED REASON AS `browser`, one run later. This
-    # job installs Chromium too, at step 33 for the real-browser matrix, and
-    # on run 41768239220 it met the identical refusal on `Image:
-    # ubuntu-26.04`: `ERROR: Playwright does not support chromium on
-    # ubuntu26.04-x64`. EIGHTEEN steps after it were skipped -- the four P4
-    # slice gates, the POS and receivables budgets, the two budget negative
-    # controls, the tampered-migration proof and the database contract from
-    # zero -- so the failure did not merely stop this job, it left those
-    # gates unmeasured. The previous commit pinned `browser` only and said
-    # this job was unmeasured on 26.04 rather than claiming it passed; this
-    # is that measurement, and the same narrow answer: the image these gates
-    # were measured on. Nothing disabled, no threshold moved, no test
-    # skipped, `timeout-minutes` untouched.
-    runs-on: ubuntu-24.04
+    # BROWSER-IMAGE-26, and DR-86. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04 and the pinned `playwright-core` had no Chromium for the new image,
+    # so this job skipped named gates. The image is therefore NAMED here rather
+    # than inherited, and the version named is the one MEASURED to work: on
+    # `measure/browser-26-04`, `playwright-core@1.60.0` on ubuntu-26.04 failed at
+    # the install step with zero bytes fetched (run 41785016875), and `1.61.0` on
+    # the same image installed chromium v1228 and passed every gate with zero
+    # skipped (run 41778343752). The difference is one dependency at one minor.
+    #
+    # 26.04 and not 24.04: the P4 lane measured the PERF01 tail nine times. It
+    # appears in all five 24.04 measurements (max 43.7 to 311 ms) and in zero of
+    # 800 samples on 26.04. So 24.04 is where the defect lives, not the cure.
+    #
+    # Nothing else moves with it: no budget, no sample count, no timeout, no
+    # retry, no `continue-on-error`.
+    runs-on: ubuntu-26.04
     services:
       postgres:
         image: postgres:16
@@ -361,6 +363,91 @@ jobs:
       # manually prepared database), then migrations, then a no-op second pass,
       # then the test suites run against THAT database (PG_PORT=5432 makes the
       # test harness reuse the service instead of an embedded instance).
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
       - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
         run: |
           set -e
@@ -1165,24 +1252,22 @@ jobs:
     # `laptop` (uid 1000); on a GitHub-hosted runner the job runs as `runner`.
     # Neither is root, which is all that routine requires — so do not read the
     # old reason as the current one.
-    # PINNED TO 24.04, AND THIS IS NOT A WEAKENED GATE -- it is the image
-    # every gate in this job was measured on. GitHub rolled `ubuntu-latest`
-    # from 24.04 to 26.04 between run 41531741433 (main at 4d65304f: Image
-    # ubuntu-24.04, all six jobs green) and run 41765693794 (Image
-    # ubuntu-26.04 on every job), and the pinned playwright-core has no
-    # Chromium build for the new one: `ERROR: Playwright does not support
-    # chromium on ubuntu26.04-x64`, step 8, with the four steps after it
-    # skipped and therefore unmeasured. Four of the other five -- workspaces,
-    # android, web-admin and hygiene -- are measured green on 26.04 in that
-    # same run; `backend` was CANCELLED there by a later push, and a cancelled
-    # job is an interrupted session and not a pass (RULE-5), so it is
-    # unmeasured on 26.04 and left on `ubuntu-latest` rather than pinned on a
-    # claim nobody took. This pin is the narrowest thing that
-    # restores a measured environment: nothing is disabled, no threshold
-    # moves, no test is skipped. Supporting 26.04 needs the browser lane's
-    # own pinned dependency to move, which is card BROWSER-IMAGE-26 and not
-    # this wave's to decide.
-    runs-on: ubuntu-24.04
+    # BROWSER-IMAGE-26, and DR-86. GitHub rolled `ubuntu-latest` from 24.04 to
+    # 26.04 and the pinned `playwright-core` had no Chromium for the new image,
+    # so this job skipped named gates. The image is therefore NAMED here rather
+    # than inherited, and the version named is the one MEASURED to work: on
+    # `measure/browser-26-04`, `playwright-core@1.60.0` on ubuntu-26.04 failed at
+    # the install step with zero bytes fetched (run 41785016875), and `1.61.0` on
+    # the same image installed chromium v1228 and passed every gate with zero
+    # skipped (run 41778343752). The difference is one dependency at one minor.
+    #
+    # 26.04 and not 24.04: the P4 lane measured the PERF01 tail nine times. It
+    # appears in all five 24.04 measurements (max 43.7 to 311 ms) and in zero of
+    # 800 samples on 26.04. So 24.04 is where the defect lives, not the cure.
+    #
+    # Nothing else moves with it: no budget, no sample count, no timeout, no
+    # retry, no `continue-on-error`.
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
@@ -1279,6 +1364,8 @@ jobs:
         # --dry-run` — the pinned version's own list, not a hand-written one —
         # and every package and version is recorded in the card's evidence.
         # Verified afterwards as the runner user: 33 installed, 0 missing.
+        # DR-86 has since moved the pin to 1.61.0, so read `1.56.1` above as
+        # what that one-off run used, not as the version pinned today.
         #
         # What does NOT change: the BROWSER is still installed per job, by the
         # pinned playwright-core, from the lockfile. Only the apt half is
