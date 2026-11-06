@@ -292,7 +292,11 @@ for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
   const cfg = read('apps/api/src/config.ts');
   const gateAt = cfg.indexOf("if (c.NODE_ENV !== 'production') return;");
   if (gateAt < 0) {
-    fail('worker-jwt-denial', 'apps/api/src/config.ts', 'the production gate `if (c.NODE_ENV !== \'production\') return;` was not found, so SEC-01 cannot be measured');
+    fail(
+      'worker-jwt-denial',
+      'apps/api/src/config.ts',
+      "the production gate `if (c.NODE_ENV !== 'production') return;` was not found, so SEC-01 cannot be measured",
+    );
   } else {
     const beforeGate = cfg.slice(0, gateAt);
     const at = beforeGate.indexOf("mode === 'worker'");
