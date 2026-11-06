@@ -52,6 +52,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { Pool } from 'pg';
+import type { PoolClient } from 'pg';
 import type { ScratchDb } from '../helpers/scratch-db';
 import { createScratchDb, urlOf } from '../helpers/scratch-db';
 import {
@@ -2949,6 +2950,70 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         return err(e);
       }
     };
+    /**
+     * WHAT THE RELATION PHYSICALLY IS — read from the FILESYSTEM length and
+     * from `pg_class`, side by side, plus the two quantities that decide
+     * whether a PLAIN `VACUUM` is ALLOWED to give the trailing pages back:
+     * the dead-tuple count the collector knows about, and the xmin of a
+     * snapshot taken NOW. The second is the control for «an older snapshot
+     * kept the tail visible»: if the horizon has not moved past the sweep's
+     * own `DELETE`, the tail tuples are dead-but-not-removable, the tail
+     * pages are therefore not EMPTY, and `lazy_truncate_heap` has nothing
+     * it is permitted to drop. `pg_relation_size` is the MAIN FORK only,
+     * which is the quantity `:4980` charges for.
+     */
+    const physical = async (): Promise<Record<string, unknown>> => {
+      try {
+        return (
+          (
+            await sup.query<Record<string, unknown>>(
+              `SELECT pg_relation_size(c.oid)::text AS bytes, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
+                      pg_stat_get_dead_tuples(c.oid)::text AS dead_tuples,
+                      pg_snapshot_xmin(pg_current_snapshot())::text AS snapshot_xmin,
+                      age(pg_snapshot_xmin(pg_current_snapshot()))::text AS snapshot_xmin_age
+                 FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+            )
+          ).rows[0] ?? { error: 'the relation did not answer' }
+        );
+      } catch (e) {
+        return { error: err(e) };
+      }
+    };
+    /**
+     * WHO ELSE IS IN THIS DATABASE, AND WHAT DO THEY HOLD. The two documented
+     * ways a plain `VACUUM` abandons truncation SILENTLY are (a) it cannot
+     * take `AccessExclusiveLock` on the relation within its own five-second
+     * budget, and (b) a backend with an older `backend_xmin` keeps the tail
+     * tuples visible. Both are facts about OTHER backends, so both are read
+     * here rather than inferred. `sup` is the superuser, so `pg_stat_activity`
+     * is not redacted for it; the reading backend itself is excluded, because
+     * its own snapshot is not a holder of anything.
+     */
+    const holders = async (): Promise<Record<string, unknown>> => {
+      try {
+        const activity = (
+          await sup.query<{ j: string }>(
+            `SELECT coalesce(json_agg(json_build_object('pid', pid, 'datname', datname, 'usename', usename, 'state', state,
+                                                        'backend_xmin', backend_xmin::text, 'xact_start', xact_start::text,
+                                                        'state_change', state_change::text, 'query', left(query, 100)) ORDER BY pid)::text, '[]') AS j
+               FROM pg_stat_activity
+              WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'
+                AND (backend_xmin IS NOT NULL OR xact_start IS NOT NULL)`,
+          )
+        ).rows[0]?.j;
+        const locks = (
+          await sup.query<{ j: string }>(
+            `SELECT coalesce(json_agg(json_build_object('pid', pid, 'mode', mode, 'granted', granted) ORDER BY pid)::text, '[]') AS j
+               FROM pg_locks WHERE relation = 'public.installment_plans'::regclass AND pid <> pg_backend_pid()`,
+          )
+        ).rows[0]?.j;
+        const prepared = (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM pg_prepared_xacts`)).rows[0]?.n;
+        const slots = (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM pg_replication_slots`)).rows[0]?.n;
+        return { snapshot_or_xact_holders: activity, relation_locks: locks, prepared_xacts: prepared, replication_slots: slots };
+      } catch (e) {
+        return { error: err(e) };
+      }
+    };
     out.push({ triggers_off: await sudoq('ALTER TABLE installment_plans DISABLE TRIGGER USER') });
     // ── THE BASE STEP'S COST INPUTS ARE CONSTRUCTED, NOT INHERITED
     //    (FINDING E; `TL-P4-COORD-R84` §4's «construct it explicitly and
@@ -3056,11 +3121,61 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // rows -- and §R17's `served: '0'` reading then read `2`. Measured, in
       // this file, on the pass that introduced it. A cleanup may not repair
       // the subject of a later case.
+      //
+      // AND IT IS RUN `VERBOSE`, WITH THE SERVER'S OWN NOTICES CAPTURED
+      // (DR-101). A plain `VACUUM` truncates the trailing all-empty pages ON
+      // A BEST-EFFORT BASIS and abandons the attempt SILENTLY -- it still
+      // returns success -- in the two documented cases above. Until this
+      // round the file asserted the RETURN (`vacuum === null`) and then
+      // charged for the OUTCOME (`bytes_after <= first.bytes`) with NOTHING
+      // between them that could say which of the two had happened. `VERBOSE`
+      // is the server's own account of that decision and it changes no
+      // behaviour: the only `lazy_truncate_heap` branch it touches is the
+      // elevation of «could not truncate due to conflicting lock request»
+      // from `DEBUG2` to `INFO`. Still PLAIN, still not `FULL`, still not
+      // `ANALYZE`: the `FULL` prohibition above and §R7's statistics premise
+      // are both untouched.
+      //
+      // THE `VACUUM` TAKES A CHECKED-OUT CLIENT rather than `sudoq`'s
+      // `pool.query`, and that is the ONLY way to read a notice at all --
+      // notices are a connection-level event, and `Pool.query` gives the
+      // connection back before the caller can listen on it. `pool.connect()`
+      // hands back the most recently released idle client, which is the one
+      // the `DELETE` above just used, so the connection this statement runs
+      // on is the one it would have run on anyway.
+      const before_cleanup = await physical();
       const cleanup = await sudoq(`DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled'`, [world.invoiceId]);
-      const vacuum = await sudoq('VACUUM public.installment_plans');
+      const before_vacuum = await physical();
+      const holders_before_vacuum = await holders();
+      const verbose: string[] = [];
+      const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
+        verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
+      };
+      const vacuum = await (async (): Promise<string | null> => {
+        let c: PoolClient | undefined;
+        try {
+          c = await sup.connect();
+          c.on('notice', onNotice);
+          await c.query('VACUUM (VERBOSE) public.installment_plans');
+          return null;
+        } catch (e) {
+          return err(e);
+        } finally {
+          if (c !== undefined) {
+            c.removeListener('notice', onNotice);
+            c.release();
+          }
+        }
+      })();
+      const holders_after_vacuum = await holders();
       out.push({
         cleanup,
         vacuum,
+        before_cleanup,
+        before_vacuum,
+        holders_before_vacuum,
+        holders_after_vacuum,
+        vacuum_verbose: verbose,
         triggers_on: await sudoq('ALTER TABLE installment_plans ENABLE TRIGGER USER'),
         rows_after: (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM installment_plans`)).rows[0]?.n,
         bytes_after: (await sup.query<{ n: string }>(`SELECT pg_relation_size('public.installment_plans')::text AS n`)).rows[0]?.n,
@@ -3206,6 +3321,103 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
 
   M['R13_teardown'] = await resetInvoice();
   M['R13_teardown_state'] = { flag: await flag(), truth: await truth(), plans: await planCount() };
+
+  // ── DR-101 §P THE MECHANISM, REPRODUCED DETERMINISTICALLY, WITH BOTH ARMS,
+  //    AND ON A RELATION OF ITS OWN.
+  //
+  //    `:4980` charges a PLAIN `VACUUM` for an OUTCOME the command does not
+  //    promise. `lazy_truncate_heap` gives the trailing all-empty pages back
+  //    on a BEST-EFFORT basis and abandons the attempt WHILE STILL REPORTING
+  //    SUCCESS, in two documented cases: it cannot take
+  //    `AccessExclusiveLock` inside its own five-second budget, or the tail
+  //    tuples are dead but NOT YET REMOVABLE, because some backend holds a
+  //    snapshot older than the `DELETE`. In the second case the tail pages
+  //    are not EMPTY, so there is nothing truncation is PERMITTED to drop.
+  //    This block asks whether that second condition ALONE is sufficient to
+  //    produce exactly the shape of the CI failure -- the relation left at
+  //    its inflated size, the command returning `null`, and the two numbers
+  //    saying nothing about which of the two happened.
+  //
+  //    IT RUNS ON `public.dr101_probe`, created and dropped here, and NEVER
+  //    on `installment_plans`. A probe that perturbed its own subject is the
+  //    exact defect the first round of the sweep above was disclosed for. The
+  //    autovacuum pin §R7 asserts, §R7's statistics premise, §R17's
+  //    deliberate index corruption and every reading already captured in `M`
+  //    are untouched by a second relation existing for the length of this
+  //    block -- and it runs LAST, after `R13_teardown`.
+  //
+  //    THE NEGATIVE ARM IS FIRST AND IT IS NOT DECORATION: an arm that only
+  //    shows the failure cannot tell a real holder from a probe that never
+  //    truncates at all. The holder is the ONLY variable between them.
+  M['DR101_truncation_probe'] = await (async (): Promise<Record<string, unknown>> => {
+    const arm = async (withHolder: boolean): Promise<Record<string, unknown>> => {
+      const verbose: string[] = [];
+      const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
+        verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
+      };
+      const size = async (): Promise<string> => String((await sup.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
+      // The holder gets a pool of its OWN rather than a third checkout of
+      // `sup` (`max: 3`): a probe that deadlocked on its own connection
+      // budget would read as the failure it is looking for.
+      const holderPool = withHolder ? new Pool({ connectionString: urlOf(DB, 'postgres'), max: 1 }) : undefined;
+      let holder: PoolClient | undefined;
+      let v: PoolClient | undefined;
+      try {
+        await sup.query('DROP TABLE IF EXISTS public.dr101_probe');
+        await sup.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
+        await sup.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
+        await sup.query('VACUUM public.dr101_probe');
+        const base = await size();
+        await sup.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
+        const inflated = await size();
+        // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
+        // the `DELETE`, which is the one ordering under which the 4400 tail
+        // tuples are dead to everyone else and still visible to it.
+        // `REPEATABLE READ` is what makes the snapshot outlive the statement.
+        if (holderPool !== undefined) {
+          holder = await holderPool.connect();
+          await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+          await holder.query('SELECT count(*) FROM public.dr101_probe');
+        }
+        const deleted = await (async (): Promise<string | null> => {
+          try {
+            await sup.query(`DELETE FROM public.dr101_probe WHERE id > 1`);
+            return null;
+          } catch (e) {
+            return err(e);
+          }
+        })();
+        const vacuum = await (async (): Promise<string | null> => {
+          try {
+            v = await sup.connect();
+            v.on('notice', onNotice);
+            await v.query('VACUUM (VERBOSE) public.dr101_probe');
+            return null;
+          } catch (e) {
+            return err(e);
+          } finally {
+            if (v !== undefined) {
+              v.removeListener('notice', onNotice);
+              v.release();
+              v = undefined;
+            }
+          }
+        })();
+        const after = await size();
+        return { holder: withHolder, base, inflated, deleted, vacuum, after, truncated: Number(after) <= Number(base), verbose };
+      } catch (e) {
+        return { holder: withHolder, error: err(e), verbose };
+      } finally {
+        if (holder !== undefined) {
+          await holder.query('ROLLBACK').catch(() => undefined);
+          holder.release();
+        }
+        if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
+        await sup.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
+      }
+    };
+    return { without_holder: await arm(false), with_holder: await arm(true) };
+  })();
 
   writeMeasurements(M);
 }, 1800000);
@@ -4977,9 +5189,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     const tail = sweep[sweep.length - 1] as Record<string, unknown>;
     expect(tail['cleanup'], `the sweep's filler rows were not removed: ${String(tail['cleanup'])}`).toBeNull();
     expect(tail['vacuum'], `the pages were not given back: ${String(tail['vacuum'])}`).toBeNull();
-    expect(Number(tail['bytes_after']), 'the sweep left the relation inflated, so it perturbed every later reading').toBeLessThanOrEqual(
-      Number(first['bytes']),
-    );
+    // THE MESSAGE CARRIES THE SERVER'S OWN ACCOUNT OF THE DECISION (DR-101).
+    // This assertion is unchanged -- same quantity, same direction, same
+    // bound -- and only its message grew: a best-effort truncation that was
+    // abandoned is indistinguishable, from the two numbers alone, from one
+    // that never started, and the run that reds here is the only run that
+    // has the evidence. `VERBOSE`'s own lines say which of the two documented
+    // abandonments happened, and the holder readings say who caused it.
+    expect(
+      Number(tail['bytes_after']),
+      `the sweep left the relation inflated, so it perturbed every later reading.
+  before DELETE : ${JSON.stringify(tail['before_cleanup'])}
+  before VACUUM : ${JSON.stringify(tail['before_vacuum'])}
+  holders before: ${JSON.stringify(tail['holders_before_vacuum'])}
+  holders after : ${JSON.stringify(tail['holders_after_vacuum'])}
+  VACUUM VERBOSE: ${JSON.stringify(tail['vacuum_verbose'])}`,
+    ).toBeLessThanOrEqual(Number(first['bytes']));
     expect(Number(tail['stats_after']), 'the sweep ANALYZEd the relation, so every later plan reading is on statistics').toBe(0);
     expect(tail['triggers_on'], `the sweep left the triggers disabled: ${String(tail['triggers_on'])}`).toBeNull();
     //    ...AND «THE FIXTURE IS BACK» IS ASSERTED OVER THE FORCED READINGS
@@ -5111,5 +5336,53 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
   it('R13 THE FIXTURE IS LEFT AS THE INDUCTION FOUND IT', () => {
     expect(M['R13_teardown']).toBeNull();
     expect(M['R13_teardown_state']).toStrictEqual({ flag: 'false', truth: 'false', plans: '0' });
+  });
+
+  /**
+   * DR-101 — THE SWEEP'S RESTORATION RESTS ON A BEST-EFFORT COMMAND, AND THIS
+   * IS THE MECHANISM THAT DEFEATS IT, MEASURED RATHER THAN SUPPOSED.
+   *
+   * The failure this arm exists for is `:4980` reading `802816` against a
+   * ceiling of `8192` on roughly one `backend` run in two, on `main` itself:
+   * 98 pages not given back, the `VACUUM` having returned cleanly. `:4979`
+   * certifies the RETURN, `:4980` charges for the OUTCOME, and before this
+   * round there was nothing between them that could say which of the two
+   * documented best-effort abandonments had occurred.
+   *
+   * This is the LAW, not the diagnosis: a plain `VACUUM` truncates only what
+   * it is PERMITTED to truncate, so a reading taken after one is a reading
+   * taken after a command that MAY have done nothing. Both arms run the same
+   * statements on the same relation in the same transaction isolation; the
+   * ONLY difference is whether a second backend holds a snapshot across the
+   * `DELETE`. The negative arm is what makes the positive one readable.
+   */
+  it('DR-101 THE MECHANISM: an older snapshot makes a PLAIN VACUUM keep the pages, and the control gives them back', () => {
+    const p = (M['DR101_truncation_probe'] ?? {}) as Record<string, unknown>;
+    const no = (p['without_holder'] ?? {}) as Record<string, unknown>;
+    const yes = (p['with_holder'] ?? {}) as Record<string, unknown>;
+    expect(no['error'], `the no-holder arm did not run: ${String(no['error'])}`).toBeUndefined();
+    expect(yes['error'], `the holder arm did not run: ${String(yes['error'])}`).toBeUndefined();
+    expect(no['deleted'], `the no-holder arm's DELETE failed: ${String(no['deleted'])}`).toBeNull();
+    expect(yes['deleted'], `the holder arm's DELETE failed: ${String(yes['deleted'])}`).toBeNull();
+    // BOTH ARMS ACTUALLY INFLATED. A probe whose relation never grew would
+    // pass the negative arm and fail the positive one for no reason at all.
+    expect(Number(no['inflated']), 'the no-holder arm never inflated its relation').toBeGreaterThan(Number(no['base']));
+    expect(Number(yes['inflated']), 'the holder arm never inflated its relation').toBeGreaterThan(Number(yes['base']));
+    // AND BOTH `VACUUM`s REPORTED SUCCESS, which is the whole point: the
+    // return value does not distinguish the two outcomes below.
+    expect(no['vacuum'], `the no-holder arm's VACUUM errored: ${String(no['vacuum'])}`).toBeNull();
+    expect(yes['vacuum'], `the holder arm's VACUUM errored: ${String(yes['vacuum'])}`).toBeNull();
+    // THE CONTROL: with no older snapshot, a plain `VACUUM` DOES give the
+    // trailing pages back, which is the assumption `:4980` was written on.
+    expect(no['truncated'], `a plain VACUUM did not truncate even with no holder, so this probe measures nothing: ${JSON.stringify(no)}`).toBe(true);
+    // THE MECHANISM: one open snapshot older than the `DELETE` is SUFFICIENT
+    // to leave the relation at its inflated size -- the exact shape of the
+    // intermittent CI failure, reproduced on demand.
+    expect(yes['truncated'], `an older snapshot did NOT stop the truncation, so this is not the mechanism: ${JSON.stringify(yes)}`).toBe(false);
+    // ...AND THE SERVER SAYS SO ITSELF, in its own words, rather than this
+    // file inferring a cause from two byte counts.
+    expect((yes['verbose'] as readonly string[] | undefined)?.join('\n') ?? '', 'the server did not report the tail as unremovable').toMatch(
+      /cannot be removed yet/,
+    );
   });
 });
