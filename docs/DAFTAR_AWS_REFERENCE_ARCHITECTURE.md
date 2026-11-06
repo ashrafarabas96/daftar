@@ -25,6 +25,30 @@ RDS PostgreSQL 16+ (Multi-AZ) · ElastiCache Redis (limiter) · S3 private bucke
 
 Secrets live in AWS Secrets Manager; each ECS task definition injects only its row. Static guard 13/14 and `production-providers.test.ts` keep the code honest.
 
+**What enforces the worker's `JWT` row, exactly (SEC-01).** Until SEC-01 this
+table's last column said the worker must not have JWT and nothing in the code
+said so: the worker's forbidden list in `loadConfig` named nine variables and
+neither `JWT_SECRET` nor `JWT_KEYS`; `JWT` appeared zero times in every static
+guard; and the one test whose title claims the denial asserted a general
+pattern that another variable already satisfied, on an environment that never
+carried a JWT variable. The row was a wish. It is now enforced, and by name:
+
+- `apps/api/src/config.ts` refuses `JWT_SECRET` and `JWT_KEYS` for
+  `PROCESS_MODE=worker` **in every environment**, in a block placed before the
+  `NODE_ENV !== 'production'` gate — because a laptop and a staging box are
+  where the habit is formed.
+- `scripts/static-guards.ts` (`worker-jwt-denial`) fails if that block stops
+  naming either variable, or moves after the gate.
+- `tests-unit/sec01-worker-jwt-deny.test.ts` proves the refusal in and out of
+  production, with negative controls for a correct worker, for `merchant-api`,
+  for `PROCESS_MODE=all` and for the reconciler.
+
+**And one row here is still prose, not measurement:** the repository tracks no
+task definition, Dockerfile, compose file or Terraform, so what a deployed
+worker actually receives cannot be read from this tree. If a deployed worker
+does carry `JWT_*` today, the refusal above will stop it booting — correct the
+deployment first, then take the change.
+
 ## 3. Database
 
 - One RDS instance, one database, six roles created by `infrastructure/database/bootstrap.sql` (run once by the DBA job with generated passwords).
