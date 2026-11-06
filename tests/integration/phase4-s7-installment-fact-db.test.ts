@@ -3368,7 +3368,38 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
         verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
       };
+      //
+      // ── AND THE `DELETE` REPORTS ITS OWN XID AND ITS OWN ROW COUNT, IN THE
+      //    SAME STATEMENT, WHICH IS WHY THE STATEMENT GREW AND THE SEQUENCE
+      //    DID NOT (DR-101, the owner's observation-before-repair order).
+      //
+      //    The horizon question is defined RELATIVE TO THIS `DELETE`: «did any
+      //    backend hold a snapshot at least as old as it». Without its xid the
+      //    `pg_stat_activity` reading taken after the `VACUUM` has no referent
+      //    and every `backend_xmin` in it is an uninterpretable number. The
+      //    xid cannot be read AFTERWARDS -- each `client.query` here is its own
+      //    autocommit transaction, so the deleting xid is gone by the time the
+      //    `VACUUM` returns -- and it cannot be read BEFORE without adding a
+      //    round trip in front of the window, which is the exact footprint the
+      //    note above removed.
+      //
+      //    SO IT IS READ IN THE `DELETE` ITSELF. This is ONE statement in the
+      //    same position, with the same lock, the same rows and the same
+      //    autocommit boundary: a data-modifying CTE always runs to
+      //    completion, so `installment_plans` is left in precisely the state
+      //    the plain `DELETE` left it in, and the `VACUUM` is still the very
+      //    next statement on the very same connection. NOTHING is added
+      //    between them and nothing is added in front of them. The technique
+      //    is the one §P already measured on this cluster (PostgreSQL 16.15).
+      //
+      //    `deleted_rows` is recorded for a reason of its own: if the sweep
+      //    deleted nothing, the tail was never inflated, there was nothing
+      //    truncation was permitted to drop, and `:4980` would be green for a
+      //    reason that has nothing to do with the mechanism. A green run whose
+      //    row count is unknown is not a control.
       let cleanup: string | null = 'the sweep never issued its DELETE';
+      let deleteXid = '';
+      let deletedRows: number | null = null;
       const vacuum = await (async (): Promise<string | null> => {
         let c: PoolClient | undefined;
         try {
@@ -3376,7 +3407,13 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           const client = c;
           client.on('notice', onNotice);
           try {
-            await client.query(`DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled'`, [world.invoiceId]);
+            const d = await client.query<{ xid: string; n: number }>(
+              `WITH d AS (DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled' RETURNING 1)
+               SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
+              [world.invoiceId],
+            );
+            deleteXid = String(d.rows[0]?.xid ?? '');
+            deletedRows = d.rows[0]?.n ?? null;
             cleanup = null;
           } catch (e) {
             cleanup = err(e);
@@ -3394,6 +3431,18 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       })();
       const after_vacuum = await physical();
       const holders_after_vacuum = await holders();
+      // ...AND THE SAME READING, NARROWED TO THE ONE QUESTION, WITH THE
+      // `DELETE`'s OWN XID AS ITS REFERENT. `holders_after_vacuum` lists every
+      // backend and leaves the comparison to the reader; this names the subset
+      // whose `backend_xmin` is at least as old as the `DELETE`, which is the
+      // set that holds `data_oldest_nonremovable` back. IT IS A FACT ABOUT
+      // AFTERWARDS AND NOT A MEASUREMENT OF THE WINDOW -- a holder that let go
+      // while the `VACUUM` was running is gone by the time this runs, so an
+      // EMPTY list here does NOT mean nothing held during the window. The
+      // window's own witness is `vacuum_verbose`, which is the server's
+      // account of the horizon AS IT COMPUTED IT.
+      const blockers_after_vacuum =
+        deleteXid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.installment_plans', deleteXid);
       // DR-101 — AND THE RESTORATION IS PRINTED ON **EVERY** RUN, NOT ONLY ON
       // THE RED ONE. The failure is intermittent at roughly one run in two,
       // and a record that existed only when the assertion failed would leave
@@ -3404,11 +3453,38 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // log is the only channel that survives the job. `no-console` is `off`
       // for this tree and two other integration suites already print a line
       // of their own.
+      // THE «BEFORE» IS NOT A NEW STATEMENT, AND THAT IS DELIBERATE. The loop
+      // above already recorded `relpages`, `bytes` and `rows` on EVERY step,
+      // including the last one, which is the inflated state the `DELETE` was
+      // issued against. Taking it from `out` costs no round trip and adds
+      // nothing in front of the window; asking the server again would.
+      // Only the three physical numbers are projected out of it: the step also
+      // carries plan text and reading pairs, and a log line nobody can read is
+      // not evidence.
+      //
+      // AND IT IS SELECTED BY THE **SAME IDENTITY THE ASSERTION USES** -- the
+      // steps that carry both `bytes` and `added` -- so that `ceiling_bytes`
+      // below is the very number `:4980` charges against and not a different
+      // row that happens to look like it (RULE-30: a count that is reported
+      // names its identity).
+      const sweepSteps = out.filter((x) => Object.hasOwn(x, 'bytes') && Object.hasOwn(x, 'added'));
+      const proj = (s: Record<string, unknown> | undefined): Record<string, unknown> =>
+        s === undefined
+          ? { note: 'the sweep loop recorded no step' }
+          : { added: s['added'], relpages: s['relpages'], bytes: s['bytes'], rows: s['rows'], error: s['error'] };
+      const before_sweep = proj(sweepSteps[sweepSteps.length - 1]);
+      // AND THE CEILING `:4980` ACTUALLY CHARGES AGAINST (`first['bytes']`),
+      // printed beside the rest so the log line can be read on its own.
+      const ceiling_bytes = sweepSteps[0]?.['bytes'];
       const restoration: Record<string, unknown> = {
         cleanup,
+        delete_xid: deleteXid,
+        deleted_rows: deletedRows,
         vacuum,
+        before_sweep,
         after_vacuum,
         holders_after_vacuum,
+        blockers_after_vacuum,
         vacuum_verbose: verbose,
         triggers_on: await sudoq('ALTER TABLE installment_plans ENABLE TRIGGER USER'),
         rows_after: (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM installment_plans`)).rows[0]?.n,
@@ -3426,8 +3502,31 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         truth_after_heapforced: await readWith(HEAP_ONLY, TRUTH_SQL, [world.invoiceId]),
         readings_after_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
       };
+      // ── ONE LINE, ONE JSON OBJECT, ONE MARKER. The job log is tens of
+      //    megabytes and is read with `grep`; a record split over three lines
+      //    with two embedded newlines cannot be pulled out of it whole, and a
+      //    record that is pulled out in pieces is a record that gets quoted
+      //    in pieces. `JSON.stringify` of a flat object emits no newline, so
+      //    `grep -F '[DR101-NATURAL-JSON]'` returns the whole fact or nothing
+      //    -- and «nothing» is then unambiguous rather than a half-match.
       console.log(
-        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
+        `[DR101-NATURAL-JSON] ${JSON.stringify({
+          marker: 'DR101-NATURAL-JSON',
+          ceiling_bytes,
+          before_sweep,
+          cleanup,
+          delete_xid: deleteXid,
+          deleted_rows: deletedRows,
+          vacuum,
+          after_vacuum,
+          bytes_after: restoration['bytes_after'],
+          relpages_after: restoration['relpages_after'],
+          rows_after: restoration['rows_after'],
+          truncated: Number(restoration['bytes_after']) <= Number(ceiling_bytes),
+          vacuum_verbose: verbose,
+          blockers_after_vacuum,
+          holders_after_vacuum,
+        })}`,
       );
       out.push(restoration);
     }
