@@ -49,6 +49,27 @@ SQLDIR="${P5_SQL_DIR:-$(cd "$(dirname "$0")/sql" && pwd)}"
 # package (already here) and the root `test:db:billing` script CI runs.
 cd "$(dirname "$0")/../.." || exit 1
 
+# DR-100, SECOND ROUND, and the vacuity guard is what caught it. The root
+# script named the suite as the REPOSITORY sees it and handed that string to
+# vitest as a filter: `packages/billing/test/db`. Vitest matches a filter
+# against the path relative to its ROOT, which is this package, so every file
+# is `test/db/…` and the filter matched NOTHING -- measured on the runner:
+# "No test files found", `files=0 total=0`, and the step went red on the floor
+# rather than passing with nothing run. Both facts are needed and they are not
+# the same string, so the repository-relative name arrives in P5_SUITE_DIR --
+# where the plan-evidence resolver reads it -- and the filter is DERIVED from
+# it here, with the prefix checked rather than assumed.
+if [ -n "${P5_SUITE_DIR:-}" ]; then
+  case "$P5_SUITE_DIR" in
+    packages/billing/*) set -- "${P5_SUITE_DIR#packages/billing/}" "$@" ;;
+    *)
+      echo "P5_SUITE_DIR=$P5_SUITE_DIR is not inside packages/billing, so no filter derived from it can mean this package's suite."
+      exit 1
+      ;;
+  esac
+  echo "SUITE_DIR=$P5_SUITE_DIR filter=$1"
+fi
+
 # ── DR-100: THE CI LANE, AN EXISTING SERVER AND A DATABASE OF ITS OWN ──────
 #
 # `main`'s plan-evidence contract refuses a plan-shape claim that required CI
