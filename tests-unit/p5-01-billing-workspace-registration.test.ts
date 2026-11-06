@@ -80,22 +80,39 @@ describe('ق-1 — @daftar/billing reaches CI', () => {
     expect(gate).not.toContain("'packages/not-a-workspace'");
   });
 
-  it('keeps its own runner pin, which is why registration must not align its vitest', () => {
-    // Measured on 2026-11-05: aligning `packages/billing` to the repository's
-    // vitest (4.1.12) made 25 of its 312 cases refuse by name —
-    // `tools/runner-bytes.json` pins 118 rows of the installed runner tree and
-    // compares `version` against the lockfile, and `tools/law-bytes.json` pins
-    // the sha256 of `packages/billing/package.json` itself. So the package
-    // keeps 4.1.11, the lockfile carries a nested runner for it, and the
-    // repository carries two vitest versions ON PURPOSE. Re-pinning 118 rows
-    // is a change to a sealed byte law, not part of registering a workspace.
+  it('keeps its runner pin and the security floor together, with ONE vitest in the tree', () => {
+    // THE HISTORY, because this case said the opposite yesterday and the
+    // reason it changed is the point. Registration deliberately did NOT align
+    // this package's vitest: aligning it to 4.1.12 made 25 of its 312 cases
+    // refuse, since `tools/runner-bytes.json` pins the installed runner tree
+    // and compares `version` against the lockfile. So the package kept 4.1.11
+    // and the lockfile carried a NESTED runner for it.
+    //
+    // T-10 on main then refused that install by name: `vitest` carries a
+    // security-batch floor of 4.1.12 — "the runner these assertions themselves
+    // run on" — and T-10's nested-copy rule exists because a nested copy below
+    // a floor is how a closed advisory stays live. A sealed byte law does not
+    // outrank a security floor; it is re-pinned, which DR-99 built the
+    // machinery to do. Measured at the move: the devDependency to 4.1.12
+    // removes all EIGHT nested lockfile rows, the tree holds ONE vitest, and
+    // the pin is the hoisted runner again at 118 rows.
     const billing = JSON.parse(read('packages/billing/package.json')) as { devDependencies: Record<string, string> };
-    const runnerPin = JSON.parse(read('packages/billing/tools/runner-bytes.json')) as { package: string; version: string };
+    const runnerPin = JSON.parse(read('packages/billing/tools/runner-bytes.json')) as { package: string; version: string; lockfile_key: string };
     expect(runnerPin.package).toBe('vitest');
     expect(billing.devDependencies['vitest']).toBe(runnerPin.version);
-    // and the lockfile installs exactly that version for this package
-    const lock = read('package-lock.json');
-    expect(lock).toContain('"packages/billing/node_modules/vitest"');
+    // The pin names the hoisted runner, and the lockfile resolves that row to
+    // the pinned version — so pin, manifest and lockfile are one fact.
+    expect(runnerPin.lockfile_key).toBe('node_modules/vitest');
+    const lock = JSON.parse(read('package-lock.json')) as { packages: Record<string, { version?: string }> };
+    expect(lock.packages[runnerPin.lockfile_key]?.version).toBe(runnerPin.version);
+    // THE FLOOR ITSELF, not a version literal: this package may never sit below
+    // what `tests/security/t10-upgrade-lock-contract.test.ts` requires, and a
+    // nested copy of the runner under this package is the shape T-10 refuses.
+    const floors = read('tests/security/t10-upgrade-lock-contract.test.ts');
+    const floor = /\['vitest', '([^']+)'/.exec(floors)?.[1];
+    expect(floor, 'T-10 no longer declares a vitest floor, so this case is reading nothing').toMatch(/^\d+\.\d+\.\d+$/);
+    expect(billing.devDependencies['vitest']).toBe(floor);
+    expect(Object.keys(lock.packages).filter((key) => key.startsWith('packages/billing/node_modules/'))).toStrictEqual([]);
     // NEGATIVE CONTROL: the probe is not matching on any version string.
     expect(runnerPin.version).not.toBe('0.0.0-not-a-version');
   });

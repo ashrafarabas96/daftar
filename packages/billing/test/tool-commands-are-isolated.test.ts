@@ -5451,22 +5451,31 @@ describe('every written invocation of the pack tools is isolated', () => {
       `${REFUSED_RUNNER_PACKAGE_NOT_LOCKED}: package-lock.json holds ${JSON.stringify(locked)} for ${pin.lockfile_key}, and tools/runner-bytes.json was pinned against ${pin.version} / ${pin.lockfile_integrity}. A pin against a package the lockfile no longer names is a pin against nothing`,
     ).toStrictEqual([pin.version, pin.lockfile_integrity]);
 
-    // DR-99, THE NESTED INSTALL. Registering this package as a workspace gave
-    // its 4.1.11 runner a nested `@vitest/mocker` the hoisted tree does not
-    // have, and the census of the pinned root grew by 35 rows. A digest taken
-    // from the disk and compared with a pin this repository wrote says only
-    // that the disk agrees with itself, so every nested row is held to the
-    // LOCKFILE and to the PUBLISHER: the row the lockfile carries for that
-    // package, and the tarball its own sha512 integrity addresses in the npm
-    // cache. The owner's condition was "any row that does not match the lock
-    // stops the work", and this is that condition as code rather than as a
-    // sentence in a commit message.
+    // DR-99, A NESTED INSTALL OF THE RUNNER, AND WHY THERE IS NONE TODAY.
+    // Registering this package as a workspace gave its 4.1.11 pin a nested
+    // `@vitest/mocker` the hoisted tree does not have, and the census of the
+    // pinned root grew by 35 rows. T-10 on main then refused that install by
+    // name: `vitest` carries a security-batch FLOOR of 4.1.12, and T-10's
+    // nested-copy rule exists because a nested copy is how a closed advisory
+    // stays live. The floor was right and this package was below it, so the
+    // devDependency moved to the floor and ALL EIGHT nested lockfile rows
+    // disappeared -- measured, and the pin is the hoisted runner again.
+    //
+    // The machinery stays, because the next workspace pin below a hoisted
+    // version brings the nested install straight back. A digest taken from the
+    // disk and compared with a pin this repository wrote says only that the
+    // disk agrees with itself, so a nested row must be held to the LOCKFILE and
+    // to the PUBLISHER. What is asserted now is the SYMMETRY, which is what
+    // makes an empty set a law rather than a silence: the pin declares a nested
+    // package exactly when its row set holds nested rows, and neither side can
+    // be emptied alone. The five-row control for the function that does the
+    // holding runs in its own case, on every host.
     const nested = pin.nested ?? [];
     const nestedRows = Object.keys(pin.files).filter((row) => row === 'node_modules' || row.startsWith('node_modules/') || row.includes('/node_modules/'));
     expect(
-      [nested.length > 0, nestedRows.length],
-      `${REFUSED_NESTED_ROW_NOT_DECLARED}: this package installs a nested dependency of its runner, so the pin must declare at least one and the row set must hold its rows. A control that measures an EMPTY set measures nothing`,
-    ).toStrictEqual([true, 35]);
+      [nested.length > 0, nestedRows.length > 0],
+      `${REFUSED_NESTED_ROW_NOT_DECLARED}: ${nested.length} nested package(s) are declared and ${nestedRows.length} row(s) of the pin sit inside a nested install. Rows with no declaration have the disk as their only oracle; a declaration with no rows is an exemption nobody re-measured. Today both are EMPTY, because the security floor removed the install`,
+    ).toStrictEqual([nestedRows.length > 0, nested.length > 0]);
     for (const row of nestedRows) {
       const inside = nested.filter((entry) => row === entry.row_prefix || row.startsWith(`${entry.row_prefix}/`));
       // `node_modules` and `node_modules/@vitest` are the ANCESTOR directories
@@ -5905,17 +5914,23 @@ describe('every written invocation of the pack tools is isolated', () => {
       `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: ${compared} package(s) compared, ${excluded} named-but-excluded, and ${linkRows.length} workspace link rows must together be every one of the ${underNodeModules.length} rows under node_modules, or this arm is measuring a subset it has not named`,
     ).toBe(true);
     // The row set reaches NESTED installs, which is a claim about this filter
-    // and therefore gets a positive control rather than a reading of it: the
-    // eight rows under `packages/billing/node_modules` -- seven of them one hop
-    // deep and one of them two (`.../vitest/node_modules/@vitest/mocker`) --
-    // are inside the set the accounting above is taken over.
+    // and therefore gets a positive control rather than a reading of it. It
+    // pointed at the eight rows under `packages/billing/node_modules` until the
+    // security floor removed that install; it points now at rows that exist for
+    // reasons of their own and not for this control's benefit -- the four under
+    // `apps/*/node_modules`, which `startsWith('node_modules/')` alone does not
+    // match. A filter that lost the second clause would measure a tree with
+    // whole package trees outside it.
+    const nestedLockRows = underNodeModules.filter((key) => !key.startsWith('node_modules/'));
     expect(
-      underNodeModules.filter((key) => key.startsWith('packages/billing/node_modules/')).length,
-      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: a nested install is matched by \`includes('/node_modules/')\` and not by the \`startsWith\` half, so a filter that lost the second clause would measure a tree with a whole package tree outside it`,
-    ).toBe(8);
-    expect(underNodeModules, `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: the deepest nested row must be in the set, two hops down`).toContain(
-      'packages/billing/node_modules/vitest/node_modules/@vitest/mocker',
-    );
+      nestedLockRows,
+      `${REFUSED_PACKAGE_NAMED_NOT_INSTALLED}: a nested install is matched by \`includes('/node_modules/')\` and not by the \`startsWith\` half. The rows are NAMED rather than counted, so one arriving or leaving is a reviewed change`,
+    ).toStrictEqual([
+      'apps/admin/node_modules/@types/node',
+      'apps/admin/node_modules/undici-types',
+      'apps/web/node_modules/@types/node',
+      'apps/web/node_modules/undici-types',
+    ]);
 
     // The `.bin` bound, asserted as a FLOOR so it cannot pass by reaching
     // nothing: 25 shims on this tree, each of which must resolve inside a
