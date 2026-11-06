@@ -43,11 +43,27 @@ carried a JWT variable. The row was a wish. It is now enforced, and by name:
   production, with negative controls for a correct worker, for `merchant-api`,
   for `PROCESS_MODE=all` and for the reconciler.
 
-**And one row here is still prose, not measurement:** the repository tracks no
-task definition, Dockerfile, compose file or Terraform, so what a deployed
-worker actually receives cannot be read from this tree. If a deployed worker
-does carry `JWT_*` today, the refusal above will stop it booting — correct the
-deployment first, then take the change.
+**And this whole table is prose, not measurement.** That is worth stating
+precisely, because it is the one thing the enforcement above cannot reach. The
+tracked tree holds **no deployment artefact of any kind**: of 1331 tracked
+files, zero Dockerfiles, zero compose files, zero Terraform, zero ECS task
+definitions, zero Helm or Kubernetes manifests, zero platform configuration
+(Fly, Render, Railway, Vercel, Netlify, Procfile, systemd) and zero `.env` or
+`.env.example`. Measured with a positive control on the same listing, so the
+zero is a measurement and not an empty probe. Every tracked place that sets
+`PROCESS_MODE=worker` is either `config.ts` itself, a guard, a test, or this
+document — and **not one of them passes `JWT_SECRET` or `JWT_KEYS` to a worker
+environment**, which is why the refusal above lands green rather than breaking
+the suite.
+
+**So nothing in this repository can tell you what a deployed worker actually
+receives.** Consequently, if any worker is running anywhere — production, a
+staging box, a trial environment — then **before this enforcement is merged**
+the two variables must be removed from that worker's configuration and its
+start-up confirmed, and only then does the refusal land. The refusal fails
+start-up in *every* environment, not only production, so a worker that carries
+the key today stops tomorrow. That ordering is a pre-launch gate, recorded as
+item 6 of §4 in `docs/DAFTAR_RELEASE_GATES.md`.
 
 ## 3. Database
 
