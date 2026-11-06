@@ -480,6 +480,39 @@ jobs:
         run: npm run test:integration
         env:
           PG_PORT: '5432'
+      # DR-100. @daftar/billing's DATABASE lane, on THIS job's postgres:16
+      # service and in a DATABASE OF ITS OWN (daftar_billing_test), so it
+      # cannot touch `daftar` above. Until this step existed the lane reached
+      # CI nowhere -- `test:db` had zero occurrences in this file -- while
+      # `test/db/credit-ledger-atomicity.test.ts` asserted a QUERY PLAN, which
+      # is the exact shape the plan-evidence contract refuses (the P4-S3
+      # defect): a plan claim that only ever ran on someone's laptop.
+      #
+      # The runner is the SAME script as the local lane, with
+      # P5_EXISTING_SERVER=1 so it builds no cluster of its own (it otherwise
+      # needs root for useradd/initdb). Same SQL files in the same order, same
+      # principal guard, same live-collation assertion, and the database is
+      # created from template0 at the deploy collation. No continue-on-error
+      # and no timeout of its own: it is a required step of a required job,
+      # like every suite above it.
+      #
+      # The DDL this applies is TEST-ONLY (DR-100 §2): billing's production
+      # tables come from a sequentially numbered migration reserved in
+      # LANES.md, never from this file.
+      # The step is a single `npm run`, and the script body NAMES the suite
+      # directory it hands the runner, because that is what the plan-evidence
+      # resolver reads: it collects `run: npm run <script>` and `run: npx …`
+      # and expands the script body, and a `run: |` block or a bare
+      # `./script.sh` is invisible to it. A lane CI runs but the law cannot
+      # SEE is the same false green from the other side.
+      - name: Billing DB lane — credit ledger on postgres:16 (own database)
+        run: npm run test:db:billing
+        env:
+          P5_EXISTING_SERVER: '1'
+          PG_PORT: '5432'
+          P5_PG_SUPERUSER: postgres
+          P5_PG_SUPERUSER_PASSWORD: postgres
+          P5_DB_NAME: daftar_billing_test
       - name: Golden regression suite
         run: npm run test:golden
         env:

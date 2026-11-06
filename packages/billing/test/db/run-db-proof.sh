@@ -40,12 +40,69 @@ P5_LOCALE=${P5_LOCALE:-en_US.utf8}
 # further than PART 6 requires, after this thread's own round-2 incident.
 SQLDIR="${P5_SQL_DIR:-$(cd "$(dirname "$0")/sql" && pwd)}"
 
-if ! id p5pg >/dev/null 2>&1; then
+# DR-100. The lane runs from the PACKAGE root whoever invokes it and from
+# wherever. `vitest.db.config.ts` carries `include: test/db/**`, relative to
+# the working directory and not to the config file, so invoking this script
+# from the repository root used to collect NOTHING and exit 1 with "No test
+# files found" -- RULE-8's trap, an operator error read as a package failure.
+# Both entry points now land in the same place: `npm run test:db` inside the
+# package (already here) and the root `test:db:billing` script CI runs.
+cd "$(dirname "$0")/../.." || exit 1
+
+# ── DR-100: THE CI LANE, AN EXISTING SERVER AND A DATABASE OF ITS OWN ──────
+#
+# `main`'s plan-evidence contract refuses a plan-shape claim that required CI
+# never executes against its `postgres:16` service, and
+# `test/db/credit-ledger-atomicity.test.ts` asserts a QUERY PLAN. This lane
+# could not be a CI step as it stood: it BUILDS a cluster, and `useradd`,
+# `initdb` and `pg_ctl` below all need root and a writable /home. With
+# P5_EXISTING_SERVER=1 it builds nothing and uses the server CI already runs,
+# in a SEPARATE DATABASE so it cannot touch the integration suite's `daftar`.
+#
+# What is NOT relaxed: the same SQL files in the same order, the same
+# principal guard (`rolsuper=false rolbypassrls=false`), the same live
+# collation assertion -- and the database is created FROM template0 with the
+# deploy collation stated, so the guard is a real comparison rather than
+# whatever template1 happened to hold.
+P5_EXISTING_SERVER=${P5_EXISTING_SERVER:-0}
+if [ "$P5_EXISTING_SERVER" = "1" ]; then
+  P5_PG_HOST=${P5_PG_HOST:-localhost}
+  P5_PG_PORT=${PG_PORT:-5432}
+  P5_PG_SUPERUSER=${P5_PG_SUPERUSER:-postgres}
+  P5_PG_SUPERUSER_PASSWORD=${P5_PG_SUPERUSER_PASSWORD:-postgres}
+  P5_DB_NAME=${P5_DB_NAME:-daftar_billing_test}
+  ADMIN_URL="postgresql://$P5_PG_SUPERUSER:$P5_PG_SUPERUSER_PASSWORD@$P5_PG_HOST:$P5_PG_PORT/postgres"
+
+  EXISTS=$(psql -tA "$ADMIN_URL" -c "SELECT count(*) FROM pg_database WHERE datname = '$P5_DB_NAME'" | tr -d '[:space:]')
+  if [ -z "$EXISTS" ]; then
+    echo "the server at $P5_PG_HOST:$P5_PG_PORT answered nothing; an empty probe is not a zero (RULE-18)."
+    exit 1
+  fi
+  if [ "$EXISTS" = "0" ]; then
+    psql -v ON_ERROR_STOP=1 "$ADMIN_URL" -c \
+      "CREATE DATABASE $P5_DB_NAME TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE '$P5_LOCALE' LC_CTYPE '$P5_LOCALE'" \
+      > /dev/null || { echo "CREATE DATABASE $P5_DB_NAME under $P5_LOCALE failed; the lane does not fall back to another collation."; exit 1; }
+  fi
+  # The one server setting the concurrency cases depend on. The scratch
+  # cluster is started with `-c deadlock_timeout=200ms`; a shared service runs
+  # the 1s default, and a lock test that waits five times longer is a
+  # different measurement. `fsync=off` is NOT reproduced: it only makes the
+  # cluster faster and no case asserts it.
+  psql -v ON_ERROR_STOP=1 "$ADMIN_URL" -c "ALTER DATABASE $P5_DB_NAME SET deadlock_timeout = '200ms'" > /dev/null || exit 1
+
+  export P5_DB_BOOTSTRAP_URL="postgresql://$P5_PG_SUPERUSER:$P5_PG_SUPERUSER_PASSWORD@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
+  export P5_DB_OWNER_URL="postgresql://p5owner:p5ownerpw@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
+  export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
+  export P5_DB_APP_URL="postgresql://p5_app:p5apppw@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
+  echo "LANE=existing-server host=$P5_PG_HOST port=$P5_PG_PORT database=$P5_DB_NAME locale=$P5_LOCALE"
+fi
+
+if [ "$P5_EXISTING_SERVER" != "1" ] && ! id p5pg >/dev/null 2>&1; then
   # initdb refuses to run as root; the cluster needs an unprivileged owner.
   useradd -m -s /bin/bash p5pg || exit 1
 fi
 
-if [ ! -f "$CLUSTER/data/PG_VERSION" ]; then
+if [ "$P5_EXISTING_SERVER" != "1" ] && [ ! -f "$CLUSTER/data/PG_VERSION" ]; then
   mkdir -p "$CLUSTER/sock" && chown -R p5pg:p5pg "$CLUSTER"
   if ! locale -a 2>/dev/null | grep -qix "$(echo "$P5_LOCALE" | tr 'A-Z' 'a-z' | tr -d '-')" \
      && ! locale -a 2>/dev/null | grep -qix "$P5_LOCALE"; then
@@ -57,7 +114,7 @@ if [ ! -f "$CLUSTER/data/PG_VERSION" ]; then
     > "$CLUSTER/initdb.log" 2>&1 || { echo "initdb failed"; tail -5 "$CLUSTER/initdb.log"; exit 1; }
 fi
 
-if ! pg_isready -h localhost -p "$PGPORT_P5" >/dev/null 2>&1; then
+if [ "$P5_EXISTING_SERVER" != "1" ] && ! pg_isready -h localhost -p "$PGPORT_P5" >/dev/null 2>&1; then
   mkdir -p "$CLUSTER/sock" && chown -R p5pg:p5pg "$CLUSTER/sock"
   # unix_socket_directories: /var/run/postgresql is not writable by p5pg.
   su p5pg -c "$PGBIN/pg_ctl -D $CLUSTER/data \
@@ -66,10 +123,12 @@ if ! pg_isready -h localhost -p "$PGPORT_P5" >/dev/null 2>&1; then
     -l $CLUSTER/pg.log start -w" || { echo "pg_ctl failed"; tail -10 "$CLUSTER/pg.log"; exit 1; }
 fi
 
-export P5_DB_BOOTSTRAP_URL="postgresql://$PGUSER_BOOTSTRAP@localhost:$PGPORT_P5/postgres"
-export P5_DB_OWNER_URL="postgresql://$PGUSER_P5@localhost:$PGPORT_P5/postgres"
-export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@localhost:$PGPORT_P5/postgres"
-export P5_DB_APP_URL="postgresql://p5_app:p5apppw@localhost:$PGPORT_P5/postgres"
+if [ "$P5_EXISTING_SERVER" != "1" ]; then
+  export P5_DB_BOOTSTRAP_URL="postgresql://$PGUSER_BOOTSTRAP@localhost:$PGPORT_P5/postgres"
+  export P5_DB_OWNER_URL="postgresql://$PGUSER_P5@localhost:$PGPORT_P5/postgres"
+  export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@localhost:$PGPORT_P5/postgres"
+  export P5_DB_APP_URL="postgresql://p5_app:p5apppw@localhost:$PGPORT_P5/postgres"
+fi
 
 # Roles first, as the cluster superuser, because the schema owner is now one
 # of the things being created rather than the principal creating them.
@@ -124,7 +183,34 @@ if [ "$LIVE_COLLATE" != "$P5_LOCALE" ]; then
 fi
 
 psql -tA "$P5_DB_OWNER_URL" -c "SELECT version()"
-npx vitest run --config vitest.db.config.ts "$@"
+
+# DR-100: THE COUNT IS PART OF THE RESULT, not a line to read off a summary.
+# `NOT_RUN` and `0 of 0 passed` are the two ways a database lane looks green
+# without having proved anything, so the run writes a machine-readable result
+# and the floor below is asserted from it. The file goes to the temporary
+# directory: no lane writes a result artefact into the repository.
+RESULTS="${TMPDIR:-/tmp}/p5-db-results-$$.json"
+npx vitest run --config vitest.db.config.ts --reporter=default --reporter=json "--outputFile.json=$RESULTS" "$@"
 rc=$?
+P5_MIN_CASES=${P5_MIN_CASES:-131}
+if [ -s "$RESULTS" ]; then
+  node -e '
+const fs = require("fs");
+const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const floor = Number(process.argv[2]);
+const total = r.numTotalTests, passed = r.numPassedTests, failed = r.numFailedTests;
+const files = Array.isArray(r.testResults) ? r.testResults.length : 0;
+console.log(`DB_PROOF_CASES files=${files} total=${total} passed=${passed} failed=${failed} floor=${floor}`);
+if (!Number.isInteger(total) || total < floor) {
+  console.log(`DB_PROOF_VACUOUS: ${total} cases executed, below the declared floor of ${floor}. A lane that runs fewer cases than it claims is NOT_RUN wearing a green badge; raise the floor deliberately or find the files that stopped being collected.`);
+  process.exit(1);
+}
+process.exit(0);
+' "$RESULTS" "$P5_MIN_CASES" || rc=1
+else
+  echo "DB_PROOF_VACUOUS: the json reporter wrote nothing to $RESULTS, so the executed count is unknown (RULE-18: an empty probe is not a zero)."
+  rc=1
+fi
+rm -f "$RESULTS"
 echo "DB_PROOF_RC=$rc"
 exit $rc

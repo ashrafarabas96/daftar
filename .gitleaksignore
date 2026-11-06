@@ -102,3 +102,20 @@ f20fb527f16198398cd9078c21883c6a2d4d3136:packages/billing/test/fake-provider.tes
 # the one historic commit and the one line.
 # line-sha256 73f1dab909f651837ae0c993b86e43b4723c519474bb9b98585565676d211acf
 cccc04168826b8fc35e381d34a0f42ba52a8b21c:packages/billing/tools/runner-bytes.json:generic-api-key:74
+
+# Not a credential: the SAME pin manifest, one rule, one path, one line, after
+# the runner moved to vitest 4.1.12 (the T-10 security floor). Regenerating
+# packages/billing/tools/runner-bytes.json renamed the chunk
+# (dist/chunks/cli-api.CnMVyzaz.js -> cli-api.B0Pz1_R7.js), so the row moved to
+# line 30 at a new commit and the entry above (line 74, cccc0416) no longer
+# matches it. WHY IT IS A FALSE POSITIVE, MEASURED, not asserted: line 30 reads
+# "dist/chunks/cli-api.B0Pz1_R7.js": "222aa60f...ee2d", and sha256 of the
+# installed node_modules/vitest/dist/chunks/cli-api.B0Pz1_R7.js (498,779 bytes)
+# is exactly 222aa60f8555aea9311703c68edaaa8eba0888ea29bfb4a49b37f98e0811ee2d.
+# The value is therefore the digest of a file published by vitest, reproducible
+# by anyone who installs the same version, and it grants nothing. The rule
+# matched a 64-hex value next to a key-shaped string. The file is generated and
+# still present at the head, so a rename cannot be the remedy; the entry is
+# pinned to the one historic commit and the one line, with no pattern.
+# line-sha256 c5090afca6c43a442e0ed92d3e908822efd1cdcfe8e0b82b65b30317098170dc
+62774d7662b03e3dc730eee6d54cf7afb1a35f61:packages/billing/tools/runner-bytes.json:generic-api-key:30

@@ -30,7 +30,24 @@ DO $$ BEGIN
     CREATE ROLE p5owner LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEROLE;
   END IF;
 END $$;
-GRANT CREATE ON DATABASE postgres TO p5owner;
+-- DR-100. The grant used to name `postgres` literally, which was true of the
+-- scratch cluster this lane builds for itself and FALSE of every other
+-- database. The CI lane runs in a database of its own on a shared
+-- `postgres:16` service, so the grant is taken from the database the file is
+-- being applied to -- the one fact that is always right -- rather than from a
+-- name. `%I` quotes the identifier, so a database name is never interpolated
+-- raw.
+DO $$ BEGIN
+  EXECUTE format('GRANT CREATE ON DATABASE %I TO p5owner', current_database());
+END $$;
+-- DR-100. A password for the schema owner, UNCONDITIONALLY (the CREATE above
+-- is `IF NOT EXISTS`, so a role that already exists would never get one).
+-- The scratch cluster authenticates with `trust` and ignores it; a TCP
+-- service does not, and without it `p5owner` cannot connect at all. It grants
+-- NOTHING: `rolsuper` and `rolbypassrls` stay false and the lane asserts both
+-- before any case runs. This is a TEST password for a test-only database, and
+-- it is in the file the test lane applies, never in production bootstrap.
+ALTER ROLE p5owner PASSWORD 'p5ownerpw';
 
 -- The application role: what the API connects as.
 DO $$ BEGIN
