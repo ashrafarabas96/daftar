@@ -2941,37 +2941,52 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    It is the same owner-only escape §R7 already uses and declares, and it
   //    is restored in a `finally` (`TL-P4-COORD-R56` §5).
   /**
-   * THE PRECONDITION OF TRUNCATION, READ — AND THE ONLY QUANTITY THIS FILE
-   * WILL EVER POLL (DR-101).
+   * WHAT COULD HOLD THE REMOVAL HORIZON, READ ONCE, AS DIAGNOSTICS — AND
+   * NOTHING ELSE (DR-101).
    *
-   * ── THE LINE THIS HELPER EXISTS TO STAY ON ──────────────────────────────
+   * ── THIS FILE NO LONGER WAITS FOR ANYTHING, AND THAT IS A MEASUREMENT ───
    *
    * A plain `VACUUM` gives the trailing all-empty pages back on a BEST-EFFORT
    * basis. Two documented conditions make it abandon the attempt while still
    * REPORTING SUCCESS: the tail tuples are dead but NOT YET REMOVABLE because
    * some backend holds a snapshot at least as old as the `DELETE`, or
    * `lazy_truncate_heap` cannot take `AccessExclusiveLock` inside its own
-   * budget. Both are PRECONDITIONS of the cleanup, and both are facts about
-   * OTHER backends.
+   * budget. Both are facts about OTHER backends.
    *
-   * SO WHAT IS POLLED HERE IS THE PRECONDITION, AND NEVER THE OUTCOME. This
-   * helper does not know what `pg_relation_size` says, cannot read it, and
-   * never issues a `VACUUM`. Its caller runs ONE `VACUUM (VERBOSE)` after it
-   * returns and takes ONE reading, and `:4980` judges THAT reading.
+   * AN EARLIER ROUND OF THIS CARD BUILT A BOUNDED WAIT ON THE FIRST OF THOSE
+   * TWO -- poll `pg_stat_activity` until no backend holds a snapshot as old as
+   * the `DELETE`, then vacuum once -- AND THE OWNER WITHDREW IT, BECAUSE ITS
+   * PREMISE WAS MEASURED FALSE IN THIS CI. The numbers, all on `3c51161c`,
+   * jobs `127868078171` (attempt 1) and `128120802738` (attempt 2) of run
+   * `42210601372`:
    *
-   * POLLING `pg_relation_size` UNTIL IT FALLS BACK TO THE BASE, OR RE-ISSUING
-   * THE `VACUUM` UNTIL A READING PASSES, IS BANNED AND IS NOT WHAT THIS IS. A
-   * LOOP WHOSE EXIT CONDITION IS THE ASSERTION'S OWN QUANTITY IS A RETRY OF
-   * THE MEASUREMENT NO MATTER WHAT IT IS CALLED. The distinction is the whole
-   * licence for waiting at all, so it is written here where the loop is.
+   *   - `n_backends = 0` holding a snapshot or an open transaction, CLUSTER
+   *     WIDE, in 4 of 4 executions; `prepared_xacts = 0`;
+   *     `replication_slots = 0`; relation locks `[]`;
+   *     `pg_stat_progress_vacuum` `[]`; `0 are dead but not yet removable`;
+   *     `removable cutoff` one single XID old.
+   *   - `vitest.config.ts` `maxWorkers: 1` with `pool: 'forks'` and the
+   *     default `isolate: true` ⇒ ONE test file at a time, each in its own
+   *     fork; and `const DB = 'daftar_s7f1_fact'` appears in exactly ONE file
+   *     ⇒ this suite owns its database EXCLUSIVELY.
+   *   - zero genuinely concurrent tests in the tree: the probe for
+   *     `.concurrent` returned TWO hits and both are STRING LITERALS inside
+   *     guard suites, so the probe is sighted and the zero is real.
    *
-   * AND WAITING HERE IS NOT A WEAKENED MEASUREMENT, because the sweep is
-   * HOUSEKEEPING AND NOT THE SUBJECT: §R13's subject is the digest, the plan
-   * readings and the trigger readings; the sweep exists only so that its own
-   * filler rows do not perturb those, and `:4980` is the guard that it did
-   * not. Waiting for a cleanup to genuinely BE ABLE TO FINISH before reading
-   * it leaves every measured number alone — no §R7 reading, no §R17 reading
-   * and no `first['bytes']` is ever re-taken.
+   * ⇒ NOTHING IN THIS CI HOLDS A LONG TRANSACTION CONCURRENTLY AGAINST THIS
+   *   DATABASE, so a wait on that horizon would clear on its first reading
+   *   every time: it would pass WITHOUT EVER WAITING, which is a repair that
+   *   hides the symptom rather than treating a cause. The remaining
+   *   documented branch -- `lazy_truncate_heap` failing to take
+   *   `AccessExclusiveLock` within its own budget -- has NEVER been seen in
+   *   the server's own words, because `main` does not run `VERBOSE`.
+   *
+   * SO WHAT IS LEFT HERE IS DIAGNOSIS AND NOTHING ELSE. This helper is read
+   * ONCE, AFTER the `VACUUM` has returned. It never loops, never waits, never
+   * re-issues a `VACUUM` and never reads `pg_relation_size`. No ceiling, no
+   * timeout and no assertion of this file is touched by it. THERE IS NO
+   * REPAIR IN THIS FILE, BY DECISION, UNTIL THE CAUSE SHOWS ITSELF IN THE
+   * SERVER'S OWN WORDS.
    *
    * ── WHAT IT READS, AND WHY IT IS A PROXY AND SAYS SO ────────────────────
    *
@@ -3017,33 +3032,11 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       return { blockers: [], error: err(e) };
     }
   };
-  /**
-   * Wait, under a bounded budget, until nothing holds the removal horizon
-   * behind `deleteXid` and nothing holds a lock on `relation`.
-   *
-   * It returns what it SAW, including on exhaustion, and it NEVER decides
-   * anything: a `clear: false` is a refusal for the caller's assertion to
-   * make, with the blockers named, and never a reason to read on or to try
-   * again. The first reading is always recorded — an exhausted budget and a
-   * wait that never actually waited must not look alike.
-   */
-  const awaitRemovableHorizon = async (relation: string, deleteXid: string, budgetMs: number): Promise<Record<string, unknown>> => {
-    const started = Date.now();
-    const readings: Record<string, unknown>[] = [];
-    let attempts = 0;
-    while (true) {
-      attempts += 1;
-      const r = await truncationBlockers(relation, deleteXid);
-      const elapsed = Date.now() - started;
-      if (r.error !== undefined) return { clear: false, attempts, waited_ms: elapsed, budget_ms: budgetMs, error: r.error, readings };
-      if (attempts === 1 || r.blockers.length > 0) readings.push({ attempt: attempts, at_ms: elapsed, blockers: r.blockers });
-      if (r.blockers.length === 0) return { clear: true, attempts, waited_ms: elapsed, budget_ms: budgetMs, readings };
-      if (elapsed >= budgetMs) return { clear: false, attempts, waited_ms: elapsed, budget_ms: budgetMs, blockers: r.blockers, readings };
-      await new Promise<void>((res) => {
-        setTimeout(res, 100);
-      });
-    }
-  };
+  // THE BOUNDED WAIT THAT STOOD HERE IS GONE, WITHDRAWN BY THE OWNER ON THE
+  // MEASUREMENT ABOVE (DR-101). Nothing in this file waits for a horizon, for
+  // a lock, or for anything else; there is no budget to size and none is
+  // sized. What remains is `truncationBlockers`, read once after the
+  // `VACUUM`, as diagnostics.
   M['R7_pagecount_sweep'] = await (async (): Promise<readonly Record<string, unknown>[]> => {
     const out: Record<string, unknown>[] = [];
     const sudoq = async (sql: string, params: readonly unknown[] = []): Promise<string | null> => {
@@ -3687,7 +3680,11 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
   //    shows the failure cannot tell a real holder from a probe that never
   //    truncates at all. The holder is the ONLY variable between them.
   M['DR101_truncation_probe'] = await (async (): Promise<Record<string, unknown>> => {
-    type ArmOpts = { name: string; holder: 'none' | 'through' | 'release'; wait: boolean; budgetMs: number; releaseAfterMs: number };
+    // TWO ARMS, AND NO WAIT. The `release` holder and the `wait` budget that
+    // stood here existed ONLY to prove the withdrawn repair's machinery, so
+    // they went with it. What is left is the MECHANISM and its negative
+    // control, which is what justifies logging the server's words at all.
+    type ArmOpts = { name: string; holder: 'none' | 'through' };
     const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
       const verbose: string[] = [];
       const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
@@ -3699,7 +3696,6 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // budget would read as the failure it is looking for.
       const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(DB, 'postgres'), max: 1 });
       let holder: PoolClient | undefined;
-      let releaseTimer: ReturnType<typeof setTimeout> | undefined;
       let v: PoolClient | undefined;
       try {
         await sup.query('DROP TABLE IF EXISTS public.dr101_probe');
@@ -3718,20 +3714,12 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
           await holder.query('SELECT count(*) FROM public.dr101_probe');
         }
-        // ...AND IN THE `release` ARM IT LETS GO PART WAY THROUGH THE WAIT.
-        //    That is the arm which proves the wait actually WAITS: it must
-        //    see blockers on its first reading and none on a later one, so
-        //    `attempts > 1` is itself a measured fact and not a hope.
-        if (opts.holder === 'release' && holder !== undefined) {
-          const h = holder;
-          releaseTimer = setTimeout(() => {
-            void h.query('ROLLBACK').catch(() => undefined);
-          }, opts.releaseAfterMs);
-        }
-        // The `DELETE` reports its OWN xid, in the same statement, because the
-        // precondition is defined RELATIVE TO IT: «no backend holds a snapshot
-        // at least as old as this `DELETE`». A `DELETE` whose xid is not known
-        // can only be compared against a guess.
+        // The `DELETE` reports its OWN xid, in the same statement, so that the
+        // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
+        // backends hold a snapshot at least as old as THIS `DELETE`». A
+        // `DELETE` whose xid is not known can only be compared against a
+        // guess. It is a label on a diagnostic, not an input to any wait --
+        // there is no longer a wait.
         const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
           try {
             const r = await sup.query<{ xid: string; n: number }>(
@@ -3743,11 +3731,9 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
             return { error: err(e), xid: '' };
           }
         })();
-        const waited = opts.wait ? await awaitRemovableHorizon('public.dr101_probe', deleted.xid, opts.budgetMs) : undefined;
-        // EXACTLY ONE `VACUUM`, ON EVERY PATH, INCLUDING AN EXHAUSTED BUDGET.
-        // On exhaustion the caller's assertion is what refuses; running the
-        // single `VACUUM` anyway is what gives that refusal the SERVER'S OWN
-        // WORDS to quote instead of two byte counts.
+        // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
+        // wait on and nothing after it to re-issue; the arm's whole claim is
+        // what the server says about that ONE command.
         const vacuum = await (async (): Promise<string | null> => {
           try {
             v = await sup.connect();
@@ -3768,12 +3754,10 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         return {
           arm: opts.name,
           holder: opts.holder,
-          waited_on_precondition: opts.wait,
           base,
           inflated,
           delete_error: deleted.error,
           delete_xid: deleted.xid,
-          waited,
           vacuum,
           after,
           truncated: Number(after) <= Number(base),
@@ -3782,7 +3766,6 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       } catch (e) {
         return { arm: opts.name, holder: opts.holder, error: err(e), verbose };
       } finally {
-        if (releaseTimer !== undefined) clearTimeout(releaseTimer);
         if (holder !== undefined) {
           await holder.query('ROLLBACK').catch(() => undefined);
           holder.release();
@@ -3792,28 +3775,24 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       }
     };
     const all = {
-      // 1. THE NEGATIVE CONTROL. Nothing holds, no wait: a plain `VACUUM`
-      //    DOES give the pages back. Without this arm the three below cannot
-      //    be told from a probe that never truncates at all.
-      no_holder: await arm({ name: 'no_holder', holder: 'none', wait: false, budgetMs: 0, releaseAfterMs: 0 }),
-      // 2. THE MECHANISM. One snapshot held across the `DELETE`, no wait: the
-      //    relation stays inflated and the `VACUUM` still reports success.
-      //    This is the shape of the CI failure, on demand.
-      holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through', wait: false, budgetMs: 0, releaseAfterMs: 0 }),
-      // 3. THE WAIT WORKS, AND IT ACTUALLY WAITED. Same holder, released part
-      //    way through a budget that is wide enough: the wait must SEE the
-      //    blocker, take more than one reading, clear, and the single
-      //    `VACUUM` after it must then truncate.
-      holder_releases_with_wait: await arm({ name: 'holder_releases_with_wait', holder: 'release', wait: true, budgetMs: 15000, releaseAfterMs: 700 }),
-      // 4. THE BUDGET CAN BE EXHAUSTED, AND THE REFUSAL CARRIES THE SERVER'S
-      //    WORDS. Holder never lets go, budget deliberately short: the wait
-      //    must REFUSE with the blocker named, and the one `VACUUM` run anyway
-      //    must leave the pages and say why. A wait that cannot be exhausted
-      //    is a wait that never waits, which reads as a wait that succeeded --
-      //    the same trap as a `backend_type` filter that excludes the answer.
-      holder_through_with_wait: await arm({ name: 'holder_through_with_wait', holder: 'through', wait: true, budgetMs: 1000, releaseAfterMs: 0 }),
+      // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
+      //    the pages back. Without this arm, arm 2 cannot be told from a
+      //    probe that never truncates at all.
+      no_holder: await arm({ name: 'no_holder', holder: 'none' }),
+      // 2. THE MECHANISM, AND THE REASON THIS CARD LOGS ANYTHING. One
+      //    snapshot held across the `DELETE`: the relation stays inflated,
+      //    the `VACUUM` STILL REPORTS SUCCESS, and `:4979` would pass while
+      //    `:4980` failed. That is the premise the diagnostic logging rests
+      //    on -- a plain `VACUUM` really can abandon truncation silently --
+      //    and it is NOT a claim that this is what happens on `main`, which
+      //    the measurement in `truncationBlockers`'s note disposes of.
+      holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through' }),
+      // ARMS 3 AND 4 ARE GONE. They proved that the withdrawn wait saw its
+      // blocker, cleared, and could have its budget exhausted. With no wait
+      // in the file there is nothing for them to prove, and an arm kept past
+      // its claim is an arm that will be read as a claim.
     };
-    // ALL FOUR ARMS ARE PRINTED, for the same reason the sweep is: the arm
+    // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
     // that PASSES is the control, and a control whose text is never shown
     // cannot be read against the arm that fails.
     for (const [k, vrec] of Object.entries(all)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
@@ -5590,18 +5569,49 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     const tail = sweep[sweep.length - 1] as Record<string, unknown>;
     expect(tail['cleanup'], `the sweep's filler rows were not removed: ${String(tail['cleanup'])}`).toBeNull();
     expect(tail['vacuum'], `the pages were not given back: ${String(tail['vacuum'])}`).toBeNull();
-    // THE MESSAGE CARRIES THE SERVER'S OWN ACCOUNT OF THE DECISION (DR-101).
-    // This assertion is unchanged -- same quantity, same direction, same
-    // bound -- and only its message grew: a best-effort truncation that was
-    // abandoned is indistinguishable, from the two numbers alone, from one
-    // that never started, and the run that reds here is the only run that
-    // has the evidence. `VERBOSE`'s own lines say which of the two documented
-    // abandonments happened, and the holder readings say who caused it.
-    const evidence = `
-  after VACUUM   : ${JSON.stringify(tail['after_vacuum'])}
-  holders after  : ${JSON.stringify(tail['holders_after_vacuum'])}
-  VACUUM VERBOSE : ${JSON.stringify(tail['vacuum_verbose'])}`;
-    expect(Number(tail['bytes_after']), `the sweep left the relation inflated, so it perturbed every later reading.${evidence}`).toBeLessThanOrEqual(
+    // ── THE MESSAGE CARRIES THE SERVER'S OWN ACCOUNT OF THE DECISION, IN
+    //    FULL, AND THE TRUNCATION CONCERN FIRST (DR-101).
+    //
+    //    THE ASSERTION ITSELF IS UNTOUCHED: same quantity (`bytes_after`),
+    //    same direction, same bound (`first['bytes']`). ONLY ITS MESSAGE
+    //    GREW. There is no repair in this file, no ceiling, no timeout and
+    //    nothing retried or skipped -- by the owner's decision, nothing is
+    //    treated until the cause shows itself in the server's own words.
+    //
+    //    AND THE WORDS ARE PRINTED AS TEXT, NOT AS JSON. `JSON.stringify`
+    //    escaped every newline in a `VACUUM (VERBOSE)` notice into a literal
+    //    `\n`, which turned the one artefact that matters -- a multi-line
+    //    per-relation summary -- into a single unreadable ribbon. The run
+    //    that reds here is the ONLY run that carries this evidence, so it is
+    //    emitted so a human can read it without a parser.
+    //
+    //    THE ORDER IS THE DIAGNOSIS. `lazy_truncate_heap` abandons the
+    //    attempt in two documented ways and each has its own spelling:
+    //    «could not truncate due to conflicting lock request» for the lock
+    //    branch, and «N are dead but not yet removable» / «pages: N removed»
+    //    / «truncated N to M pages» for the horizon branch. Those lines are
+    //    hoisted to the top under TRUNCATION CONCERN; the rest of the server
+    //    account follows in the order the server said it, so nothing is
+    //    DROPPED by the hoist -- it is only READ FIRST. A filter that
+    //    discarded the remainder would be the same mistake as the
+    //    `backend_type` filter this file already made once.
+    const verbose = (tail['vacuum_verbose'] as readonly string[] | undefined) ?? [];
+    const TRUNCATION = /truncat|conflicting lock|not yet removable|cannot be removed yet|pages: |AccessExclusive/i;
+    const concerns = verbose.filter((l) => TRUNCATION.test(l));
+    const evidence = [
+      '',
+      '  ── DR-101 TRUNCATION CONCERN — the server lines that bear on it, hoisted:',
+      concerns.length > 0 ? concerns.map((l) => `    ${l}`).join('\n') : '    (none: the server said nothing about truncation or locks)',
+      '  ── DR-101 VACUUM (VERBOSE), IN FULL, in the order the server said it:',
+      verbose.length > 0 ? verbose.map((l, i) => `    [${i}] ${l}`).join('\n') : '    (none: no notice was captured at all, which is itself the finding)',
+      `  ── DR-101 delete_xid=${String(tail['delete_xid'])} deleted_rows=${String(tail['deleted_rows'])} ceiling=${String(first['bytes'])}`,
+      `  ── DR-101 before_sweep    : ${JSON.stringify(tail['before_sweep'])}`,
+      `  ── DR-101 after_vacuum    : ${JSON.stringify(tail['after_vacuum'])}`,
+      `  ── DR-101 blockers_after  : ${JSON.stringify(tail['blockers_after_vacuum'])}`,
+      `  ── DR-101 holders_after   : ${JSON.stringify(tail['holders_after_vacuum'])}`,
+      '  ── NOTE: the two readings above are facts about AFTER the VACUUM returned, not measurements of the window.',
+    ].join('\n');
+    expect(Number(tail['bytes_after']), `the sweep left the relation inflated, so it perturbed every later reading.\n${evidence}`).toBeLessThanOrEqual(
       Number(first['bytes']),
     );
     expect(Number(tail['stats_after']), 'the sweep ANALYZEd the relation, so every later plan reading is on statistics').toBe(0);
@@ -5748,40 +5758,46 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
    * card there was nothing between them that could say which of the two
    * documented best-effort abandonments had occurred.
    *
-   * FOUR ARMS, AND EACH ONE IS THE CONTROL FOR ANOTHER:
+   * TWO ARMS, AND EACH IS THE CONTROL FOR THE OTHER:
    *
-   *   1. `no_holder`                — a plain `VACUUM` DOES truncate.
-   *   2. `holder_no_wait`           — one snapshot across the `DELETE` is
-   *                                   SUFFICIENT to keep every page, with the
-   *                                   command still reporting success.
-   *   3. `holder_releases_with_wait`— the precondition wait SEES the blocker,
-   *                                   takes more than one reading, clears,
-   *                                   and the single `VACUUM` then truncates.
-   *   4. `holder_through_with_wait` — the budget CAN be exhausted, the
-   *                                   refusal names the blocker, and the one
-   *                                   `VACUUM` run anyway carries the
-   *                                   server's words.
+   *   1. `no_holder`      — a plain `VACUUM` DOES truncate.
+   *   2. `holder_no_wait` — one snapshot across the `DELETE` is SUFFICIENT to
+   *                         keep every page, with the command STILL REPORTING
+   *                         SUCCESS, so `:4979` passes while `:4980` fails.
    *
-   * Arm 1 is why arm 2 is readable. Arm 4 is why arm 3 is readable: A WAIT
-   * THAT CANNOT BE EXHAUSTED IS A WAIT THAT NEVER WAITS, AND THAT READS AS A
-   * WAIT THAT SUCCEEDED — the same trap as a `backend_type` filter that can
-   * only ever exclude the answer, which this file already made once.
+   * Arm 1 is why arm 2 is readable. Together they establish the ONE premise
+   * the diagnostic logging rests on: a plain `VACUUM` really can abandon
+   * truncation silently, so the two byte counts cannot say which of the two
+   * documented abandonments happened and the SERVER'S OWN WORDS are the only
+   * thing that can.
    *
-   * ALL FOUR RUN ON `public.dr101_probe`, created and dropped in the block,
-   * and NEVER on `installment_plans`. No §R7 reading, no §R17 reading and no
-   * `first['bytes']` is touched by any of them.
+   * THE TWO WAIT ARMS ARE WITHDRAWN WITH THE WAIT. They proved that the
+   * bounded precondition wait saw its blocker, cleared, and could have its
+   * budget exhausted; the owner withdrew that repair because its premise --
+   * a concurrent holder in this database -- was MEASURED FALSE in this CI
+   * (see `truncationBlockers`'s note: `n_backends = 0` in 4 of 4 executions
+   * on `3c51161c`, `maxWorkers: 1` with `isolate: true`, and this suite
+   * owning `daftar_s7f1_fact` exclusively). An arm kept past its claim is an
+   * arm that will be read as a claim.
+   *
+   * AND NEITHER ARM IS A CLAIM ABOUT WHAT HAPPENS ON `main`. They are a
+   * mechanism demonstration on a relation of this block's own.
+   *
+   * BOTH RUN ON `public.dr101_probe`, created and dropped in the block, and
+   * NEVER on `installment_plans`. No §R7 reading, no §R17 reading and no
+   * `first['bytes']` is touched by either of them.
    */
-  it('DR-101 THE MECHANISM, and the precondition wait, each with its own control', () => {
+  it('DR-101 THE MECHANISM, with its negative control', () => {
     const p = (M['DR101_truncation_probe'] ?? {}) as Record<string, unknown>;
-    const arms = ['no_holder', 'holder_no_wait', 'holder_releases_with_wait', 'holder_through_with_wait'] as const;
+    const arms = ['no_holder', 'holder_no_wait'] as const;
     const a = Object.fromEntries(arms.map((k) => [k, (p[k] ?? {}) as Record<string, unknown>])) as Record<(typeof arms)[number], Record<string, unknown>>;
-    // EVERY ARM RAN, DELETED, AND ACTUALLY INFLATED FIRST. A probe whose
-    // relation never grew would pass the negative arms and fail the positive
-    // ones for no reason at all.
+    // BOTH ARMS RAN, DELETED, AND ACTUALLY INFLATED FIRST. A probe whose
+    // relation never grew would pass arm 1 and fail arm 2 for no reason at
+    // all.
     for (const k of arms) {
       expect(a[k]['error'], `arm ${k} did not run: ${String(a[k]['error'])}`).toBeUndefined();
       expect(a[k]['delete_error'], `arm ${k}'s DELETE failed: ${String(a[k]['delete_error'])}`).toBeNull();
-      expect(String(a[k]['delete_xid']), `arm ${k} did not report its DELETE's xid, so its precondition has no referent`).not.toBe('');
+      expect(String(a[k]['delete_xid']), `arm ${k} did not report its DELETE's xid, so its holder reading has no referent`).not.toBe('');
       expect(Number(a[k]['inflated']), `arm ${k} never inflated its relation`).toBeGreaterThan(Number(a[k]['base']));
       // AND EVERY `VACUUM` REPORTED SUCCESS, which is the whole point: the
       // return value does not distinguish any of the outcomes below.
@@ -5814,42 +5830,5 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     const saidNoWait = (a['holder_no_wait']['verbose'] as readonly string[] | undefined)?.join('\n') ?? '';
     expect(saidNoWait, 'the server did not report the tail as unremovable').toMatch(/dead but not yet removable|cannot be removed yet/);
     expect(saidNoWait, 'the server did not report that it removed no pages').toMatch(/pages: 0 removed/);
-    // 3. THE WAIT WORKS -- AND IT ACTUALLY WAITED, which is asserted and not
-    //    assumed. It must have SEEN the blocker on its first reading and
-    //    needed more than one reading to clear; a wait that returned clear on
-    //    attempt 1 here would prove nothing about waiting.
-    const w3 = (a['holder_releases_with_wait']['waited'] ?? {}) as Record<string, unknown>;
-    expect(w3['clear'], `the wait did not clear inside a budget wide enough for the holder: ${JSON.stringify(w3)}`).toBe(true);
-    expect(Number(w3['attempts']), `the wait cleared on its first reading, so it never waited: ${JSON.stringify(w3)}`).toBeGreaterThan(1);
-    const firstReading = ((w3['readings'] ?? []) as readonly Record<string, unknown>[])[0];
-    expect(
-      ((firstReading?.['blockers'] ?? []) as readonly unknown[]).length,
-      `the wait's first reading saw no blocker, so this arm is not measuring a wait: ${JSON.stringify(w3)}`,
-    ).toBeGreaterThan(0);
-    //    ...and the single `VACUUM` taken AFTER it cleared gave the pages
-    //    back. This is the repair's claim, measured on the probe: ONE wait on
-    //    the PRECONDITION, then ONE vacuum, then ONE reading.
-    expect(
-      a['holder_releases_with_wait']['truncated'],
-      `the pages were not given back even after the precondition cleared: ${JSON.stringify(a['holder_releases_with_wait'])}`,
-    ).toBe(true);
-    // 4. THE BUDGET CAN BE EXHAUSTED, and the refusal is a refusal: it says
-    //    `clear: false`, it NAMES the blocker, and it carries the server's
-    //    own words. Without this arm the wait above could be a no-op.
-    const w4 = (a['holder_through_with_wait']['waited'] ?? {}) as Record<string, unknown>;
-    expect(w4['clear'], `the budget could NOT be exhausted by a holder that never let go, so the wait never waits: ${JSON.stringify(w4)}`).toBe(false);
-    expect(((w4['blockers'] ?? []) as readonly unknown[]).length, `the exhausted wait named no blocker: ${JSON.stringify(w4)}`).toBeGreaterThan(0);
-    expect(Number(w4['waited_ms']), `the exhausted wait did not spend its budget: ${JSON.stringify(w4)}`).toBeGreaterThanOrEqual(Number(w4['budget_ms']));
-    //    ...and the blocker it named is the SNAPSHOT, which is what makes
-    //    this arm a measurement of the horizon branch rather than of the lock
-    //    branch.
-    expect(
-      ((w4['blockers'] ?? []) as readonly Record<string, unknown>[]).map((b) => String(b['kind'])),
-      `the exhausted wait blamed something other than a snapshot: ${JSON.stringify(w4['blockers'])}`,
-    ).toContain('snapshot');
-    //    ...and the relation stayed inflated, with the server saying why.
-    expect(a['holder_through_with_wait']['truncated'], `the holder that never let go did not stop the truncation after all`).toBe(false);
-    const said4 = (a['holder_through_with_wait']['verbose'] as readonly string[] | undefined)?.join('\n') ?? '';
-    expect(said4, 'the exhausted arm carries no words from the server').toMatch(/dead but not yet removable|cannot be removed yet/);
   });
 });
