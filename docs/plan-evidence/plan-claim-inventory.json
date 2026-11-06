@@ -88,14 +88,14 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 433,
-    "planGates": 120,
+    "hits": 434,
+    "planGates": 121,
     "assertions": 32,
     "files": 55
   },
   "byPhase": {
     "cross-phase": {
-      "planGates": 51,
+      "planGates": 52,
       "assertions": 12,
       "mentions": 121
     },
@@ -405,7 +405,7 @@
       "phase": "cross-phase"
     },
     "tests/performance/receivables-s4-budgets.test.ts": {
-      "planGates": 19,
+      "planGates": 20,
       "assertions": 2,
       "mentions": 12,
       "phase": "cross-phase"
@@ -3738,6 +3738,15 @@
       "kind": "plan-gate",
       "via": ["record"],
       "text": "expect(volume.fatCredits, 'customer credits exist, or the credit half of the reader of record is unmeasured').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/performance/receivables-s4-budgets.test.ts",
+      "line": 1173,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["stats"],
+      "text": "expect(Object.keys(stats).length, 'the statistics query found no measured relation at all').toBeGreaterThan(0);"
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
