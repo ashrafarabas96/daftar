@@ -2962,22 +2962,42 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
      * it is permitted to drop. `pg_relation_size` is the MAIN FORK only,
      * which is the quantity `:4980` charges for.
      */
+    //    IT IS TWO QUERIES AND NOT ONE, and that is not tidiness: a single
+    //    `SELECT` is ALL-OR-NOTHING, so one unavailable function would return
+    //    `{ error }` for the whole reading and the red run would carry no
+    //    numbers at all. The three catalogue columns cannot fail; the two
+    //    that depend on newer server functions are asked separately, and if
+    //    they fail they say so beside the numbers that did answer.
     const physical = async (): Promise<Record<string, unknown>> => {
-      try {
-        return (
-          (
-            await sup.query<Record<string, unknown>>(
-              `SELECT pg_relation_size(c.oid)::text AS bytes, c.relpages::int AS relpages, c.reltuples::text AS reltuples,
-                      pg_stat_get_dead_tuples(c.oid)::text AS dead_tuples,
-                      pg_snapshot_xmin(pg_current_snapshot())::text AS snapshot_xmin,
-                      age(pg_snapshot_xmin(pg_current_snapshot()))::text AS snapshot_xmin_age
-                 FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
-            )
-          ).rows[0] ?? { error: 'the relation did not answer' }
-        );
-      } catch (e) {
-        return { error: err(e) };
-      }
+      const core = await (async (): Promise<Record<string, unknown>> => {
+        try {
+          return (
+            (
+              await sup.query<Record<string, unknown>>(
+                `SELECT pg_relation_size(c.oid)::text AS bytes, c.relpages::int AS relpages, c.reltuples::text AS reltuples
+                   FROM pg_class c WHERE c.oid = 'public.installment_plans'::regclass`,
+              )
+            ).rows[0] ?? { error: 'the relation did not answer' }
+          );
+        } catch (e) {
+          return { error: err(e) };
+        }
+      })();
+      const horizon = await (async (): Promise<Record<string, unknown>> => {
+        try {
+          return (
+            (
+              await sup.query<Record<string, unknown>>(
+                `SELECT pg_stat_get_dead_tuples('public.installment_plans'::regclass)::text AS dead_tuples,
+                        pg_snapshot_xmin(pg_current_snapshot())::text AS snapshot_xmin`,
+              )
+            ).rows[0] ?? {}
+          );
+        } catch (e) {
+          return { horizon_error: err(e) };
+        }
+      })();
+      return { ...core, ...horizon };
     };
     /**
      * WHO ELSE IS IN THIS DATABASE, AND WHAT DO THEY HOLD. The two documented
@@ -3168,7 +3188,17 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         }
       })();
       const holders_after_vacuum = await holders();
-      out.push({
+      // DR-101 — AND THE RESTORATION IS PRINTED ON **EVERY** RUN, NOT ONLY ON
+      // THE RED ONE. The failure is intermittent at roughly one run in two,
+      // and a record that existed only when the assertion failed would leave
+      // the GREEN run -- which is the control -- unreadable: «it passed»
+      // cannot distinguish a `VACUUM` that truncated from one that was never
+      // asked to. `writeMeasurements` puts the whole of `M` on disk, but that
+      // file is under `/tmp` on the runner and is not collected, so the job
+      // log is the only channel that survives the job. `no-console` is `off`
+      // for this tree and two other integration suites already print a line
+      // of their own.
+      const restoration: Record<string, unknown> = {
         cleanup,
         vacuum,
         before_cleanup,
@@ -3191,7 +3221,11 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         // asserted over the FORCED readings and the free ones are recorded.
         truth_after_heapforced: await readWith(HEAP_ONLY, TRUTH_SQL, [world.invoiceId]),
         readings_after_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
-      });
+      };
+      console.log(
+        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   before_cleanup=${JSON.stringify(restoration['before_cleanup'])}\n[DR-101]   before_vacuum=${JSON.stringify(restoration['before_vacuum'])}\n[DR-101]   holders_before=${JSON.stringify(restoration['holders_before_vacuum'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
+      );
+      out.push(restoration);
     }
     return out;
   })();
@@ -3416,7 +3450,13 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         await sup.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
       }
     };
-    return { without_holder: await arm(false), with_holder: await arm(true) };
+    const both = { without_holder: await arm(false), with_holder: await arm(true) };
+    // AND BOTH ARMS ARE PRINTED, for the same reason the sweep above is: the
+    // arm that PASSES is the control, and a control whose text is never shown
+    // cannot be read against the arm that fails.
+    console.log(`[DR-101] probe no-holder: ${JSON.stringify(both.without_holder)}`);
+    console.log(`[DR-101] probe holder   : ${JSON.stringify(both.with_holder)}`);
+    return both;
   })();
 
   writeMeasurements(M);
@@ -5196,15 +5236,15 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // that never started, and the run that reds here is the only run that
     // has the evidence. `VERBOSE`'s own lines say which of the two documented
     // abandonments happened, and the holder readings say who caused it.
-    expect(
-      Number(tail['bytes_after']),
-      `the sweep left the relation inflated, so it perturbed every later reading.
-  before DELETE : ${JSON.stringify(tail['before_cleanup'])}
-  before VACUUM : ${JSON.stringify(tail['before_vacuum'])}
-  holders before: ${JSON.stringify(tail['holders_before_vacuum'])}
-  holders after : ${JSON.stringify(tail['holders_after_vacuum'])}
-  VACUUM VERBOSE: ${JSON.stringify(tail['vacuum_verbose'])}`,
-    ).toBeLessThanOrEqual(Number(first['bytes']));
+    const evidence = `
+  before DELETE  : ${JSON.stringify(tail['before_cleanup'])}
+  before VACUUM  : ${JSON.stringify(tail['before_vacuum'])}
+  holders before : ${JSON.stringify(tail['holders_before_vacuum'])}
+  holders after  : ${JSON.stringify(tail['holders_after_vacuum'])}
+  VACUUM VERBOSE : ${JSON.stringify(tail['vacuum_verbose'])}`;
+    expect(Number(tail['bytes_after']), `the sweep left the relation inflated, so it perturbed every later reading.${evidence}`).toBeLessThanOrEqual(
+      Number(first['bytes']),
+    );
     expect(Number(tail['stats_after']), 'the sweep ANALYZEd the relation, so every later plan reading is on statistics').toBe(0);
     expect(tail['triggers_on'], `the sweep left the triggers disabled: ${String(tail['triggers_on'])}`).toBeNull();
     //    ...AND «THE FIXTURE IS BACK» IS ASSERTED OVER THE FORCED READINGS
@@ -5380,9 +5420,18 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // intermittent CI failure, reproduced on demand.
     expect(yes['truncated'], `an older snapshot did NOT stop the truncation, so this is not the mechanism: ${JSON.stringify(yes)}`).toBe(false);
     // ...AND THE SERVER SAYS SO ITSELF, in its own words, rather than this
-    // file inferring a cause from two byte counts.
-    expect((yes['verbose'] as readonly string[] | undefined)?.join('\n') ?? '', 'the server did not report the tail as unremovable').toMatch(
-      /cannot be removed yet/,
-    );
+    // file inferring a cause from two byte counts. BOTH WORDINGS ARE
+    // ACCEPTED, and the first one is the MEASURED one: PostgreSQL 16.15 on
+    // this cluster printed «4400 are dead but not yet removable» inside the
+    // per-relation summary, where older majors said «N dead row versions
+    // cannot be removed yet». The first spelling is what red this probe on
+    // run 42147185172 -- the MECHANISM held and only my pattern was wrong --
+    // and the second is kept so a server wording cannot turn a working probe
+    // into a false red about the mechanism. The PAGE fact is asserted beside
+    // it, because the wording alone is a statement about TUPLES while
+    // `:4980` charges for PAGES.
+    const said = (yes['verbose'] as readonly string[] | undefined)?.join('\n') ?? '';
+    expect(said, 'the server did not report the tail as unremovable').toMatch(/dead but not yet removable|cannot be removed yet/);
+    expect(said, 'the server did not report that it removed no pages').toMatch(/pages: 0 removed/);
   });
 });
