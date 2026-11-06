@@ -3008,17 +3008,42 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
      * here rather than inferred. `sup` is the superuser, so `pg_stat_activity`
      * is not redacted for it; the reading backend itself is excluded, because
      * its own snapshot is not a holder of anything.
+     *
+     * ── AND IT NO LONGER FILTERS ON `backend_type`, WHICH WAS A BLIND SPOT
+     *    OF EXACTLY THE SHAPE THAT WOULD HIDE THE LIKELIEST HOLDER.
+     *
+     *    The first writing of this helper read only
+     *    `backend_type = 'client backend'`. An AUTOVACUUM WORKER is
+     *    `'autovacuum worker'`, so that filter EXCLUDED it -- and an
+     *    autovacuum worker is a backend with a live `backend_xmin` in THIS
+     *    database, which holds back `data_oldest_nonremovable` for every
+     *    relation in it. The pin this fixture sets is `autovacuum_enabled =
+     *    false` on `installment_plans` and `installments` ONLY; the scratch
+     *    database carries every other relation 80 migrations create, the
+     *    daemon is free to work on any of them, and whether it happens to be
+     *    doing so in the few milliseconds the sweep needs is not something
+     *    this file controls or can predict. That is an intermittency of the
+     *    right order and it was INVISIBLE to the reading built to find it.
+     *
+     *    A filter that can only ever exclude the answer is worse than no
+     *    reading: it returns an empty list that reads as «no holders». So
+     *    EVERY backend is now listed, `backend_type` is reported rather than
+     *    assumed, and `pg_stat_progress_vacuum` is read beside it so a worker
+     *    actually vacuuming in this database is named and not merely counted.
+     *    THIS IS NOT A CLAIM THAT THE DAEMON IS THE CAUSE -- it is the
+     *    removal of a filter that made one candidate unobservable.
      */
     const holders = async (): Promise<Record<string, unknown>> => {
       try {
         const activity = (
           await sup.query<{ j: string }>(
             `SELECT coalesce(json_agg(json_build_object('pid', pid, 'datname', datname, 'usename', usename, 'state', state,
-                                                        'backend_xmin', backend_xmin::text, 'xact_start', xact_start::text,
+                                                        'backend_type', backend_type, 'backend_xmin', backend_xmin::text,
+                                                        'backend_xid', backend_xid::text, 'xact_start', xact_start::text,
                                                         'state_change', state_change::text, 'query', left(query, 100)) ORDER BY pid)::text, '[]') AS j
                FROM pg_stat_activity
-              WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'
-                AND (backend_xmin IS NOT NULL OR xact_start IS NOT NULL)`,
+              WHERE pid <> pg_backend_pid()
+                AND (backend_xmin IS NOT NULL OR backend_xid IS NOT NULL OR xact_start IS NOT NULL)`,
           )
         ).rows[0]?.j;
         const locks = (
@@ -3027,9 +3052,28 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
                FROM pg_locks WHERE relation = 'public.installment_plans'::regclass AND pid <> pg_backend_pid()`,
           )
         ).rows[0]?.j;
+        const vacuuming = await (async (): Promise<string | undefined> => {
+          try {
+            return (
+              await sup.query<{ j: string }>(
+                `SELECT coalesce(json_agg(json_build_object('pid', pid, 'datname', datname, 'relid', relid::regclass::text,
+                                                            'phase', phase) ORDER BY pid)::text, '[]') AS j
+                   FROM pg_stat_progress_vacuum`,
+              )
+            ).rows[0]?.j;
+          } catch (e) {
+            return `error: ${err(e)}`;
+          }
+        })();
         const prepared = (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM pg_prepared_xacts`)).rows[0]?.n;
         const slots = (await sup.query<{ n: string }>(`SELECT count(*)::text AS n FROM pg_replication_slots`)).rows[0]?.n;
-        return { snapshot_or_xact_holders: activity, relation_locks: locks, prepared_xacts: prepared, replication_slots: slots };
+        return {
+          snapshot_or_xact_holders: activity,
+          relation_locks: locks,
+          vacuum_in_progress: vacuuming,
+          prepared_xacts: prepared,
+          replication_slots: slots,
+        };
       } catch (e) {
         return { error: err(e) };
       }
