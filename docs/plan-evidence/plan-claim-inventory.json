@@ -444,7 +444,7 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 697,
+      "line": 747,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -452,7 +452,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 703,
+      "line": 753,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
@@ -460,7 +460,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 718,
+      "line": 768,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -468,7 +468,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 787,
+      "line": 837,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -476,7 +476,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 790,
+      "line": 840,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -484,7 +484,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 792,
+      "line": 842,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -492,7 +492,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 793,
+      "line": 843,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -500,7 +500,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 804,
+      "line": 854,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -508,7 +508,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 824,
+      "line": 874,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -516,7 +516,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 827,
+      "line": 877,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -2527,7 +2527,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 220,
+      "line": 321,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -2535,7 +2535,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 230,
+      "line": 331,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2543,7 +2543,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 238,
+      "line": 339,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -2551,7 +2551,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 242,
+      "line": 343,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -2559,7 +2559,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 244,
+      "line": 345,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "mention",
@@ -2567,7 +2567,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 351,
+      "line": 470,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2575,7 +2575,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 357,
+      "line": 476,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -2583,7 +2583,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 416,
+      "line": 538,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -2591,7 +2591,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 593,
+      "line": 738,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2599,7 +2599,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 602,
+      "line": 747,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "plan-gate",
@@ -2608,7 +2608,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 603,
+      "line": 748,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "assertion",
@@ -2616,7 +2616,7 @@
     },
     {
       "file": "tests/performance/accounting-budgets.test.ts",
-      "line": 605,
+      "line": 750,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "assertion",
