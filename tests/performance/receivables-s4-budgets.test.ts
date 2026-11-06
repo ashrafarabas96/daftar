@@ -533,6 +533,50 @@ function assertInDatabaseWithin(m: Measured, thresholdMs: number, budgetId: stri
 }
 
 /**
+ * EVERY ARM'S VERDICT, AND THEN THE FAILURE — not the first arm's failure and
+ * silence about the rest.
+ *
+ * WHY THIS EXISTS, MEASURED ON LINUX. Run 42223226679, job 127910205268,
+ * commit 71495877: the in-database negative control (ci.yml step 54) requires
+ * a `P4-S4-BUDGET-FAIL-<tag>` line for ALL FIVE converted tags, and it exited
+ * on `D-AGING` with «the in-database-slowed run failed, but NOT on D-AGING's
+ * own in-database assertion». The reason is structural, not a measurement: the
+ * three `P4-D` reads are judged in ONE `it` by a `for` loop, as are the two
+ * `P4-F-TXN` arms and the two `P4-F-HTTP` arms, and the first arm that misses
+ * THROWS — so the arms after it are never evaluated and never print a marker
+ * of their own. The log is the fingerprint: exactly one FAIL line per loop,
+ * `D-RECEIVABLE`, `FTXN-BASE-5` and `FHTTP-BASE-5`, each the FIRST of its
+ * loop. The control's demand was therefore unsatisfiable by construction.
+ *
+ * WHAT THIS DOES NOT CHANGE. No ceiling, no iteration count, no percentile, no
+ * budget, nothing about what is judged or which clock judges it: each arm is
+ * still judged by the same assertion against the same threshold, and a run in
+ * which ANY arm misses still FAILS. One arm missing rethrows that arm's own
+ * error unchanged. The only difference is that the arms after the first miss
+ * are still EVALUATED, so each prints its own `P4-S4-MONITOR-<tag>` and either
+ * `P4-S4-BUDGET-FAIL-<tag>` or `P4-S4-INDB-OK-<tag>` — which is strictly more
+ * evidence, never less, and never a pass where there was a failure.
+ */
+function everyArm(arms: readonly (readonly [string, () => void])[]): void {
+  const failures: { readonly tag: string; readonly error: unknown }[] = [];
+  for (const [tag, arm] of arms) {
+    try {
+      arm();
+    } catch (error) {
+      failures.push({ tag, error });
+    }
+  }
+  if (failures.length === 0) return;
+  const first = must(failures[0], 'a failure list that is not empty has a first element');
+  if (failures.length === 1) throw first.error;
+  throw new Error(
+    `${failures.length} of ${arms.length} measured arms missed their budget in this run, and each one's own verdict is below ` +
+      `(a budget that was never reached is not a budget that passed):\n\n` +
+      failures.map((f) => `── ${f.tag} ──\n${f.error instanceof Error ? f.error.message : String(f.error)}`).join('\n\n'),
+  );
+}
+
+/**
  * Warm up, then measure. The warm-up samples are discarded, never averaged in.
  *
  * `before` runs OUTSIDE the clock on every iteration, warm-up and measured
@@ -1633,19 +1677,26 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
 
   it(`MEASUREMENT: p95 of ${SHORT_PERCENTILE_ITERATIONS} warm runs of each fat-tail read is within P4-D (${BUDGET.D_BALANCE_P95} ms)`, () => {
     requireFixture();
-    for (const { path, tag } of readsOf(dataset.fatCustomerId, w.day)) {
-      const m = must(readSeries.get(path), `the measured series of ${path}`);
-      // P4-AL-76: the gate fails when a measurement's sample count is below
-      // the declared iterations. Asserted on the series itself, before its
-      // percentile is read, so a short series can never be a quiet pass.
-      expect(
-        m.samplesMs.length,
-        `${m.name}: ${m.samplesMs.length} samples were taken and ${SHORT_PERCENTILE_ITERATIONS} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
-      ).toBe(SHORT_PERCENTILE_ITERATIONS);
-      // DR-98: the verdict is the IN-DATABASE p95; the wall clock is printed
-      // beside it, in the message and on the log, and judges nothing.
-      assertInDatabaseWithin(m, BUDGET.D_BALANCE_P95, 'P4-D', tag);
-    }
+    // EVERY read's verdict is reached, then the run fails on whichever missed:
+    // see `everyArm`. The judgement itself is unchanged.
+    everyArm(
+      readsOf(dataset.fatCustomerId, w.day).map(({ path, tag }) => [
+        tag,
+        () => {
+          const m = must(readSeries.get(path), `the measured series of ${path}`);
+          // P4-AL-76: the gate fails when a measurement's sample count is below
+          // the declared iterations. Asserted on the series itself, before its
+          // percentile is read, so a short series can never be a quiet pass.
+          expect(
+            m.samplesMs.length,
+            `${m.name}: ${m.samplesMs.length} samples were taken and ${SHORT_PERCENTILE_ITERATIONS} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+          ).toBe(SHORT_PERCENTILE_ITERATIONS);
+          // DR-98: the verdict is the IN-DATABASE p95; the wall clock is printed
+          // beside it, in the message and on the log, and judges nothing.
+          assertInDatabaseWithin(m, BUDGET.D_BALANCE_P95, 'P4-D', tag);
+        },
+      ]),
+    );
   });
 
   it(`RATIO (host-independent, P4-AL-72): p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median)`, () => {
@@ -1765,30 +1816,40 @@ describe('P4-F — the customer payment allocation', () => {
 
   it(`MEASUREMENT: p95 of the 5-invoice allocation is within P4-F in-transaction (${BUDGET.F_ALLOCATION_TXN_P95} ms)`, () => {
     requireFixture();
-    for (const key of ['base-5', 'foreign-5']) {
-      const s = armOf(key);
-      // DR-98: the verdict is the IN-DATABASE execution time of the
-      // transaction window; the wall clock and the residual are printed beside
-      // it and judge nothing. The instrument's own wall cost — which sits
-      // inside the HTTP window and nowhere else — is printed too, because it
-      // is the one figure this conversion ADDS to a budget it does not convert.
-      assertInDatabaseWithin(
-        {
-          name: `P4-F in-transaction, ${s.shape} invoices, ${s.currency} currency`,
-          budgetMs: BUDGET.F_ALLOCATION_TXN_P95,
-          samplesMs: s.txnMs,
-          inDatabaseMs: s.txnInDatabaseMs,
-        },
-        BUDGET.F_ALLOCATION_TXN_P95,
-        'P4-F (in-transaction)',
-        `FTXN-${s.currency.toUpperCase()}-${s.shape}`,
-      );
-      console.log(
-        `P4-S4-INSTRUMENT-COST-FTXN-${s.currency.toUpperCase()}-${s.shape} ` +
-          `p50=${quantile(s.instrumentMs, 0.5).toFixed(3)} p95=${quantile(s.instrumentMs, 0.95).toFixed(3)} ` +
-          `— the two pg_stat_statements reads sit INSIDE the HTTP window, so they can only make the P4-F-HTTP figure larger, never smaller`,
-      );
-    }
+    everyArm(
+      ['base-5', 'foreign-5'].map((key) => {
+        const s = armOf(key);
+        const tag = `FTXN-${s.currency.toUpperCase()}-${s.shape}`;
+        return [
+          tag,
+          () => {
+            // DR-98: the verdict is the IN-DATABASE execution time of the
+            // transaction window; the wall clock and the residual are printed
+            // beside it and judge nothing. The instrument's own wall cost —
+            // which sits inside the HTTP window and nowhere else — is printed
+            // too, because it is the one figure this conversion ADDS to a
+            // budget it does not convert. It is printed BEFORE the verdict so
+            // a missed budget cannot take it off the log.
+            console.log(
+              `P4-S4-INSTRUMENT-COST-${tag} ` +
+                `p50=${quantile(s.instrumentMs, 0.5).toFixed(3)} p95=${quantile(s.instrumentMs, 0.95).toFixed(3)} ` +
+                `— the two pg_stat_statements reads sit INSIDE the HTTP window, so they can only make the P4-F-HTTP figure larger, never smaller`,
+            );
+            assertInDatabaseWithin(
+              {
+                name: `P4-F in-transaction, ${s.shape} invoices, ${s.currency} currency`,
+                budgetMs: BUDGET.F_ALLOCATION_TXN_P95,
+                samplesMs: s.txnMs,
+                inDatabaseMs: s.txnInDatabaseMs,
+              },
+              BUDGET.F_ALLOCATION_TXN_P95,
+              'P4-F (in-transaction)',
+              tag,
+            );
+          },
+        ];
+      }),
+    );
   });
 
   /**
@@ -1806,15 +1867,23 @@ describe('P4-F — the customer payment allocation', () => {
    */
   it(`MEASUREMENT: p95 of the 5-invoice allocation is within P4-F over HTTP (${BUDGET.F_ALLOCATION_HTTP_P95} ms)`, () => {
     requireFixture();
-    for (const key of ['base-5', 'foreign-5']) {
-      const s = armOf(key);
-      assertWithin(
-        { name: `P4-F over HTTP, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_HTTP_P95, samplesMs: s.httpMs },
-        BUDGET.F_ALLOCATION_HTTP_P95,
-        'P4-F (HTTP)',
-        `FHTTP-${s.currency.toUpperCase()}-${s.shape}`,
-      );
-    }
+    everyArm(
+      ['base-5', 'foreign-5'].map((key) => {
+        const s = armOf(key);
+        const tag = `FHTTP-${s.currency.toUpperCase()}-${s.shape}`;
+        return [
+          tag,
+          () => {
+            assertWithin(
+              { name: `P4-F over HTTP, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_HTTP_P95, samplesMs: s.httpMs },
+              BUDGET.F_ALLOCATION_HTTP_P95,
+              'P4-F (HTTP)',
+              tag,
+            );
+          },
+        ];
+      }),
+    );
   });
 
   it('REPORT: the 1-invoice median, the 5-invoice median and the 1→5 scaling ratio, at both depths', () => {
