@@ -131,7 +131,10 @@ CREATE TABLE p5scratch.platform_credit_grant_remainders (
   granted_minor   bigint NOT NULL,
   remaining_minor bigint NOT NULL,
   CONSTRAINT pcgr_granted_positive CHECK (granted_minor > 0),
-  CONSTRAINT pcgr_never_overdrawn  CHECK (remaining_minor >= 0 AND remaining_minor <= granted_minor),
+  -- PLANTED CONTROL FOR DR-100, on a throwaway branch only. The overdraw
+  -- floor `remaining_minor >= 0` is REMOVED here. If the CI step is really
+  -- executing this DDL and the cases really bite, the lane must go RED.
+  CONSTRAINT pcgr_never_overdrawn  CHECK (remaining_minor <= granted_minor),
   CONSTRAINT pcgr_kind_is_grant    CHECK (grant_kind = 'grant'),
   CONSTRAINT pcgr_grant_fk FOREIGN KEY (tenant_id, business_id, currency, grant_kind, grant_id)
     REFERENCES p5scratch.platform_credit_adjustments (tenant_id, business_id, currency, kind, id)
