@@ -33,6 +33,16 @@ P0=0 · P1=0 · P2=0 لـ(Accounting/Inventory/Security/Tenant isolation/Data in
 3. **FINANCIAL & DATA INTEGRITY AUDIT**: Ledger/Invoices/Payments/Receivables/Installments/Inventory/Returns/Refunds/FX/Reports (§169).
 4. **Final Golden Regression** (§170).
 5. **Known Defects = 0** للحرجة/العالية-الأساسية/المالية/العزل/فقدان البيانات (§171).
+6. **SECRET HYGIENE — نطاق كل سرٍّ في النشر الفعليّ (`SEC-01`).** لا تُقرأ من المستودع:
+   **المستودع لا يحمل ملفَ نشرٍ واحدًا** (مقيسًا على `a191d9da`: صفر `Dockerfile`
+   وصفر `compose` وصفر `terraform` وصفر تعريف مهمة وصفر `.env*` من **1331** ملفًا متتبَعًا)
+   ⇒ **فما يحمله أي عاملٍ منشورٍ فعلًا غيرُ مقيسٍ من هنا بحال.**
+   **والشرط المُلزِم:** قبل الإطلاق — **وقبل دمج علاج `SEC-01`** — يُثبِت المالك
+   أنّ **كل عملية `PROCESS_MODE=worker` منشورةٍ أو تجريبيةٍ لا يُمرَّر لها
+   `JWT_SECRET` ولا `JWT_KEYS`**، فيُنزَع المتغيّران من إعدادات العامل أوّلًا ويُثبَت
+   إقلاعه بعدهما، **ثم** يُدمج المنع — فالمنع يُفشِل الإقلاع في **كل** بيئة،
+   فعاملٌ يحمل المفتاح اليوم يتوقّف غدًا. **ومرجعُ الصفّ:**
+   `docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md` § 2 (صفّ `worker`: «`Must NOT have … JWT`»).
 
 ## 5. قرارات البوابة
 
