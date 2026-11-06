@@ -3236,8 +3236,30 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       //    COMPUTED IT, and «could not truncate due to conflicting lock
       //    request» is the other branch. The server is a better witness to
       //    that instant than any statement this file could squeeze in.
-      const before_cleanup = await physical();
-      const holders_before_cleanup = await holders();
+      //
+      // ── AND NOTHING IS READ BEFORE THE `DELETE` EITHER. THAT IS THE SAME
+      //    CORRECTION AGAIN, ONE STATEMENT EARLIER.
+      //
+      //    Moving the readings out of the window still left two of them in
+      //    front of it, and a reading in front of the window is not harmless:
+      //    it moves the `DELETE`/`VACUUM` pair LATER relative to whatever
+      //    preceded it -- here the last `readWith` of the loop above, which
+      //    opens and commits a transaction of its own. If the holder is
+      //    transient and bound to that, a delay BEFORE the `DELETE` masks the
+      //    event exactly as well as a delay inside the window. `:4980` has
+      //    now passed on FOUR consecutive runs (42147185172, 42150290853,
+      //    42162941125, 42166593961) where the owner measured roughly one
+      //    failure in two, which is about one chance in sixteen. I do NOT
+      //    read that as proof my instrument masks it -- the other reading is
+      //    that the 1-in-2 rate was measured on `main` and on
+      //    `perf/dr98-in-database-budgets` and does not transfer to this ref
+      //    at this hour, and ONE ENVIRONMENT'S RATE IS NOT ANOTHER'S. But a
+      //    footprint I can remove is one I should not be arguing about.
+      //
+      //    SO THE APPROACH IS NOW EMPTY TOO: between the loop's last reading
+      //    and this `DELETE` there is exactly what there was before this card
+      //    -- `R7_stats_after_last_plan` and nothing else. Every reading this
+      //    block takes happens AFTER the `VACUUM` has returned.
       const verbose: string[] = [];
       const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
         verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
@@ -3266,6 +3288,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           }
         }
       })();
+      const after_vacuum = await physical();
       const holders_after_vacuum = await holders();
       // DR-101 — AND THE RESTORATION IS PRINTED ON **EVERY** RUN, NOT ONLY ON
       // THE RED ONE. The failure is intermittent at roughly one run in two,
@@ -3280,8 +3303,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       const restoration: Record<string, unknown> = {
         cleanup,
         vacuum,
-        before_cleanup,
-        holders_before_cleanup,
+        after_vacuum,
         holders_after_vacuum,
         vacuum_verbose: verbose,
         triggers_on: await sudoq('ALTER TABLE installment_plans ENABLE TRIGGER USER'),
@@ -3301,7 +3323,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         readings_after_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
       };
       console.log(
-        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   before_cleanup=${JSON.stringify(restoration['before_cleanup'])}\n[DR-101]   holders_before=${JSON.stringify(restoration['holders_before_cleanup'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
+        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
       );
       out.push(restoration);
     }
@@ -5315,8 +5337,7 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // has the evidence. `VERBOSE`'s own lines say which of the two documented
     // abandonments happened, and the holder readings say who caused it.
     const evidence = `
-  before DELETE  : ${JSON.stringify(tail['before_cleanup'])}
-  holders before : ${JSON.stringify(tail['holders_before_cleanup'])}
+  after VACUUM   : ${JSON.stringify(tail['after_vacuum'])}
   holders after  : ${JSON.stringify(tail['holders_after_vacuum'])}
   VACUUM VERBOSE : ${JSON.stringify(tail['vacuum_verbose'])}`;
     expect(Number(tail['bytes_after']), `the sweep left the relation inflated, so it perturbed every later reading.${evidence}`).toBeLessThanOrEqual(
