@@ -3159,24 +3159,59 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // THE `VACUUM` TAKES A CHECKED-OUT CLIENT rather than `sudoq`'s
       // `pool.query`, and that is the ONLY way to read a notice at all --
       // notices are a connection-level event, and `Pool.query` gives the
-      // connection back before the caller can listen on it. `pool.connect()`
-      // hands back the most recently released idle client, which is the one
-      // the `DELETE` above just used, so the connection this statement runs
-      // on is the one it would have run on anyway.
+      // connection back before the caller can listen on it.
+      //
+      // ── AND NOTHING IS READ BETWEEN THE `DELETE` AND THE `VACUUM`. THAT IS
+      //    A CORRECTION OF THIS INSTRUMENT, MADE BECAUSE OF WHAT IT DID.
+      //
+      //    The first writing of this block took `physical()` and `holders()`
+      //    AFTER the `DELETE` and BEFORE the `VACUUM` -- five extra round
+      //    trips inside the one window the failure lives in. If the condition
+      //    that defeats truncation is a TRANSIENT holder, a few milliseconds
+      //    of added delay is enough for it to let go, and the instrument then
+      //    PREVENTS the event it was built to observe. `:4980` passed on both
+      //    runs carrying that shape (42147185172 and 42150290853) where the
+      //    owner measured roughly one failure in two, which is NOT evidence
+      //    at n = 2 -- two greens in a row have probability about a quarter
+      //    on a fair coin -- but it is exactly the shape of a masked subject,
+      //    and this file already carries one disclosure of its own sweep
+      //    perturbing its own reading. I will not measure through an
+      //    instrument that can cause the result.
+      //
+      //    SO THE WINDOW IS NOW TIGHTER THAN THE ORIGINAL, NOT LOOSER: ONE
+      //    client is checked out BEFORE the `DELETE`, and the `DELETE` and
+      //    the `VACUUM` are issued back to back on THAT one connection --
+      //    where `sudoq`'s two `pool.query` calls merely MOST LIKELY landed on
+      //    one connection, by LIFO. Everything this block reads is read
+      //    BEFORE the `DELETE` or AFTER the `VACUUM`.
+      //
+      //    AND THE IN-WINDOW TRUTH IS NOT LOST BY MOVING THEM, because the
+      //    `VACUUM` reports it ITSELF, at zero cost in delay: `removable
+      //    cutoff: <xid>, which was N XIDs old when operation ended` and
+      //    `N are dead but not yet removable` are the horizon AS THE VACUUM
+      //    COMPUTED IT, and «could not truncate due to conflicting lock
+      //    request» is the other branch. The server is a better witness to
+      //    that instant than any statement this file could squeeze in.
       const before_cleanup = await physical();
-      const cleanup = await sudoq(`DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled'`, [world.invoiceId]);
-      const before_vacuum = await physical();
-      const holders_before_vacuum = await holders();
+      const holders_before_cleanup = await holders();
       const verbose: string[] = [];
       const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
         verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
       };
+      let cleanup: string | null = 'the sweep never issued its DELETE';
       const vacuum = await (async (): Promise<string | null> => {
         let c: PoolClient | undefined;
         try {
           c = await sup.connect();
-          c.on('notice', onNotice);
-          await c.query('VACUUM (VERBOSE) public.installment_plans');
+          const client = c;
+          client.on('notice', onNotice);
+          try {
+            await client.query(`DELETE FROM installment_plans WHERE invoice_id = $1 AND status = 'cancelled'`, [world.invoiceId]);
+            cleanup = null;
+          } catch (e) {
+            cleanup = err(e);
+          }
+          await client.query('VACUUM (VERBOSE) public.installment_plans');
           return null;
         } catch (e) {
           return err(e);
@@ -3202,8 +3237,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         cleanup,
         vacuum,
         before_cleanup,
-        before_vacuum,
-        holders_before_vacuum,
+        holders_before_cleanup,
         holders_after_vacuum,
         vacuum_verbose: verbose,
         triggers_on: await sudoq('ALTER TABLE installment_plans ENABLE TRIGGER USER'),
@@ -3223,7 +3257,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         readings_after_heapforced: await readWith(HEAP_ONLY, TWO_READINGS_SQL, [world.businessId, world.invoiceId]),
       };
       console.log(
-        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   before_cleanup=${JSON.stringify(restoration['before_cleanup'])}\n[DR-101]   before_vacuum=${JSON.stringify(restoration['before_vacuum'])}\n[DR-101]   holders_before=${JSON.stringify(restoration['holders_before_vacuum'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
+        `[DR-101] sweep restoration: bytes_after=${String(restoration['bytes_after'])} relpages_after=${String(restoration['relpages_after'])} rows_after=${String(restoration['rows_after'])} cleanup=${String(restoration['cleanup'])} vacuum=${String(restoration['vacuum'])}\n[DR-101]   before_cleanup=${JSON.stringify(restoration['before_cleanup'])}\n[DR-101]   holders_before=${JSON.stringify(restoration['holders_before_cleanup'])}\n[DR-101]   holders_after=${JSON.stringify(restoration['holders_after_vacuum'])}\n[DR-101]   verbose=${JSON.stringify(restoration['vacuum_verbose'])}`,
       );
       out.push(restoration);
     }
@@ -5238,8 +5272,7 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     // abandonments happened, and the holder readings say who caused it.
     const evidence = `
   before DELETE  : ${JSON.stringify(tail['before_cleanup'])}
-  before VACUUM  : ${JSON.stringify(tail['before_vacuum'])}
-  holders before : ${JSON.stringify(tail['holders_before_vacuum'])}
+  holders before : ${JSON.stringify(tail['holders_before_cleanup'])}
   holders after  : ${JSON.stringify(tail['holders_after_vacuum'])}
   VACUUM VERBOSE : ${JSON.stringify(tail['vacuum_verbose'])}`;
     expect(Number(tail['bytes_after']), `the sweep left the relation inflated, so it perturbed every later reading.${evidence}`).toBeLessThanOrEqual(
