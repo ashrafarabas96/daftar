@@ -1032,6 +1032,121 @@ jobs:
         env:
           PG_PORT: '5432'
           POS_PERF_NEGATIVE_CONTROL_MS: '200'
+      # DR-98, extended to the P4-S4 receivables budgets. `P4-D` and `P4-F`
+      # in-transaction are now asserted on the time PostgreSQL spent EXECUTING
+      # (pg_stat_statements), not on the client's wall clock, so the two
+      # controls below have OPPOSITE required outcomes and BOTH run:
+      #
+      #   1. a delay planted INSIDE the database (`pg_sleep`, 200 ms, on a
+      #      `daftar_app` connection, inside every measured window) must turn
+      #      the suite red ON the two converted budgets' own assertions. 200 ms
+      #      and not 50: it has to exceed the ceiling it is meant to break, and
+      #      `P4-D`'s ceiling is 100 ms.
+      #   2. a delay planted OUTSIDE the database (`setTimeout`, 200 ms, at the
+      #      head of the same windows) must leave BOTH converted budgets green —
+      #      and must turn `P4-F over HTTP` RED, because that budget is still
+      #      judged on the wall clock by decision and the HTTP window CONTAINS
+      #      the transaction window. That red is the control's second half, not
+      #      its failure: it is the executable proof that the unconverted budget
+      #      really was left unconverted.
+      #
+      # WHY THE MARKERS AND NOT THE PROSE. Each budget's assertion message opens
+      # with a pure-ASCII `P4-S4-BUDGET-FAIL-<tag>` that appears if and only if
+      # that assertion failed, and each verdict that HELD prints
+      # `P4-S4-INDB-OK-<tag>` afterwards. Control 2's claim is an ABSENCE — the
+      # two converted budgets did not fail — so it carries its own positive
+      # control in the same log: the HTTP marker MUST be there, which proves the
+      # grep can see a marker in this very run, and the `-INDB-OK-` lines MUST
+      # be there, which proves the verdicts were actually reached. A run that
+      # matched no test, or a delay that never fired, satisfies neither.
+      #
+      # `--reporter=verbose` is not decoration: MEASURED on Vitest 4.1.11, the
+      # default reporter DROPS the `console.log` of a passing case, and every
+      # monitor line a control reads is printed by a case that passes.
+      #
+      # Neither step touches a ceiling, an iteration count, a percentile or a
+      # timeout, neither carries `continue-on-error` or an `if:`, and the knobs
+      # are unset — and then inert — in every other step of this job. Neither
+      # step names the measured npm script: that step is pinned by name and by
+      # script body (`scripts/phase4-s4-gate.ts`, `S4_EVIDENCE_STEPS`) and must
+      # appear in this job exactly once, so a control that reached the suite
+      # through that script would make the measured step ambiguous.
+      - name: Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-receivables-in-db.log"
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the in-database-SLOWED receivables budgets PASSED — P4-D and P4-F-TXN cannot fail on database time, so their green means nothing"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
+            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=inDatabaseExecMs" "$log" || {
+              tail -160 "$log"
+              echo "the in-database-slowed run failed, but NOT on $tag's own in-database assertion — the control proves nothing about that budget"; exit 1
+            }
+          done
+          grep -h 'P4-S4-MONITOR-' "$log" || true
+        env:
+          PG_PORT: '5432'
+          P4_S4_IN_DB_DELAY_MS: '200'
+      - name: Budget negative control — a delay OUTSIDE the database must NOT fail the P4-D and P4-F-TXN budgets
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-receivables-client-side.log"
+          # The run is EXPECTED to fail, on the one budget this card left on the
+          # wall clock and on that budget alone.
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "a 200 ms CLIENT-SIDE delay left P4-F over HTTP green — that budget is judged on the wall clock, so this run proves the delay never reached it"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # POSITIVE CONTROL for the absence claims below: the wall-clock budget
+          # DID fail, in this log, so the marker grep can see a marker here.
+          for tag in FHTTP-BASE-5 FHTTP-FOREIGN-5; do
+            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=wallClockClientMs" "$log" || {
+              tail -160 "$log"
+              echo "the client-side-delayed run did not fail on $tag — either the delay never fired or the marker is not in this log, and then every absence below is unmeasured"; exit 1
+            }
+          done
+          # THE CLAIM: no converted budget failed, and each verdict was reached.
+          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
+            if grep -q "P4-S4-BUDGET-FAIL-$tag " "$log"; then
+              tail -160 "$log"
+              echo "a CLIENT-SIDE delay failed $tag — that budget's verdict still listens to something outside PostgreSQL"; exit 1
+            fi
+            grep -q "P4-S4-INDB-OK-$tag" "$log" || {
+              tail -160 "$log"
+              echo "$tag printed no P4-S4-INDB-OK line, so its verdict was never reached and its silence is not a pass"; exit 1
+            }
+          done
+          # AND THE NUMBERS, not just the exit code: the wall clock really was
+          # inflated by the delay, and the in-database series still sat inside
+          # the ceiling. Read from the monitor lines the suite printed.
+          grep -h 'P4-S4-MONITOR-' "$log" >"$RUNNER_TEMP/monitor.txt" || true
+          test -s "$RUNNER_TEMP/monitor.txt" || { echo "no P4-S4-MONITOR line was printed, so neither figure can be read"; exit 1; }
+          cat "$RUNNER_TEMP/monitor.txt"
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-MONITOR-"));
+            const want = ["D-RECEIVABLE", "D-AGING", "D-OPENINVOICES", "FTXN-BASE-5", "FTXN-FOREIGN-5"];
+            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
+            let bad = 0;
+            for (const tag of want) {
+              const l = lines.find((x) => x.includes("P4-S4-MONITOR-" + tag + " "));
+              if (l === undefined) { console.log("MISSING monitor line for " + tag); bad += 1; continue; }
+              const wall = num(l, "wallP50"), inDb = num(l, "inDbP95"), ceiling = num(l, "budgetMs");
+              const ok = wall >= 200 && inDb <= ceiling;
+              console.log(tag + ": wall p50 " + wall + " ms (must be >= 200), in-database p95 " + inDb + " ms (ceiling " + ceiling + ")");
+              if (!ok) bad += 1;
+            }
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$RUNNER_TEMP/monitor.txt" || {
+            echo "the client-side control did not prove what it claims: either the delay never reached the wall clock or an in-database series missed its ceiling"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          P4_S4_CLIENT_DELAY_MS: '200'
       - name: Database contract from zero (throw-away embedded server; same check as the release gate)
         run: npm run check:db-from-zero
       - name: API build

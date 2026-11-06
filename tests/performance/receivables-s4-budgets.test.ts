@@ -135,7 +135,9 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'supertest';
-import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
+import { Client } from 'pg';
+import { appDbUrl, ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
+import { InDatabaseClock } from '../helpers/in-database-time';
 import { must } from '../helpers/inventory-commands';
 import { readAs } from '../helpers/merchant-reads';
 import { classifyPlanEvidence, planEvidenceBanner, readPlanEvidenceEnvironment, type PlanEvidenceEnvironment } from '../helpers/plan-evidence-env';
@@ -213,6 +215,98 @@ const SHORT_PERCENTILE_ITERATIONS = 200;
 const WARMUP = 5;
 
 /**
+ * ── DR-98 EXTENDED TO P4-D AND P4-F-TXN: WHAT THESE TWO BUDGETS NOW JUDGE ──
+ *
+ * `P4-D` and `P4-F` in-transaction are asserted on the time PostgreSQL spent
+ * EXECUTING, read from `pg_stat_statements` (`tests/helpers/in-database-time.ts`),
+ * and no longer on the client's wall clock. The wall clock keeps being measured
+ * and keeps being printed beside it; it stopped being the verdict.
+ *
+ * WHY. The same tail that DR-98 measured on PERF01's budgets A and B is in this
+ * file's numbers: `P4-F in-transaction, 5 invoices, foreign currency` was
+ * p50 24.737 and p95 45.045 against a 40 ms ceiling, with ten of two hundred
+ * samples above it and a max of 183.002 — a median well inside the ceiling and
+ * isolated excursions to seven times it. A verdict decided by that shape is a
+ * verdict about the runner's scheduling, not about the allocation.
+ *
+ * THE CEILINGS, THE SAMPLE COUNT AND THE PERCENTILE ARE UNTOUCHED. 40 ms and
+ * 100 ms still come from `ACCEPTED` through `effectiveCeilingMs`, the count is
+ * still `SHORT_PERCENTILE_ITERATIONS`, and the estimator is still the one in
+ * `./percentile`. Nothing here is a `retry`, a `skip`, a widened ceiling or a
+ * dropped outlier.
+ *
+ * ── WHAT THIS CONVERSION GIVES UP, STATED BECAUSE IT IS NOT A FREE WIN ─────
+ *
+ * On PERF01's A and E the measured span was essentially one statement, so the
+ * database's clock covered all of it. HERE IT DOES NOT. `P4-F-TXN`'s span is
+ * `Database.withBusinessInventoryAccountingTransaction`, and part of what that
+ * span used to contain is GENUINE APPLICATION WORK IN NODE: the allocation
+ * arithmetic, the settlement figures and the FX conversion that run BETWEEN the
+ * statements. The in-database clock does not see one microsecond of it. So this
+ * budget stops holding a ceiling over the application's own CPU inside the
+ * transaction, and a regression that doubled the allocation arithmetic — while
+ * the SQL stayed the same — would no longer fail it. That is a real loss of
+ * coverage, it is accepted deliberately, and it is kept VISIBLE rather than
+ * described: the residual (wall − in-database) is computed per iteration and
+ * printed with every verdict, so the part that is no longer judged is the part
+ * a reader can see moving.
+ *
+ * `P4-F-HTTP` IS DELIBERATELY NOT CONVERTED. Its whole subject is the endpoint
+ * over HTTP — Nest, the guard, the membership resolution, serialisation. An
+ * in-database clock there would judge the SQL and silently drop the endpoint
+ * out of a budget whose name says the endpoint is what it measures. It keeps
+ * the wall clock, and both of its figures stay printed.
+ */
+
+/**
+ * CONTROL KNOB 1 — a real `pg_sleep` INSIDE the database, on a `daftar_app`
+ * connection, inside the measured window of every converted budget. The server
+ * accounts it, so `P4-D` and `P4-F-TXN` MUST go red on their own assertions.
+ * Inert and unset in every normal run. It is the control that proves the
+ * in-database series can still fail.
+ *
+ * It must exceed the ceiling of the budget it is meant to break: `P4-F-TXN`'s
+ * ceiling is 40 ms, so CI sets 200.
+ */
+const IN_DB_DELAY_MS = Number(process.env['P4_S4_IN_DB_DELAY_MS'] ?? '0') || 0;
+
+/**
+ * CONTROL KNOB 2 — a `setTimeout` OUTSIDE every query, at the head of the same
+ * measured windows. It inflates the wall clock and nothing the database does,
+ * so `P4-D` and `P4-F-TXN` MUST STAY GREEN while their printed wall figures go
+ * up by at least this much. Inert and unset in every normal run.
+ *
+ * AND IT IS EXPECTED TO TURN ONE CASE RED: `P4-F over HTTP`. The HTTP window
+ * CONTAINS the transaction window, so a delay planted inside the transaction
+ * necessarily inflates the request around it, and that budget is still judged
+ * on the wall clock by decision. Its red under this knob is not a defect of the
+ * control — it is the second half of what the control proves: the converted
+ * budgets no longer listen to anything outside PostgreSQL, and the one budget
+ * this card deliberately left on the wall clock still does. `ci.yml` requires
+ * exactly that shape: the HTTP tag present, the two converted tags absent.
+ */
+const CLIENT_DELAY_MS = Number(process.env['P4_S4_CLIENT_DELAY_MS'] ?? '0') || 0;
+
+/** The in-database instrument the converted budgets are judged on (DR-98). */
+let inDatabase: InDatabaseClock | null = null;
+/** The `daftar_app` connection control knob 1 plants its delay on. Null unless the knob is set. */
+let delayer: Client | null = null;
+
+const sleep = async (ms: number): Promise<void> => {
+  await new Promise((r) => setTimeout(r, ms));
+};
+
+/**
+ * The two control delays, at the HEAD of a measured window — where the
+ * operation's own cost sits — so a red is the budget's own assertion missing
+ * its own ceiling. Both are inert unless their knob is set.
+ */
+async function plantControlDelays(): Promise<void> {
+  if (CLIENT_DELAY_MS > 0) await sleep(CLIENT_DELAY_MS);
+  if (delayer !== null) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
+}
+
+/**
  * `P4-F` is measured over 1 invoice and over 5 (`P4-AL-71`, `P4-AL-72`).
  *
  * The three arms, named once. The FX arm is measured only at the five-invoice
@@ -285,6 +379,15 @@ interface Measured {
   readonly name: string;
   readonly budgetMs: number | null;
   readonly samplesMs: readonly number[];
+  /**
+   * DR-98. Present on the CONVERTED budgets only (`P4-D`, `P4-F-TXN`).
+   * `samplesMs` above stays the WALL CLOCK the test process saw — what every
+   * earlier evidence file in this slice meant by it — and this is the other
+   * series: the milliseconds PostgreSQL accounted to the statements that ran
+   * inside the same windows, in the same order, and the one the verdict reads.
+   * Two series under two names, never one number that could be either.
+   */
+  readonly inDatabaseMs?: readonly number[];
 }
 
 interface Diagnostic extends Distribution {
@@ -346,17 +449,87 @@ function diagnose(m: Measured, thresholdMs: number): Diagnostic {
   return d;
 }
 
-/** The verdict and the whole series in one message, so a red is self-explanatory. */
-function assertWithin(m: Measured, thresholdMs: number, budgetId: string): Diagnostic {
+/**
+ * The verdict and the whole series in one message, so a red is self-explanatory.
+ *
+ * `tag` opens the message with a PURE-ASCII marker, `P4-S4-BUDGET-FAIL-<tag>`,
+ * which appears if and only if this assertion failed. The `ci.yml` controls
+ * grep for it rather than for the prose that follows: the prose carries an em
+ * dash and the budget's own words, and a control that greps for either is a
+ * control that a rewording or a host code page can quietly defeat.
+ */
+function assertWithin(m: Measured, thresholdMs: number, budgetId: string, tag: string): Diagnostic {
   const d = diagnose(m, thresholdMs);
   expect(
     d.p95,
-    `${budgetId} — ${m.name}: p95 ${d.p95.toFixed(3)} ms against ${thresholdMs} ms over ${d.iterations} measured iterations ` +
+    `P4-S4-BUDGET-FAIL-${tag} judgedOn=wallClockClientMs ` +
+      `${budgetId} — ${m.name}: p95 ${d.p95.toFixed(3)} ms against ${thresholdMs} ms over ${d.iterations} measured iterations ` +
       `(min ${d.min} / p50 ${d.p50} / p99 ${d.p99} / max ${d.max}; ${d.countAboveThreshold} of ${d.iterations} samples above the ceiling). ` +
       `A missed budget is a FAIL until diagnosed and the ceiling is never relaxed to obtain a PASS (P4-AL-76). ` +
       `The complete ordered series, in milliseconds, is:\n${JSON.stringify(d.orderedMs)}`,
   ).toBeLessThanOrEqual(thresholdMs);
   return d;
+}
+
+/**
+ * THE VERDICT OF A CONVERTED BUDGET (DR-98): the IN-DATABASE p95 against the
+ * ceiling, with the wall clock printed beside it and judging nothing.
+ *
+ * Both series go into `diagnostics` under names that say which is which, so the
+ * performance record carries the monitored series as well as the judged one and
+ * no reader has to guess which a bare `p95` meant. The residual — wall minus
+ * in-database, per iteration — is the part of the old quantity this conversion
+ * stopped judging (the Node-side work inside the window), printed so the
+ * coverage that was given up stays visible.
+ *
+ * `tag` is pure ASCII and stable: the CI controls grep for `P4-S4-MONITOR-<tag>`
+ * and for `P4-S4-INDB-OK-<tag>`, and the `OK` line is printed only AFTER the
+ * assertion held, so a run that executed nothing cannot satisfy a control.
+ */
+function assertInDatabaseWithin(m: Measured, thresholdMs: number, budgetId: string, tag: string): Distribution {
+  const inDb = must(m.inDatabaseMs, `${m.name}: the in-database series is absent, so this budget has no verdict to read (DR-98)`);
+  expect(
+    inDb.length,
+    `${m.name}: ${inDb.length} in-database samples against ${m.samplesMs.length} wall-clock ones — the two series are taken in the same windows and must be the same length`,
+  ).toBe(m.samplesMs.length);
+  const residualMs = m.samplesMs.map((ms, i) => ms - must(inDb[i], `${m.name}: in-database sample ${i}`));
+  // The judged series first, so `diagnostics[]` and the printed DISTRIBUTION
+  // block carry it; then the two monitored series under their own names.
+  //
+  // `dv`/`dw`/`dr` are two characters on purpose, which is the convention
+  // `assertWithin` above already follows with its `const d = diagnose(...)`.
+  // `scripts/plan-evidence/discover-plan-claims.ts` taints any identifier of
+  // three characters or more whose initialiser calls a tainted helper, and the
+  // taint set is per FILE and not per scope — so naming these `verdict`,
+  // `wall` and `residual` made the generator report a gate of its own kind on
+  // an unrelated pre-existing `expect(verdict.authoritative …)` 1 400 lines away.
+  // MEASURED: three invented plan-gate hits appeared in the inventory, and
+  // renaming removed all three. A false claim in an evidence inventory is the
+  // exact defect that inventory exists to prevent.
+  const dv = diagnose({ name: `${m.name} — IN-DATABASE EXEC TIME, THE VERDICT`, budgetMs: thresholdMs, samplesMs: inDb }, thresholdMs);
+  const dw = diagnose({ name: `${m.name} — wall clock, MONITORING ONLY (judges nothing)`, budgetMs: null, samplesMs: m.samplesMs }, thresholdMs);
+  const dr = diagnose(
+    { name: `${m.name} — residual wall MINUS in-database, MONITORING ONLY (the coverage this conversion gave up)`, budgetMs: null, samplesMs: residualMs },
+    thresholdMs,
+  );
+  console.log(
+    `P4-S4-MONITOR-${tag} judgedOn=inDatabaseExecMs budgetMs=${thresholdMs} iterations=${dv.iterations} ` +
+      `inDbP50=${dv.p50.toFixed(3)} inDbP95=${dv.p95.toFixed(3)} inDbP99=${dv.p99.toFixed(3)} inDbMax=${dv.max.toFixed(3)} ` +
+      `wallP50=${dw.p50.toFixed(3)} wallP95=${dw.p95.toFixed(3)} wallMax=${dw.max.toFixed(3)} ` +
+      `residualP50=${dr.p50.toFixed(3)} residualP95=${dr.p95.toFixed(3)}`,
+  );
+  expect(
+    dv.p95,
+    `P4-S4-BUDGET-FAIL-${tag} judgedOn=inDatabaseExecMs ` +
+      `${budgetId} — ${m.name}: in-database p95 ${dv.p95.toFixed(3)} ms against ${thresholdMs} ms over ${dv.iterations} measured iterations ` +
+      `(in-database min ${dv.min} / p50 ${dv.p50} / p99 ${dv.p99} / max ${dv.max}; ${dv.countAboveThreshold} of ${dv.iterations} above the ceiling). ` +
+      `MONITORING ONLY, judging nothing: wall clock p50 ${dw.p50} / p95 ${dw.p95} / max ${dw.max} ms, residual (wall minus in-database) p50 ${dr.p50} / p95 ${dr.p95} ms. ` +
+      `A missed budget is a FAIL until diagnosed and the ceiling is never relaxed to obtain a PASS (P4-AL-76). ` +
+      `The complete ordered IN-DATABASE series, in milliseconds, is:\n${JSON.stringify(dv.orderedMs)}\n` +
+      `and the complete ordered WALL-CLOCK series is:\n${JSON.stringify(dw.orderedMs)}`,
+  ).toBeLessThanOrEqual(thresholdMs);
+  console.log(`P4-S4-INDB-OK-${tag}`);
+  return dv;
 }
 
 /**
@@ -375,19 +548,35 @@ async function measure(
   once: () => Promise<void>,
   iterations = SHORT_PERCENTILE_ITERATIONS,
   before: () => Promise<unknown> = async () => undefined,
+  judged: 'in-database' | 'wall-clock-only' = 'wall-clock-only',
 ): Promise<Measured> {
   for (let i = 0; i < WARMUP; i += 1) {
     await before();
     await once();
   }
   const samplesMs: number[] = [];
+  const inDatabaseMs: number[] = [];
+  // DR-98. The cumulative executed milliseconds are read on the instrument's
+  // OWN connection immediately before the wall-clock timer starts and
+  // immediately after it stops, so both reads sit OUTSIDE the wall-clock window
+  // and cost it nothing. The instrument's role is excluded from its own sum.
+  const clock = judged === 'in-database' ? must(inDatabase, `${name}: the in-database instrument`) : null;
   for (let i = 0; i < iterations; i += 1) {
     await before();
+    const dbBefore = clock === null ? 0 : await clock.cumulativeMs();
     const started = process.hrtime.bigint();
+    // Inert in every normal run. Applied to EVERY window taken through this
+    // function, including the median read and the two RLS halves, so that the
+    // host-independent ratios see the same delay on both sides and stay green:
+    // a control that broke a ratio would be a control about the ratio.
+    await plantControlDelays();
     await once();
     samplesMs.push(Number(process.hrtime.bigint() - started) / 1e6);
+    if (clock !== null) inDatabaseMs.push(InDatabaseClock.delta(dbBefore, await clock.cumulativeMs()));
   }
-  return { name, budgetMs, samplesMs };
+  // A series that lost entries to eviction is not a series.
+  if (clock !== null) await clock.assertNoEviction();
+  return clock === null ? { name, budgetMs, samplesMs } : { name, budgetMs, samplesMs, inDatabaseMs };
 }
 
 // ───── the read under measurement ─────────────────────────────────────────
@@ -480,10 +669,17 @@ const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECOR
 const READER_OF_RECORD_CALL_G = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\([^)]*\\)`, 'gi');
 
 /** The three reads of one customer, labelled, so the fat-tail and median arms are built identically. */
-const readsOf = (customerId: string, asOf: string): readonly { readonly label: string; readonly path: string; readonly route: string }[] => [
-  { label: 'receivable (live AR)', path: READS.receivable(customerId), route: ROUTE.receivable },
-  { label: 'receivable/aging (as of a date)', path: READS.aging(customerId, asOf), route: ROUTE.aging },
-  { label: 'open-invoices (as of a date)', path: READS.openInvoices(customerId, asOf), route: ROUTE.openInvoices },
+const readsOf = (
+  customerId: string,
+  asOf: string,
+  // `tag` is the pure-ASCII, stable marker the DR-98 monitor line and the CI
+  // controls grep for (`P4-S4-MONITOR-<tag>`, `P4-S4-INDB-OK-<tag>`). It is a
+  // field rather than a derivation of `label` because a control that greps for
+  // a string built out of prose is a control that a reworded comment can break.
+): readonly { readonly label: string; readonly path: string; readonly route: string; readonly tag: string }[] => [
+  { label: 'receivable (live AR)', path: READS.receivable(customerId), route: ROUTE.receivable, tag: 'D-RECEIVABLE' },
+  { label: 'receivable/aging (as of a date)', path: READS.aging(customerId, asOf), route: ROUTE.aging, tag: 'D-AGING' },
+  { label: 'open-invoices (as of a date)', path: READS.openInvoices(customerId, asOf), route: ROUTE.openInvoices, tag: 'D-OPENINVOICES' },
 ];
 
 /**
@@ -619,6 +815,10 @@ async function statementCostMs(path: string, principal: 'daftar_app' | 'owner', 
 interface Allocated {
   readonly httpMs: number;
   readonly txnMs: number;
+  /** DR-98: what PostgreSQL accounted to the statements inside the transaction span. The VERDICT of `P4-F-TXN`. */
+  readonly txnInDatabaseMs: number;
+  /** The wall cost of the instrument's own two reads, which sit inside the HTTP window. Monitoring only. */
+  readonly instrumentMs: number;
   readonly transactions: number;
   readonly status: number;
   readonly paymentId: string;
@@ -669,14 +869,46 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
   const db = w.t.app.get(Database);
   const original = db.withBusinessInventoryAccountingTransaction.bind(db);
   let txnMs = 0;
+  let txnInDatabaseMs = 0;
+  let instrumentMs = 0;
   let transactions = 0;
+  // ── WHERE THE IN-DATABASE READS SIT, AND WHAT THAT COSTS (DR-98) ────────
+  //
+  // `P4-F-TXN`'s subject is the TRANSACTION, so the instrument reads the
+  // server's cumulative executed milliseconds immediately around the
+  // transaction span and nowhere else. That span is NESTED INSIDE the HTTP
+  // window, so unlike PERF01 — where both reads sat outside every measured
+  // window — these two reads are inside the window `P4-F-HTTP` is measured on,
+  // and they cost it two round trips to PostgreSQL.
+  //
+  // That is declared rather than hidden, and its DIRECTION is stated: the two
+  // reads can only make the HTTP figure LARGER, so the unconverted HTTP budget
+  // becomes slightly STRICTER than it was and can never be made to pass by the
+  // instrument. The cost is measured — `instrumentMs` below — and printed per
+  // arm, so how much of the HTTP figure is the instrument is a number a reader
+  // has rather than a reassurance. Nothing is subtracted from a judged figure.
+  const clock = inDatabase;
+  const readClock = async (): Promise<number> => {
+    if (clock === null) return 0;
+    const at = process.hrtime.bigint();
+    try {
+      return await clock.cumulativeMs();
+    } finally {
+      instrumentMs += Number(process.hrtime.bigint() - at) / 1e6;
+    }
+  };
   const spy = vi.spyOn(db, 'withBusinessInventoryAccountingTransaction').mockImplementation(async (...args: Parameters<typeof original>) => {
     transactions += 1;
+    const dbBefore = await readClock();
     const started = process.hrtime.bigint();
     try {
+      // The control delays, at the head of the measured transaction window.
+      // Inert in every normal run.
+      await plantControlDelays();
       return await original(...args);
     } finally {
       txnMs += Number(process.hrtime.bigint() - started) / 1e6;
+      if (clock !== null) txnInDatabaseMs += InDatabaseClock.delta(dbBefore, await readClock());
     }
   });
   let res: Response;
@@ -687,7 +919,17 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
     spy.mockRestore();
   }
   const httpMs = Number(process.hrtime.bigint() - started) / 1e6;
-  return { httpMs, txnMs, transactions, status: res.status, paymentId, invoiceIds: invoices.map((i) => i.invoiceId), body: res.body };
+  return {
+    httpMs,
+    txnMs,
+    txnInDatabaseMs,
+    instrumentMs,
+    transactions,
+    status: res.status,
+    paymentId,
+    invoiceIds: invoices.map((i) => i.invoiceId),
+    body: res.body,
+  };
 }
 
 /** One arm's measured series, both depths, taken from one pass over the pool. */
@@ -697,6 +939,10 @@ interface AllocationSeries {
   readonly currency: 'base' | 'foreign';
   readonly httpMs: readonly number[];
   readonly txnMs: readonly number[];
+  /** DR-98: the in-database execution time of each transaction window, in the same order. */
+  readonly txnInDatabaseMs: readonly number[];
+  /** The instrument's own wall cost inside each HTTP window, in the same order. Monitoring only. */
+  readonly instrumentMs: readonly number[];
   readonly transactionsPerCommand: readonly number[];
   /** Every committed payment, so the journal-entry gate can read the rows afterwards. */
   readonly paymentIds: readonly string[];
@@ -709,6 +955,8 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
   }
   const httpMs: number[] = [];
   const txnMs: number[] = [];
+  const txnInDatabaseMs: number[] = [];
+  const instrumentMs: number[] = [];
   const transactionsPerCommand: number[] = [];
   const paymentIds: string[] = [];
   for (let i = 0; i < SHORT_PERCENTILE_ITERATIONS; i += 1) {
@@ -716,10 +964,14 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
     expect(r.status, `the ${arm} collection ${i} commits: ${JSON.stringify(r.body)}`).toBeLessThan(300);
     httpMs.push(r.httpMs);
     txnMs.push(r.txnMs);
+    txnInDatabaseMs.push(r.txnInDatabaseMs);
+    instrumentMs.push(r.instrumentMs);
     transactionsPerCommand.push(r.transactions);
     paymentIds.push(r.paymentId);
   }
-  return { arm, shape, currency, httpMs, txnMs, transactionsPerCommand, paymentIds };
+  // DR-98: a series that lost entries to eviction is not a series.
+  if (inDatabase !== null) await inDatabase.assertNoEviction();
+  return { arm, shape, currency, httpMs, txnMs, txnInDatabaseMs, instrumentMs, transactionsPerCommand, paymentIds };
 }
 
 const series = new Map<string, AllocationSeries>();
@@ -859,6 +1111,44 @@ async function buildFixture(): Promise<void> {
   // exists without it, which `stateFxRate` makes idempotent on (pair, instant).
   await stateFxRate(w, FOREIGN_CURRENCY, dataset.baseCurrencyCode, FOREIGN_RATE, `${w.day}T00:00:02Z`);
 
+  // ── DR-98. THE INSTRUMENT, OPENED AND PROVED BEFORE ANY BUDGET LEANS ON IT ──
+  //
+  // `InDatabaseClock.open` reads `shared_preload_libraries`,
+  // `pg_stat_statements.track` and `track_utility` FROM THE SERVER and refuses
+  // to continue unless they are what the measurement relies on. There is no
+  // fallback to the wall clock: a server without the library throws
+  // PERF01-INSTRUMENT-UNAVAILABLE and this fixture fails by name, which
+  // `requireFixture()` turns into a red on every case of this file.
+  //
+  // `calibrate` is the instrument's own POSITIVE control, and it is the reason
+  // a low in-database figure cannot be read as a database that is simply very
+  // fast: 50 ms that a `daftar_app` session — a NON-superuser, the principal
+  // the budgets are about — spends inside the database must be accounted as at
+  // least 49, or the probe is filtering away the application's statements.
+  inDatabase = await InDatabaseClock.open('daftar');
+  await inDatabase.calibrate(49, async () => {
+    const c = new Client({ connectionString: appDbUrl });
+    await c.connect();
+    try {
+      await c.query('SELECT pg_sleep(0.05)');
+    } finally {
+      await c.end();
+    }
+  });
+  console.log(`\n[P4-S4 budgets] DR-98 in-database instrument, as the SERVER reports it — ${JSON.stringify(inDatabase.settings, null, 1)}\n`);
+  // Control knob 1's connection, as `daftar_app`: the same principal the
+  // budgets are about, so the planted delay is accounted exactly as the
+  // product's own statements are. Null — and the knob inert — in every normal run.
+  if (IN_DB_DELAY_MS > 0) {
+    delayer = new Client({ connectionString: appDbUrl });
+    await delayer.connect();
+    console.log(`\n[P4-S4 budgets] CONTROL 1 ARMED — a ${IN_DB_DELAY_MS} ms pg_sleep is planted INSIDE every measured window, on a daftar_app connection\n`);
+  }
+  if (CLIENT_DELAY_MS > 0)
+    console.log(
+      `\n[P4-S4 budgets] CONTROL 2 ARMED — a ${CLIENT_DELAY_MS} ms setTimeout is planted OUTSIDE every query, at the head of every measured window\n`,
+    );
+
   environment = await readPlanEvidenceEnvironment(async <R>(sql: string) => ({ rows: (await ownerPool().query(sql)).rows as R[] }));
   // WHICH server, and how much room it had — both before a single figure is
   // taken. The free space is read first because a measurement that ran the
@@ -927,6 +1217,11 @@ async function buildFixture(): Promise<void> {
         () => read200(path),
         SHORT_PERCENTILE_ITERATIONS,
         () => pace(route),
+        // DR-98: this is a BUDGET series, so it carries the in-database verdict
+        // series as well as the wall clock. The median and the two RLS halves
+        // below are not budgets — they are the denominators of host-independent
+        // ratios — and stay on the wall clock on both sides of their ratio.
+        'in-database',
       ),
     );
   }
@@ -1002,6 +1297,10 @@ afterAll(async ({}, suite: { readonly tasks?: readonly unknown[] }) => {
   try {
     if (w !== undefined) await w.t.close();
     await resetData();
+    // DR-98: the instrument and the control's connection, closed whatever
+    // happened, before the audit speaks.
+    await delayer?.end().catch(() => undefined);
+    await inDatabase?.close().catch(() => undefined);
   } finally {
     auditTheRun(suite);
   }
@@ -1076,6 +1375,20 @@ function performanceRecord(): Record<string, unknown> {
     // re-mint happened outside a measured span (inside `pace()`).
     authentication: authReport(),
     planEvidence: classifyPlanEvidence(environment),
+    /**
+     * DR-98: HOW the converted budgets were measured, as the SERVER reported
+     * it, and what the two control knobs were set to on this run. A reader who
+     * has only this record can tell which series was the verdict and whether a
+     * control was armed, instead of inferring it from a step name.
+     */
+    inDatabaseInstrument:
+      inDatabase === null ? null : { source: 'pg_stat_statements.total_exec_time (delta, dbid-filtered, probe role excluded)', ...inDatabase.settings },
+    judgedOn: {
+      'P4-D': 'inDatabaseExecMs',
+      'P4-F-TXN': 'inDatabaseExecMs',
+      'P4-F-HTTP': 'wallClockClientMs — deliberately not converted: its subject is the endpoint over HTTP',
+    },
+    controls: { inDatabaseDelayMs: IN_DB_DELAY_MS, clientSideDelayMs: CLIENT_DELAY_MS },
     distributions: diagnostics.map((d) => ({ name: d.name, iterations: d.iterations, p95: d.p95, thresholdMs: d.thresholdMs, orderedMs: d.orderedMs })),
   };
 }
@@ -1320,7 +1633,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
 
   it(`MEASUREMENT: p95 of ${SHORT_PERCENTILE_ITERATIONS} warm runs of each fat-tail read is within P4-D (${BUDGET.D_BALANCE_P95} ms)`, () => {
     requireFixture();
-    for (const { path } of readsOf(dataset.fatCustomerId, w.day)) {
+    for (const { path, tag } of readsOf(dataset.fatCustomerId, w.day)) {
       const m = must(readSeries.get(path), `the measured series of ${path}`);
       // P4-AL-76: the gate fails when a measurement's sample count is below
       // the declared iterations. Asserted on the series itself, before its
@@ -1329,7 +1642,9 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         m.samplesMs.length,
         `${m.name}: ${m.samplesMs.length} samples were taken and ${SHORT_PERCENTILE_ITERATIONS} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
       ).toBe(SHORT_PERCENTILE_ITERATIONS);
-      assertWithin(m, BUDGET.D_BALANCE_P95, 'P4-D');
+      // DR-98: the verdict is the IN-DATABASE p95; the wall clock is printed
+      // beside it, in the message and on the log, and judges nothing.
+      assertInDatabaseWithin(m, BUDGET.D_BALANCE_P95, 'P4-D', tag);
     }
   });
 
@@ -1452,14 +1767,43 @@ describe('P4-F — the customer payment allocation', () => {
     requireFixture();
     for (const key of ['base-5', 'foreign-5']) {
       const s = armOf(key);
-      assertWithin(
-        { name: `P4-F in-transaction, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_TXN_P95, samplesMs: s.txnMs },
+      // DR-98: the verdict is the IN-DATABASE execution time of the
+      // transaction window; the wall clock and the residual are printed beside
+      // it and judge nothing. The instrument's own wall cost — which sits
+      // inside the HTTP window and nowhere else — is printed too, because it
+      // is the one figure this conversion ADDS to a budget it does not convert.
+      assertInDatabaseWithin(
+        {
+          name: `P4-F in-transaction, ${s.shape} invoices, ${s.currency} currency`,
+          budgetMs: BUDGET.F_ALLOCATION_TXN_P95,
+          samplesMs: s.txnMs,
+          inDatabaseMs: s.txnInDatabaseMs,
+        },
         BUDGET.F_ALLOCATION_TXN_P95,
         'P4-F (in-transaction)',
+        `FTXN-${s.currency.toUpperCase()}-${s.shape}`,
+      );
+      console.log(
+        `P4-S4-INSTRUMENT-COST-FTXN-${s.currency.toUpperCase()}-${s.shape} ` +
+          `p50=${quantile(s.instrumentMs, 0.5).toFixed(3)} p95=${quantile(s.instrumentMs, 0.95).toFixed(3)} ` +
+          `— the two pg_stat_statements reads sit INSIDE the HTTP window, so they can only make the P4-F-HTTP figure larger, never smaller`,
       );
     }
   });
 
+  /**
+   * DELIBERATELY NOT CONVERTED (DR-98, and stated here so the decision is in
+   * the code and not only in a card).
+   *
+   * This budget's subject IS the endpoint over HTTP: the guard, the membership
+   * resolution, the serialisation, the connection the pool hands out. An
+   * in-database clock measures the SQL, so converting this one would judge the
+   * SQL and drop the endpoint out of a budget whose own name says the endpoint
+   * is what it measures — the opposite of the narrowing DR-98 accepted for the
+   * transaction. So the verdict here stays the WALL CLOCK, and the tail that
+   * DR-98 moved out of the way for `P4-D` and `P4-F-TXN` is still in front of
+   * this one. Both of its figures are printed; neither is quietly swapped.
+   */
   it(`MEASUREMENT: p95 of the 5-invoice allocation is within P4-F over HTTP (${BUDGET.F_ALLOCATION_HTTP_P95} ms)`, () => {
     requireFixture();
     for (const key of ['base-5', 'foreign-5']) {
@@ -1468,6 +1812,7 @@ describe('P4-F — the customer payment allocation', () => {
         { name: `P4-F over HTTP, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_HTTP_P95, samplesMs: s.httpMs },
         BUDGET.F_ALLOCATION_HTTP_P95,
         'P4-F (HTTP)',
+        `FHTTP-${s.currency.toUpperCase()}-${s.shape}`,
       );
     }
   });
@@ -1578,8 +1923,14 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
   it('CENSUS: every declared series exists and carries its full declared sample count (P4-AL-76)', () => {
     requireFixture();
     const lengths: Record<string, number> = {};
-    for (const { path } of readsOf(dataset.fatCustomerId, w.day))
-      lengths[`P4-D HTTP ${path}`] = must(readSeries.get(path), `the series of ${path}`).samplesMs.length;
+    for (const { path } of readsOf(dataset.fatCustomerId, w.day)) {
+      const s = must(readSeries.get(path), `the series of ${path}`);
+      lengths[`P4-D HTTP ${path}`] = s.samplesMs.length;
+      // DR-98: the JUDGED series is counted here too. A short in-database
+      // series would otherwise be a quiet pass on the one number that decides
+      // the budget, which is exactly what P4-AL-76 forbids for the wall clock.
+      lengths[`P4-D IN-DATABASE (the verdict) ${path}`] = must(s.inDatabaseMs, `the in-database series of ${path}`).length;
+    }
     expect(readSeries.size, `${DECLARED_READ_SERIES} fat-tail read series are declared and ${readSeries.size} were measured`).toBe(DECLARED_READ_SERIES);
     lengths['P4-D median (the ratio denominator)'] = must(medianReceivable, 'the median series').samplesMs.length;
     lengths['P4-D daftar_app statements (RLS numerator)'] = must(appStatementReceivable, 'the daftar_app statement series').samplesMs.length;
@@ -1589,6 +1940,7 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
       const arm = must(series.get(`${currency}-${shape}`), `the ${currency}-${shape} allocation arm`);
       lengths[`P4-F ${currency}-${shape} in-transaction`] = arm.txnMs.length;
       lengths[`P4-F ${currency}-${shape} over HTTP`] = arm.httpMs.length;
+      lengths[`P4-F ${currency}-${shape} IN-DATABASE (the verdict)`] = arm.txnInDatabaseMs.length;
     }
     // The diagnostic series is thirty iterations by declaration, not 200, and
     // it is a diagnostic rather than a verdict — so it is counted and named
@@ -1602,8 +1954,11 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
       short.map(([name, n]) => `${name}: ${n}`),
       `every measured series must carry exactly ${SHORT_PERCENTILE_ITERATIONS} samples — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
     ).toEqual([]);
+    // DR-98 raised this total: each fat-tail read now carries a wall-clock AND
+    // an in-database series, and each allocation arm carries three. The literal
+    // is derived from the declared constants, never from what happened to run.
     expect(Object.keys(lengths).length, 'no series was counted at all, so this census was satisfied by nothing having run').toBe(
-      DECLARED_READ_SERIES + 3 + DECLARED_ALLOCATION_ARMS * 2,
+      DECLARED_READ_SERIES * 2 + 3 + DECLARED_ALLOCATION_ARMS * 3,
     );
     expect(diagnosticSamples, 'the before-ANALYZE diagnostic was never taken, so the ANALYZE state of these figures is undocumented (P4-AL-74)').toBe(30);
   });
