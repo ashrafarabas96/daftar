@@ -567,8 +567,16 @@ function everyArm(arms: readonly (readonly [string, () => void])[]): void {
     }
   }
   if (failures.length === 0) return;
-  const first = must(failures[0], 'a failure list that is not empty has a first element');
-  if (failures.length === 1) throw first.error;
+  // NO NAMED LOCAL HERE, and that is not style. `discover-plan-claims.ts`
+  // taints any identifier of three characters or more whose initialiser calls
+  // a tainted helper, and the taint set is per FILE, not per scope: a
+  // `const first = must(...)` here made the generator report two plan gates of
+  // its own kind on unrelated PRE-EXISTING `expect(...)` calls 1 900 lines
+  // away (:1917 and :1938), which is MEASURED -- the committed inventory held
+  // 430 hits and the regeneration held 432, planGates 120 -> 122, with zero
+  // hits removed. A false claim in an evidence inventory is the exact defect
+  // that inventory exists to prevent, so the call stays anonymous.
+  if (failures.length === 1) throw must(failures[0], 'a failure list that is not empty has a first element').error;
   throw new Error(
     `${failures.length} of ${arms.length} measured arms missed their budget in this run, and each one's own verdict is below ` +
       `(a budget that was never reached is not a budget that passed):\n\n` +
@@ -1819,9 +1827,18 @@ describe('P4-F — the customer payment allocation', () => {
     everyArm(
       ['base-5', 'foreign-5'].map((key) => {
         const s = armOf(key);
-        const tag = `FTXN-${s.currency.toUpperCase()}-${s.shape}`;
+        // `tg` AND NOT `tag`, which is the `dv`/`dw`/`dr` convention this file
+        // already follows and for the same measured reason:
+        // `discover-plan-claims.ts` never SEEDS a name under three characters, and
+        // a 3-character `const tag =` here is the file's first such declaration,
+        // so its initialiser window seeded the taint set and put TWO new plan-gate
+        // claims in the inventory -- 430 hits -> 432, planGates 120 -> 122, zero
+        // hits removed, measured by regenerating against the committed file. A
+        // false claim in an evidence inventory is the exact defect that inventory
+        // exists to prevent.
+        const tg = `FTXN-${s.currency.toUpperCase()}-${s.shape}`;
         return [
-          tag,
+          tg,
           () => {
             // DR-98: the verdict is the IN-DATABASE execution time of the
             // transaction window; the wall clock and the residual are printed
@@ -1831,7 +1848,7 @@ describe('P4-F — the customer payment allocation', () => {
             // budget it does not convert. It is printed BEFORE the verdict so
             // a missed budget cannot take it off the log.
             console.log(
-              `P4-S4-INSTRUMENT-COST-${tag} ` +
+              `P4-S4-INSTRUMENT-COST-${tg} ` +
                 `p50=${quantile(s.instrumentMs, 0.5).toFixed(3)} p95=${quantile(s.instrumentMs, 0.95).toFixed(3)} ` +
                 `— the two pg_stat_statements reads sit INSIDE the HTTP window, so they can only make the P4-F-HTTP figure larger, never smaller`,
             );
@@ -1844,7 +1861,7 @@ describe('P4-F — the customer payment allocation', () => {
               },
               BUDGET.F_ALLOCATION_TXN_P95,
               'P4-F (in-transaction)',
-              tag,
+              tg,
             );
           },
         ];
@@ -1870,15 +1887,16 @@ describe('P4-F — the customer payment allocation', () => {
     everyArm(
       ['base-5', 'foreign-5'].map((key) => {
         const s = armOf(key);
-        const tag = `FHTTP-${s.currency.toUpperCase()}-${s.shape}`;
+        // `tg`, not `tag`: see the FTXN arm above.
+        const tg = `FHTTP-${s.currency.toUpperCase()}-${s.shape}`;
         return [
-          tag,
+          tg,
           () => {
             assertWithin(
               { name: `P4-F over HTTP, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_HTTP_P95, samplesMs: s.httpMs },
               BUDGET.F_ALLOCATION_HTTP_P95,
               'P4-F (HTTP)',
-              tag,
+              tg,
             );
           },
         ];
