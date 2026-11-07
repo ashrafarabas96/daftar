@@ -1,11 +1,11 @@
 /**
  * DR-106 CONDITION 1 — NO FILE OUTSIDE `migrations/` MAY `CREATE OR REPLACE`
- * A FUNCTION WHOSE NAME A SEALED MIGRATION CREATES.
+ * A FUNCTION WHOSE NAME ANY NUMBERED MIGRATION CREATES.
  *
  * ── THE DEFECT THIS MODULE WAS WRITTEN FOR (DR-106, owner, 2026-11-07) ────
  *
  * `infrastructure/database/specifications/p4s7-installment-aging.spec.sql`
- * carries, at `:4222`, a 551-line body under the head
+ * carries, at `:4281`, a 551-line body under the head
  *
  *   CREATE OR REPLACE FUNCTION customer_ar_aging
  *     — arguments (p_business_id UUID, p_customer_id UUID, p_as_of DATE,
@@ -25,27 +25,47 @@
  * migrated tree silently changes a live financial read. The owner's ruling is
  * that `0084` is the law and the specification is a design, not a law.
  *
- * ── WHAT THIS MODULE ASSERTS, AND IN THE OWNER'S WORDS ────────────────────
+ * ── WHAT THIS MODULE ASSERTS ──────────────────────────────────────────────
  *
- * The law is the owner's sentence, implemented verbatim and NOT widened:
- * a file outside `infrastructure/database/migrations/` containing
- * `CREATE OR REPLACE FUNCTION <name>` where `<name>` is created by a migration
- * at or below `frozenThrough`. `frozenThrough` is read from
- * `infrastructure/database/MIGRATION_MANIFEST.json`, never from prose.
+ * A file outside `infrastructure/database/migrations/` containing
+ * `CREATE OR REPLACE FUNCTION <name>` where `<name>` is created by ANY
+ * NUMBERED MIGRATION — sealed or candidate. `frozenThrough` is still read
+ * from `infrastructure/database/MIGRATION_MANIFEST.json`, never from prose,
+ * because BOTH counts are reported: the sealed subset and the whole.
  *
- * ── THE LIMIT OF THE LAW, WHICH IS THE OWNER'S TO MOVE AND NOT MINE ──────
+ * ── THE SCOPE WAS WIDENED BY THE OWNER, AND §3's GAP IS CLOSED ────────────
  *
- * DR-106 §3 names it and this module repeats it rather than quietly fixing it:
- * the law is hinged on «a name a SEALED migration creates», so A FUNCTION
- * FIRST CREATED AFTER `0079` IS NOT PROTECTED. Measured on `a191d9da`:
- * EIGHTEEN function names are created only by `0080..0086` and by nothing
- * sealed — among them `customer_collect_payment` and `customer_apply_credit`,
- * which move money. A file outside `migrations/` may replace any of those and
- * this law stays green. `sealedFunctionNames` is therefore the deliberate
- * scope and `candidateOnlyFunctionNames` exists so the gap is a measured
- * number in a test rather than a sentence in a comment. Widening the law to
- * «a name ANY numbered migration creates» would close it, and that is a change
- * to the owner's text, not a reading of it.
+ * As first written, the law was hinged on «a name a SEALED migration creates»
+ * (`<= frozenThrough`), and DR-106 §3 recorded that this protected 277 names
+ * from 80 sealed migrations WHILE LEAVING UNPROTECTED every routine first
+ * created after `0079`. That was measured here, not asserted: EIGHTEEN names,
+ * and SEVENTEEN OF THEM ARE MONEY ROUTINES —
+ *
+ *   customer_collect_payment · customer_apply_credit · payment_complete ·
+ *   payment_guard · payment_closure_verify · payment_allocation_guard ·
+ *   payment_allocation_value_complete · invoice_settlement_verify ·
+ *   customer_credit_consume · customer_credit_guard · customer_credit_verify ·
+ *   customer_credit_application_guard ·
+ *   customer_credit_application_value_complete ·
+ *   customer_open_invoices_page ·
+ *   accounting_customer_payment_allocation_entry_complete ·
+ *   accounting_customer_credit_entry_complete ·
+ *   accounting_customer_credit_application_entry_complete
+ *
+ * A file outside `migrations/` could have replaced the routine that collects a
+ * payment, the routine that applies a credit, or the verifier that attests an
+ * invoice was settled, and the law would have stayed green. That is the effect,
+ * described and not decorated.
+ *
+ * OWNER DECISION 2026-11-08, appended to DR-106: «yes, widen it» — the scope is
+ * now EVERY NAME ANY NUMBERED MIGRATION CREATES, 295 names from 87 migration
+ * files, measured here. So this is a change to the owner's text MADE BY ITS
+ * OWNER, not a reading of it taken here, and §3's gap is closed. The widening
+ * is readable FROM THE TOOL and not from this comment: `verdict` reports the
+ * sealed count and the total count side by side, and
+ * `candidateOnlyFunctionNames` still names the 18 the widening added — which is
+ * why the suite's plant on one of them, previously required to stay GREEN, is
+ * now required to go RED.
  *
  * ── TWO FALSE POSITIVES THIS READER IS BUILT AGAINST ─────────────────────
  *
@@ -55,9 +75,9 @@
  *     still scanned and a migration in a renamed directory is not silently
  *     exempted.
  *
- * (b) THE TEXT APPEARS IN PROSE. The specification's own comment box at `:33`
+ * (b) THE TEXT APPEARS IN PROSE. The specification's own comment box at `:92`
  *     reads «signature"; `CREATE OR REPLACE FUNCTION` may not change a
- *     `RETURNS`», and `:4866` names `CREATE FUNCTION` while describing this
+ *     `RETURNS`», and `:4925` names `CREATE FUNCTION` while describing this
  *     very extractor. A reader that counted those would report the pattern it
  *     forbids as an instance of itself. So SQL comments are blanked before the
  *     scan, and the pattern tolerates whitespace and newlines between every
@@ -72,7 +92,7 @@
  *     The consequence is measured and enumerated in `DR106_BASELINE`.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 
 export const MIGRATIONS_PREFIX = 'infrastructure/database/migrations/';
@@ -133,8 +153,33 @@ function read(root: string, file: string): string {
   return readFileSync(isAbsolute(file) ? file : join(root, file), 'utf8');
 }
 
-/** Every tracked file, repo-relative, from git — not a directory walk, so untracked scratch is out of scope. */
+/**
+ * Every file the tree claims to consist of, repo-relative — not a directory
+ * walk, so a developer's untracked scratch cannot turn this law red on one
+ * machine and green on another. A pinned baseline needs a deterministic
+ * subject.
+ *
+ * IN AN EXTRACTED RELEASE CANDIDATE THERE IS NO GIT, BY DESIGN — the release
+ * gate runs from the archive with no `.git` — so the archive's own
+ * `DELIVERY_MANIFEST.json` inventory is the source there, which is the rule
+ * `tests/helpers/delivered-files.ts` and
+ * `tests/security/phase2-s8-gate-tamper.test.ts` already follow and which
+ * `tests/security/archive-portability.test.ts` enforces on every git call under
+ * `scripts/**` and `tests/**`. CI measured that law red here first: this
+ * function had neither branch, and the finding named
+ * `scripts/guards/sealed-function-replacement.ts:138`.
+ *
+ * An empty inventory is a REFUSAL, never a silently empty file list: a scan
+ * over zero files would report zero violations and read as a pass.
+ */
 export function trackedFiles(root: string): string[] {
+  const manifest = join(root, 'DELIVERY_MANIFEST.json');
+  if (existsSync(manifest)) {
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8')) as { inventory?: { path?: string }[] };
+    const paths = (parsed.inventory ?? []).map((e) => e.path).filter((p): p is string => typeof p === 'string' && p !== '');
+    if (paths.length === 0) throw new Error('DELIVERY_MANIFEST.json is present and carries no inventory, so this law has no subject');
+    return paths;
+  }
   return execFileSync('git', ['-C', root, 'ls-files'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     .split('\n')
     .filter((f) => f.length > 0);
@@ -173,17 +218,33 @@ function namesCreatedBy(root: string, migrations: readonly string[]): Set<string
   return names;
 }
 
-/** The protected set: every function name a SEALED migration creates. This is the law's scope. */
+/**
+ * The SEALED subset: names a migration at or below `frozenThrough` creates.
+ * This WAS the whole scope until the owner's 2026-11-08 widening; it is kept
+ * and still reported so the widening is a difference the tool prints rather
+ * than a claim in a comment.
+ */
 export function sealedFunctionNames(root: string): Set<string> {
   return namesCreatedBy(root, migrationSplit(root).sealed);
 }
 
-/** The MEASURED gap of DR-106 §3: names no sealed migration creates, so the law does not reach them. */
+/** THE PROTECTED SET after the owner's 2026-11-08 widening: every name ANY numbered migration creates. */
+export function allMigrationFunctionNames(root: string): Set<string> {
+  const { sealed, candidates } = migrationSplit(root);
+  return namesCreatedBy(root, [...sealed, ...candidates]);
+}
+
+/**
+ * The names the widening ADDED: created by a candidate migration and by no
+ * sealed one. These were DR-106 §3's gap — 18 names, 17 of them money — and
+ * they are now protected, which is why the suite's plant on one of them must
+ * go RED where it previously had to stay GREEN.
+ */
 export function candidateOnlyFunctionNames(root: string): Set<string> {
   const { sealed, candidates } = migrationSplit(root);
-  const protectedNames = namesCreatedBy(root, sealed);
+  const sealedNames = namesCreatedBy(root, sealed);
   const out = new Set<string>();
-  for (const n of namesCreatedBy(root, candidates)) if (!protectedNames.has(n)) out.add(n);
+  for (const n of namesCreatedBy(root, candidates)) if (!sealedNames.has(n)) out.add(n);
   return out;
 }
 
@@ -217,15 +278,15 @@ export function scanForSealedReplacements(root: string, files: readonly string[]
 /**
  * THE MEASURED STARTING STATE, AND WHY IT IS NOT AN EXONERATION.
  *
- * The owner's sentence, run over the whole tracked tree at `a191d9da`, is TRUE
- * OF FORTY (file, function) PAIRS AND FORTY-EIGHT OCCURRENCES — not of one.
- * DR-106 §3 measured only that the specification IS caught; it did not measure
- * what else is. One of the forty is the specification, the case the decision
- * was written for. The other thirty-nine are, by inspection of the list:
+ * The law, run over the whole tracked tree at `a191d9da` IN ITS WIDENED SCOPE,
+ * is TRUE OF FORTY-TWO (file, function) PAIRS AND FIFTY-ONE OCCURRENCES — not
+ * of one. DR-106 §3 measured only that the specification IS caught; it did not
+ * measure what else is. One of the forty-two is the specification, the case the
+ * decision was written for. The other forty-one are, by inspection of the list:
  *
  *   * SIX Markdown phase contracts, which quote a migration's own DDL in prose
  *     and cannot be applied to anything;
- *   * THIRTY-TWO TypeScript sites, almost all of them the project's OWN
+ *   * THIRTY-FIVE TypeScript sites, almost all of them the project's OWN
  *     technique for proving a guard — a defective body is PLANTED and the
  *     refusal is required (DR-55/RULE-27). `tests/security/p4s4-internal-
  *     definer-inventory.test.ts` plants `inventory_business_has_stock_
@@ -236,17 +297,24 @@ export function scanForSealedReplacements(root: string, files: readonly string[]
  *     renaming the routine, or dropping `OR REPLACE` from it, BREAKS a
  *     consumer: `assertPinnedBodiesComplete` errors on a head it cannot find.
  *
- * So the law as written would be red on thirty-nine sites that are the
- * technique rather than the defect, and a law that fails falsely is a law that
- * gets switched off. This baseline keeps it enforceable: a NEW occurrence is
- * red and named, every listed one is pinned by (file, function, count) so a
- * SECOND plant in an already-listed file is still red, and a listed pair that
+ * WHAT THE 2026-11-08 WIDENING ADDED: exactly THREE occurrences in TWO pairs,
+ * all in `tests/guards/p4s4-settlement-surface-laws.test.ts`, each read at its
+ * own line and justified beside its entry below — none of them a new kind, all
+ * of them planted body TEXT fed to a text analyser. Nothing was added whose
+ * reason is unknown; an unexplained addition would be a REAL hit being hidden,
+ * so it stops the work instead of being pinned.
+ *
+ * So the law would be red on forty-one sites that are the technique rather than
+ * the defect, and a law that fails falsely is a law that gets switched off.
+ * This baseline keeps it enforceable: a NEW occurrence is red and NAMED — file,
+ * line and function — every listed one is pinned by (file, function, count) so
+ * a SECOND plant in an already-listed file is still red, and a listed pair that
  * DISAPPEARS is also red, so the list cannot quietly rot.
  *
  * THIS IS A NARROWING OF THE OWNER'S TEXT AND IT IS DECLARED, NOT SILENT. The
- * owner decides, and I do not: whether the thirty-nine stand as technique,
- * and whether the specification's own entry should be emptied out of this list
- * by renaming the routine or dropping `OR REPLACE` from it. Both of those were
+ * owner decides, and I do not: whether the forty-one stand as technique, and
+ * whether the specification's own entry should be emptied out of this list by
+ * renaming the routine or dropping `OR REPLACE` from it. Both of those were
  * MEASURED to break consumers and neither is authorised by DR-106 §2, which
  * offers renaming or marking only — see the PR body.
  *
@@ -266,6 +334,25 @@ export const DR106_BASELINE: readonly { readonly file: string; readonly fn: stri
   { file: 'scripts/guards/p4s7-body-digests.ts', fn: 'customer_ar_aging', count: 2 },
   { file: 'scripts/phase2-s4-gate.ts', fn: 'accounting_post_reversal', count: 1 },
   { file: 'tests/guards/p4s4-settlement-surface-laws.test.ts', fn: 'invoice_outstanding', count: 1 },
+  // ── THE THREE OCCURRENCES THE 2026-11-08 WIDENING ADDED, EACH WITH ITS
+  //    REASON, READ AT ITS LINE AND NOT ASSUMED FROM ITS NEIGHBOURS ────────
+  //
+  // All three are in ONE file and all three are the SAME KNOWN CLASS as the
+  // 32 TypeScript sites above: a body is planted AS TEXT and handed to a text
+  // analyser, never applied to a database (DR-55/RULE-27).
+  //
+  //   `:577` + `:578` — `shape(stmt)` of `describe('RP-S4-ROWLOCK …')` builds a
+  //   synthetic TWO-ROUTINE body text with one statement planted, and feeds it
+  //   to `rowLockOnlyWriteProblems(...)` to prove that law catches a routine
+  //   writing a table it only locks. `customer_collect_payment` is the first
+  //   routine of that fixture and `customer_apply_credit` the second.
+  //
+  //   `:664` — an UNTERMINATED dollar-quoted `customer_collect_payment` body,
+  //   planted to prove the same law REPORTS an unreadable body rather than
+  //   skipping it («a routine whose body cannot be read is reported, never
+  //   skipped»). Hence `customer_collect_payment` counts 2 in this file, not 1.
+  { file: 'tests/guards/p4s4-settlement-surface-laws.test.ts', fn: 'customer_apply_credit', count: 1 },
+  { file: 'tests/guards/p4s4-settlement-surface-laws.test.ts', fn: 'customer_collect_payment', count: 2 },
   { file: 'tests/guards/phase4-deferred-seam-guard.test.ts', fn: 'accounting_reversals_20_domain_source_guard', count: 1 },
   { file: 'tests/guards/phase4-deferred-seam-guard.test.ts', fn: 'invoice_outstanding', count: 3 },
   { file: 'tests/guards/phase4-refund-not-a-reducer-guard.test.ts', fn: 'customer_ar_outstanding', count: 1 },
@@ -313,10 +400,14 @@ export function verdict(root: string = REPO_ROOT): {
   readonly surplus: readonly Replacement[];
   readonly vanished: readonly { readonly file: string; readonly fn: string; readonly expected: number; readonly actual: number }[];
   readonly scannedFiles: number;
+  /** The post-widening scope: every name any numbered migration creates. */
   readonly protectedNames: number;
+  /** The pre-widening subset, reported beside the total so the widening is readable from the tool. */
+  readonly sealedNames: number;
   readonly found: readonly Replacement[];
 } {
-  const names = sealedFunctionNames(root);
+  const names = allMigrationFunctionNames(root);
+  const sealed = sealedFunctionNames(root);
   const files = trackedFiles(root).filter((f) => !f.startsWith(MIGRATIONS_PREFIX));
   const found = scanForSealedReplacements(root, files, names);
   const seen = tally(found);
@@ -336,15 +427,18 @@ export function verdict(root: string = REPO_ROOT): {
     expected: b.count,
     actual: seen.get(`${b.file}\u0000${b.fn}`) ?? 0,
   }));
-  return { surplus, vanished, scannedFiles: files.length, protectedNames: names.size, found };
+  return { surplus, vanished, scannedFiles: files.length, protectedNames: names.size, sealedNames: sealed.size, found };
 }
 
 if (require.main === module) {
   const v = verdict();
-  process.stdout.write(`protected sealed function names: ${v.protectedNames}\n`);
+  // BOTH COUNTS, side by side: the widening of 2026-11-08 is read from the
+  // tool, not from a comment.
+  process.stdout.write(`protected function names, SEALED subset (<= frozenThrough): ${v.sealedNames}\n`);
+  process.stdout.write(`protected function names, ALL numbered migrations (the scope): ${v.protectedNames}\n`);
+  process.stdout.write(`added by the owner's 2026-11-08 widening: ${candidateOnlyFunctionNames(REPO_ROOT).size} names, 17 of them money\n`);
   process.stdout.write(`files scanned outside migrations/: ${v.scannedFiles}\n`);
   process.stdout.write(`occurrences found: ${v.found.length} (baseline allows ${DR106_BASELINE.reduce((a, b) => a + b.count, 0)})\n`);
-  process.stdout.write(`gap of DR-106 §3 — names created only after frozenThrough: ${candidateOnlyFunctionNames(REPO_ROOT).size}\n`);
   for (const r of v.surplus) process.stdout.write(`SURPLUS\t${r.file}:${r.line}\t${r.fn}\n`);
   for (const r of v.vanished) process.stdout.write(`VANISHED\t${r.file}\t${r.fn}\texpected ${r.expected} found ${r.actual}\n`);
   const bad = v.surplus.length + v.vanished.length;
