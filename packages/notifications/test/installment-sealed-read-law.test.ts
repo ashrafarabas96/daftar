@@ -83,6 +83,40 @@ function migrationObjects(): { readonly tables: readonly string[]; readonly func
   return { tables, functions, files: files.length };
 }
 
+const SPEC = join(REPO, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql');
+
+/**
+ * The numbered migrations, concatenated in NUMBER order — which is apply
+ * order, and the only order in which "the last definition wins" is true.
+ */
+const MIGRATIONS_TEXT = readdirSync(MIGRATIONS)
+  .filter((f) => f.endsWith('.sql'))
+  .sort()
+  .map((f) => readFileSync(join(MIGRATIONS, f), 'utf8'))
+  .join('\n');
+
+/**
+ * The LAST body `customer_ar_aging` is given in the text, sliced out between
+ * its dollar-quote tags. The last one is the live one: `0083` replaces `0075`'s
+ * and `0084` drops and recreates it, so reasoning about the first definition
+ * reasons about a body no database has.
+ */
+function agingBody(sql: string): { readonly sites: readonly number[]; readonly body: string } {
+  const sites: number[] = [];
+  for (const m of sql.matchAll(/create\s+(?:or\s+replace\s+)?function\s+(?:public\.)?customer_ar_aging\b/gi)) {
+    if (m.index !== undefined) sites.push(m.index);
+  }
+  const last = sites[sites.length - 1];
+  if (last === undefined) return { sites, body: '' };
+  const tail = sql.slice(last);
+  const open = /\bAS\s+(\$[A-Za-z0-9_]*\$)/.exec(tail);
+  if (!open || open.index === undefined) return { sites, body: '' };
+  const tag = open[1] ?? '';
+  const from = open.index + open[0].length;
+  const close = tail.indexOf(tag, from);
+  return { sites, body: close === -1 ? '' : tail.slice(from, close) };
+}
+
 function reader(configured: readonly ScheduleConfiguration[]): ScheduleReader {
   return { read: (_business, scheduleId) => configured.find((c) => c.scheduleId === scheduleId) };
 }
@@ -130,20 +164,49 @@ describe('the installment kinds are disabled BY LAW until a migration carries th
     ).toBeGreaterThan(0);
   });
 
-  it('BACKWARD: when the table AND the function both arrive, this law reds so the ban is lifted deliberately', () => {
+  it('the live aging read is installment-BLIND, and the specification`s is not — both measured off the bodies', () => {
+    // WHY THIS CASE EXISTS, and it is a correction. The first writing of this
+    // law reasoned about `0075:798` as the aging read. That was WRONG, and the
+    // P4 seal lane said so: `customer_ar_aging` is defined THREE times in the
+    // numbered migrations — `0075:798`, `0083:383` (OR REPLACE) and
+    // `0084:705`, preceded by `0084:478 DROP FUNCTION` — so the LIVE body is
+    // `0084`'s, and `0084 > frozenThrough = 0079`, which means it is not even
+    // frozen. Measured here, in this repository, not relayed.
+    const live = agingBody(MIGRATIONS_TEXT);
+    expect(live.sites.length, 'no definition of customer_ar_aging was found in the migrations at all').toBe(3);
+    expect(live.body, 'the live body could not be sliced out, so "blind" below would be a fact about the slicer').toContain('invoice_outstanding');
+    expect(INSTALLMENT_NAME.test(live.body), 'the LIVE aging read now mentions installments — see the backward direction').toBe(false);
+
+    // The control: the same slicer, pointed at the specification's body, must
+    // come back installment-AWARE. Without it, `false` above would measure the
+    // slicer and not the read.
+    const spec = agingBody(readFileSync(SPEC, 'utf8'));
+    expect(spec.body.length, 'the specification body could not be sliced').toBeGreaterThan(live.body.length);
+    expect(INSTALLMENT_NAME.test(spec.body), 'the slicer cannot see installments even in the specification body').toBe(true);
+  });
+
+  it('BACKWARD: the ban lifts only on a table, an installment function AND an installment-aware aging read', () => {
     const { tables, functions } = migrationObjects();
     const hasTable = tables.some((n) => INSTALLMENT_NAME.test(n));
     const hasFunction = functions.some((n) => INSTALLMENT_NAME.test(n));
-    if (hasTable && hasFunction) {
+    // The third term, and the reason it is here. Without it, a migration that
+    // added `installment_plans` and, say, `installment_plan_fact_sync` would
+    // flip this law while `customer_ar_aging` stayed installment-blind — and
+    // the read these two kinds actually need would still not exist. The P4
+    // lane raised exactly this: a condition satisfied by the mere presence of
+    // the NAME is the `/instal/` false positive one level up.
+    const agingAware = INSTALLMENT_NAME.test(agingBody(MIGRATIONS_TEXT).body);
+    if (hasTable && hasFunction && agingAware) {
       expect.fail(
-        'P4-S7 has landed: a numbered migration now carries both the installment table and its aging function. ' +
-          'That does NOT lift this ban on its own. Remove the two kinds from KINDS_AWAITING_SEALED_READ, delete ' +
-          'this test, and record the evidence in the P8 release-blocking card — in the same commit, with ' +
-          'daftar-finance on it, because both kinds carry a `money` variable to a customer.',
+        'P4-S7 has landed: a numbered migration now carries the installment table, an installment function, AND ' +
+          'an installment-aware customer_ar_aging. That does NOT lift this ban on its own. Remove the two kinds ' +
+          'from KINDS_AWAITING_SEALED_READ, delete this test, and record the evidence in the P8 release-blocking ' +
+          'card — in the same commit, with daftar-finance on it, because both kinds carry a `money` variable to a ' +
+          'customer.',
       );
     }
-    // Until then the law stands, and this assertion records which half is absent.
-    expect({ hasTable, hasFunction }).toEqual({ hasTable: false, hasFunction: false });
+    // Until then the law stands, and this records which of the three is absent.
+    expect({ hasTable, hasFunction, agingAware }).toEqual({ hasTable: false, hasFunction: false, agingAware: false });
   });
 
   it('the banned set is exactly the kinds whose boundTo says NOT SEALED — it cannot be narrowed quietly', () => {
