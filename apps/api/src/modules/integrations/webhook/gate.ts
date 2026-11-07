@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { AdapterDescriptor } from '../adapter';
+import type { AdapterRegistry } from '../adapter-registry';
+import type { ServiceKind } from '../service-kinds';
 import { isAcceptableIdentityField, replayKeyOf } from './identity';
 import type { RawWebhookRequest, ReplayStore } from './replay-store';
 
@@ -25,7 +26,9 @@ import type { RawWebhookRequest, ReplayStore } from './replay-store';
 export const WEBHOOK_REJECTIONS = [
   'request_malformed',
   'unconfigured',
+  'adapter_unregistered',
   'adapter_not_webhook_capable',
+  'scheme_unknown',
   'replay_store_not_durable',
   'scheme_unsigned',
   'scheme_not_timestamp_bound',
@@ -121,6 +124,27 @@ export class WebhookGate {
   constructor(
     private readonly opts: WebhookGateOptions,
     private readonly store: ReplayStore,
+    /**
+     * The registry, not a descriptor, and this is the fix for a hole the
+     * finance review found: `verify` used to take an `AdapterDescriptor`
+     * straight from its caller and re-check nothing on it, while the registry
+     * states the opposite doctrine about itself — that every closed set is
+     * re-checked at runtime because a descriptor can reach a function from
+     * code built against an older shape. The argument applied to the gate
+     * verbatim and the gate did not apply it.
+     *
+     * Two money consequences followed. A `/` inside `adapterKey`, or a `kind`
+     * outside the closed set, made two replay namespaces collide, so the
+     * second independent event was reported as a duplicate. And an unknown
+     * signature scheme fell through to the body-only branch — the WEAKEST
+     * signed mode — where the registry would have refused it outright. The
+     * suite itself demonstrated the bypass: it built descriptors with object
+     * spread and never went through `AdapterRegistry.build`.
+     *
+     * Taking the registry removes the class rather than the two instances: the
+     * only descriptor the gate can use is one that was validated at boot.
+     */
+    private readonly registry: AdapterRegistry,
     private readonly now: () => number = () => Date.now(),
     hmac?: (key: Buffer, message: Buffer) => Buffer,
   ) {
@@ -143,7 +167,7 @@ export class WebhookGate {
    * providers, and `eventSource` is the adapter's own key rather than a string
    * a caller chose.
    */
-  async verify(request: RawWebhookRequest, secret: Buffer | undefined, adapter: AdapterDescriptor): Promise<WebhookVerdict> {
+  async verify(request: RawWebhookRequest, secret: Buffer | undefined, kind: ServiceKind, adapterKey: string): Promise<WebhookVerdict> {
     // Shape before anything else. These fields arrive from an HTTP layer, and
     // a duplicated header reaches a handler as an ARRAY: coerced by a regex it
     // would pass, and then `Buffer.from(array, 'utf8')` is not the bytes the
@@ -166,11 +190,24 @@ export class WebhookGate {
     // nobody set is not a weak check, it is no check.
     if (secret === undefined || secret.length === 0) return { accepted: false, rejection: 'unconfigured' };
 
+    const adapter = this.registry.get(kind, adapterKey);
+    if (adapter === undefined) return { accepted: false, rejection: 'adapter_unregistered' };
+
     const scheme = adapter.capabilities.webhookSignatureScheme;
     if (scheme === 'none') return { accepted: false, rejection: 'scheme_unsigned' };
     const extract = adapter.extractWebhookIdentity;
     if (typeof extract !== 'function') return { accepted: false, rejection: 'adapter_not_webhook_capable' };
 
+    // Exhaustive, rather than "everything else is the body-only branch". The
+    // registry already refuses an unknown scheme, so through the lookup above
+    // this is unreachable — and it is written anyway, because the previous
+    // version's fall-through made the WEAKEST mode the default for anything it
+    // did not recognise. There is deliberately NO test claiming to reach it:
+    // it cannot be reached through a validated registry, and a control that
+    // cannot fail is worth nothing.
+    if (scheme !== 'hmac_sha256_ts_body' && scheme !== 'hmac_sha256_body') {
+      return { accepted: false, rejection: 'scheme_unknown' };
+    }
     const timestampBound = scheme === 'hmac_sha256_ts_body';
     if (!timestampBound && !this.opts.acceptTimestampUnboundScheme) {
       return { accepted: false, rejection: 'scheme_not_timestamp_bound' };
@@ -275,7 +312,8 @@ export class WebhookGate {
     // follows it.
     const key = replayKeyOf({
       businessId: request.businessId,
-      eventSource: `${adapter.kind}/${adapter.adapterKey}`,
+      kind: adapter.kind,
+      adapterKey: adapter.adapterKey,
       externalEventId: identity.externalEventId,
     });
     const first = await this.store.remember(key);

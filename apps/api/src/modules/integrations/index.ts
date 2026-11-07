@@ -35,6 +35,13 @@ export { WEBHOOK_SIGNATURE_SCHEMES, isWebhookSignatureScheme, type CapabilityFla
 export { ADAPTER_KEY_PATTERN, ADAPTER_MODES, isAdapterMode, type AdapterDescriptor, type AdapterMode } from './adapter';
 export { AdapterRegistry } from './adapter-registry';
 export { ProviderResolver, UNAVAILABLE_REASONS, type ProviderFacts, type Resolution, type UnavailableReason } from './provider-resolver';
-export { IDENTITY_FIELD_PATTERN, MAX_IDENTITY_FIELD_LENGTH, isAcceptableIdentityField, replayKeyOf, type WebhookIdentity } from './webhook/identity';
+export {
+  IDENTITY_FIELD_PATTERN,
+  MAX_IDENTITY_FIELD_LENGTH,
+  eventSourceOf,
+  isAcceptableIdentityField,
+  replayKeyOf,
+  type WebhookIdentity,
+} from './webhook/identity';
 export { InMemoryReplayStore, type RawWebhookRequest, type ReplayStore } from './webhook/replay-store';
 export { WebhookGate, WEBHOOK_REJECTIONS, type WebhookGateOptions, type WebhookRejection, type WebhookVerdict } from './webhook/gate';

@@ -81,6 +81,40 @@ export function isAcceptableIdentityField(value: unknown): value is string {
  * `0042_accounting_journal.sql:136`) and its own injectivity requirement, and
  * it is the money lane's to write.
  */
-export function replayKeyOf(parts: { readonly businessId: string; readonly eventSource: string; readonly externalEventId: string }): string {
-  return [parts.businessId, parts.eventSource, parts.externalEventId].map((p) => `${p.length}:${p}`).join('|');
+export function replayKeyOf(parts: {
+  readonly businessId: string;
+  readonly kind: string;
+  readonly adapterKey: string;
+  readonly externalEventId: string;
+}): string {
+  return [parts.businessId, parts.kind, parts.adapterKey, parts.externalEventId].map((p) => `${p.length}:${p}`).join('|');
+}
+
+/**
+ * The canonical `event_source` string: `kind/adapterKey`.
+ *
+ * It is the composite and not the bare adapter key, because one provider is
+ * registered under more than one service kind — the closed set carries both
+ * `payment.platform_billing` and `payment.merchant_checkout` — and a bare key
+ * puts two independent events in one replay namespace, where the second is
+ * reported as a duplicate and a money event disappears behind a success.
+ *
+ * It is written here, in one place, because the string crosses a lane
+ * boundary: the durable replay table's `event_source` column and the ledger's
+ * `sourceId = f(event_source, external_event_id)` derivation must use THIS
+ * definition. If one side composes and the other uses the bare key, the two
+ * payment kinds separate at the boundary and collapse again at the ledger —
+ * the same defect one layer down, and invisible, because each side is
+ * internally consistent.
+ *
+ * Note what this function does NOT carry: the key built by `replayKeyOf` above
+ * length-prefixes `kind` and `adapterKey` SEPARATELY rather than joining them
+ * with this `/`. That is deliberate. The injectivity of this composite rests
+ * on charsets validated elsewhere (the service-kind set, and an adapter key
+ * pattern that excludes `/`), and the replay key must not depend on a check in
+ * another file. So the readable composite is for the column and the contract;
+ * the key is prefix-encoded and injective on its own terms.
+ */
+export function eventSourceOf(kind: string, adapterKey: string): string {
+  return `${kind}/${adapterKey}`;
 }
