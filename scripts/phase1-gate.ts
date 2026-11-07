@@ -71,6 +71,13 @@ const expected = [
   'packages/inventory',
   'packages/shared-contracts',
   'packages/design-system',
+  // Phase 8 (notifications), registered when its lane re-opened on the sealed
+  // Phase 4 head (DR-19). This list is the APPARATUS, not a Phase 1
+  // deliverable: it is what makes a workspace appearing or disappearing a red
+  // gate instead of a silent change, and it did exactly that — the first CI
+  // run of the registration failed here and in `ci.yml`'s own copy, which is
+  // the only reason either list is accurate.
+  'packages/notifications',
 ].sort();
 const actual = [...pkg.workspaces].sort();
 if (JSON.stringify(expected) !== JSON.stringify(actual)) fail(`root workspaces must be exactly ${expected.join(', ')} (got ${actual.join(', ')})`);
