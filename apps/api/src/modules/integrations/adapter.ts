@@ -1,5 +1,6 @@
 import type { CapabilityFlags } from './capabilities';
 import type { ServiceKind } from './service-kinds';
+import type { WebhookIdentity } from './webhook/identity';
 
 /** `^[a-z0-9_]+$` — the ADR draft 3.2 fixes this shape, e.g. `whatsapp_cloud`. */
 export const ADAPTER_KEY_PATTERN = /^[a-z0-9_]+$/;
@@ -32,4 +33,20 @@ export interface AdapterDescriptor {
   /** The adapter declares its egress hosts IN CODE, never in configuration. */
   readonly allowedHosts: readonly string[];
   readonly isTestDouble: boolean;
+  /**
+   * How THIS provider's identity is read out of a verified webhook body.
+   *
+   * It lives on the descriptor and not on the call, because the review showed
+   * what a free argument costs: an extractor wired to the wrong field — one
+   * constant across a provider's events, or one that truncates — returns a
+   * well-formed, in-cap string every time, and silently collapses every event
+   * of a business onto one key. The first is accepted and the rest are
+   * reported as replays, so money events vanish behind a success, and no
+   * refusal channel can see it. Here, `eventSource` and the extraction rule
+   * are the same descriptor and cannot disagree.
+   *
+   * Required exactly when the adapter claims a signature scheme, and refused
+   * when it does not; the registry enforces both at build time.
+   */
+  readonly extractWebhookIdentity?: (verifiedBody: Buffer) => WebhookIdentity | undefined;
 }

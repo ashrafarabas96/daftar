@@ -1,6 +1,6 @@
 /**
  * INTEG S-9 (the part that needs no secret store and no queue) — THE INBOUND
- * WEBHOOK GATE: signature, timestamp window, replay.
+ * WEBHOOK GATE: signature, timestamp window, identity, replay.
  *
  * Measured starting point: the repository has no webhook surface at all.
  *   grep -ril "webhook" --include="*.ts" --include="*.sql" .   =>  exit 1, 0 files
@@ -8,29 +8,33 @@
  * The second command is the positive control: the zero above is a measurement
  * and not a broken search. (Both count FILES, not lines — `-l`.)
  *
- * What is HERE is what is pure: the mandatory checks in a fixed order over the
- * bytes as they arrived. What is NOT here, and is named rather than faked: the
- * secret (handed in, already unsealed), the replay TABLE (a port and an
- * in-memory double), the queue insert and the worker, and the rate limit.
- *
- * Two defects the finance review found in the first version are what most of
- * this file now exists to hold shut:
+ * Four defects two review rounds found in this gate are what most of this file
+ * now exists to hold shut, and all four are money defects:
  *   1. the external event id arrived BESIDE the signed bytes, so one validly
- *      signed delivery could be replayed with a mutated id and accepted as a
- *      new event — which is a duplicate posting the ledger cannot see;
- *   2. an absent or blank id had no refusal channel at all, and collapsed
- *      every event of a business onto one key, so money events disappeared
- *      behind a reported success.
+ *      signed delivery replayed with a mutated id was accepted as a new event;
+ *   2. an absent or blank id had no refusal channel, and collapsed every event
+ *      of a business onto one key — money events behind a reported success;
+ *   3. `businessId` was still unauthenticated. Under a secret SHARED across
+ *      tenants, which is the model the body-only scheme exists for, one signed
+ *      delivery replayed at another tenant's route verified and posted there
+ *      too — `business_id` being the first column of the ledger's identity;
+ *   4. the identity extractor was a free argument of the call, so one wired to
+ *      a constant field returned a well-formed id every time and restored
+ *      defect 2 through another door.
  */
 import { createHmac, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  AdapterRegistry,
   InMemoryReplayStore,
-  MAX_EXTERNAL_EVENT_ID_LENGTH,
+  MAX_IDENTITY_FIELD_LENGTH,
   WebhookGate,
   replayKeyOf,
+  type AdapterDescriptor,
   type RawWebhookRequest,
   type ReplayStore,
+  type WebhookIdentity,
+  type WebhookSignatureScheme,
 } from '../apps/api/src/modules/integrations';
 
 const SECRET = Buffer.from('f3a1b2c3d4e5f60718293a4b5c6d7e8f', 'hex');
@@ -38,6 +42,7 @@ const WINDOW = 300;
 const NOW_MS = 1_780_000_000_000;
 const NOW_S = Math.floor(NOW_MS / 1000);
 const EVENT_ID = 'wamid.HBgMOTk5';
+const ACCOUNT = 'waba_1001';
 
 /** A durable store stands in for the table: not a test double. */
 class DurableLikeStore implements ReplayStore {
@@ -48,16 +53,52 @@ class DurableLikeStore implements ReplayStore {
     this.seen.add(key);
     return true;
   }
+  size(): number {
+    return this.seen.size;
+  }
 }
 
-function bodyWith(id: string, extra = ''): Buffer {
-  return Buffer.from(`{"id":"${id}","amount":1200,"note":"caf\\u00e9"${extra}}`, 'utf8');
+/** The provider's real rule, read back out of the verified bytes. */
+function extractIdentity(verified: Buffer): WebhookIdentity | undefined {
+  const text = verified.toString('utf8');
+  const account = /"account":"([^"]*)"/.exec(text);
+  const id = /"id":"([^"]*)"/.exec(text);
+  if (account === null || id === null) return undefined;
+  return { accountRef: account[1] as string, externalEventId: id[1] as string };
 }
 
-/** The identity the gate reads back OUT of the verified bytes. */
-function extractId(verified: Buffer): string | undefined {
-  const m = /"id":"([^"]*)"/.exec(verified.toString('utf8'));
-  return m === null ? undefined : m[1];
+function adapter(
+  over: {
+    scheme?: WebhookSignatureScheme;
+    extract?: AdapterDescriptor['extractWebhookIdentity'];
+  } = {},
+): AdapterDescriptor {
+  const scheme = over.scheme ?? 'hmac_sha256_ts_body';
+  return {
+    kind: 'notification.whatsapp',
+    adapterKey: 'whatsapp_cloud',
+    mode: 'delivers',
+    capabilities: {
+      serverSideIdempotency: false,
+      requiresApprovedTemplate: false,
+      supportsDeliveryReceipts: false,
+      supportsRefund: false,
+      supportsPartialRefund: false,
+      supportsHostedFields: false,
+      webhookSignatureScheme: scheme,
+      supportedCountries: [],
+      supportedCurrencies: [],
+      supportedLocales: [],
+    },
+    secretSlots: ['access_token'],
+    allowedHosts: ['graph.facebook.com'],
+    isTestDouble: false,
+    extractWebhookIdentity: scheme === 'none' ? undefined : (over.extract ?? extractIdentity),
+  };
+}
+
+function bodyWith(id: string, account: string = ACCOUNT, extra = ''): Buffer {
+  return Buffer.from(`{"account":"${account}","id":"${id}","amount":1200,"note":"caf\\u00e9"${extra}}`, 'utf8');
 }
 
 function signTsBody(timestamp: string, rawBody: Buffer, secret: Buffer = SECRET): string {
@@ -75,7 +116,7 @@ function request(over: Partial<RawWebhookRequest> = {}): RawWebhookRequest {
   const timestamp = over.timestampHeader ?? String(NOW_S);
   return {
     businessId: 'b1',
-    eventSource: 'whatsapp_cloud',
+    expectedAccountRef: ACCOUNT,
     rawBody,
     timestampHeader: timestamp,
     signatureHeader: signTsBody(timestamp, rawBody),
@@ -88,15 +129,17 @@ function gate(
     store?: ReplayStore;
     hmac?: (k: Buffer, m: Buffer) => Buffer;
     acceptTimestampUnboundScheme?: boolean;
+    production?: boolean;
   } = {},
 ) {
-  const store = opts.store ?? new InMemoryReplayStore();
+  const store = opts.store ?? new DurableLikeStore();
   return {
     store,
     gate: new WebhookGate(
       {
         timestampWindowSeconds: WINDOW,
         acceptTimestampUnboundScheme: opts.acceptTimestampUnboundScheme ?? false,
+        production: opts.production ?? false,
       },
       store,
       () => NOW_MS,
@@ -105,21 +148,20 @@ function gate(
   };
 }
 
-const keyFor = (id: string = EVENT_ID): string => replayKeyOf({ businessId: 'b1', eventSource: 'whatsapp_cloud', externalEventId: id });
+const keyFor = (id: string = EVENT_ID, businessId = 'b1'): string => replayKeyOf({ businessId, eventSource: 'whatsapp_cloud', externalEventId: id });
 
-describe('the gate refuses to exist without the two parameters nobody should default', () => {
-  it('rejects a nonsense window and an unstated scheme policy', () => {
-    const store = new InMemoryReplayStore();
+describe('the gate refuses to exist without the three parameters nobody should default', () => {
+  it('rejects a nonsense window, an unstated scheme policy, and an unstated environment', () => {
+    const store = new DurableLikeStore();
+    const base = { acceptTimestampUnboundScheme: false, production: false };
     for (const bad of [undefined, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-      expect(() => new WebhookGate({ timestampWindowSeconds: bad as never, acceptTimestampUnboundScheme: false }, store, () => NOW_MS)).toThrow(
-        /timestampWindowSeconds/,
-      );
+      expect(() => new WebhookGate({ ...base, timestampWindowSeconds: bad as never }, store, () => NOW_MS)).toThrow(/timestampWindowSeconds/);
     }
-    expect(() => new WebhookGate({ timestampWindowSeconds: WINDOW, acceptTimestampUnboundScheme: undefined as never }, store, () => NOW_MS)).toThrow(
+    expect(() => new WebhookGate({ ...base, timestampWindowSeconds: WINDOW, acceptTimestampUnboundScheme: undefined as never }, store, () => NOW_MS)).toThrow(
       /acceptTimestampUnboundScheme/,
     );
-    // positive control: both stated, and it constructs.
-    expect(new WebhookGate({ timestampWindowSeconds: WINDOW, acceptTimestampUnboundScheme: false }, store, () => NOW_MS)).toBeDefined();
+    expect(() => new WebhookGate({ ...base, timestampWindowSeconds: WINDOW, production: undefined as never }, store, () => NOW_MS)).toThrow(/production/);
+    expect(new WebhookGate({ ...base, timestampWindowSeconds: WINDOW }, store, () => NOW_MS)).toBeDefined();
   });
 });
 
@@ -127,10 +169,8 @@ describe('the signature is checked FIRST, so the endpoint is not a clock oracle'
   it('reports signature_mismatch — not a timestamp verdict — for a bad signature with a bad timestamp', async () => {
     const { gate: g } = gate();
     const old = String(NOW_S - WINDOW - 1);
-    const v = await g.verify(request({ timestampHeader: old, signatureHeader: signBody(bodyWith(EVENT_ID)) }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const v = await g.verify(request({ timestampHeader: old, signatureHeader: signBody(bodyWith(EVENT_ID)) }), SECRET, adapter());
     expect(v.accepted).toBe(false);
-    // the window verdict would have told an unauthenticated caller the
-    // server's clock and the configured tolerance.
     if (!v.accepted) expect(v.rejection).toBe('signature_mismatch');
   });
 
@@ -139,28 +179,17 @@ describe('the signature is checked FIRST, so the endpoint is not a clock oracle'
     for (const delta of [-(WINDOW + 1), WINDOW + 1]) {
       const ts = String(NOW_S + delta);
       const body = bodyWith(EVENT_ID);
-      const v = await g.verify(
-        request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }),
-        SECRET,
-        'hmac_sha256_ts_body',
-        extractId,
-      );
+      const v = await g.verify(request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }), SECRET, adapter());
       expect(v.accepted, String(delta)).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('timestamp_outside_window');
     }
-    // both exact bounds are INSIDE the window, and both are asserted.
     for (const [delta, id] of [
       [-WINDOW, 'evt_low'],
       [WINDOW, 'evt_high'],
     ] as const) {
       const ts = String(NOW_S + delta);
       const body = bodyWith(id);
-      const v = await g.verify(
-        request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }),
-        SECRET,
-        'hmac_sha256_ts_body',
-        extractId,
-      );
+      const v = await g.verify(request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }), SECRET, adapter());
       expect(v.accepted, String(delta)).toBe(true);
     }
   });
@@ -169,12 +198,7 @@ describe('the signature is checked FIRST, so the endpoint is not a clock oracle'
     const { gate: g } = gate();
     for (const ts of ['', 'now', '17800000000000000000000', '1.5e9', ' 1780000000']) {
       const body = bodyWith(EVENT_ID);
-      const v = await g.verify(
-        request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }),
-        SECRET,
-        'hmac_sha256_ts_body',
-        extractId,
-      );
+      const v = await g.verify(request({ timestampHeader: ts, rawBody: body, signatureHeader: signTsBody(ts, body) }), SECRET, adapter());
       expect(v.accepted, JSON.stringify(ts)).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('timestamp_malformed');
     }
@@ -182,43 +206,64 @@ describe('the signature is checked FIRST, so the endpoint is not a clock oracle'
 });
 
 describe("a scheme that does not bind the timestamp is the owner's call, not a default", () => {
-  it('refuses it when the deployment has not said otherwise, and refuses an unsigned scheme always', async () => {
+  it('refuses it unless the deployment said otherwise, and refuses an unsigned scheme always', async () => {
     const { gate: g } = gate({ acceptTimestampUnboundScheme: false });
-    const v = await g.verify(request(), SECRET, 'hmac_sha256_body', extractId);
+    const v = await g.verify(request(), SECRET, adapter({ scheme: 'hmac_sha256_body' }));
     expect(v.accepted).toBe(false);
     if (!v.accepted) expect(v.rejection).toBe('scheme_not_timestamp_bound');
 
-    const unsigned = await g.verify(request(), SECRET, 'none', extractId);
+    const unsigned = await g.verify(request(), SECRET, adapter({ scheme: 'none' }));
     expect(unsigned.accepted).toBe(false);
     if (!unsigned.accepted) expect(unsigned.rejection).toBe('scheme_unsigned');
-    // and `none` stays refused even where the body-only scheme is admitted.
-    const permissive = gate({ acceptTimestampUnboundScheme: true, store: new DurableLikeStore() });
-    const stillUnsigned = await permissive.gate.verify(request(), SECRET, 'none', extractId);
+
+    const permissive = gate({ acceptTimestampUnboundScheme: true });
+    const stillUnsigned = await permissive.gate.verify(request(), SECRET, adapter({ scheme: 'none' }));
     expect(stillUnsigned.accepted).toBe(false);
   });
 
-  it('admits it only against a durable store, because then the store is the only defence left', async () => {
+  it('admits it against a durable store, and then does not consult the clock at all', async () => {
     const body = bodyWith(EVENT_ID);
     const req = request({ rawBody: body, signatureHeader: signBody(body) });
-
-    const withDouble = gate({ acceptTimestampUnboundScheme: true, store: new InMemoryReplayStore() });
-    const refused = await withDouble.gate.verify(req, SECRET, 'hmac_sha256_body', extractId);
-    expect(refused.accepted).toBe(false);
-    if (!refused.accepted) expect(refused.rejection).toBe('unconfigured');
-
-    const durable = gate({ acceptTimestampUnboundScheme: true, store: new DurableLikeStore() });
-    const accepted = await durable.gate.verify(req, SECRET, 'hmac_sha256_body', extractId);
+    const durable = gate({ acceptTimestampUnboundScheme: true });
+    const accepted = await durable.gate.verify(req, SECRET, adapter({ scheme: 'hmac_sha256_body' }));
     expect(accepted).toEqual({ accepted: true, replay: false, key: keyFor() });
-    // and the timestamp is not consulted for this scheme: a wildly stale
-    // header on a valid body-only signature still passes, which is exactly the
-    // constraint the capability flag documents.
+
+    const staleBody = bodyWith('evt_stale');
     const stale = await durable.gate.verify(
-      { ...req, timestampHeader: '1', rawBody: bodyWith('evt_stale'), signatureHeader: signBody(bodyWith('evt_stale')) },
+      { ...req, timestampHeader: '1', rawBody: staleBody, signatureHeader: signBody(staleBody) },
       SECRET,
-      'hmac_sha256_body',
-      extractId,
+      adapter({ scheme: 'hmac_sha256_body' }),
     );
     expect(stale.accepted).toBe(true);
+  });
+});
+
+describe('replay prevention is mandatory under every scheme, so the store may not be a double', () => {
+  it('refuses a test-double store in production whatever the scheme, and for an unbound scheme anywhere', async () => {
+    const inProduction = gate({ store: new InMemoryReplayStore(), production: true });
+    const v = await inProduction.gate.verify(request(), SECRET, adapter());
+    expect(v.accepted).toBe(false);
+    if (!v.accepted) expect(v.rejection).toBe('replay_store_not_durable');
+
+    const unboundOutsideProduction = gate({
+      store: new InMemoryReplayStore(),
+      acceptTimestampUnboundScheme: true,
+      production: false,
+    });
+    const body = bodyWith(EVENT_ID);
+    const u = await unboundOutsideProduction.gate.verify(
+      request({ rawBody: body, signatureHeader: signBody(body) }),
+      SECRET,
+      adapter({ scheme: 'hmac_sha256_body' }),
+    );
+    expect(u.accepted).toBe(false);
+    if (!u.accepted) expect(u.rejection).toBe('replay_store_not_durable');
+
+    // positive control: the double IS allowed for a timestamp-bound scheme
+    // outside production, which is what makes the two refusals above the
+    // production flag and the scheme rather than a broken double.
+    const allowed = gate({ store: new InMemoryReplayStore(), production: false });
+    expect((await allowed.gate.verify(request(), SECRET, adapter())).accepted).toBe(true);
   });
 });
 
@@ -229,15 +274,12 @@ describe('the HMAC is over the bytes as they arrived', () => {
     const ts = String(NOW_S);
     const signature = signTsBody(ts, raw);
 
-    const ok = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const ok = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
     expect(ok.accepted).toBe(true);
 
-    // The round trip changes the bytes (the é escape becomes one UTF-8
-    // character) without changing the parsed value — exactly the substitution
-    // this check exists to refuse.
     const reserialized = Buffer.from(JSON.stringify(JSON.parse(raw.toString('utf8'))), 'utf8');
     expect(reserialized.equals(raw)).toBe(false);
-    const v = await g.verify(request({ rawBody: reserialized, timestampHeader: ts, signatureHeader: signature }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const v = await g.verify(request({ rawBody: reserialized, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
     expect(v.accepted).toBe(false);
     if (!v.accepted) expect(v.rejection).toBe('signature_mismatch');
   });
@@ -255,7 +297,7 @@ describe('the HMAC is over the bytes as they arrived', () => {
       ['tampered timestamp', good, String(NOW_S - 1)],
     ];
     for (const [name, signature, timestamp] of cases) {
-      const v = await g.verify(request({ rawBody: raw, signatureHeader: signature, timestampHeader: timestamp }), SECRET, 'hmac_sha256_ts_body', extractId);
+      const v = await g.verify(request({ rawBody: raw, signatureHeader: signature, timestampHeader: timestamp }), SECRET, adapter());
       expect(v.accepted, name).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('signature_mismatch');
     }
@@ -265,7 +307,7 @@ describe('the HMAC is over the bytes as they arrived', () => {
     const { gate: g } = gate();
     const good = signTsBody(String(NOW_S), bodyWith(EVENT_ID));
     for (const signature of ['', 'deadbeef', 'zz'.repeat(32), `${good}00`]) {
-      const v = await g.verify(request({ signatureHeader: signature }), SECRET, 'hmac_sha256_ts_body', extractId);
+      const v = await g.verify(request({ signatureHeader: signature }), SECRET, adapter());
       expect(v.accepted, JSON.stringify(signature)).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('signature_malformed');
     }
@@ -278,12 +320,12 @@ describe('the HMAC is over the bytes as they arrived', () => {
       ['duplicated signature header arrives as an array', { signatureHeader: [signTsBody(String(NOW_S), bodyWith(EVENT_ID))] as never }],
       ['duplicated timestamp header arrives as an array', { timestampHeader: [String(NOW_S)] as never }],
       ['no business', { businessId: '' }],
-      ['no event source', { eventSource: '' }],
+      ['no expected account', { expectedAccountRef: '' }],
     ];
     for (const [name, over] of malformed) {
       // built from a VALID request and then spoiled, so the helper does not
       // trip over the broken field while signing it.
-      const v = await g.verify({ ...request(), ...over }, SECRET, 'hmac_sha256_ts_body', extractId);
+      const v = await g.verify({ ...request(), ...over }, SECRET, adapter());
       expect(v.accepted, name).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('request_malformed');
     }
@@ -300,75 +342,163 @@ describe('no secret means no authority, and no HMAC is computed at all', () => {
     const { gate: g } = gate({ hmac: counting });
 
     for (const secret of [undefined, Buffer.alloc(0)]) {
-      const v = await g.verify(request(), secret, 'hmac_sha256_ts_body', extractId);
+      const v = await g.verify(request(), secret, adapter());
       expect(v.accepted).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('unconfigured');
     }
     expect(calls).toBe(0);
-    // positive control: the counter does count when a secret is present.
-    expect((await g.verify(request(), SECRET, 'hmac_sha256_ts_body', extractId)).accepted).toBe(true);
+    expect((await g.verify(request(), SECRET, adapter())).accepted).toBe(true);
     expect(calls).toBe(1);
   });
 });
 
-describe('the identity comes out of the SIGNED bytes — the first finance defect', () => {
+describe('the identity comes out of the SIGNED bytes — the first money defect', () => {
   it('cannot be mutated without breaking the signature', async () => {
     const { gate: g } = gate();
     const raw = bodyWith(EVENT_ID);
     const ts = String(NOW_S);
     const signature = signTsBody(ts, raw);
 
-    // One genuine delivery, captured, with its id changed and the signature
-    // left alone: this is the whole attack, and it must not be accepted.
     const mutated = Buffer.from(raw.toString('utf8').replace(EVENT_ID, 'wamid.FORGED00'), 'utf8');
     expect(mutated.equals(raw)).toBe(false);
-    const forged = await g.verify(request({ rawBody: mutated, timestampHeader: ts, signatureHeader: signature }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const forged = await g.verify(request({ rawBody: mutated, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
     expect(forged.accepted).toBe(false);
     if (!forged.accepted) expect(forged.rejection).toBe('signature_mismatch');
 
-    // positive control: the untouched delivery IS accepted, and keys to the id
-    // that was inside the signed bytes.
-    const honest = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const honest = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
     expect(honest).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID) });
   });
 
-  it('ignores any id offered beside the body, because there is nowhere to offer one', () => {
-    // The type carries no identity field at all: the only way in is the
-    // extractor, which only ever sees verified bytes.
-    expect(Object.keys(request()).sort()).toEqual(['businessId', 'eventSource', 'rawBody', 'signatureHeader', 'timestampHeader'].sort());
+  it('offers no field in which to pass an identity beside the body', () => {
+    expect(Object.keys(request()).sort()).toEqual(['businessId', 'expectedAccountRef', 'rawBody', 'signatureHeader', 'timestampHeader'].sort());
   });
 });
 
-describe('an absent or unusable identity is refused by name — the second finance defect', () => {
+describe('the TENANT is authenticated too — the third money defect, and the sharpest', () => {
+  it('refuses one signed delivery replayed at another tenant, under a secret shared between them', async () => {
+    // The whole point: ONE secret, as with a single Meta app serving every
+    // tenant. The signature cannot tell the businesses apart, so without the
+    // account check the replay below would verify.
+    const { gate: g, store } = gate();
+    const raw = bodyWith(EVENT_ID, 'waba_1001');
+    const ts = String(NOW_S);
+    const signature = signTsBody(ts, raw);
+
+    const atOtherTenant = await g.verify(
+      {
+        businessId: 'b2',
+        expectedAccountRef: 'waba_2002',
+        rawBody: raw,
+        timestampHeader: ts,
+        signatureHeader: signature,
+      },
+      SECRET,
+      adapter(),
+    );
+    expect(atOtherTenant.accepted).toBe(false);
+    if (!atOtherTenant.accepted) expect(atOtherTenant.rejection).toBe('account_mismatch');
+    // nothing was claimed for the other tenant either.
+    expect((store as DurableLikeStore).size()).toBe(0);
+
+    // positive control: the SAME bytes and the SAME secret are accepted at the
+    // tenant the payload actually names, so the refusal is the account and not
+    // the signature.
+    const atOwnTenant = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
+    expect(atOwnTenant).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID, 'b1') });
+  });
+
+  it('refuses an absent or unusable account reference by name', async () => {
+    const { gate: g } = gate();
+    const noAccount = Buffer.from(`{"id":"${EVENT_ID}"}`, 'utf8');
+    const ts = String(NOW_S);
+    const v = await g.verify(request({ rawBody: noAccount, timestampHeader: ts, signatureHeader: signTsBody(ts, noAccount) }), SECRET, adapter());
+    expect(v.accepted).toBe(false);
+    if (!v.accepted) expect(v.rejection).toBe('identity_absent');
+
+    const weird = await g.verify(request(), SECRET, adapter({ extract: () => ({ accountRef: 'a\nb', externalEventId: EVENT_ID }) }));
+    expect(weird.accepted).toBe(false);
+    if (!weird.accepted) expect(weird.rejection).toBe('identity_malformed');
+  });
+});
+
+describe('the extraction rule lives on the adapter — the fourth money defect', () => {
+  it('is required of a signing adapter and refused of a non-signing one, at BUILD time', () => {
+    expect(() => AdapterRegistry.build([{ ...adapter(), extractWebhookIdentity: undefined }], { production: false })).toThrow(/extractWebhookIdentity/);
+    expect(() =>
+      AdapterRegistry.build([{ ...adapter({ scheme: 'none' }), extractWebhookIdentity: extractIdentity }], {
+        production: false,
+      }),
+    ).toThrow(/must not declare/);
+    // positive control: the matched pairs both build.
+    expect(AdapterRegistry.build([adapter()], { production: false }).get('notification.whatsapp', 'whatsapp_cloud')).toBeDefined();
+    expect(AdapterRegistry.build([adapter({ scheme: 'none' })], { production: false }).get('notification.whatsapp', 'whatsapp_cloud')).toBeDefined();
+  });
+
+  it('refuses rather than crashing when the extractor throws on a body the provider signed', async () => {
+    const { gate: g } = gate();
+    const notJson = Buffer.from('<xml>the provider changed its shape</xml>', 'utf8');
+    const ts = String(NOW_S);
+    const parsing = (b: Buffer): WebhookIdentity | undefined => {
+      const o = JSON.parse(b.toString('utf8')) as { account?: string; id?: string };
+      return { accountRef: o.account ?? '', externalEventId: o.id ?? '' };
+    };
+    const v = await g.verify(
+      request({ rawBody: notJson, timestampHeader: ts, signatureHeader: signTsBody(ts, notJson) }),
+      SECRET,
+      adapter({ extract: parsing }),
+    );
+    expect(v.accepted).toBe(false);
+    if (!v.accepted) expect(v.rejection).toBe('identity_malformed');
+  });
+
+  it('keeps two distinct events apart through verify, not merely through the key function', async () => {
+    const { gate: g, store } = gate();
+    const ts = String(NOW_S);
+    const keys: string[] = [];
+    for (const id of ['evt_one', 'evt_two']) {
+      const body = bodyWith(id);
+      const v = await g.verify(request({ rawBody: body, timestampHeader: ts, signatureHeader: signTsBody(ts, body) }), SECRET, adapter());
+      expect(v.accepted, id).toBe(true);
+      if (v.accepted) {
+        expect(v.replay, id).toBe(false);
+        keys.push(v.key);
+      }
+    }
+    expect(new Set(keys).size).toBe(2);
+    expect((store as DurableLikeStore).size()).toBe(2);
+  });
+});
+
+describe('an absent or unusable event id is refused by name — the second money defect', () => {
   it('refuses rather than collapsing every event onto one key', async () => {
-    const { gate: g, store } = gate({ store: new InMemoryReplayStore() });
-    const absent: Array<[string, (b: Buffer) => string | undefined]> = [
+    const { gate: g, store } = gate();
+    const absent: Array<[string, AdapterDescriptor['extractWebhookIdentity']]> = [
       ['extractor finds nothing', () => undefined],
-      ['empty id', () => ''],
+      ['empty id', () => ({ accountRef: ACCOUNT, externalEventId: '' })],
     ];
-    for (const [name, extractor] of absent) {
-      const v = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', extractor);
+    for (const [name, extract] of absent) {
+      const v = await g.verify(request(), SECRET, adapter({ extract }));
       expect(v.accepted, name).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('identity_absent');
     }
-    // and nothing was claimed, so the real delivery that follows is not
-    // reported as a replay — which is how a money event used to disappear.
-    expect((store as InMemoryReplayStore).size()).toBe(0);
-    const real = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', extractId);
+    expect((store as DurableLikeStore).size()).toBe(0);
+    const real = await g.verify(request(), SECRET, adapter());
     expect(real).toEqual({ accepted: true, replay: false, key: keyFor() });
   });
 
   it('refuses an id carrying a newline, a space, a control byte, or more than the cap', async () => {
     const { gate: g } = gate();
-    const bad = ['evt\nFAKE_LOG_LINE', 'evt one', 'evt\u0000one', 'e'.repeat(MAX_EXTERNAL_EVENT_ID_LENGTH + 1)];
+    const bad = ['evt\nFAKE_LOG_LINE', 'evt one', 'evt\u0000one', 'e'.repeat(MAX_IDENTITY_FIELD_LENGTH + 1)];
     for (const id of bad) {
-      const v = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', () => id);
+      const v = await g.verify(request(), SECRET, adapter({ extract: () => ({ accountRef: ACCOUNT, externalEventId: id }) }));
       expect(v.accepted, JSON.stringify(id)).toBe(false);
       if (!v.accepted) expect(v.rejection).toBe('identity_malformed');
     }
-    // positive control: the cap itself is allowed, so the refusal above is the
-    // length and not the repetition.
-    const atCap = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', () => 'e'.repeat(MAX_EXTERNAL_EVENT_ID_LENGTH));
+    const atCap = await g.verify(
+      request(),
+      SECRET,
+      adapter({ extract: () => ({ accountRef: ACCOUNT, externalEventId: 'e'.repeat(MAX_IDENTITY_FIELD_LENGTH) }) }),
+    );
     expect(atCap.accepted).toBe(true);
   });
 });
@@ -376,21 +506,20 @@ describe('an absent or unusable identity is refused by name — the second finan
 describe('a re-delivery is processed once, and the key is byte-identical across attempts', () => {
   it('accepts the first delivery and marks the second a replay', async () => {
     const { gate: g, store } = gate();
-    const first = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', extractId);
-    const second = await g.verify(request(), SECRET, 'hmac_sha256_ts_body', extractId);
+    const first = await g.verify(request(), SECRET, adapter());
+    const second = await g.verify(request(), SECRET, adapter());
 
     expect(first).toEqual({ accepted: true, replay: false, key: keyFor() });
     expect(second).toEqual({ accepted: true, replay: true, key: keyFor() });
-    expect((store as InMemoryReplayStore).size()).toBe(1);
+    expect((store as DurableLikeStore).size()).toBe(1);
   });
 
   it('derives the key from identity alone, so a retry cannot mint a new one', () => {
     const a = keyFor();
-    const b = replayKeyOf({ businessId: 'b1', eventSource: 'whatsapp_cloud', externalEventId: EVENT_ID });
-    expect(Buffer.from(a, 'utf8').equals(Buffer.from(b, 'utf8'))).toBe(true);
-    expect(replayKeyOf({ businessId: 'b2', eventSource: 'whatsapp_cloud', externalEventId: EVENT_ID })).not.toBe(a);
+    expect(Buffer.from(a, 'utf8').equals(Buffer.from(keyFor(), 'utf8'))).toBe(true);
+    expect(keyFor(EVENT_ID, 'b2')).not.toBe(a);
     expect(replayKeyOf({ businessId: 'b1', eventSource: 'other', externalEventId: EVENT_ID })).not.toBe(a);
-    expect(replayKeyOf({ businessId: 'b1', eventSource: 'whatsapp_cloud', externalEventId: 'evt_9' })).not.toBe(a);
+    expect(keyFor('evt_9')).not.toBe(a);
   });
 
   it('cannot be confused by a separator planted inside a field', () => {
@@ -401,28 +530,28 @@ describe('a re-delivery is processed once, and the key is byte-identical across 
 
   it('does not record anything when the signature fails', async () => {
     const { gate: g, store } = gate();
-    const v = await g.verify(request({ signatureHeader: signTsBody(String(NOW_S), Buffer.from('x')) }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const v = await g.verify(request({ signatureHeader: signTsBody(String(NOW_S), Buffer.from('x')) }), SECRET, adapter());
     expect(v.accepted).toBe(false);
-    expect((store as InMemoryReplayStore).size()).toBe(0);
+    expect((store as DurableLikeStore).size()).toBe(0);
   });
 });
 
 describe('the verdict acknowledges, and carries no payload beyond the identity', () => {
   it('returns three fields, and no body content reaches them', async () => {
     const marker = 'MARKER_7f3c2a';
-    const raw = bodyWith(EVENT_ID, `,"secretish":"${marker}"`);
+    const raw = bodyWith(EVENT_ID, ACCOUNT, `,"secretish":"${marker}"`);
     const ts = String(NOW_S);
     const { gate: g } = gate();
-    const v = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signTsBody(ts, raw) }), SECRET, 'hmac_sha256_ts_body', extractId);
+    const v = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signTsBody(ts, raw) }), SECRET, adapter());
     expect(v.accepted).toBe(true);
     expect(Object.keys(v).sort()).toEqual(['accepted', 'key', 'replay']);
     expect(JSON.stringify(v)).not.toContain(marker);
     // positive control: the marker IS in the bytes, so the absence above is
     // about the verdict and not about a marker that was never there.
     expect(raw.toString('utf8')).toContain(marker);
-    // the key does carry the event id, by design — and the charset rule above
-    // is what keeps that from being a log-forging field.
-    if (v.accepted) expect(v.key).toContain(EVENT_ID);
-    if (v.accepted) expect(/^[\x20-\x7e]+$/.test(v.key)).toBe(true);
+    if (v.accepted) {
+      expect(v.key).toContain(EVENT_ID);
+      expect(/^[\x20-\x7e]+$/.test(v.key)).toBe(true);
+    }
   });
 });

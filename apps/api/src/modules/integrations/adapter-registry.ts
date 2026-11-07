@@ -38,10 +38,19 @@ export class AdapterRegistry {
       if (!isAdapterMode(d.mode)) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} claims an unknown mode ${JSON.stringify(d.mode)}`);
       }
-      if (!isWebhookSignatureScheme(d.capabilities.webhookSignatureScheme)) {
-        throw new Error(
-          `integrations.registry: ${d.kind}/${d.adapterKey} claims an unknown webhook signature scheme ${JSON.stringify(d.capabilities.webhookSignatureScheme)}`,
-        );
+      const scheme = d.capabilities.webhookSignatureScheme;
+      if (!isWebhookSignatureScheme(scheme)) {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} claims an unknown webhook signature scheme ${JSON.stringify(scheme)}`);
+      }
+      // An adapter that receives signed webhooks must say HOW its identity is
+      // read, on the same descriptor, so the event source and the extraction
+      // rule cannot be wired to different providers. And one that receives
+      // none may not carry an extractor nothing will ever call.
+      if (scheme !== 'none' && typeof d.extractWebhookIdentity !== 'function') {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} claims signature scheme ${scheme} and must declare extractWebhookIdentity`);
+      }
+      if (scheme === 'none' && d.extractWebhookIdentity !== undefined) {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} signs no webhook and must not declare extractWebhookIdentity`);
       }
       if (d.isTestDouble && opts.production) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a test double and this is production`);

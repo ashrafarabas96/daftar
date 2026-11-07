@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { WebhookSignatureScheme } from '../capabilities';
-import { isAcceptableExternalEventId, replayKeyOf, type RawWebhookRequest, type ReplayStore } from './replay-store';
+import type { AdapterDescriptor } from '../adapter';
+import { isAcceptableIdentityField, replayKeyOf } from './identity';
+import type { RawWebhookRequest, ReplayStore } from './replay-store';
 
 /**
  * The closed set of refusals. Every one of them is a REFUSAL: there is no
@@ -10,14 +11,22 @@ import { isAcceptableExternalEventId, replayKeyOf, type RawWebhookRequest, type 
  * These names are for the LOG, not for the wire. The caller owes every one of
  * them the SAME opaque HTTP response, and the reason is in this list's shape:
  * `timestamp_outside_window` tells an unauthenticated caller the server's
- * clock and the configured tolerance, and `scheme_not_timestamp_bound` tells
- * it which scheme is configured. The check order below keeps those two behind
- * a valid signature; the opaque response is what keeps the configuration
- * refusals from answering the same questions.
+ * clock and the configured tolerance, `scheme_not_timestamp_bound` tells it
+ * which scheme is configured, and `account_mismatch` tells it that its
+ * signature was good. The check order below keeps the last two behind a valid
+ * signature; the opaque response is what keeps the configuration refusals
+ * from answering the same questions.
+ *
+ * Each name carries ONE condition. An earlier version returned `unconfigured`
+ * both for "no secret" and for "the store is a test double", which is a
+ * distinct operator error collapsed into one log line in a list that says of
+ * itself that it exists for the log.
  */
 export const WEBHOOK_REJECTIONS = [
   'request_malformed',
   'unconfigured',
+  'adapter_not_webhook_capable',
+  'replay_store_not_durable',
   'scheme_unsigned',
   'scheme_not_timestamp_bound',
   'signature_malformed',
@@ -26,6 +35,7 @@ export const WEBHOOK_REJECTIONS = [
   'timestamp_outside_window',
   'identity_absent',
   'identity_malformed',
+  'account_mismatch',
 ] as const;
 
 export type WebhookRejection = (typeof WEBHOOK_REJECTIONS)[number];
@@ -36,10 +46,15 @@ export type WebhookRejection = (typeof WEBHOOK_REJECTIONS)[number];
  *
  * `replay: true` means SEEN, never POSTED. It is not a licence to skip the
  * work: the caller must still drive the event to the idempotent posting
- * primitive, which recognises a duplicate source on its own
- * (`0045_accounting_post_entry.sql:724-735` returns the existing entry with
- * `created = false`). A caller that treats `replay` as "already done" drops
- * the first delivery whenever the claim committed and the posting did not.
+ * primitive. What that primitive does is worth stating exactly, because the
+ * short version is wrong in the direction that costs money. It returns the
+ * existing entry with `created = false` ONLY when the posting fingerprint
+ * matches (`0045_accounting_post_entry.sql:731`, `:735`); when the same source
+ * arrives describing DIFFERENT financial truth it raises
+ * `accounting.idempotency_conflict` (`:738-739`). So a redelivery carrying a
+ * changed amount is an exception to handle, not a quiet no-op — and a caller
+ * that treats `replay` as "already done" drops the first delivery whenever the
+ * claim committed and the posting did not.
  */
 export type WebhookVerdict =
   | { readonly accepted: true; readonly replay: boolean; readonly key: string }
@@ -65,13 +80,16 @@ export interface WebhookGateOptions {
    * replay store. Refusing such a scheme outright closes the inbound WhatsApp
    * path of the P8 contract; admitting it silently removes W-2.
    *
-   * An earlier version of this file refused the scheme outright, in a comment
-   * that called the refusal faithful to the design. That was a phase contract
-   * closed by a decision written in a comment, and the review was right to
-   * block it. So neither side is chosen here: the caller must say which, in
-   * one place, and saying `true` costs the replay store its optionality.
+   * An earlier version refused the scheme outright in a comment that called
+   * the refusal faithful to the design. That closed a phase contract by a
+   * decision written in a comment, and the review was right to block it.
    */
   readonly acceptTimestampUnboundScheme: boolean;
+  /**
+   * Required, because the test-double store refusal depends on it and a
+   * default would make the refusal depend on nobody's decision.
+   */
+  readonly production: boolean;
 }
 
 /** Up to twelve digits: enough for any second-precision epoch, and a hard cap. */
@@ -80,17 +98,16 @@ const TIMESTAMP_PATTERN = /^(?:0|[1-9][0-9]{0,11})$/;
 const SIGNATURE_PATTERN = /^[0-9a-fA-F]{64}$/;
 
 /**
- * The inbound gate: the signature first, then the timestamp, then the replay
- * claim — over the bytes as they arrived.
+ * The inbound gate: the signature first, then the timestamp, then the identity
+ * out of the verified bytes, then the replay claim.
  *
  * That order is deliberate and was corrected after review. Checking the clock
  * before the signature turns the endpoint into an oracle: an unauthenticated
  * caller distinguishes `timestamp_outside_window` from `signature_mismatch`
  * and reads off the server's clock and the configured tolerance. The ADR
- * draft 7 states the same rule — "verification first". The two checks that
- * remain ahead of the signature are CONFIGURATION facts rather than attacker
- * input: there is no secret at all, or the scheme is one this deployment
- * refuses.
+ * draft 7 states the same rule — "verification first". The checks that remain
+ * ahead of the signature are CONFIGURATION facts rather than attacker input:
+ * no secret at all, a scheme or a store this deployment refuses.
  *
  * What it does NOT do is as deliberate as what it does. It does not read a
  * secret (one is handed to it, already unsealed, and it keeps no reference
@@ -114,20 +131,19 @@ export class WebhookGate {
     if (typeof opts.acceptTimestampUnboundScheme !== 'boolean') {
       throw new Error('integrations.webhook: acceptTimestampUnboundScheme must be stated explicitly, true or false');
     }
+    if (typeof opts.production !== 'boolean') {
+      throw new Error('integrations.webhook: production must be stated explicitly, true or false');
+    }
     this.hmac = hmac ?? ((key, message) => createHmac('sha256', key).update(message).digest());
   }
 
   /**
-   * `extractExternalEventId` is applied to the body ONLY AFTER the signature
-   * has verified, so the identity the key is built from is identity the
-   * provider signed. It returns `undefined` when the body carries no id.
+   * The scheme and the identity rule both come from the RESOLVED DESCRIPTOR,
+   * not from arguments at the call site, so they cannot be wired to different
+   * providers, and `eventSource` is the adapter's own key rather than a string
+   * a caller chose.
    */
-  async verify(
-    request: RawWebhookRequest,
-    secret: Buffer | undefined,
-    scheme: WebhookSignatureScheme,
-    extractExternalEventId: (verifiedBody: Buffer) => string | undefined,
-  ): Promise<WebhookVerdict> {
+  async verify(request: RawWebhookRequest, secret: Buffer | undefined, adapter: AdapterDescriptor): Promise<WebhookVerdict> {
     // Shape before anything else. These fields arrive from an HTTP layer, and
     // a duplicated header reaches a handler as an ARRAY: coerced by a regex it
     // would pass, and then `Buffer.from(array, 'utf8')` is not the bytes the
@@ -138,9 +154,9 @@ export class WebhookGate {
       typeof request.signatureHeader !== 'string' ||
       typeof request.timestampHeader !== 'string' ||
       typeof request.businessId !== 'string' ||
-      typeof request.eventSource !== 'string' ||
+      typeof request.expectedAccountRef !== 'string' ||
       request.businessId === '' ||
-      request.eventSource === ''
+      request.expectedAccountRef === ''
     ) {
       return { accepted: false, rejection: 'request_malformed' };
     }
@@ -150,15 +166,22 @@ export class WebhookGate {
     // nobody set is not a weak check, it is no check.
     if (secret === undefined || secret.length === 0) return { accepted: false, rejection: 'unconfigured' };
 
+    const scheme = adapter.capabilities.webhookSignatureScheme;
     if (scheme === 'none') return { accepted: false, rejection: 'scheme_unsigned' };
+    const extract = adapter.extractWebhookIdentity;
+    if (typeof extract !== 'function') return { accepted: false, rejection: 'adapter_not_webhook_capable' };
+
     const timestampBound = scheme === 'hmac_sha256_ts_body';
     if (!timestampBound && !this.opts.acceptTimestampUnboundScheme) {
       return { accepted: false, rejection: 'scheme_not_timestamp_bound' };
     }
-    // When the timestamp is not signed, the replay store is the ONLY defence
-    // the ADR leaves standing, so it may not be a test double.
-    if (!timestampBound && this.store.isTestDouble) {
-      return { accepted: false, rejection: 'unconfigured' };
+    // Replay prevention is mandatory under EVERY scheme, so a store that
+    // forgets on restart and is not shared between instances is refused in
+    // production outright — not only where the timestamp is unsigned. Outside
+    // production it is still refused for an unbound scheme, because there the
+    // store is the only defence the ADR leaves standing.
+    if (this.store.isTestDouble && (this.opts.production || !timestampBound)) {
+      return { accepted: false, rejection: 'replay_store_not_durable' };
     }
 
     // Shape before comparison: `timingSafeEqual` THROWS on a length mismatch,
@@ -188,12 +211,34 @@ export class WebhookGate {
     }
 
     // The identity comes out of the verified bytes, never from beside them.
-    const externalEventId = extractExternalEventId(request.rawBody);
-    if (externalEventId === undefined || externalEventId === '') {
+    //
+    // The call is GUARDED, and the reason was measured in review: a body the
+    // provider signed correctly but changed the shape of makes a JSON parse
+    // throw, and the exception escapes `verify` as a 500 instead of a named
+    // refusal — carrying a message that for this class of error can quote a
+    // fragment of the input, which reopens the one channel this file keeps
+    // shut. A broken extractor is a provider-shape problem, so it is a
+    // refusal, not a crash.
+    let identity;
+    try {
+      identity = extract(request.rawBody);
+    } catch {
+      return { accepted: false, rejection: 'identity_malformed' };
+    }
+    if (identity === undefined) return { accepted: false, rejection: 'identity_absent' };
+    if (identity.externalEventId === undefined || identity.externalEventId === '' || identity.accountRef === undefined || identity.accountRef === '') {
       return { accepted: false, rejection: 'identity_absent' };
     }
-    if (!isAcceptableExternalEventId(externalEventId)) {
+    if (!isAcceptableIdentityField(identity.externalEventId) || !isAcceptableIdentityField(identity.accountRef)) {
       return { accepted: false, rejection: 'identity_malformed' };
+    }
+
+    // THE TENANT IS AUTHENTICATED HERE, and nowhere else. The signed bytes
+    // must name the same provider account the caller resolved this business
+    // from; without this, a secret shared across tenants lets one genuine
+    // delivery be replayed at every other tenant's route.
+    if (identity.accountRef !== request.expectedAccountRef) {
+      return { accepted: false, rejection: 'account_mismatch' };
     }
 
     // Only a request that PASSED is remembered: recording a rejected one would
@@ -201,8 +246,8 @@ export class WebhookGate {
     // follows it.
     const key = replayKeyOf({
       businessId: request.businessId,
-      eventSource: request.eventSource,
-      externalEventId,
+      eventSource: adapter.adapterKey,
+      externalEventId: identity.externalEventId,
     });
     const first = await this.store.remember(key);
     return { accepted: true, replay: !first, key };
