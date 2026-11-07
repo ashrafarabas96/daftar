@@ -903,7 +903,29 @@ describe('§16 CASE C — the eight Phase 4 command surfaces, each REFUSED with 
     const routes: readonly { readonly path: string; readonly code: RegExp }[] = [
       { path: `/v1/customers/${B.customerId}`, code: /^customer\.not_found$/ },
       { path: `/v1/customers/${B.customerId}/receivable`, code: /^customer\.not_found$/ },
-      { path: `/v1/customers/${B.customerId}/receivable/aging?asOf=${day}&bucketDays=30,60,90`, code: /^customer\.not_found$/ },
+      /**
+       * `bucketDays` CARRIES THE STANDARD SET, AND THAT IS LOAD-BEARING HERE.
+       *
+       * DR-14 narrowed this field to exactly `STANDARD_AGING_BUCKET_DAYS`
+       * (`packages/domain-core/src/invoice.ts` — `[0, 30, 60, 90]`), and
+       * `apps/api/.../selling.schemas.ts` enforces it element by element, so
+       * the ORDER is part of the contract and not a style choice: any other
+       * list, `30,60,90` included, is refused by the FIELD VALIDATOR.
+       *
+       * This request previously sent `30,60,90`. It was refused — with 400
+       * `VALIDATION_FAILED` and `details.issues[0].path = "bucketDays"` — and
+       * the classifier rightly called that `structural`, because a refusal
+       * that arrives before the business binding is consulted would read
+       * exactly the same with the tenant barrier removed. The case was not
+       * failing because isolation was broken; it was failing because it had
+       * stopped testing isolation at all.
+       *
+       * So the set must be the one the contract accepts, for the request to
+       * reach the binding and the refusal to be the binding's. Do NOT "fix" a
+       * future failure here by relaxing the classifier or by widening the
+       * field: the verdict assertion below is what makes this route evidence.
+       */
+      { path: `/v1/customers/${B.customerId}/receivable/aging?asOf=${day}&bucketDays=0,30,60,90`, code: /^customer\.not_found$/ },
       { path: `/v1/customers/${B.customerId}/open-invoices?asOf=${day}`, code: /^customer\.not_found$/ },
       /**
        * MEASURED: this one answers `customer_credit.not_found` and not

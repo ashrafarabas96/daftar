@@ -12,12 +12,29 @@ import { LogDelivery } from '../auth/tokens';
  * §15: TOKENS ARE NEVER LOGGED. The token appears only inside the message body
  * handed to the configured transport.
  */
+/**
+ * Transport settings a TEST may force, and nothing else may.
+ *
+ * Driving the real library against a real socket is the only way a test can
+ * say anything about an SMTP upgrade — a stubbed transport would test the
+ * stub. But `requireTLS` below means nodemailer will not talk to a fixture
+ * that offers no STARTTLS, and minting a certificate is not something this
+ * suite can do.
+ *
+ * So the relaxation is a constructor argument rather than a config key. A
+ * config key named anything like `SMTP_REQUIRE_TLS` is a switch that can be
+ * set in production by whoever is debugging at 2am; this cannot be reached
+ * from configuration at all. `createCredentialDelivery` never passes it, and
+ * a test pins that it never does.
+ */
+export type SmtpTransportOverrides = Readonly<Partial<{ secure: boolean; requireTLS: boolean }>>;
+
 export class SmtpDelivery implements CredentialDelivery {
   readonly kind = 'smtp';
   private readonly transporter: Transporter;
   private readonly from: string;
 
-  constructor(config: AppConfig) {
+  constructor(config: AppConfig, testOnlyTransportOverrides?: SmtpTransportOverrides) {
     if (!config.SMTP_URL) throw new Error('SMTP_URL required for SmtpDelivery');
     if (!config.SMTP_FROM) throw new Error('SMTP_FROM required for SmtpDelivery');
     this.from = config.SMTP_FROM;
@@ -32,6 +49,7 @@ export class SmtpDelivery implements CredentialDelivery {
       connectionTimeout: 10_000,
       greetingTimeout: 10_000,
       socketTimeout: 15_000,
+      ...(testOnlyTransportOverrides ?? {}),
     });
   }
 

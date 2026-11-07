@@ -38,7 +38,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { basename, join, relative, sep } from 'node:path';
 
 const ROOT = join(__dirname, '..');
 const RELEASE = join(ROOT, 'release');
@@ -52,9 +52,27 @@ const OUT = join(RELEASE, 'phase2-s9-release-evidence.json');
 
 const problems: string[] = [];
 
+/**
+ * A path as this script names it in evidence and in messages: relative to the
+ * repository root, always with forward slashes.
+ *
+ * This replaced a string replace of the root prefix, which stripped nothing
+ * on Windows — `ROOT` comes from `join()` and carries a backslash there, so
+ * the forward-slash prefix it looked for never occurred — and printed the
+ * whole absolute path of the machine that ran the gate. `relative` also
+ * refuses the other failure that string replace had: a sibling directory
+ * whose name merely starts with the root (`/repo-backup` against `/repo`) is
+ * reported as outside the repository rather than silently half-stripped.
+ *
+ * tests-unit/release-evidence-path-portability.test.ts holds this script to
+ * both, and its guard reads the source text — so describe the retired pattern
+ * here, never quote it.
+ */
+const shown = (path: string): string => relative(ROOT, path).split(sep).join('/');
+
 function readJson<T>(path: string, what: string): T | null {
   if (!existsSync(path)) {
-    problems.push(`${what} is missing: ${path.replace(`${ROOT}/`, '')}`);
+    problems.push(`${what} is missing: ${shown(path)}`);
     return null;
   }
   try {
@@ -103,7 +121,7 @@ let archiveBytes: number | null = null;
 let archiveEntryCount: number | null = null;
 
 if (!existsSync(ARCHIVE)) {
-  problems.push(`the release archive is missing: ${ARCHIVE.replace(`${ROOT}/`, '')}`);
+  problems.push(`the release archive is missing: ${shown(ARCHIVE)}`);
 } else {
   const buf = readFileSync(ARCHIVE);
   archiveSha256 = createHash('sha256').update(buf).digest('hex');
@@ -117,7 +135,7 @@ if (!existsSync(ARCHIVE)) {
     // String.prototype.split always returns at least one element; the guard only narrows the type.
     if (recorded === undefined) throw new Error(`${sidecar} could not be split into fields`);
     if (recorded !== archiveSha256)
-      problems.push(`${sidecar.replace(`${ROOT}/`, '')} records ${recorded.slice(0, 12)}… but the archive hashes to ${archiveSha256.slice(0, 12)}…`);
+      problems.push(`${shown(sidecar)} records ${recorded.slice(0, 12)}… but the archive hashes to ${archiveSha256.slice(0, 12)}…`);
   } else {
     problems.push('the archive has no sibling .sha256');
   }
@@ -201,7 +219,7 @@ const evidence = {
   },
 
   archive: {
-    name: ARCHIVE.split('/').pop(),
+    name: basename(ARCHIVE),
     sha256: archiveSha256,
     bytes: archiveBytes,
     entryCount: archiveEntryCount,
@@ -279,7 +297,7 @@ console.log(
 );
 console.log(`  deployment matrix  ${String(evidence.deploymentAuthority.verdict)}`);
 console.log(`\nP2-S9 RELEASE EVIDENCE: ${evidence.verdict}`);
-console.log(`  ${OUT.replace(`${ROOT}/`, '')}`);
+console.log(`  ${shown(OUT)}`);
 if (problems.length > 0) {
   for (const p of problems) console.log(`  - ${p}`);
   process.exit(1);

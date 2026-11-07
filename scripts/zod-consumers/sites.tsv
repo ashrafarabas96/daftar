@@ -1,0 +1,541 @@
+file	line	family	class	rule	text
+apps/android/app/src/test/java/app/daftar/NetworkSecurityConfigTest.kt	43	find-shift	safe	R-RECEIVER	val block = Regex("$buildType\\s*\\{([\\s\\S]*?)\\n\\s*\\}").find(gradle)?.groupValues?.get(1) ?: error("no $buildType block")
+apps/android/app/src/test/java/app/daftar/NetworkSecurityConfigTest.kt	44	find-shift	safe	R-RECEIVER	return Regex("API_BASE_URL\",\\s*\"\\\\\"([^\\\\]+)\\\\\"\"").find(block)?.groupValues?.get(1) ?: error("no API_BASE_URL in $buildType")
+apps/api/src/common/error.filter.ts	3	formatter	safe	HAND	import { ZodError } from 'zod';
+apps/api/src/common/error.filter.ts	54	formatter	intended	HAND	if (exception instanceof ZodError) {
+apps/api/src/common/error.filter.ts	56	method	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
+apps/api/src/common/error.filter.ts	56	issues-access	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
+apps/api/src/config.ts	402	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	402	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/modules/accounting/accounting-reconciliation.reader.ts	251	find-shift	safe	R-RECEIVER	const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
+apps/api/src/modules/catalog/media.service.ts	132	find-shift	safe	R-RECEIVER	const v = row.variants.find((x) => x.size === size);
+apps/api/src/modules/inventory/inventory-stock-read.ts	98	find-shift	safe	R-RECEIVER	const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);
+apps/api/src/modules/pos/pos-cart.controller.ts	81	find-shift	safe	R-RECEIVER	const found = POS_CART_ROUTE_AUTHORITY.find((r) => r.command === command);
+apps/api/src/modules/purchasing/supplier-balance-reads.ts	434	find-shift	safe	R-RECEIVER	const tail = scan.find((r) => r.tail);
+apps/api/src/modules/receivables/receivables-payload.ts	150	find-shift	safe	R-RECEIVER	const registered = INVENTORY_OPERATION_CODES.find((c) => c === code);
+apps/api/src/modules/tenancy/structure.service.ts	374	find-shift	safe	R-RECEIVER	const member = (await this.listMembers(m)).find((x) => x.userId === userId);
+apps/web/src/app/[locale]/AppHeader.tsx	99	find-shift	safe	R-RECEIVER	const currentName = businesses.find((b) => b.businessId === current)?.name ?? t('nav.switchBusiness');
+apps/web/src/app/[locale]/catalog/[id]/page.tsx	193	client-details	safe	HAND	<h2 style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.lg, margin: `${spacing[2]} 0 0` }}>{t('catalog.details')}</h2>
+apps/web/src/app/[locale]/catalog/[id]/page.tsx	340	find-shift	safe	R-RECEIVER	const found = items.items.find((i) => i.productId === productId);
+apps/web/src/app/[locale]/catalog/[id]/page.tsx	363	find-shift	safe	R-RECEIVER	const found = again.items.find((i) => i.productId === productId);
+apps/web/src/app/[locale]/catalog/page.tsx	227	find-shift	safe	R-RECEIVER	render: (c) => (c.parentId ? (categories.find((x) => x.id === c.parentId)?.translations[locale] ?? '—') : '—'),
+apps/web/src/app/[locale]/pos/page.tsx	218	errors-access	safe	R-RECEIVER	const next = { ...errors };
+apps/web/src/app/[locale]/pos/page.tsx	234	errors-access	safe	R-RECEIVER	const next = { ...errors };
+apps/web/src/app/[locale]/pos/page.tsx	248	errors-access	safe	R-RECEIVER	setDiscountErrors((errors) => ({ ...errors, [cartLineId]: 'pos.discount.invalid' }));
+apps/web/src/app/[locale]/pos/page.tsx	252	errors-access	safe	R-RECEIVER	const next = { ...errors };
+apps/web/src/app/[locale]/pos/page.tsx	366	errors-access	safe	R-RECEIVER	const next = { ...errors };
+apps/web/src/app/[locale]/pos/pos-page-kit.ts	99	find-shift	safe	R-RECEIVER	setCurrency(businesses.items.find((b) => b.businessId === currentBusinessId())?.baseCurrency ?? null);
+apps/web/src/app/[locale]/pos/till/page.tsx	63	find-shift	safe	R-RECEIVER	const place = screen.places.find((p) => p.id === placeId);
+apps/web/src/app/[locale]/purchases/_shared/lookups.ts	42	find-shift	safe	R-RECEIVER	const variant = variantId === null ? undefined : item?.variants.find((v) => v.variantId === variantId);
+apps/web/src/app/[locale]/purchases/_shared/merchant-context.ts	69	find-shift	safe	R-RECEIVER	const found = mine.items.find((b) => b.businessId === current);
+apps/web/src/app/[locale]/purchases/receive/page.tsx	104	find-shift	safe	R-RECEIVER	return EXTRA_COST_KINDS.find((kind) => LOCALES.some((l) => translate(l, `purchasing.extraCost.kind.${kind}`) === description)) ?? 'other';
+apps/web/src/app/[locale]/purchases/receive/page.tsx	239	errors-access	safe	R-RECEIVER	setForm((f) => ({ ...f, supplierSearch: text, supplierNoMatch: false, errors: { ...f.errors, supplier: false } }));
+apps/web/src/app/[locale]/purchases/receive/page.tsx	267	find-shift	safe	R-RECEIVER	const same = page.items.find((s) => s.name.trim().toLocaleLowerCase(locale) === term.toLocaleLowerCase(locale));
+apps/web/src/app/[locale]/purchases/receive/page.tsx	291	errors-access	safe	R-RECEIVER	patchLine(lineId, (l) => ({ ...l, itemSearch: text, itemNoMatch: false, errors: { ...l.errors, item: false } }));
+apps/web/src/app/[locale]/purchases/receive/page.tsx	388	find-shift	safe	R-RECEIVER	const variant = line?.item?.variants.find((v) => v.variantId === l.variantId);
+apps/web/src/app/[locale]/purchases/receive/page.tsx	441	find-shift	safe	R-RECEIVER	const method = activeMethodChoices(payNow.methods, locale, t).find((m) => m.paymentMethodId === payNow.methodId);
+apps/web/src/app/[locale]/purchases/receive/page.tsx	558	errors-access	safe	R-RECEIVER	onWarehouse: (warehouseId) => setForm((f) => ({ ...f, warehouseId, errors: { ...f.errors, warehouse: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	559	errors-access	safe	R-RECEIVER	onDate: (documentDate) => setForm((f) => ({ ...f, documentDate, errors: { ...f.errors, date: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	564	errors-access	safe	R-RECEIVER	onAddLine: () => setForm((f) => ({ ...f, lines: [...f.lines, emptyLine()], errors: { ...f.errors, lines: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	582	errors-access	safe	R-RECEIVER	onLineField: (lineId, field: LineField, value) => patchLine(lineId, (l) => ({ ...l, [field]: value, errors: { ...l.errors, [field]: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	588	errors-access	safe	R-RECEIVER	onExtraCostAmount: (id, amount) => patchCost(id, (c) => ({ ...c, amount, errors: { ...c.errors, amount: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	590	errors-access	safe	R-RECEIVER	onExtraCostShare: (id, lineId, value) => patchCost(id, (c) => ({ ...c, shares: { ...c.shares, [lineId]: value }, errors: { ...c.errors, shares: false } })),
+apps/web/src/app/[locale]/purchases/receive/page.tsx	599	errors-access	safe	R-RECEIVER	setPayNow((p) => (p ? { ...p, [field]: value, errors: { ...p.errors, [field === 'methodId' ? 'method' : field]: false } } : p)),
+apps/web/src/app/[locale]/stock/count/[stocktakeId]/page.tsx	143	find-shift	safe	R-RECEIVER	const line = detail.lines.find((l) => identityKey(l.productId, l.variantId) === key);
+apps/web/src/app/[locale]/stock/count/[stocktakeId]/page.tsx	187	find-shift	safe	R-RECEIVER	const warehouseName = screen.warehouses.find((w) => w.warehouseId === stocktake?.warehouseId)?.name ?? '';
+apps/web/src/app/[locale]/stock/stock-page-kit.ts	75	find-shift	safe	R-RECEIVER	setCurrency(b.items.find((x) => x.businessId === currentBusinessId())?.baseCurrency ?? null);
+apps/web/src/app/[locale]/stock/stock-page-kit.ts	102	find-shift	safe	R-RECEIVER	return warehouses.find((w) => w.status === 'active')?.warehouseId ?? '';
+apps/web/src/app/[locale]/stock/stock-page-kit.ts	117	client-details	safe	HAND	const lines = error.details?.['lines'];
+apps/web/src/app/[locale]/structure/page.tsx	66	find-shift	safe	R-RECEIVER	const branchName = (id: string) => branches.find((b) => b.id === id)?.name ?? '—';
+apps/web/src/app/[locale]/suppliers/[supplierId]/page.tsx	139	find-shift	safe	R-RECEIVER	const note = notes.length === 1 ? notes[0] : notes.find((n) => n.creditNoteId === money.creditNoteId);
+apps/web/src/app/[locale]/suppliers/[supplierId]/page.tsx	144	find-shift	safe	R-RECEIVER	const method = activeMethodChoices(loaded.methods, locale, t).find((m) => m.paymentMethodId === money.methodId);
+apps/web/src/app/[locale]/suppliers/[supplierId]/page.tsx	225	errors-access	safe	R-RECEIVER	setMoney((m) => ({ ...m, [name]: value, errors: cleared ? { ...m.errors, [cleared]: false } : m.errors }));
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	199	errors-access	safe	R-RECEIVER	setForm((f) => ({ ...f, errors: { ...f.errors, amount: true } }));
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	216	find-shift	safe	R-RECEIVER	const method = activeMethodChoices(methods, locale, t).find((m) => m.paymentMethodId === form.methodId);
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	278	find-shift	safe	R-RECEIVER	const foreignRow = rows.find((r) => r.currency !== baseCurrency);
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	324	find-shift	safe	R-RECEIVER	const account = accounts.items.find((a) => a.systemKey === SETTLEMENT_ACCOUNT_KEY[systemType] && a.isActive);
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	362	find-shift	safe	R-RECEIVER	const note = notes?.find((n) => n.creditNoteId === creditNoteId);
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	431	errors-access	safe	R-RECEIVER	setForm((f) => ({ ...f, [field]: value, errors: { ...f.errors, [errorOf[field]]: false } }));
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	491	errors-access	safe	R-RECEIVER	onToggleManual: () => setForm((f) => ({ ...f, manual: !f.manual, errors: { ...f.errors, rows: false } })),
+apps/web/src/app/[locale]/suppliers/[supplierId]/pay/page.tsx	495	find-shift	safe	R-RECEIVER	onChooseSetup: (systemType) => setSetup((s) => (s ? { ...s, chosen: s.options.find((o) => o.systemType === systemType)?.systemType ?? null } : s)),
+apps/web/src/app/[locale]/team/page.tsx	153	find-shift	safe	R-RECEIVER	const branchName = (id: string) => branches.find((b) => b.id === id)?.name ?? id.slice(0, 8);
+apps/web/src/lib/client.ts	199	client-details	safe	HAND	const details = this.details;
+apps/web/src/lib/client.ts	202	client-details	safe	HAND	const value = details[field];
+apps/web/src/lib/client.ts	206	client-details	safe	HAND	const value = details['code'];
+apps/web/src/lib/client.ts	273	client-details	safe	HAND	throw new ApiError(res.status, data.error?.code ?? `HTTP_${res.status}`, plainObject(data.error?.details));
+apps/web/src/lib/phase3-format.ts	61	find-shift	safe	R-RECEIVER	const decimalSep = nf.formatToParts(0.5).find((p) => p.type === 'decimal')?.value ?? '.';
+apps/web/src/middleware.ts	30	find-shift	safe	R-RECEIVER	const preferred = LOCALES.find((l) => accept.toLowerCase().startsWith(l)) ?? DEFAULT_LOCALE;
+apps/web/src/views/pos/TillView.tsx	76	find-shift	safe	R-RECEIVER	const placeName = props.places.find((p) => p.id === (session?.warehouse_id ?? props.placeId))?.name ?? '';
+apps/web/src/views/purchases/PurchaseListView.tsx	85	find-shift	safe	R-RECEIVER	return FILTERS.find((f) => f === key) ?? 'all';
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	124	errors-access	safe	R-RECEIVER	error={form.errors.warehouse ? t('purchasing.receive.warehouseRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	132	errors-access	safe	R-RECEIVER	error={form.errors.date ? t('purchasing.receive.dateRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	148	errors-access	safe	R-RECEIVER	{form.errors.lines ? <Notice tone="danger">{t('purchasing.receive.linesRequired')}</Notice> : null}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	222	errors-access	safe	R-RECEIVER	error={form.errors.supplier ? t('purchasing.receive.supplierRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	258	errors-access	safe	R-RECEIVER	error={line.errors.item ? t('purchasing.receive.itemRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	282	errors-access	safe	R-RECEIVER	error={line.errors.variant ? t('purchasing.receive.variantRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	291	errors-access	safe	R-RECEIVER	error={line.errors.quantity ? t('purchasing.receive.quantityInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	298	errors-access	safe	R-RECEIVER	error={line.errors.unitPrice ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	306	errors-access	safe	R-RECEIVER	error={line.errors.discount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	331	find-shift	safe	R-RECEIVER	onChange={(v) => on.onExtraCostKind(cost.landedCostId, EXTRA_COST_KINDS.find((k) => k === v) ?? 'other')}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	337	errors-access	safe	R-RECEIVER	error={cost.errors.amount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	349	errors-access	safe	R-RECEIVER	error={cost.errors.shares ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	429	find-shift	safe	R-RECEIVER	const method = methods.find((m) => m.paymentMethodId === payNow.methodId);
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	447	errors-access	safe	R-RECEIVER	error={payNow.errors.method ? t('payments.methodRequired') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	463	errors-access	safe	R-RECEIVER	error={payNow.errors.amount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	471	errors-access	safe	R-RECEIVER	error={payNow.errors.applied ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/purchases/ReceivePurchaseView.tsx	478	errors-access	safe	R-RECEIVER	error={payNow.errors.reference ? t('payments.referenceRequired') : undefined}
+apps/web/src/views/stock/MoveStockView.tsx	42	find-shift	safe	R-RECEIVER	const nameOf = (id: string): string => props.warehouses.find((w) => w.warehouseId === id)?.name ?? '';
+apps/web/src/views/suppliers/PaySupplierView.tsx	141	find-shift	safe	R-RECEIVER	const method = methods.find((m) => m.paymentMethodId === form.methodId);
+apps/web/src/views/suppliers/PaySupplierView.tsx	151	errors-access	safe	R-RECEIVER	error={form.errors.method ? t('payments.methodRequired') : undefined}
+apps/web/src/views/suppliers/PaySupplierView.tsx	167	errors-access	safe	R-RECEIVER	error={form.errors.amount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/suppliers/PaySupplierView.tsx	174	errors-access	safe	R-RECEIVER	error={form.errors.date ? t('purchasing.receive.dateRequired') : undefined}
+apps/web/src/views/suppliers/PaySupplierView.tsx	180	errors-access	safe	R-RECEIVER	error={form.errors.reference ? t('payments.referenceRequired') : undefined}
+apps/web/src/views/suppliers/PaySupplierView.tsx	193	errors-access	safe	R-RECEIVER	{form.errors.rows ? <Notice tone="danger">{t('payments.rowsInvalid')}</Notice> : null}
+apps/web/src/views/suppliers/SupplierDetailView.tsx	179	find-shift	safe	R-RECEIVER	const note = form.notes.find((n) => n.creditNoteId === form.creditNoteId);
+apps/web/src/views/suppliers/SupplierDetailView.tsx	181	find-shift	safe	R-RECEIVER	const method = methods.find((m) => m.paymentMethodId === form.methodId);
+apps/web/src/views/suppliers/SupplierDetailView.tsx	190	errors-access	safe	R-RECEIVER	error={form.errors.note ? t('suppliers.moneyBack.noteRequired') : undefined}
+apps/web/src/views/suppliers/SupplierDetailView.tsx	207	errors-access	safe	R-RECEIVER	error={form.errors.method ? t('payments.methodRequired') : undefined}
+apps/web/src/views/suppliers/SupplierDetailView.tsx	216	errors-access	safe	R-RECEIVER	error={form.errors.amount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/suppliers/SupplierDetailView.tsx	233	errors-access	safe	R-RECEIVER	error={form.errors.receiptAmount ? t('purchasing.receive.amountInvalid') : undefined}
+apps/web/src/views/suppliers/SupplierDetailView.tsx	241	errors-access	safe	R-RECEIVER	error={form.errors.reference ? t('payments.referenceRequired') : undefined}
+apps/web/test/bff-session-notice.test.tsx	20	find-shift	safe	R-RECEIVER	const status = [...elements(frame)].find((e) => e.attrs['role'] === 'status');
+apps/web/test/bff-session-notice.test.tsx	22	find-shift	safe	R-RECEIVER	const button = [...elements(frame)].find((e) => e.tag === 'button');
+apps/web/test/bff-session-retry.test.ts	23	find-shift	safe	R-RECEIVER	const next = answers.shift();
+apps/web/test/csp.test.ts	77	find-shift	safe	R-RECEIVER	const nonceSource = script.find((s) => s.startsWith(`'nonce-`));
+apps/web/test/platform.test.ts	21	find-shift	safe	R-RECEIVER	const next = responses.shift();
+apps/web/test/pos-receipt-invisible.test.tsx	107	find-shift	safe	R-RECEIVER	const receipt = fixtures.find(({ area, entry }) => area === 'pos' && entry.name === 'SaleDoneView');
+apps/web/test/purchase-leftover.test.tsx	69	find-shift	safe	R-RECEIVER	const found = PURCHASE_VIEWS.find((e) => e.name === 'PurchaseDetailView')?.fixtures.find((f) => f.name === fixture);
+apps/web/test/purchasing-screens.test.tsx	15	find-shift	safe	R-RECEIVER	const entry = [...PURCHASES, ...COMMON].find((e) => e.name === view);
+apps/web/test/purchasing-screens.test.tsx	16	find-shift	safe	R-RECEIVER	const found = entry?.fixtures.find((f) => f.name === name);
+apps/web/test/starting-stock.test.tsx	47	find-shift	safe	R-RECEIVER	const found = STOCK_VIEWS.find((e) => e.name === 'AdjustStockView')?.fixtures.find((f) => f.name === fixture);
+apps/web/test/stock-screens.test.tsx	18	find-shift	safe	R-RECEIVER	const found = entries.find((e) => e.name === view)?.fixtures.find((f) => f.name === fixture);
+apps/web/test/stock-screens.test.tsx	29	find-shift	safe	R-RECEIVER	const names = (area: string) => areas.find((a) => a.area === area)?.entries.map((e) => e.name) ?? [];
+apps/web/test/supplier-screens.test.tsx	16	find-shift	safe	R-RECEIVER	const found = SUPPLIERS.find((e) => e.name === view)?.fixtures.find((f) => f.name === name);
+apps/web/test/supplier-screens.test.tsx	28	find-shift	safe	R-RECEIVER	const found = all(r, 'button').find((b) => textOf(b) === label);
+apps/web/test/ux-review-fixes.test.tsx	26	find-shift	safe	R-RECEIVER	const found = AREAS.find((e) => e.name === view)?.fixtures.find((f) => f.name === name);
+apps/web/test/ux-review-fixes.test.tsx	202	find-shift	safe	R-RECEIVER	const labelEl = all(r, 'label').find((l) => textOf(l) === label);
+apps/web/test/ux-review-fixes.test.tsx	205	find-shift	safe	R-RECEIVER	const alert = [...elements(field)].find((e) => e.attrs['role'] === 'alert');
+apps/web/test/ux-review-fixes.test.tsx	214	find-shift	safe	R-RECEIVER	const alert = [...elements(counted.parent ?? counted)].find((e) => e.attrs['role'] === 'alert');
+apps/web/test/ux-review-fixes.test.tsx	232	find-shift	safe	R-RECEIVER	const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog' && textOf(e).includes(tr('en', 'stock.count.finishTitle')));
+apps/web/test/ux-review-fixes.test.tsx	242	find-shift	safe	R-RECEIVER	const finish = all(r, 'button').find((b) => textOf(b) === tr('en', 'stock.count.finish'));
+apps/web/test/ux-review-fixes.test.tsx	293	find-shift	safe	R-RECEIVER	const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog');
+apps/web/test/ux-review-fixes.test.tsx	333	find-shift	safe	R-RECEIVER	const pay = all(r, 'button').find((b) => textOf(b) === tr('en', 'payments.submit'));
+packages/domain-core/src/locale.ts	77	find-shift	safe	R-RECEIVER	const decimalSep = skeletonParts.find((p) => p.type === 'decimal')?.value ?? '.';
+packages/domain-core/src/locale.ts	90	find-shift	safe	R-RECEIVER	out += units > 0 ? (skeletonParts.find((p) => p.type === 'decimal')?.value ?? decimalSep) : '';
+packages/domain-core/src/locale.ts	116	find-shift	safe	R-RECEIVER	const dec = nf.formatToParts(1.1).find((p) => p.type === 'decimal')?.value ?? '.';
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	874	find-shift	safe	R-RECEIVER	const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	915	find-shift	safe	R-RECEIVER	plans.find((p) => p.invoiceId === r.invoiceId),
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	926	find-shift	safe	R-RECEIVER	plans.find((p) => p.invoiceId === r.invoiceId),
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	964	find-shift	safe	R-RECEIVER	const i = plan.installments.find((x) => x.seqNo === c.seqNo);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	1066	find-shift	safe	R-RECEIVER	const inclusive = BUCKET_MUTANTS.find((m) => m.name === 'boundary_inclusive');
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	1353	find-shift	safe	R-RECEIVER	const declared = x.origin === 'down_payment' ? plan.downPaymentMinor : (inst.find((i) => i.seqNo === x.seqNo)?.amountTxnMinor as bigint);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	1750	find-shift	safe	R-RECEIVER	const dropper = MIGRATIONS.find((m) => /DROP FUNCTION public\.invoice_outstanding\(UUID, UUID\[\]\)/.test(m.sql));
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	2571	find-shift	safe	R-RECEIVER	const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	2607	find-shift	safe	R-RECEIVER	const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	2910	find-shift	safe	R-RECEIVER	const decl = MANDATORY.find((m) => m.id === target);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	2944	find-shift	safe	R-RECEIVER	const six = MANDATORY.find((m) => m.id === 'proof_6');
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	3119	find-shift	safe	R-RECEIVER	const plan = plans.find((p) => p.invoiceId === r.invoiceId);
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	3283	find-shift	safe	R-RECEIVER	const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'));
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	3894	find-shift	safe	R-RECEIVER	const predecessor = MIGRATIONS.find((m) => m.name.startsWith('0075_'))?.sql ?? '';
+packages/domain-core/test/phase4-s7-installment-aging.test.ts	5495	find-shift	safe	R-RECEIVER	const oldest = buckets.find((b) => b.bucketNo === OLDEST_STANDARD);
+packages/domain-core/test/phase4-s7-proof-oracles.ts	204	find-shift	safe	R-RECEIVER	const found = bands.find((b) => aged >= b.loDays && aged <= b.hiDays);
+packages/inventory/scripts/s4-vector-cases.ts	517	find-shift	safe	R-RECEIVER	const sha = (id: string): string => cases.find((c) => c.id === id)?.intent.sha256 ?? '';
+packages/inventory/scripts/s4-vector-cases.ts	1089	find-shift	safe	R-RECEIVER	const gold72 = cases.find((c) => c.id === 'GOLD72');
+packages/inventory/scripts/s4-vector-cases.ts	1092	find-shift	safe	R-RECEIVER	const flush = cases.find((c) => c.id === 'FLUSH-RESIDUE')?.receipts[0]?.expect.lines[0]?.coverages.map((x) => x.formulaMinor);
+packages/inventory/scripts/s4-vector-cases.ts	1094	find-shift	safe	R-RECEIVER	const zero = cases.find((c) => c.id === 'ZERO-CATCHUP')?.receipts[0]?.expect;
+packages/inventory/scripts/s5-vector-cases.ts	346	find-shift	safe	R-RECEIVER	const get = (id: string): S5PayloadVector | undefined => cases.find((c) => c.id === id);
+packages/inventory/scripts/s5-vector-cases.ts	786	find-shift	safe	R-RECEIVER	const get = (id: string): SupplierReturnCaseVector | undefined => cases.find((c) => c.id === id);
+packages/inventory/scripts/s5-vector-cases.ts	796	find-shift	safe	HAND	const dust = get('FOREIGN-DUST')?.returns.map((r) => r.expect?.entry.find((e) => e.systemKey === 'accounts_payable' && e.currency === 'ILS')?.side);
+packages/inventory/scripts/s5-vector-cases.ts	800	find-shift	safe	HAND	const ppvSide = (id: string): string | undefined => get(id)?.returns[0]?.expect?.entry.find((e) => e.systemKey === 'purchase_price_variance')?.side;
+packages/inventory/scripts/vector-cases.ts	275	find-shift	safe	R-RECEIVER	const payload = payloads.find((p) => p.name === c.payload);
+packages/inventory/test/deficit-coverage.test.ts	55	find-shift	safe	R-RECEIVER	const fromValuation = (valuation.scenarios.find((s) => s.id === val)?.steps ?? [])
+packages/inventory/test/deficit-coverage.test.ts	58	find-shift	safe	R-RECEIVER	const fromCoverage = (vectors.cases.find((c) => c.id === cov)?.receipts ?? []).flatMap((r) =>
+packages/inventory/test/movement-payloads.test.ts	91	find-shift	safe	R-RECEIVER	const fields = (id: string) => vectors.cases.find((c) => c.id === id)?.payload.fields ?? [];
+packages/inventory/test/movement-payloads.test.ts	137	find-shift	safe	R-RECEIVER	const sha = (id: string) => vectors.cases.find((c) => c.id === id)?.payload.sha256;
+packages/inventory/test/movement-payloads.test.ts	143	find-shift	safe	R-RECEIVER	const c = (id: string) => vectors.cases.find((x) => x.id === id);
+packages/inventory/test/payment-method-payloads.test.ts	104	find-shift	safe	R-RECEIVER	const v = vectors.cases.find((c) => c.id === 'S6-PMC-01');
+packages/inventory/test/payment-method-payloads.test.ts	111	find-shift	safe	R-RECEIVER	const d = vectors.cases.find((c) => c.id === 'S6-PMD-01');
+packages/inventory/test/payment-method-payloads.test.ts	112	find-shift	safe	R-RECEIVER	const a = vectors.cases.find((c) => c.id === 'S6-PMA-01');
+packages/inventory/test/purchase-payloads.test.ts	170	find-shift	safe	R-RECEIVER	const sha = (id: string) => vectors.cases.find((c) => c.id === id)?.intent.sha256;
+packages/inventory/test/purchase-payloads.test.ts	172	find-shift	safe	R-RECEIVER	expect(vectors.cases.find((c) => c.id === 'S4-SUP-ARC-01')?.payload.sha256).not.toBe(vectors.cases.find((c) => c.id === 'S4-SUP-REA-01')?.payload.sha256);
+packages/inventory/test/purchase-payloads.test.ts	176	find-shift	safe	R-RECEIVER	const v = vectors.cases.find((c) => c.id === 'S4-PDR-02');
+packages/inventory/test/purchase-reversal-payloads.test.ts	99	find-shift	safe	R-RECEIVER	const v = vectors.cases.find((c) => c.id === 'S5-REV-01');
+packages/inventory/test/supplier-payloads.test.ts	71	find-shift	safe	R-RECEIVER	expect(p.payload.sha256).toBe(vectors.cases.find((c) => c.id === 'S4-SUP-CRT-02')?.payload.sha256);
+packages/inventory/test/supplier-return-payloads.test.ts	134	find-shift	safe	R-RECEIVER	const count = Number(v.payload.fields.find((f) => f.name === 'line_count')?.value);
+packages/inventory/test/supplier-return-payloads.test.ts	136	find-shift	safe	R-RECEIVER	const w1 = v.payload.fields.find((f) => f.name === 'reason_w1')?.value;
+packages/inventory/test/supplier-return-payloads.test.ts	142	find-shift	safe	R-RECEIVER	const get = (id: string) => vectors.cases.find((c) => c.id === id);
+packages/inventory/test/supplier-return.test.ts	195	find-shift	safe	R-RECEIVER	expect(vectors.cases.find((c) => c.id === 'CUMULATIVE-THIRDS')?.naiveProportionalPlusFlush).toEqual(['33', '33', '34']);
+packages/inventory/test/supplier-settlement-payloads.test.ts	151	find-shift	safe	R-RECEIVER	const count = Number(v.payload.fields.find((f) => f.name === 'allocation_count')?.value);
+packages/inventory/test/supplier-settlement-payloads.test.ts	155	find-shift	safe	R-RECEIVER	expect(v.routine.args['p_reference'] === null, v.id).toBe(v.payload.fields.find((f) => f.name === 'reference_w1')?.value === null);
+packages/inventory/test/supplier-settlement-payloads.test.ts	156	find-shift	safe	R-RECEIVER	expect(v.routine.args['p_rate_id'] === null, v.id).toBe(v.payload.fields.find((f) => f.name === 'rate_id')?.value === null);
+packages/inventory/test/valuation-vectors.test.ts	345	find-shift	safe	R-RECEIVER	const sc = [...vectors.scenarios, ...vectors.controls].find((s) => s.id === id);
+packages/inventory/test/vectors.test.ts	28	find-shift	safe	R-RECEIVER	const field = (c: (typeof cases)[number], name: string) => c.fields.find((f) => f.name === name)?.value;
+packages/shared-contracts/test/dr31-credit-age.test.ts	343	length	safe	R-FIXTURE-ISSUES	expect(checked).toBe(asOfs.length * issues.length * dues.length * credits.length);
+packages/shared-contracts/test/dr31-credit-age.test.ts	476	find-shift	safe	R-FIXTURE-ISSUES	const line = code.split('\n').find((l) => /AS\s+age_days/i.test(l)) ?? '';
+packages/shared-contracts/test/dr31-credit-age.test.ts	497	find-shift	safe	R-FIXTURE-ISSUES	const line = code.split('\n').find((l) => /AS\s+is_credit/i.test(l)) ?? '';
+scripts/bootstrap-platform-owner.ts	36	find-shift	safe	R-RECEIVER	const email = args.find((a) => a.startsWith('--email='))?.slice('--email='.length);
+scripts/bootstrap-platform-owner.ts	37	find-shift	safe	R-RECEIVER	const confirm = args.find((a) => a.startsWith('--confirm='))?.slice('--confirm='.length);
+scripts/guards/inventory-definer-contract.ts	322	find-shift	safe	R-RECEIVER	const path = files.find((p) => (p.split(/[\\/]/).pop() ?? p) === file);
+scripts/guards/inventory-definer-contract.ts	339	find-shift	safe	R-RECEIVER	).test(stripComments(src.migrations[files.find((p) => (p.split(/[\\/]/).pop() ?? p) === file) ?? ''] ?? ''));
+scripts/guards/inventory-writer-authority.ts	308	find-shift	safe	R-RECEIVER	const path = Object.keys(migrations).find((p) => (p.split(/[\\/]/).pop() ?? p) === d.file) ?? d.file;
+scripts/guards/merchant-jargon.ts	306	find-shift	safe	R-RECEIVER	for (const hit of rule.find(code)) hits.push({ file, line: lineOf(code, hit.index), rule: rule.name, evidence: hit.evidence });
+scripts/guards/phase4-rls-force.ts	579	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
+scripts/guards/pos-session-law.ts	311	find-shift	safe	R-RECEIVER	const till = tables.find((t) => t.name === POS_TILL_SESSIONS);
+scripts/guards/pos-session-law.ts	360	find-shift	safe	R-RECEIVER	const exemptionFor = (relation: string, column: string) => ACTOR_COLUMN_EXEMPTIONS.find((e) => e.relation === relation && e.column === column);
+scripts/guards/pos-session-law.ts	386	find-shift	safe	R-RECEIVER	const parent = tables.find((t) => t.name === (exemption.edge?.parentRelation ?? exemption.relation));
+scripts/guards/process-composition.ts	169	find-shift	safe	R-RECEIVER	const composition = compositions.find((c) => c.process === process);
+scripts/guards/web-responsive.ts	90	find-shift	safe	R-RECEIVER	for (const hit of rule.find(code)) out.push({ file, line: lineOf(code, hit.index), rule: rule.name, evidence: hit.evidence, why: rule.why });
+scripts/install-accounting-key.ts	56	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
+scripts/install-inventory-key.ts	55	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
+scripts/install-provisioning-key.ts	51	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
+scripts/phase1-release-gate.ts	618	find-shift	safe	R-RECEIVER	const byName = (needle: string) => results.find((r) => r.name.toLowerCase().includes(needle));
+scripts/phase2-deployment-authority.ts	1462	find-shift	safe	R-RECEIVER	const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
+scripts/phase2-deployment-authority.ts	1464	find-shift	safe	R-RECEIVER	const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
+scripts/phase2-prefix.ts	154	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
+scripts/phase3-prefix.ts	184	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
+scripts/phase3-release-gate.ts	264	find-shift	safe	R-RECEIVER	const eq = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-review-index.ts	126	find-shift	safe	R-RECEIVER	return GROUP_RULES.find((r) => r.test(path))?.group ?? 'other';
+scripts/phase3-review-index.ts	433	find-shift	safe	R-RECEIVER	const h1 = lines.find((l) => /^#\s+\S/.test(l));
+scripts/phase3-review-index.ts	643	find-shift	safe	R-RECEIVER	const windowOf = (i: number): (typeof bounds)[number] | null => bounds.find((b) => i <= b.at) ?? null;
+scripts/phase3-s9-evidence.ts	75	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-secret-scan.ts	383	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
+scripts/phase3-secret-scan.ts	488	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
+scripts/phase3-secret-scan.ts	782	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase4-gate.ts	342	find-shift	safe	R-RECEIVER	const w = present.find((x) => x.name === n);
+scripts/phase4-gate.ts	822	find-shift	safe	R-RECEIVER	const r = results.find((x) => x.id === st.id);
+scripts/phase4-gate.ts	843	find-shift	safe	R-RECEIVER	const hit = found.find((r) => needle.test(r));
+scripts/phase4-gate.ts	939	find-shift	safe	R-RECEIVER	const step = planned.find((st) => st.id === `slice-${s}`);
+scripts/phase4-gate.ts	1541	find-shift	safe	R-RECEIVER	const resultOf = (id: string): Result => results.find((r) => r.id === id) as Result;
+scripts/phase4-prefix.ts	293	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
+scripts/phase4-s1-gate.ts	788	find-shift	safe	R-RECEIVER	const table = tables.find((t) => t.name === name);
+scripts/phase4-s1-gate.ts	1666	find-shift	safe	R-RECEIVER	export const refundMention = (text: string): string | null => (text.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).find(isRefundRelation) ?? null;
+scripts/phase4-s1-gate.ts	1902	find-shift	safe	R-RECEIVER	const invoices = readTables(phase4Sql(root)).tables.find((t) => t.name === 'invoices');
+scripts/phase4-s1-gate.ts	2116	find-shift	safe	R-RECEIVER	const discriminator = [`${stem}_type`, `${stem}_kind`].find((d) => known.has(d));
+scripts/phase4-s1-gate.ts	2773	find-shift	safe	R-RECEIVER	const evidence = argv.find((a) => a.startsWith('--evidence='))?.slice('--evidence='.length) ?? null;
+scripts/phase4-s2-gate.ts	648	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/phase4-s3-gate.ts	521	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/phase4-s4-gate.ts	785	find-shift	safe	R-RECEIVER	declaredInvoiceEdges(sql, child).find(
+scripts/phase4-s4-gate.ts	2647	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
+scripts/phase4-s4-gate.ts	3711	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/plan-evidence/discover-plan-claims.ts	395	find-shift	safe	R-RECEIVER	const outArg = args.find((a) => a.startsWith('--out='))?.slice('--out='.length);
+scripts/plan-evidence/target-cluster.ts	186	find-shift	safe	R-RECEIVER	const dbArg = args.find((a) => a.startsWith('--database='))?.slice('--database='.length);
+scripts/test-census.ts	220	errors-access	safe	R-RECEIVER	for (const error of module.errors()) problems.push(`${file}: ${error.message}`);
+scripts/test-census.ts	314	find-shift	safe	R-RECEIVER	source: `vitest collect, ${PROJECTS.find((p) => p.id === rule.project)?.config ?? rule.project}`,
+scripts/test-census.ts	366	find-shift	safe	R-RECEIVER	const arg = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+tests-unit/browser-pacer-route-coverage.test.ts	27	find-shift	safe	R-RECEIVER	const row = (c: RouteCoverage) => c.table().find((r) => r.route === KEY);
+tests/browser/gate.ts	82	find-shift	safe	R-BROWSER-GATE	const value = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+tests/browser/gate.ts	224	length	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
+tests/browser/gate.ts	224	issues-access	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
+tests/browser/gate.ts	256	length	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
+tests/browser/gate.ts	256	issues-access	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
+tests/browser/gate.ts	302	length	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
+tests/browser/gate.ts	302	issues-access	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
+tests/browser/gate.ts	305	issues-access	safe	R-BROWSER-GATE	for (const i of r.issues) console.log(`    [${i.kind}] ${i.detail}`);
+tests/browser/gate.ts	331	method	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
+tests/browser/gate.ts	331	issues-access	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
+tests/browser/invariants.ts	368	issues-access	safe	R-BROWSER-GATE	return 'issues' in value && Array.isArray(value.issues) && 'scrollWidth' in value && typeof value.scrollWidth === 'number';
+tests/browser/pacer.ts	39	find-shift	safe	R-BROWSER-GATE	while (this.spent.length > 0 && (this.spent[0] ?? now) <= now - this.windowMs) this.spent.shift();
+tests/browser/run-context.ts	141	issues-access	safe	R-BROWSER-GATE	target.issues.push({ kind, detail: detail.slice(0, 300) });
+tests/browser/run-context.ts	256	body-consumer	safe	R-BROWSER-GATE	this.current = { step: name, issues: [], shots: [], started: Date.now(), pacedAt: this.pacedWaitMs() };
+tests/browser/run-context.ts	272	issues-access	safe	R-BROWSER-GATE	issues: done.issues,
+tests/browser/run-context.ts	287	destructure	safe	R-BROWSER-GATE	target.shots.push({ file, issues: result.issues });
+tests/browser/run-context.ts	287	issues-access	safe	R-BROWSER-GATE	target.shots.push({ file, issues: result.issues });
+tests/browser/run-context.ts	288	issues-access	safe	R-BROWSER-GATE	for (const i of result.issues) target.issues.push({ kind: i.kind, detail: `[${name}] ${i.detail}` });
+tests/browser/seed.ts	243	find-shift	safe	R-BROWSER-GATE	const found = list(accounts, 'items').find((a) => field(a, 'systemKey') === key);
+tests/golden-regression/phase1/06-web-contract.golden.test.ts	427	issues-access	safe	HAND	`${a.client}: response DTO mismatch ${JSON.stringify(parsed.success ? null : parsed.error.issues)} for ${JSON.stringify(res.body)}`,
+tests/golden-regression/phase1/07-admin-contract.golden.test.ts	305	find-shift	safe	R-RECEIVER	const p = (b.items as { key: string; versions: unknown[] }[]).find((x) => x.key === planKey);
+tests/golden-regression/phase1/07-admin-contract.golden.test.ts	401	issues-access	safe	HAND	`${a.client}: response DTO mismatch ${JSON.stringify(parsed.success ? null : parsed.error.issues)} for ${JSON.stringify(res.body)}`,
+tests/golden-regression/phase2/02-report-shapes.golden.test.ts	269	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).accountId;
+tests/golden-regression/phase2/02-report-shapes.golden.test.ts	316	find-shift	safe	R-RECEIVER	rows.find((r) => r.code === golden.code),
+tests/golden-regression/phase2/02-report-shapes.golden.test.ts	348	find-shift	safe	R-RECEIVER	const payable = must((res.body['items'] as { code: string; netMinor: string }[]).find((r) => r.code === '2000'));
+tests/golden-regression/phase2/02-report-shapes.golden.test.ts	387	find-shift	safe	R-RECEIVER	const cash = must((tb.body['items'] as { code: string; netMinor: string }[]).find((r) => r.code === '1000'));
+tests/golden-regression/phase2/02-report-shapes.golden.test.ts	397	find-shift	safe	R-RECEIVER	const inventory = must((detail.body['lines'] as Record<string, unknown>[]).find((l) => l['code'] === '1200'));
+tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts	225	find-shift	safe	R-RECEIVER	must(sides.find((x) => x.name === 'ledgerValueBaseMinor')).code.includes('value_delta_base_minor'),
+tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts	132	find-shift	safe	R-RECEIVER	const documentKey = r.rows.find((row) => row.cols.includes('business_id') && row.cols.includes('id'));
+tests/golden-regression/phase4-s2/sale-path.ts	177	find-shift	safe	R-RECEIVER	return seen.find((s) => /\.insufficient_stock$/.test(s)) ?? null;
+tests/golden-regression/phase4-s4/harness.ts	165	find-shift	safe	R-RECEIVER	const single = bodies.find((r) => r.args.replace(/\s+/g, '') === 'invoice_outstanding(uuid,uuid)')?.body ?? '';
+tests/golden-regression/phase4-s4/settlement-path.ts	803	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
+tests/golden-regression/phase4/01-cross-tenant.golden.test.ts	1683	find-shift	safe	R-RECEIVER	const row = (await openInvoices(shop, actor)).find((i) => i.invoiceId === invoiceId);
+tests/golden-regression/phase4/04-schema-lint.golden.test.ts	162	find-shift	safe	R-RECEIVER	const column = columns.find((a) => a.relation === relation && a.column === required);
+tests/guards/mig-0084-end-state-signature-law.test.ts	442	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
+tests/guards/mig-0084-end-state-signature-law.test.ts	466	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
+tests/guards/p4s1-roster-floor-and-deference.test.ts	82	find-shift	safe	R-RECEIVER	const found = S7_ROWS.find((r) => r.file.endsWith(suffix));
+tests/guards/p4s4-command-refusal-audit-law.test.ts	146	find-shift	safe	R-RECEIVER	const named = problems.find((p) => p.includes(`${TILL}: close`)) ?? '';
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	916	find-shift	safe	R-RECEIVER	const first = rows.find((r) => r.currency_code === currency);
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1019	find-shift	safe	R-RECEIVER	const row = openCounts.find((c) => c.currency === 'JOD');
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1037	find-shift	safe	R-RECEIVER	const row = openCounts.find((c) => c.currency === 'KWD');
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1340	find-shift	safe	R-RECEIVER	expect(wrong.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(3);
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1341	find-shift	safe	R-RECEIVER	expect(right.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(1);
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1343	find-shift	safe	R-RECEIVER	expect(() => expect(wrong.find((c) => c.currency === 'KWD')?.openDebitCount).toBe(1)).toThrow();
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1346	find-shift	safe	R-RECEIVER	expect(wrong.find((c) => c.currency === 'JOD')).toEqual({ currency: 'JOD', openDebitCount: 2, openCreditCount: 2 });
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1355	find-shift	safe	R-RECEIVER	expect(wrong.find((c) => c.currency === 'KWD')).toEqual({ currency: 'KWD', openDebitCount: 0, openCreditCount: 1 });
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1356	find-shift	safe	R-RECEIVER	expect(right.find((c) => c.currency === 'KWD')).toEqual({ currency: 'KWD', openDebitCount: 1, openCreditCount: 0 });
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1363	find-shift	safe	R-RECEIVER	const r = right.find((c) => c.currency === currency);
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1364	find-shift	safe	R-RECEIVER	const w = wrong.find((c) => c.currency === currency);
+tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1370	find-shift	safe	R-RECEIVER	expect(wrong.find((c) => c.currency === 'JOD')).toEqual(right.find((c) => c.currency === 'JOD'));
+tests/guards/p4s4-required-ci.test.ts	748	find-shift	safe	R-RECEIVER	const ev = S4_EVIDENCE_STEPS.find((e) => e.scriptBody !== undefined);
+tests/guards/p4s4-required-ci.test.ts	1322	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === victim && r.title === law);
+tests/guards/p4s4-required-ci.test.ts	1571	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-payment-closure.test.ts');
+tests/guards/p4s4-required-ci.test.ts	1594	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-customer-identity-pin.test.ts');
+tests/guards/p4s4-required-ci.test.ts	1762	find-shift	safe	R-RECEIVER	const victim = S4_EVIDENCE_STEPS.find((e) => [...`${e.label} ${e.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].length === 0);
+tests/guards/p4s4-settlement-surface-laws.test.ts	570	find-shift	safe	R-RECEIVER	const hit = readdirSync(dir).find((f) => /_phase4_customer_payments_credits\.sql$/.test(f));
+tests/guards/p4s4-settlement-surface-laws.test.ts	617	find-shift	safe	HAND	const other = ROW_LOCK_ONLY_ROUTINES.find((r) => r !== fn) as string;
+tests/guards/p4s4-standard-aging-not-due-band.test.ts	378	method	safe	HAND	if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');
+tests/guards/p4s4-standard-aging-not-due-band.test.ts	378	issues-access	safe	HAND	if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');
+tests/guards/p4s4-vocabulary-live-arm.test.ts	317	find-shift	safe	R-RECEIVER	expect(live.find((r) => r.name === view)?.kind, 'the shared catalogue read did not return the matview').toBe('m');
+tests/guards/p4s4-vocabulary-live-arm.test.ts	362	find-shift	safe	R-RECEIVER	expect(live.find((r) => r.name === name)?.schema, 'the shared catalogue read did not return the non-public relation').toBe(schema);
+tests/guards/phase4-browser-step-ownership.test.ts	154	find-shift	safe	R-RECEIVER	const walked = (browserSteps().find((a) => a.startsWith('--steps=')) ?? '').slice('--steps='.length).split(',');
+tests/guards/phase4-deferred-seam-guard.test.ts	548	find-shift	safe	R-RECEIVER	const wrapper = live.find((d) => routineSignature(d, 'invoice_outstanding') === 'uuid,uuid') ?? '';
+tests/guards/phase4-deferred-seam-guard.test.ts	549	find-shift	safe	R-RECEIVER	const setBased = live.find((d) => routineSignature(d, 'invoice_outstanding') === 'uuid,uuid[]') ?? '';
+tests/guards/phase4-deferred-seam-guard.test.ts	656	find-shift	safe	R-RECEIVER	const scalar = liveRoutineBodiesIn(phase4Sql(root), 'invoice_outstanding').live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid');
+tests/guards/phase4-deferred-seam-guard.test.ts	678	find-shift	safe	R-RECEIVER	const scalar = live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid') ?? '';
+tests/guards/phase4-deferred-seam-guard.test.ts	679	find-shift	safe	R-RECEIVER	const array = live.find((def) => routineSignature(def, 'invoice_outstanding') === 'uuid,uuid[]') ?? '';
+tests/guards/phase4-merchant-language-guard.test.ts	113	find-shift	safe	R-GUARD-ISSUES	expect(hits.find((h) => h.rule === 'JSX text literal outside t()')?.evidence).toBe('Outstanding balance');
+tests/guards/phase4-merchant-language-guard.test.ts	213	method	safe	R-GUARD-ISSUES	issues.map((i) => i.kind),
+tests/guards/phase4-merchant-language-guard.test.ts	216	method	safe	R-GUARD-ISSUES	expect(issues.find((i) => i.kind === 'tax-control')?.detail, d.desc).toContain(d.tag);
+tests/guards/phase4-merchant-language-guard.test.ts	216	find-shift	safe	R-GUARD-ISSUES	expect(issues.find((i) => i.kind === 'tax-control')?.detail, d.desc).toContain(d.tag);
+tests/guards/phase4-merchant-language-guard.test.ts	230	method	safe	R-GUARD-ISSUES	issues.map((i) => i.kind),
+tests/guards/phase4-merchant-language-guard.test.ts	233	method	safe	R-GUARD-ISSUES	expect(issues.find((i) => i.kind === 'jargon')?.detail, text).toContain(word);
+tests/guards/phase4-merchant-language-guard.test.ts	233	find-shift	safe	R-GUARD-ISSUES	expect(issues.find((i) => i.kind === 'jargon')?.detail, text).toContain(word);
+tests/guards/phase4-pos-client-trust-boundary.test.ts	186	find-shift	safe	R-RECEIVER	const found = declared.find((d) => d.name === name);
+tests/guards/phase4-rls-force-guard.test.ts	207	find-shift	safe	R-RECEIVER	const row = live.find((x) => x.name === name);
+tests/guards/phase4-rls-force-guard.test.ts	235	find-shift	safe	R-RECEIVER	expect(planted.find((r) => r.name === name)?.rowSecurity, 'the plant did not take').toBe(false);
+tests/guards/phase4-rls-force-guard.test.ts	257	find-shift	safe	R-RECEIVER	expect(planted.find((r) => r.name === name)?.rowSecurity, 'the plant also disabled RLS, so this is not the FORCE proof').toBe(true);
+tests/guards/phase4-rls-force-guard.test.ts	258	find-shift	safe	R-RECEIVER	expect(planted.find((r) => r.name === name)?.forceRowSecurity, 'the plant did not take').toBe(false);
+tests/guards/phase4-rls-force-guard.test.ts	743	find-shift	safe	R-RECEIVER	expect(live.find((r) => r.name === name)?.kind, 'LIVE_RELATION_SQL did not read the matview').toBe('m');
+tests/guards/phase4-rls-force-guard.test.ts	806	find-shift	safe	R-RECEIVER	expect(live.find((r) => r.name === name)?.schema, 'LIVE_RELATION_SQL did not read the non-public table').toBe(schema);
+tests/guards/pos-s3-cart-law.test.ts	375	formatter	safe	R-PROSE	// The defect: schema-then-scan. A strict schema throws `ZodError` for an
+tests/guards/pos-s3-cart-law.test.ts	418	find-shift	safe	R-RECEIVER	const removal = POS_CART_ROUTE_AUTHORITY.find((r) => r.command === 'cart.remove_line');
+tests/guards/pos-s3-cart-law.test.ts	855	find-shift	safe	R-RECEIVER	const routine = cartStatementPlan(command, target()).find((p) => p.role === 'routine');
+tests/guards/pos-s3-cart-law.test.ts	867	find-shift	safe	R-RECEIVER	const routine = cartStatementPlan(command, target()).find((p) => p.role === 'routine');
+tests/guards/pos-s3-checkout-law.test.ts	637	find-shift	safe	R-RECEIVER	const row = POS_ROUTE_AUTHORITY.find((r) => r.path === '/v1/pos/till-sessions/:sessionId/checkout');
+tests/guards/rowcount-refusal-law.test.ts	1635	find-shift	safe	R-RECEIVER	const roleOf = (law: string) => PINS.find((p) => p.law === law)?.role;
+tests/guards/rowcount-refusal-law.test.ts	1666	find-shift	safe	R-RECEIVER	const boundOf = (law: string) => PINS.find((p) => p.law === law)?.bound;
+tests/guards/sale-s2-red-proofs.test.ts	327	find-shift	safe	R-RECEIVER	const law = LAWS.find((l) => l.id === plant.law);
+tests/helpers/purchase-commands.ts	1130	find-shift	safe	R-RECEIVER	return must(whole.shift(), 'vectorDraft: at most four whole-quantity lines');
+tests/helpers/purchase-deficits.ts	127	find-shift	safe	R-RECEIVER	coverageVectors().find((v) => v.id === id),
+tests/helpers/purchase-returns.ts	1148	find-shift	safe	R-RECEIVER	supplierReturnVectors().find((v) => v.id === id),
+tests/helpers/purchase-returns.ts	1189	find-shift	safe	R-RECEIVER	return must(whole.shift(), 'vector purchase: at most four whole-quantity lines');
+tests/helpers/supplier-settlement.ts	1410	find-shift	safe	R-RECEIVER	settlementVectors().find((v) => v.id === id),
+tests/helpers/till-checkout.ts	239	find-shift	safe	R-RECEIVER	return seen.find((s) => /^(pos|sale|invoice|customer|inventory)\.[a-z_]+$/.test(s)) ?? null;
+tests/helpers/validation-refusal.ts	2	formatter	safe	HAND	import type { ZodError } from 'zod';
+tests/helpers/validation-refusal.ts	39	formatter	safe	R-PROSE	* Runs a schema over a body. Returns the ZodError, or null when it ACCEPTED
+tests/helpers/validation-refusal.ts	40	formatter	safe	R-PROSE	* the body. A schema that throws something other than a ZodError (a refinement
+tests/helpers/validation-refusal.ts	44	formatter	safe	HAND	export function refusalOf(schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } }, value: unknown): ZodError | null {
+tests/helpers/validation-refusal.ts	46	formatter	safe	HAND	return r.success ? null : (r.error as ZodError);
+tests/integration/accounting-fingerprint-parity.test.ts	206	find-shift	safe	R-RECEIVER	const base: Vector = must(vectors.cases.find((c) => c.name === 'line-order-is-byte-order'));
+tests/integration/accounting-ledger-pagination.test.ts	170	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).accountId;
+tests/integration/accounting-reconciliation.test.ts	149	find-shift	safe	R-RECEIVER	const outcome = must(metrics.snapshot().find((s) => s.name === ACCOUNTING_METRICS.reconciliationRunTotal));
+tests/integration/accounting-reconciliation.test.ts	252	find-shift	safe	R-RECEIVER	const definition = must(RECONCILIATION_CHECKS.find((d) => d.id === id));
+tests/integration/accounting-reports-authorization.test.ts	358	find-shift	safe	R-RECEIVER	must((res.body['items'] as { code: string; totalDebitMinor: string }[]).find((r) => r.code === '1000')).totalDebitMinor;
+tests/integration/accounting-reports.test.ts	342	find-shift	safe	R-RECEIVER	account.find((a) => a.code === customCode),
+tests/integration/accounting-reports.test.ts	348	find-shift	safe	R-RECEIVER	expect(must(tbRows(tb.body).find((r) => r.code === customCode))).toMatchObject({ totalDebitMinor: '30000', netMinor: '30000', isActive: false });
+tests/integration/accounting-reports.test.ts	363	find-shift	safe	R-RECEIVER	const bankBefore = must((before.body['items'] as { code: string; balanceMinor: string }[]).find((r) => r.code === '1010')).balanceMinor;
+tests/integration/accounting-reports.test.ts	391	find-shift	safe	R-RECEIVER	const bankAfter = must((after.body['items'] as { code: string; balanceMinor: string }[]).find((r) => r.code === '1010')).balanceMinor;
+tests/integration/accounting-reports.test.ts	420	find-shift	safe	R-RECEIVER	must((body['lines'] as Record<string, unknown>[]).find((l) => l['code'] === code));
+tests/integration/accounting-reports.test.ts	444	find-shift	safe	R-RECEIVER	const inventory = must(accounts.find((a) => a.code === '1200'));
+tests/integration/accounting-reports.test.ts	477	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).accountId;
+tests/integration/accounting-reports.test.ts	503	find-shift	safe	R-RECEIVER	const theirCash = must(theirs.find((a) => a.code === '1000')).accountId;
+tests/integration/accounting-reports.test.ts	550	find-shift	safe	R-RECEIVER	const cash = must(tbRows(res.body).find((r) => r.code === '1000'));
+tests/integration/accounting-source-completeness.test.ts	372	find-shift	safe	R-RECEIVER	rows.rows.find((r) => r.tgname === trigger),
+tests/integration/accounting-source-completeness.test.ts	387	find-shift	safe	R-RECEIVER	const search = must(row.config, `${fn} has no search_path`).find((c) => c.startsWith('search_path='));
+tests/integration/catalog-base-variant.test.ts	150	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_sku_uq')?.indexdef).toMatch(/WHERE \(+sku IS NOT NULL\)/);
+tests/integration/catalog-base-variant.test.ts	151	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_barcode_uq')?.indexdef).toMatch(/WHERE \(+barcode IS NOT NULL\)/);
+tests/integration/inventory-seam.test.ts	240	find-shift	safe	R-RECEIVER	const seamClient = must(issued.find((q) => q.text === SERVER_VIEW)).client;
+tests/integration/invitation-lifecycle.test.ts	111	find-shift	safe	R-RECEIVER	const item = (list.body.items as { email: string; status: string }[]).find((i) => i.email === email);
+tests/integration/invitation-lifecycle.test.ts	180	find-shift	safe	R-RECEIVER	const maxUsers = (ent.body.limits as { key: string; usage: number }[]).find((l) => l.key === 'MAX_USERS');
+tests/integration/migration-upgrade.test.ts	995	find-shift	safe	R-RECEIVER	expect(manifest.migrations.find((m) => m.name === '0049_accounting_periods.sql')?.sha256).toBe(
+tests/integration/onboarding.test.ts	51	find-shift	safe	R-RECEIVER	expect(roles.rows.find((r) => r.key === 'owner')?.is_system).toBe(true);
+tests/integration/p3c-td20-default-warehouse-name.test.ts	369	find-shift	safe	R-RECEIVER	after.find((r) => r.id === id),
+tests/integration/p3c-td20-default-warehouse-name.test.ts	374	find-shift	safe	R-RECEIVER	after.find((r) => r.business === businessId && r.branch === branchId && r.isDefault),
+tests/integration/p3c-td20-default-warehouse-name.test.ts	378	find-shift	safe	R-RECEIVER	[must(before.find((r) => r.business === ar.businessId && r.branch === ar.branchId && r.isDefault)).id, MAIN.ar],
+tests/integration/p3c-td20-default-warehouse-name.test.ts	379	find-shift	safe	R-RECEIVER	[must(before.find((r) => r.business === tr.businessId && r.branch === tr.branchId && r.isDefault)).id, MAIN.tr],
+tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	581	find-shift	safe	R-RECEIVER	standardSweep.find((s) => s.days === 0),
+tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	586	find-shift	safe	R-RECEIVER	standardSweep.find((s) => s.days === 1),
+tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	677	issues-access	safe	HAND	expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');
+tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	677	body-consumer	safe	HAND	expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');
+tests/integration/p4s4-customer-identity-pin.test.ts	321	find-shift	safe	R-RECEIVER	chain.find((s) => s.relation === 'payment_allocations'),
+tests/integration/p4s4-customer-identity-pin.test.ts	457	find-shift	safe	R-RECEIVER	(await invoiceChain(ownerPool(), w.shop.businessId, invoiceC2.invoiceId)).find((st) => st.relation === 'customer_credit_applications'),
+tests/integration/p4s4-invoice-settlement-chain.test.ts	331	find-shift	safe	R-RECEIVER	chain.find((s) => s.relation === 'payment_allocations'),
+tests/integration/phase3-s8-negative-controls.test.ts	237	find-shift	safe	R-RECEIVER	accounts.find((a) => a.key === key),
+tests/integration/phase4-s7-installment-fact-db.test.ts	4133	find-shift	safe	R-RECEIVER	(M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
+tests/integration/phase4-s7-installment-fact-db.test.ts	4135	find-shift	safe	R-RECEIVER	expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
+tests/integration/phase4-s7-installment-fact-db.test.ts	4912	find-shift	safe	R-RECEIVER	const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
+tests/integration/pos-s3-cart.test.ts	714	find-shift	safe	R-RECEIVER	const ordinal = indexes.find((row) => row.name === POS_CART_UNIQUE_CONSTRAINT);
+tests/integration/pos-s3-cart.test.ts	727	find-shift	safe	R-RECEIVER	const byProduct = indexes.find((row) => row.cols.includes('product_id') && row.cols.includes('variant_id'));
+tests/integration/process-composition.test.ts	237	find-shift	safe	R-RECEIVER	const of = (p: string): ReadonlySet<Ctor> => (COMPOSITIONS.find((c) => c.process === p) as Composition<Ctor>).controllers;
+tests/integration/process-composition.test.ts	366	find-shift	safe	R-RECEIVER	const merchant = COMPOSITIONS.find((c) => c.process === 'merchant-api') as Composition<Ctor>;
+tests/integration/process-composition.test.ts	386	find-shift	safe	R-RECEIVER	const of = (p: string): ReadonlySet<Ctor> => (COMPOSITIONS.find((c) => c.process === p) as Composition<Ctor>).controllers;
+tests/integration/process-composition.test.ts	408	find-shift	safe	R-RECEIVER	const accounting = discovered.find((d) => label(d.controller) === 'AccountingController')?.controller;
+tests/integration/purchase-s4-coverage.test.ts	161	find-shift	safe	R-RECEIVER	layers.find((l) => l.id === v.deficitId),
+tests/integration/purchase-s4-coverage.test.ts	266	find-shift	safe	R-RECEIVER	).scenarios.find((s) => s.id === 'AL08-CATCHUP-GOLD72'),
+tests/integration/purchase-s4-fx.test.ts	66	find-shift	safe	R-RECEIVER	landedCostVectors().purchases.find((p) => p.id === id),
+tests/integration/purchase-s4-landed-cost.test.ts	185	find-shift	safe	R-RECEIVER	const keep = must(gone.rows.find((r) => r.amount === '60'));
+tests/integration/purchase-s4-receipt.test.ts	171	find-shift	safe	R-RECEIVER	const v = must(landedCostVectors().purchases.find((p) => p.id === 'PA-DOMESTIC-01'));
+tests/integration/purchase-s5-reads.test.ts	183	find-shift	safe	R-RECEIVER	const reversed = must(purchases.find((x) => x.what === 'reversed')).p;
+tests/integration/purchase-s5-reads.test.ts	185	find-shift	safe	R-RECEIVER	const whole = must(purchases.find((x) => x.what === 'ILS, returned whole')).p;
+tests/integration/purchase-s5-reversal-exact.test.ts	85	find-shift	safe	R-RECEIVER	rows.find((r) => r.source_line_id === l.lineId),
+tests/integration/read-s7-authority.test.ts	196	find-shift	safe	R-RECEIVER	expect(mine.items.find((x) => x.warehouseId === w.w3)?.branchIds).toEqual([w.A.branchX, w.A.branchY].sort());
+tests/integration/read-s7-freshness.test.ts	52	find-shift	safe	R-RECEIVER	return page.items.find((r) => r.productId === productId)?.onHand;
+tests/integration/read-s7-freshness.test.ts	59	find-shift	safe	R-RECEIVER	const row = page.items.find((r) => r.supplierId === w.supplierId);
+tests/integration/read-s7-freshness.test.ts	64	find-shift	safe	R-RECEIVER	const owedIls = async (): Promise<string | undefined> => (await balance()).owed.find((a) => a.currency === 'ILS')?.amountMinor;
+tests/integration/read-s7-freshness.test.ts	101	find-shift	safe	R-RECEIVER	expect(open.items.find((r) => r.purchaseId === p.purchaseId)?.outstandingTxnMinor).toBe('1800');
+tests/integration/read-s7-freshness.test.ts	108	find-shift	safe	R-RECEIVER	const favour = async (): Promise<string | undefined> => (await balance()).inYourFavour.find((a) => a.currency === 'ILS')?.amountMinor;
+tests/integration/read-s7-freshness.test.ts	132	find-shift	safe	R-RECEIVER	expect(detail.lines.find((l) => l.productId === fig.productId)?.countedQty).toBe('5');
+tests/integration/read-s7-items-units.test.ts	99	find-shift	safe	R-RECEIVER	all.items.find((i) => i.productId === A.untracked.productId),
+tests/integration/read-s7-items-units.test.ts	158	find-shift	safe	R-RECEIVER	expect(page.items.find((i) => i.productId === archived.productId)).toMatchObject({ status: 'archived', unitCode: 'kg', unitDecimals: 3 });
+tests/integration/read-s7-items-units.test.ts	202	find-shift	safe	R-RECEIVER	expect(ar.items.find((u) => u.unitCode === 'metre')).toEqual({ unitCode: 'metre', name: 'متر', defaultDecimals: 2 });
+tests/integration/read-s7-items-units.test.ts	204	find-shift	safe	R-RECEIVER	expect(en.items.find((u) => u.unitCode === 'hour')?.name).toBe('Hour');
+tests/integration/read-s7-stock.test.ts	128	find-shift	safe	R-RECEIVER	expect(rows.find((r) => r.productId === w.A.dec2.productId)).toMatchObject({ variantId: null, onHand: '0.00' });
+tests/integration/read-s7-stock.test.ts	129	find-shift	safe	R-RECEIVER	expect(rows.find((r) => r.productId === w.A.piece.productId)?.onHand, 'the part-paid receipt of 10').toBe('10');
+tests/integration/read-s7-supplier-balances.test.ts	156	find-shift	safe	R-RECEIVER	const main = must(rows.find((r) => r.supplierId === w.supplierId));
+tests/integration/read-s7-supplier-balances.test.ts	162	find-shift	safe	R-RECEIVER	expect(must(rows.find((r) => r.supplierId === settledSupplier)).owed, 'a settled supplier owes nothing').toEqual([]);
+tests/integration/read-s7-supplier-balances.test.ts	163	find-shift	safe	R-RECEIVER	expect(must(rows.find((r) => r.supplierId === emptySupplier))).toMatchObject({ owed: [], inYourFavour: [] });
+tests/integration/sale-s2-error-contract.test.ts	341	find-shift	safe	R-RECEIVER	const domain = [details['sellingCode'], details['inventoryCode'], details['accountingCode']].find((v) => typeof v === 'string');
+tests/integration/settlement-s6-credit-concurrency.test.ts	184	find-shift	safe	R-RECEIVER	expect(refusalCode(must(responses.find((x) => x.status === 422)))).toBe('supplier_refund.amount_exceeds_credit');
+tests/integration/settlement-s6-over-allocation.test.ts	177	find-shift	safe	R-RECEIVER	const loser = must(responses.find((r) => r.status === 422));
+tests/integration/settlement-s6-reads.test.ts	159	find-shift	safe	R-RECEIVER	(listed.body as { items: Record<string, unknown>[] }).items.find((n) => n.creditNoteId === creditNoteId),
+tests/integration/stock-ledger-primitive.test.ts	230	find-shift	safe	R-RECEIVER	expect(stored.find((m) => m.id === d.movement_id)?.reason).toBe('broken in transit');
+tests/integration/stock-ledger-primitive.test.ts	231	find-shift	safe	R-RECEIVER	expect(stored.find((m) => m.id === a.movement_id)?.reason).toBe('x'.repeat(500));
+tests/integration/stock-ledger-primitive.test.ts	234	find-shift	safe	R-RECEIVER	expect((await movementsOf(c, biz.businessId, K1)).find((m) => m.id === p.movement_id)?.reason).toBe('supplier invoice');
+tests/integration/stock-ledger-unit-lock.test.ts	283	find-shift	safe	R-RECEIVER	const lock = must(r.rows.find((x) => x.name === 'products_20_unit_history_lock'));
+tests/integration/stock-ledger-unit-lock.test.ts	376	find-shift	safe	R-RECEIVER	const lock = must(r.rows.find((x) => x.name === 'product_variants_20_stock_identity_lock'));
+tests/integration/stock-ledger-vectors.test.ts	602	find-shift	safe	R-RECEIVER	const scenario = must(SCENARIOS.find((s) => s.id === 'A'));
+tests/integration/stock-ledger-vectors.test.ts	632	find-shift	safe	R-RECEIVER	const scenario = must(SCENARIOS.find((s) => s.id === 'F'));
+tests/integration/stock-ledger-vectors.test.ts	646	find-shift	safe	R-RECEIVER	const g = must(SCENARIOS.find((s) => s.id === 'G'));
+tests/integration/stock-ledger-vectors.test.ts	711	find-shift	safe	R-RECEIVER	const ctrl = must(CONTROLS.find((s) => s.id === 'CTRL-FLUSH'));
+tests/integration/stock-ledger-vectors.test.ts	738	find-shift	safe	R-RECEIVER	const ctrl = must(CONTROLS.find((s) => s.id === 'CTRL-FLUSH'));
+tests/integration/team.test.ts	68	find-shift	safe	R-RECEIVER	const maxUsers = (res.body.limits as { key: string; limit: number; usage: number }[]).find((l) => l.key === 'MAX_USERS');
+tests/integration/team.test.ts	70	find-shift	safe	R-RECEIVER	const customRoles = (res.body.features as { key: string; enabled: boolean }[]).find((f) => f.key === 'CUSTOM_ROLES');
+tests/integration/team.test.ts	150	find-shift	safe	R-RECEIVER	const joined = (members.body.items as { email: string; roleKeys: string[]; status: string; joinedAt: string | null }[]).find((mm) => mm.email === email);
+tests/integration/team.test.ts	306	find-shift	safe	R-RECEIVER	expect((list.body.items as { userId: string }[]).find((mm) => mm.userId === uid2)).toBeUndefined();
+tests/integration/team.test.ts	325	find-shift	safe	R-RECEIVER	const maxUsers = (res.body.limits as { key: string; limit: number }[]).find((l) => l.key === 'MAX_USERS');
+tests/integration/team.test.ts	340	find-shift	safe	R-RECEIVER	const maxUsers = (res.body.limits as { key: string; limit: number }[]).find((l) => l.key === 'MAX_USERS');
+tests/integration/warehouse-branch-association.test.ts	83	find-shift	safe	R-RECEIVER	const w2 = homes.find((w) => w.branch_id === branch2)?.id ?? '';
+tests/integration/warehouse-branch-association.test.ts	84	find-shift	safe	R-RECEIVER	const first = homes.find((w) => w.branch_id !== branch2);
+tests/performance/accounting-read-plans.test.ts	135	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).id;
+tests/performance/phase3-s8-budgets.test.ts	232	find-shift	safe	HAND	(report.testResults ?? []).find((r) => (r.name ?? '').endsWith(T01)),
+tests/performance/receivables-open-page-equivalence.test.ts	304	find-shift	safe	R-RECEIVER	[seeded.businessId['subject'], cases.find((k) => k.key === 'settledCreditTail')?.customerId],
+tests/performance/receivables-open-page-equivalence.test.ts	317	find-shift	safe	R-RECEIVER	[seeded.businessId['subject'], cases.find((k) => k.key === 'currencies')?.customerId],
+tests/performance/receivables-open-page-equivalence.test.ts	324	find-shift	safe	HAND	[seeded.businessId['subject'], cases.find((k) => k.key === 'tiedDates')?.customerId],
+tests/performance/receivables-open-page-equivalence.test.ts	326	issues-access	safe	HAND	expect(tied.rows[0]?.issues).toBe('1');
+tests/performance/receivables-open-page-equivalence.test.ts	330	find-shift	safe	R-RECEIVER	expect(cases.find((k) => k.key === 'neighbour')?.customerId).toBe(cases.find((k) => k.key === 'cashTail')?.customerId);
+tests/performance/receivables-open-page-equivalence.test.ts	339	find-shift	safe	R-RECEIVER	const k = cases.find((c) => c.key === key);
+tests/performance/receivables-open-page-equivalence.test.ts	477	find-shift	safe	R-RECEIVER	const subject = cases.find((k) => k.key === 'cashTail') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	478	find-shift	safe	R-RECEIVER	const neighbour = cases.find((k) => k.key === 'neighbour') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	496	find-shift	safe	R-RECEIVER	const subject = cases.find((k) => k.key === 'cashTail') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	518	find-shift	safe	R-RECEIVER	const subject = cases.find((k) => k.key === 'cashTail') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	519	find-shift	safe	R-RECEIVER	const neighbour = cases.find((k) => k.key === 'neighbour') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	549	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'identity') as CaseSpec;
+tests/performance/receivables-open-page-equivalence.test.ts	631	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'fakeLimit') as CaseSpec;
+tests/performance/receivables-s4-budgets.test.ts	1271	find-shift	safe	R-RECEIVER	plans.find((p) => p.text.includes('customer_ar_outstanding(')),
+tests/performance/receivables-s4-dataset.ts	335	find-shift	safe	R-RECEIVER	while (state.at.length > 0 && now - (state.at[0] as number) >= THROTTLE.windowMs) state.at.shift();
+tests/security/accounting-credential-matrix.test.ts	196	find-shift	safe	R-RECEIVER	const setting = (f.config ?? []).find((c) => c.toLowerCase().startsWith('search_path='));
+tests/security/accounting-raw-sql-invariants.test.ts	159	find-shift	safe	R-RECEIVER	cashId = must(accounts.rows.find((a) => a.system_key === 'cash')).id;
+tests/security/accounting-raw-sql-invariants.test.ts	160	find-shift	safe	R-RECEIVER	equityId = must(accounts.rows.find((a) => a.system_key === 'opening_equity')).id;
+tests/security/accounting-sources-authority.test.ts	405	find-shift	safe	R-RECEIVER	const setting = must(row.config, row.name).find((c) => c.startsWith('search_path='));
+tests/security/branch-scopes.test.ts	216	find-shift	safe	R-RECEIVER	const scoped = (res.body.items as { userId: string; branchScopeMode: string; allowedBranchIds: string[] }[]).find((x) => x.userId === c.scoped.userId);
+tests/security/branch-scopes.test.ts	219	find-shift	safe	R-RECEIVER	const ownerRow = (res.body.items as { userId: string; branchScopeMode: string }[]).find((x) => x.userId === c.owner.userId);
+tests/security/dr71-zod-sensitive-paths.test.ts	110	issues-access	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
+tests/security/dr71-zod-sensitive-paths.test.ts	110	body-consumer	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
+tests/security/dr71-zod-sensitive-paths.test.ts	119	issues-access	intended	R-DR71-SUITE	for (const i of o.issues) expect(Object.keys(i).sort(), `${label}: an issue carries exactly path and code — no message, no keys`).toEqual(['code', 'path']);
+tests/security/dr71-zod-sensitive-paths.test.ts	135	method	intended	R-DR71-SUITE	o.issues.map((i) => i.path),
+tests/security/dr71-zod-sensitive-paths.test.ts	135	issues-access	intended	R-DR71-SUITE	o.issues.map((i) => i.path),
+tests/security/dr71-zod-sensitive-paths.test.ts	138	method	intended	HAND	if (h.code) expect(o.issues.find((i) => i.path === h.path)?.code, `${s.name}: ${h.id} code`).toBe(h.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	138	find-shift	intended	HAND	if (h.code) expect(o.issues.find((i) => i.path === h.path)?.code, `${s.name}: ${h.id} code`).toBe(h.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	138	issues-access	intended	HAND	if (h.code) expect(o.issues.find((i) => i.path === h.path)?.code, `${s.name}: ${h.id} code`).toBe(h.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	146	method	intended	R-DR71-SUITE	o.issues.map((i) => i.path),
+tests/security/dr71-zod-sensitive-paths.test.ts	146	issues-access	intended	R-DR71-SUITE	o.issues.map((i) => i.path),
+tests/security/dr71-zod-sensitive-paths.test.ts	149	method	intended	HAND	if (d.code) expect(o.issues.find((i) => i.path === want)?.code, `${s.name}: ${d.id} code`).toBe(d.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	149	find-shift	intended	HAND	if (d.code) expect(o.issues.find((i) => i.path === want)?.code, `${s.name}: ${d.id} code`).toBe(d.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	149	issues-access	intended	HAND	if (d.code) expect(o.issues.find((i) => i.path === want)?.code, `${s.name}: ${d.id} code`).toBe(d.code);
+tests/security/dr71-zod-sensitive-paths.test.ts	179	method	intended	R-DR71-SUITE	const got = o.issues.map((i) => i.path);
+tests/security/dr71-zod-sensitive-paths.test.ts	179	issues-access	intended	R-DR71-SUITE	const got = o.issues.map((i) => i.path);
+tests/security/dr71-zod-sensitive-paths.test.ts	185	method	intended	R-DR71-SUITE	const set = [...new Set(o.issues.map((i) => `${norm(i.path)}|${i.code}`))].sort().join(';');
+tests/security/dr71-zod-sensitive-paths.test.ts	185	issues-access	intended	R-DR71-SUITE	const set = [...new Set(o.issues.map((i) => `${norm(i.path)}|${i.code}`))].sort().join(';');
+tests/security/dr71-zod-sensitive-paths.test.ts	189	length	intended	HAND	counts.add(o.issues.length);
+tests/security/dr71-zod-sensitive-paths.test.ts	189	issues-access	intended	HAND	counts.add(o.issues.length);
+tests/security/dr71-zod-sensitive-paths.test.ts	278	method	intended	R-DR71-SUITE	expect(observe(sale.schema, credit).issues.map((i) => i.path)).toContain('customerId');
+tests/security/dr71-zod-sensitive-paths.test.ts	278	issues-access	intended	R-DR71-SUITE	expect(observe(sale.schema, credit).issues.map((i) => i.path)).toContain('customerId');
+tests/security/dr71-zod-sensitive-paths.test.ts	280	method	intended	R-DR71-SUITE	expect(observe(sale.schema, early).issues.map((i) => i.path)).toContain('dueDate');
+tests/security/dr71-zod-sensitive-paths.test.ts	280	issues-access	intended	R-DR71-SUITE	expect(observe(sale.schema, early).issues.map((i) => i.path)).toContain('dueDate');
+tests/security/dr71-zod-sensitive-paths.test.ts	283	method	intended	R-DR71-SUITE	expect(observe(sale.schema, dup).issues.map((i) => i.path)).toContain('lines');
+tests/security/dr71-zod-sensitive-paths.test.ts	283	issues-access	intended	R-DR71-SUITE	expect(observe(sale.schema, dup).issues.map((i) => i.path)).toContain('lines');
+tests/security/dr71-zod-sensitive-paths.test.ts	297	method	intended	R-DR71-SUITE	expect(o.issues.map((i) => i.code)).toEqual(expect.arrayContaining(['unrecognized_keys']));
+tests/security/dr71-zod-sensitive-paths.test.ts	297	issues-access	intended	R-DR71-SUITE	expect(o.issues.map((i) => i.code)).toEqual(expect.arrayContaining(['unrecognized_keys']));
+tests/security/dr71-zod-sensitive-paths.test.ts	369	issues-access	intended	R-DR71-SUITE	for (const i of (err(res).details as { issues: object[] }).issues) expect(Object.keys(i).sort()).toEqual(['code', 'path']);
+tests/security/dr71-zod-sensitive-paths.test.ts	389	find-shift	intended	R-DR71-SUITE	).find((m) => m.userId === uid),
+tests/security/dr71-zod-sensitive-paths.test.ts	406	find-shift	intended	R-DR71-SUITE	expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);
+tests/security/inventory-payload-parity.test.ts	85	find-shift	safe	R-RECEIVER	const c = INVPL.find((x) => x.name === name);
+tests/security/journal-privilege-matrix.test.ts	608	find-shift	safe	R-RECEIVER	.find((t) => !prefixRelations.has(t));
+tests/security/p3c-bff-admin-session-retry.test.ts	54	find-shift	safe	R-RECEIVER	const next = answers.shift();
+tests/security/p3c-corrective-gate-tamper.test.ts	319	find-shift	safe	R-RECEIVER	const entry = CORRECTIVE_SUITES.find((e) => !isPending(e) && e.runner === 'root' && e.file !== 'tests/security/p3c-corrective-gate-tamper.test.ts');
+tests/security/p3c-corrective-gate-tamper.test.ts	455	find-shift	safe	R-RECEIVER	const step = correctivePlan(root).find((s) => s.kind === 'command' && s.area === 'web-suites');
+tests/security/p3c-review-index.test.ts	65	find-shift	safe	R-RECEIVER	const line = text.split('\n').find((l) => l.startsWith(`| \`${path}\` |`));
+tests/security/p3c-review-index.test.ts	146	find-shift	safe	R-RECEIVER	const target = parseRows(page).find((r) => r.path === 'apps/api/src/modules/purchasing/purchases.controller.ts');
+tests/security/p3c-td18-definer-ownership.test.ts	612	find-shift	safe	R-RECEIVER	const frozenHead = migrationFiles().find((f) => f.startsWith('0069_'));
+tests/security/p4s4-cross-tenant-command-refusal.test.ts	695	find-shift	safe	R-RECEIVER	const due = BigInt(String(owed.find((i) => i.invoiceId === first.invoiceId)?.outstandingTxnMinor ?? '0'));
+tests/security/p4s4-cross-tenant-command-refusal.test.ts	696	find-shift	safe	R-RECEIVER	const surplus = BigInt(String(owed.find((i) => i.invoiceId === second.invoiceId)?.outstandingTxnMinor ?? '0'));
+tests/security/p4s4-cross-tenant-command-refusal.test.ts	916	index	safe	R-PROSE	* `VALIDATION_FAILED` and `details.issues[0].path = "bucketDays"` — and
+tests/security/p4s4-cross-tenant-command-refusal.test.ts	916	issues-access	safe	R-PROSE	* `VALIDATION_FAILED` and `details.issues[0].path = "bucketDays"` — and
+tests/security/p4s4-cross-tenant-command-refusal.test.ts	916	body-consumer	safe	R-PROSE	* `VALIDATION_FAILED` and `details.issues[0].path = "bucketDays"` — and
+tests/security/p4s4-internal-definer-inventory.test.ts	1658	find-shift	safe	R-RECEIVER	const helper = live.find((x) => x.sig.startsWith(`${via}(`));
+tests/security/p4s4-internal-definer-inventory.test.ts	1989	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.grantees.length === 1 && d.grantees[0] === 'daftar_app');
+tests/security/p4s4-internal-definer-inventory.test.ts	2001	find-shift	safe	R-RECEIVER	const seal = SEALED.find((s) => s[2] === 'helper');
+tests/security/p4s4-internal-definer-inventory.test.ts	2031	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.permission === 'signed-op');
+tests/security/p4s4-internal-definer-inventory.test.ts	2067	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.sig.startsWith('accounting_period_reopen('));
+tests/security/p4s4-internal-definer-inventory.test.ts	2090	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.sig.startsWith('sale_commit('));
+tests/security/p4s4-internal-definer-inventory.test.ts	2116	find-shift	safe	R-RECEIVER	const sealSig = SEALED.find((x) => x[0].startsWith(`${via}(`))?.[0];
+tests/security/p4s4-internal-definer-inventory.test.ts	2137	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.callerIds === 'unbound');
+tests/security/p4s4-internal-definer-inventory.test.ts	2156	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.sig === 'inventory_business_has_stock_movements(uuid)');
+tests/security/p4s4-internal-definer-inventory.test.ts	2199	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.callerIds === 'signed-id-equality');
+tests/security/p4s4-rls-barrier-behaviour.test.ts	879	find-shift	safe	R-RECEIVER	const before = (await policyState(c)).find((r) => r.relname === rel && r.polname === 'business_isolation_delete');
+tests/security/p4s4-rls-barrier-behaviour.test.ts	902	find-shift	safe	R-RECEIVER	after.find((r) => r.relname === rel && r.polname === 'business_isolation_delete'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2283	find-shift	safe	R-RECEIVER	(await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc,
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2290	find-shift	safe	R-RECEIVER	must((await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc, 'check'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2685	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'B'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2693	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'D'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2748	find-shift	safe	R-RECEIVER	const named = AUTHORITY_MATRIX.find((r) => r.principal === role);
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2790	find-shift	safe	R-RECEIVER	.map((role) => AUTHORITY_MATRIX.find((r) => r.principal === role))
+tests/security/p4s4-rls-barrier-behaviour.test.ts	3015	find-shift	safe	R-RECEIVER	AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
+tests/security/p4s4-rls-quals-once-per-query.test.ts	128	find-shift	safe	R-RECEIVER	const q = r.rows.find((x) => x.polname === pol)?.q;
+tests/security/phase2-s8-gate-tamper.test.ts	334	find-shift	safe	HAND	const victim = Object.entries(lock.packages).find(
+tests/security/phase3-s8-grant-matrix.test.ts	539	find-shift	safe	R-RECEIVER	const purchases = (await taxColumns(ownerPool())).find((x) => x.col === 'purchases.tax_minor');
+tests/security/phase3-s8-operation-kinds.test.ts	130	find-shift	safe	R-RECEIVER	const c = all.find((x) => x.sig === sig);
+tests/security/phase3-s8-reconciliation-planted.test.ts	125	find-shift	safe	R-RECEIVER	lines.find((l) => l.system_key === 'inventory'),
+tests/security/phase3-s8-reconciliation-planted.test.ts	129	find-shift	safe	R-RECEIVER	lines.find((l) => l.system_key !== 'inventory'),
+tests/security/phase3-s8-signed-authority-matrix.test.ts	591	find-shift	safe	R-RECEIVER	const other = must(KINDS.find((k) => k !== op));
+tests/security/phase3-s8-writer-authority.test.ts	283	find-shift	safe	R-RECEIVER	const m = ws.find((w) => w.sig === 'warehouses_home_branch_maintain()');
+tests/security/phase3-s8-writer-authority.test.ts	343	find-shift	safe	R-RECEIVER	expect(ws.find((w) => w.sig === 't02_rogue(uuid)')?.problems).toEqual(['1: the first statement is not an assertion call']);
+tests/security/phase3-s8-writer-authority.test.ts	360	find-shift	safe	R-RECEIVER	expect(ws.find((w) => w.sig === 't02_impure(uuid)')?.problems).toEqual([
+tests/security/phase4-forward-evolution.test.ts	460	find-shift	safe	R-RECEIVER	`const root = process.argv.find((a) => a.startsWith('--root='))?.slice(7) ?? '.';`,
+tests/security/phase4-route-surface.test.ts	344	find-shift	safe	R-RECEIVER	(await declaredRoutes()).filter((r) => isPhase4Path(r.path)).map((r) => PHASE4_ROUTE_PREFIXES.find((p) => r.path === p || r.path.startsWith(`${p}/`))),
+tests/security/phase4-route-surface.test.ts	464	find-shift	safe	HAND	: ((Object.entries(details).find(([k, v]) => /Code$/.test(k) && typeof v === 'string' && /^[a-z_]+\.[a-z_]+$/.test(v))?.[1] as
+tests/security/policy-helper-inlining.test.ts	126	find-shift	safe	R-RECEIVER	expect(routines.find((r) => r.proname === 'app_bypass')?.ret).toBe('boolean');
+tests/security/policy-helper-inlining.test.ts	127	find-shift	safe	R-RECEIVER	expect(routines.find((r) => r.proname === 'app_tenant')?.ret).toBe('text');
+tests/security/policy-helper-inlining.test.ts	128	find-shift	safe	R-RECEIVER	expect(routines.find((r) => r.proname === 'app_business')?.ret).toBe('text');
+tests/security/policy-helper-inlining.test.ts	165	find-shift	safe	R-RECEIVER	const body = (name: string): string => (routines.find((r) => r.proname === name)?.body ?? '').replace(/\s+/g, ' ').trim();
+tests/security/purchase-s4-http.test.ts	292	find-shift	safe	R-RECEIVER	const holder = must(SINGLE.find(([, p]) => p === route.permission))[0];
+tests/security/purchase-s5-http.test.ts	269	find-shift	safe	R-RECEIVER	const holder = must(SINGLE.find(([, p]) => p === route.permission))[0];
+tests/security/settlement-s6-grants.test.ts	287	find-shift	safe	R-RECEIVER	const read = must(ps.find((p) => p.name === 'business_isolation_read'));
+tests/security/settlement-s6-grants.test.ts	296	find-shift	safe	R-RECEIVER	expect(must(ps.find((p) => p.name === 'business_isolation_read')).qual).toContain('daftar_accounting_internal');
+tests/security/settlement-s6-grants.test.ts	297	find-shift	safe	R-RECEIVER	expect(ps.find((p) => p.name === 'accounting_validator')).toMatchObject({
+tests/security/settlement-s6-guard-gaps.test.ts	142	find-shift	safe	R-RECEIVER	const note = must(r.rows.find((x) => x.f === 'supplier_credit_note_guard()'));
+tests/security/settlement-s6-scope.test.ts	198	find-shift	safe	R-RECEIVER	const item = must((list.body as { items: Record<string, unknown>[] }).items.find((m) => m.paymentMethodId === method));
+tests/security/stock-ledger-authority.test.ts	989	find-shift	safe	R-RECEIVER	const migratorOwner = must(r.rows.find((x) => x.tg === 'stock_levels_retain')).owner;
+tests/security/t10-upgrade-lock-contract.test.ts	102	find-shift	safe	HAND	const floor = FLOORS.find(([n]) => n === name)?.[1] ?? (name === 'zod' ? '4.6.7' : undefined);
+tests/security/t10-zod-error-contract.test.ts	11	index	safe	R-PROSE	*   3. the FIELD NAME                       — `issues[].path`,
+tests/security/t10-zod-error-contract.test.ts	37	formatter	safe	HAND	import { ZodError, z } from 'zod';
+tests/security/t10-zod-error-contract.test.ts	69	formatter	safe	R-PROSE	/** A real refusal from a real schema — never a hand-built `ZodError`, which would prove nothing about the product. */
+tests/security/t10-zod-error-contract.test.ts	70	formatter	safe	HAND	function refuse(schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } }, value: unknown): ZodError {
+tests/security/t10-zod-error-contract.test.ts	73	formatter	safe	HAND	expect(r.error).toBeInstanceOf(ZodError);
+tests/security/t10-zod-error-contract.test.ts	74	formatter	safe	HAND	return r.error as ZodError;
+tests/security/t10-zod-error-contract.test.ts	77	destructure	safe	HAND	const paths = (c: Captured): readonly string[] => (c.body.error.details?.issues ?? []).map((i) => i.path);
+tests/security/t10-zod-error-contract.test.ts	77	issues-access	safe	HAND	const paths = (c: Captured): readonly string[] => (c.body.error.details?.issues ?? []).map((i) => i.path);
+tests/security/t10-zod-error-contract.test.ts	77	body-consumer	safe	HAND	const paths = (c: Captured): readonly string[] => (c.body.error.details?.issues ?? []).map((i) => i.path);
+tests/security/t10-zod-error-contract.test.ts	105	issues-access	safe	HAND	const issues = c.body.error.details?.issues ?? [];
+tests/security/t10-zod-error-contract.test.ts	105	body-consumer	safe	HAND	const issues = c.body.error.details?.issues ?? [];
+tests/security/t10-zod-error-contract.test.ts	106	length	safe	HAND	expect(issues.length).toBeGreaterThan(0);
+tests/security/t10-zod-error-contract.test.ts	163	length	safe	R-PROSE	// Deliberately no assertion on `issues.length`. See this file's header.
+tests/security/t10-zod-error-contract.test.ts	184	issues-access	safe	HAND	expect((c.body.error.details?.issues ?? []).map((i) => i.code)).toEqual(['unrecognized_keys']);
+tests/security/t10-zod-error-contract.test.ts	184	body-consumer	safe	HAND	expect((c.body.error.details?.issues ?? []).map((i) => i.code)).toEqual(['unrecognized_keys']);

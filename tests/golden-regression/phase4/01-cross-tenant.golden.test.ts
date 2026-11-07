@@ -280,7 +280,15 @@ const hdr = (a: Actor, businessId: string): Record<string, string> => ({ Authori
  */
 const QUERY: Readonly<Record<string, string>> = {
   'GET /v1/customers/:customerId/open-invoices': '?asOf=2026-05-01',
-  'GET /v1/customers/:customerId/receivable/aging': '?asOf=2026-05-01&bucketDays=30,60,90',
+  // `bucketDays` MUST be the standard set, in the contract's own order.
+  // DR-14 narrowed the field to exactly `STANDARD_AGING_BUCKET_DAYS`
+  // (`[0, 30, 60, 90]`), enforced element by element, so `30,60,90` — what
+  // stood here — is no longer well-formed: the ALLOW answered 400 from the
+  // FIELD VALIDATOR instead of 200, which is precisely the failure the comment
+  // above forbids. The DENY beside it would then have been a refusal with no
+  // ALLOW to pair against, and "every ALLOW must really be a 200" is the rule
+  // that catches it.
+  'GET /v1/customers/:customerId/receivable/aging': '?asOf=2026-05-01&bucketDays=0,30,60,90',
 };
 
 /** Whether a route names a resource in its path, as opposed to paging a collection. */

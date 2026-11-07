@@ -593,7 +593,7 @@ COMMENT ON FUNCTION invoice_outstanding(UUID, UUID) IS
 CREATE FUNCTION invoice_outstanding(p_business_id UUID, p_invoice_ids UUID[])
 RETURNS TABLE (invoice_id UUID, paid_txn_minor BIGINT, paid_base_minor BIGINT,
                outstanding_txn_minor BIGINT, outstanding_base_minor BIGINT,
-               currency_code TEXT, due_date DATE)
+               currency_code TEXT, due_date DATE, issue_date DATE)
 LANGUAGE plpgsql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
 DECLARE
   v_found BIGINT;
@@ -612,7 +612,13 @@ BEGIN
            CASE WHEN i.status <> 'open' OR s.settlement_mode = 'cash' THEN 0::BIGINT
                 ELSE (i.total_base_minor - coalesce(r.paid_base, 0))::BIGINT END,
            i.currency_code::TEXT,
-           i.due_date
+           i.due_date,
+           -- DR-13: the aging reader needs a date even when the document
+           -- states no term, and this routine already has the `invoices` row
+           -- in hand. An ADDITIVE column, so `due_date` keeps meaning exactly
+           -- what it meant — the open-invoice page returns it to the client,
+           -- and "no due date" has to keep reading as no due date there.
+           i.issue_date
       FROM public.invoices i
       JOIN public.sales s ON s.business_id = i.business_id AND s.id = i.sale_id
       LEFT JOIN (
@@ -705,9 +711,20 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
          pg_catalog.sum(b.base_minor)::BIGINT,
          pg_catalog.count(*)::INTEGER
     FROM (
+      -- DR-13 (owner, 2026-10-26): an invoice that states NO due date is due
+      -- from its own issue date, so it ages like any other.
+      --
+      -- This guard used to read `o.due_date IS NOT NULL AND …`, which made a
+      -- termless receivable exceed NO threshold however old it got: it sat in
+      -- band 1 forever — the not-due band since DR-10, the `0-30` band before
+      -- it — so debt could leave an aging report by omission instead of by
+      -- payment. `coalesce` is total here: `invoices.issue_date` is NOT NULL,
+      -- and `invoices_due_date_ck` enforces `due_date >= issue_date`, so the
+      -- substitute can only ever make an invoice MORE overdue than the missing
+      -- date did, never less.
       SELECT (1 + (SELECT pg_catalog.count(*)
                      FROM pg_catalog.unnest(p_bucket_days) AS t(threshold)
-                    WHERE o.due_date IS NOT NULL AND (p_as_of - o.due_date) > t.threshold))::INTEGER AS bucket_no,
+                    WHERE (p_as_of - coalesce(o.due_date, o.issue_date)) > t.threshold))::INTEGER AS bucket_no,
              o.currency_code AS currency_code,
              o.outstanding_txn_minor AS txn_minor,
              o.outstanding_base_minor AS base_minor
@@ -724,6 +741,126 @@ REVOKE ALL ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) FROM PUBLI
 GRANT EXECUTE ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) TO daftar_app, daftar_inventory_internal;
 COMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS
   'P4-S1, replaced by P4-S4 (0083, then 0084; P4-AL-05): the aging of a customer receivable, computed from the open invoices and a supplied as-of date. There is no materialised aging table (P4-AL-06) and the routine does not read the clock (P4-AL-30). Since 0083 it makes ONE call to the set-based invoice_outstanding over the customer''s open invoices instead of one call per invoice; since 0084 it takes the currency and the due date off that call rather than joining invoices back onto it, so it visits invoices exactly once. The buckets, the thresholds and the answer are unchanged.';
+
+-- ──────────────────────────────────────────────────────────────────────────
+-- 6b. HOW MANY OPEN DOCUMENTS THIS CUSTOMER HAS, DEBIT AND CREDIT, PER
+--     CURRENCY (DR-39, amending DR-29).
+--
+--     TWO COUNTERS AND NOT ONE, AND THE OWNER DECIDED IT. `open_debit_count`
+--     counts the open documents whose balance is `> 0`; `open_credit_count`
+--     those whose balance is `< 0`, which is where an overpaid invoice's
+--     credit sits (DR-23); AND A DOCUMENT AT EXACTLY ZERO IS COUNTED IN
+--     NEITHER. The two are never to be added together, and that prohibition is
+--     not fastidiousness: because zero belongs to neither counter, the sum is
+--     NOT "how many documents this customer has open" - it is "how many have a
+--     non-zero balance", and no label short enough for a screen says that.
+--
+--     WHICH IS WHY DR-29's SINGLE-FIGURE COUNTING ROUTINE IS GONE
+--     rather than kept beside these two. That routine computed exactly the
+--     forbidden sum, under a name that read like a document count. Leaving it
+--     in place would have left the wrong number easier to reach than the right
+--     ones, and a correct figure beside a tempting wrong one is how the wrong
+--     one gets read.
+--
+--     DISTINCT AT CUSTOMER *AND* CURRENCY, so: ONE ROW PER CURRENCY in which
+--     this customer has an open document - `GROUP BY o.currency_code` - and
+--     not a pair of scalars aggregated over all of their currencies. The
+--     ruling cites DR-33, which makes PRESENCE per currency ("appearance for
+--     every currency in which there is any open document, even at a net of
+--     zero"), and all-currency scalars cannot express a per-currency net-zero
+--     appearance at all. The two neighbouring readers of record,
+--     `customer_ar_outstanding` and `customer_ar_aging`, already key their
+--     answers by `currency_code`, so this is the shape they already have.
+--     THIS READING OF THE RULING IS THE COORDINATOR'S AND IS OVERTURNABLE BY
+--     ONE WORD FROM THE OWNER: the correction is to drop this `GROUP BY` and
+--     the `currency` key from the DTO row. It is recorded in
+--     `docs/decisions/2026-10-27-phase4-aging-decisions.md`.
+--
+--     THE SPLIT IS MADE HERE, IN SQL, BY EXPLICIT SIGN PREDICATES. `FILTER
+--     (WHERE o.outstanding_txn_minor > 0)` and `< 0`, and NOT a `<> 0` count
+--     divided up afterwards by the reader: a sign convention implemented in
+--     TypeScript would be a second place where "which way is a receivable"
+--     lives, and the two places disagree only under the numbers nobody tested.
+--
+--     A DOCUMENT-LEVEL FIGURE THE BUCKETS CANNOT PRODUCE, which is DR-29 and
+--     still holds. `customer_ar_aging` counts ROWS within a band —
+--     `count(*)`, section 6 — and that equals the number of distinct invoices
+--     in the band ONLY BECAUSE `invoice_outstanding` returns one row per
+--     invoice and asserts it. The per-band figure is therefore correct today
+--     by resting on a property of another routine, not by measuring
+--     distinctness itself.
+--
+--     AND THE ASSERTION IS THE REASON, SO BOTH HALVES ARE WORTH STATING.
+--     While it stands, a second row for one invoice does NOT inflate this
+--     count — it is REFUSED: `invoice_outstanding` reads `GET DIAGNOSTICS
+--     v_found = ROW_COUNT` and raises `invoice.not_found` when the rows found
+--     differ from the distinct ids asked for (section 5). So the band count
+--     cannot be wrong in that way without the refusal firing first. It is if
+--     that assertion is ever weakened or removed that `count(*)` silently
+--     inflates, and nothing here would notice — which is what makes the
+--     dependency worth naming rather than relying on.
+--
+--     THE ROUTINE BELOW DELIBERATELY DOES NOT REST ON THAT PROPERTY. It
+--     counts `count(DISTINCT o.invoice_id)` precisely so that the honesty of
+--     a document-level figure a merchant reads does not depend on the
+--     set-based reader happening to behave. The two are not inconsistent: the
+--     band count is a per-band sum where a repeated row would be a defect
+--     caught upstream, while the document count is the figure itself.
+--
+--     And since P4-S7 one invoice is aged ACROSS ITS SCHEDULE, so it reaches
+--     several bands and the sum of those counts counts it once per band. That
+--     sum is not the number of open documents and may exceed it. Neither is
+--     the number any other function of the per-band counts: two invoices each
+--     reaching two bands, and four invoices each reaching one, give the same
+--     four counts. So it is MEASURED, here, once, over the whole set.
+--
+--     WHY A SEPARATE ROUTINE AND NOT MORE COLUMNS ON `customer_ar_aging`.
+--     Not a preference - more columns were never available. The owner's
+--     section 25 ruling pins that return shape, and the P4-S7 specification
+--     installs its body with `CREATE OR REPLACE FUNCTION`, which cannot change
+--     a `RETURNS TABLE` list at all (42P13). Appending to it would have made
+--     that specification's own apply fail, so the figures have to come from
+--     somewhere else - and a routine of their own is the somewhere that keeps
+--     them INDEPENDENTLY computed rather than folded out of the bands.
+--
+--     THE SAME POPULATION, STATED THE SAME WAY. The subquery over
+--     `public.invoices` and the non-zero filter are character for character
+--     the ones section 6's aging body uses, so the two readers cannot come to
+--     disagree about WHICH documents are open. `<> 0` is where rule 3 lives:
+--     it is the ONE place the zero-balance document is excluded, rather than a
+--     third predicate that could drift from the aging body's. And
+--     `count(DISTINCT o.invoice_id)` rather than a row count, because the
+--     honesty of a figure must not rest on the set-based reader happening to
+--     return one row per invoice.
+--
+--     ONE VISIT TO `public.invoices` (R-104), in its own body, exactly as its
+--     two siblings. It is a SECOND relation for the caller to read and that
+--     cost is deliberate and declared: the alternative was the 42P13 failure
+--     above. The read surface pays for it once per aging answer and not once
+--     per band - see the `MATERIALIZED` note in `customer-reads.ts`.
+--
+--     IT STORES NOTHING. No count column, no cached total and no new relation:
+--     an aggregation at the moment it is asked, which is what P4-AL-05 and
+--     P4-AL-06 require of every derived figure.
+-- ──────────────────────────────────────────────────────────────────────────
+CREATE FUNCTION customer_ar_open_document_counts(p_business_id UUID, p_customer_id UUID)
+RETURNS TABLE (currency_code TEXT, open_debit_count INTEGER, open_credit_count INTEGER)
+LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $fn$
+  SELECT o.currency_code,
+         pg_catalog.count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor > 0)::INTEGER,
+         pg_catalog.count(DISTINCT o.invoice_id) FILTER (WHERE o.outstanding_txn_minor < 0)::INTEGER
+    FROM public.invoice_outstanding(
+           p_business_id,
+           (SELECT pg_catalog.array_agg(x.id)
+              FROM public.invoices x
+             WHERE x.business_id = p_business_id AND x.customer_id = p_customer_id AND x.status = 'open')) o
+   WHERE o.outstanding_txn_minor <> 0
+   GROUP BY o.currency_code;
+$fn$;
+REVOKE ALL ON FUNCTION customer_ar_open_document_counts(UUID, UUID) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION customer_ar_open_document_counts(UUID, UUID) TO daftar_app, daftar_inventory_internal;
+COMMENT ON FUNCTION customer_ar_open_document_counts(UUID, UUID) IS
+  'P4-S4 (0084; DR-29 as amended by DR-39): how many DISTINCT open documents of this customer still have something outstanding, split into TWO counters and reported ONE ROW PER CURRENCY. open_debit_count counts the documents whose balance is > 0; open_credit_count those whose balance is < 0, which is where an overpaid invoice''s credit balance sits (DR-23); and a document at EXACTLY ZERO is counted in NEITHER. THE TWO MUST NEVER BE ADDED TOGETHER: because zero belongs to neither counter, their sum is not the number of documents this customer has open but the number with a non-zero balance, which is not a figure any short label states correctly - and that forbidden sum is precisely what DR-29''s retired single-figure counting routine computed. The split is made HERE, by explicit FILTER predicates on the sign, and not by dividing a <> 0 count afterwards in the reader, so the sign convention lives in one place. These are DOCUMENT-LEVEL figures the aging buckets cannot produce, because since P4-S7 one invoice is aged across its instalment schedule and so reaches several buckets, which makes the sum of customer_ar_aging''s per-bucket invoice_count larger than the number of open documents and makes it no function of them at all. They are NOT extra columns of customer_ar_aging: that return shape is pinned by the owner''s section 25 ruling and the P4-S7 specification installs the body with CREATE OR REPLACE FUNCTION, which cannot change a RETURNS TABLE list (42P13), so appending would have broken that apply. The population is character for character the one the aging body uses - this customer''s open invoices with a non-zero settlement sum - and each counter is count(DISTINCT invoice_id) so the answer does not rest on the set-based reader returning one row per invoice. GROUP BY currency_code, so a currency whose open documents net to zero still appears with both counters standing (DR-33). ONE visit to invoices (R-104). Stores nothing: no count column, no cached total, no new relation (P4-AL-05, P4-AL-06). Its answer is UNCHANGED by P4-S7, because that slice changes how a document is BANDED and not which documents are open, which is why the specification does not replace it. INVOKER, reads through the caller''s row security, writes nothing. EXECUTE: daftar_app and daftar_inventory_internal.';
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- 7. THE OPEN-INVOICE PAGE READER (R-105, R-106).
@@ -927,7 +1064,7 @@ DECLARE
   v_name TEXT;
   v_seen INTEGER;
 BEGIN
-  -- 0084-E(1). THE ONE DEFINITION IS IN THE LIVE CATALOGUE, with the two
+  -- 0084-E(1). THE ONE DEFINITION IS IN THE LIVE CATALOGUE, with the three
   -- columns APPENDED, and it still reads both reducers, the invoice, its
   -- sale's settlement mode and nothing cached. The signature is checked
   -- against the coordinator-fixed one EXACTLY: a definition that dropped
@@ -937,8 +1074,8 @@ BEGIN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding is not in the catalogue' USING ERRCODE = 'P0001';
   END IF;
   IF pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])'))
-     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date)' THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding does not carry the two appended columns in the fixed order (found %)',
+     IS DISTINCT FROM 'TABLE(invoice_id uuid, paid_txn_minor bigint, paid_base_minor bigint, outstanding_txn_minor bigint, outstanding_base_minor bigint, currency_code text, due_date date, issue_date date)' THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: the set-based invoice_outstanding does not carry the three appended columns in the fixed order (found %)',
       pg_get_function_result(to_regprocedure('public.invoice_outstanding(UUID, UUID[])')) USING ERRCODE = 'P0001';
   END IF;
   v_def := pg_get_functiondef(to_regprocedure('public.invoice_outstanding(UUID, UUID[])'));
@@ -1095,12 +1232,12 @@ BEGIN
   END IF;
 
   -- 0084-E(6). And the accepted configuration stated ABSOLUTELY, over all
-  -- FOUR routines including the new page reader — a capture compared against
+  -- SIX routines, the new page reader and DR-39's per-currency open-document counters among them — a capture compared against
   -- itself proves nothing if the configuration was already wrong before this
   -- file ran, and the page reader has no capture at all because it did not
   -- exist. STABLE, invoker's rights, the pinned `search_path`, EXECUTE for
   -- exactly the two accepted roles, and NOTHING for PUBLIC. The subject count
-  -- is asserted: four were looked for and four must have been examined.
+  -- is asserted: six were looked for and six must have been examined.
   v_seen := 0;
   FOR v_name IN
     SELECT f.sig
@@ -1108,6 +1245,7 @@ BEGIN
             UNION ALL SELECT 'public.invoice_outstanding(UUID, UUID[])'
             UNION ALL SELECT 'public.customer_ar_outstanding(UUID, UUID)'
             UNION ALL SELECT 'public.customer_ar_aging(UUID, UUID, DATE, INTEGER[])'
+            UNION ALL SELECT 'public.customer_ar_open_document_counts(UUID, UUID)'
             UNION ALL SELECT 'public.customer_open_invoices_page(UUID, UUID, DATE, UUID, INTEGER)') f
   LOOP
     IF to_regprocedure(v_name) IS NULL THEN
@@ -1132,8 +1270,8 @@ BEGIN
       RAISE EXCEPTION 'selling.migration_end_state_invalid: PUBLIC holds a privilege on %', v_name USING ERRCODE = 'P0001';
     END IF;
   END LOOP;
-  IF v_seen <> 5 THEN
-    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0084-E(6) examined % routines and not 5', v_seen USING ERRCODE = 'P0001';
+  IF v_seen <> 6 THEN
+    RAISE EXCEPTION 'selling.migration_end_state_invalid: 0084-E(6) examined % routines and not 6', v_seen USING ERRCODE = 'P0001';
   END IF;
 
   -- 0084-E(7). `invoice_settlement_state`'S OWN TEXT IS BYTE-IDENTICAL — and

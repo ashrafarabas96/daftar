@@ -67,25 +67,43 @@
  * distinguish it — a golden that could not tell the two apart would be
  * reporting a coincidence.
  *
- * ── ONE THING THIS HEAD CANNOT REACH, STATED AND NOT FAKED ────────────────
+ * ── WHAT THIS ESTATE DOES NOT REACH, AND WHAT THE HEAD DOES ──────────────
  *
  * The AR dust is `rel − conv_R(a)`, and it is non-zero only when the INVOICE
- * is in a currency other than the base. On this head no invoice can be: a
+ * is in a currency other than the base. No invoice OF THIS ESTATE is: a
  * product's `price_currency` is pinned to the business base currency by the
- * catalogue authority (`apps/api/src/modules/catalog/catalog.service.ts:247-252`
- * — "price currency = the BUSINESS BASE CURRENCY, always", §36–37), so every
- * invoice carries `rate_source = 'base'` and `source_to_base_rate = 1`, `B = T`,
- * and `rel` and `conv_R(a)` are both exactly `a`.
+ * catalogue authority (`apps/api/src/modules/catalog/catalog.service.ts:247`,
+ * §36–37) and cannot later be changed (`:321`), so every invoice here carries
+ * `source_to_base_rate = 1`, `B = T`, and `rel` and `conv_R(a)` are both
+ * exactly `a`. That is a property of THIS fixture, and the cases below that
+ * rest on it remain exactly as true as they were.
  *
- * So this file does NOT assert that an AR dust line is present: that is an
- * assertion nobody can make true, and a fixture that forced a foreign-currency
- * product in by hand would be proving a law about a state §36–37 forbids. It
- * instead (a) MEASURES the pin and reports it as the disclosure, naming the
- * dead FX branch it strands (`sale-commit.service.ts:641-660`), and (b) proves
- * the AR-dust law can be non-zero, and on which account it would land, as a
- * red proof over synthetic `(B, T, R)`. The day a non-base price currency is
- * admitted, the disclosure case is the one that changes and the live assertion
- * replaces the synthetic one. It does NOT assert the gap is correct.
+ * ── CORRECTED (DR-79). THIS BLOCK USED TO SAY THE HEAD COULD NOT REACH IT ──
+ *
+ * It said a foreign-currency invoice was unreachable and that only a fixture
+ * forcing one in by hand could produce the dust. Both are now measured false,
+ * and nothing was forced: changing the BUSINESS BASE CURRENCY leaves an
+ * existing product's `price_currency` behind it, and the lock that stops that
+ * change (`financial_started_at`) arms at the FIRST POSTED ENTRY — so the
+ * window is "before the first posting", not "never". A second base change
+ * after a posting is refused `409 BASE_CURRENCY_LOCKED`, which is the real
+ * shape of the restriction and the reason the stronger claim looked true.
+ *
+ * `tests/integration/receivables-s4-fx-closure.test.ts` drives it end to end
+ * through the API — base changed before any posting, a credit sale in the old
+ * currency (`T = 3000`, `B = 721`), three payments at three rates — and closes
+ * with `outstanding_txn = 0` and `outstanding_base = 0`, `Σ rel = 721` equal to
+ * the invoice's stored `total_base_minor`, a NON-ZERO AR dust on two legs, and
+ * the difference confined to `realized_fx_gain_loss_minor`.
+ *
+ * So the day this block anticipated has arrived, and it named the remedy
+ * itself: the live assertion now exists beside the synthetic one. This file
+ * keeps (a) the pin as a measurement of THIS estate and (b) the synthetic red
+ * proof of the dust law, both still sound; what is withdrawn is the claim that
+ * no invoice ANYWHERE on this head could carry a dust, and the description of
+ * the FX branch as dead. That branch is at `sale-commit.service.ts:707-733`,
+ * not `:641-660`, and it is live: it carries `sale.fx_rate_missing` and
+ * `sale.currency_unknown`, and it is the branch that path drives.
  *
  * ── THIS FILE IS RED UNTIL `0081` LANDS, AND THAT IS CORRECT ──────────────
  *

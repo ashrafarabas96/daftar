@@ -225,10 +225,46 @@ export function ensureGitleaks(explicit: string | undefined, root: string = ROOT
     if (binDigest !== GITLEAKS_BINARY_SHA256)
       throw new SecretScanError(`the extracted gitleaks has SHA-256 ${binDigest}, not the pinned ${GITLEAKS_BINARY_SHA256}`);
     chmodSync(extracted, 0o755);
-    renameSync(extracted, bin);
+    moveIntoPlace(extracted, bin);
     return bin;
   } finally {
     rmSync(work, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Move a verified binary into its cache, across a filesystem boundary if
+ * there is one.
+ *
+ * `rename(2)` cannot cross filesystems. `os.tmpdir()` and the repository sit
+ * on one device on most machines and on two on others: the
+ * `ubuntu26/20261101.64` runner image put `/tmp` on a different device from
+ * the workspace, and the hygiene range scan died with `EXDEV` before it had
+ * read a single commit (job 126623991768; the same step passed on image
+ * `ubuntu26/20261025.179`).
+ *
+ * The fallback is `EXDEV` AND NOTHING ELSE. Any other error is rethrown
+ * untouched, because an environment failure inside a security gate reads
+ * exactly like a gate that found nothing, and a gate that swallows errors is
+ * not a gate. `tests-unit/p3c-secret-scan-exdev.test.ts` fails if this catch
+ * is ever widened.
+ *
+ * `rename` is a parameter so the boundary can be exercised on a machine with
+ * a single filesystem; nothing but that test passes it.
+ */
+export function moveIntoPlace(src: string, dest: string, rename: (from: string, to: string) => void = renameSync): void {
+  try {
+    rename(src, dest);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
+    // Copy BESIDE the destination and rename there: one device, so the
+    // rename is atomic and no reader can ever see a half-written binary,
+    // which is what `rename` from the temporary directory used to give.
+    const partial = `${dest}.partial`;
+    copyFileSync(src, partial);
+    chmodSync(partial, 0o755);
+    renameSync(partial, dest);
+    rmSync(src, { force: true });
   }
 }
 
@@ -271,7 +307,20 @@ export function parseIgnoreFile(text: string): { entries: IgnoreEntry[]; problem
     } else if (reason === '') {
       problems.push(`.gitleaksignore line ${i + 1} has no reason comment directly above it: "${line}"`);
     } else if (c !== null && c[1] !== undefined && c[2] !== undefined && c[3] !== undefined && c[4] !== undefined) {
-      entries.push({ fingerprint: line, reason, kind: 'commit', commit: c[1], path: c[2], rule: c[3], line: Number(c[4]), lineSha256: null });
+      // The pin is read for a RANGE entry too (DR-73 §1). It was `tree`-only
+      // here while `verifyEntry` already knew how to check it, so a range entry
+      // could carry a correct `line-sha256` and still be refused for pinning
+      // nothing — measured before this line existed.
+      entries.push({
+        fingerprint: line,
+        reason,
+        kind: 'commit',
+        commit: c[1],
+        path: c[2],
+        rule: c[3],
+        line: Number(c[4]),
+        lineSha256: LINE_PIN.exec(reason)?.[1] ?? null,
+      });
     } else if (t !== null && t[1] !== undefined && t[2] !== undefined && t[3] !== undefined) {
       const pin = LINE_PIN.exec(reason)?.[1] ?? null;
       entries.push({ fingerprint: `${t[1]}:${t[2]}:${t[3]}`, reason, kind: 'tree', commit: null, path: t[1], rule: t[2], line: Number(t[3]), lineSha256: pin });
@@ -302,13 +351,29 @@ function verifyEntry(e: IgnoreEntry, read: (path: string) => Buffer | null, wher
     if (actual !== m[2]) return `${e.fingerprint}: ${m[1]} hashes to ${actual} ${where}, not the ${m[2]} on the line`;
     return null;
   }
-  if (e.kind === 'tree' && e.lineSha256 !== null) {
+  // A LINE PINNED BY ITS OWN DIGEST, IN EITHER MODE (DR-73 §1).
+  //
+  // This was `tree`-only. A RANGE entry now qualifies the same way, and the
+  // obligation it carries is STRICTER rather than looser: `verifyDigestEntry`
+  // reads the line with `git show <commit>:<path>`, so the pin is against the
+  // content AS IT STOOD AT THAT COMMIT. A tree pin can be satisfied by editing
+  // the file; a range pin cannot be satisfied at all except by the history that
+  // is already written.
+  //
+  // What did NOT move, and each of these is what keeps this narrow:
+  //   - only `generic-api-key` may ever be allowlisted (the check above);
+  //   - the fingerprint is exact — `COMMIT_FINGERPRINT` admits one commit, one
+  //     path, one rule and one line, and any wildcard is a problem;
+  //   - a reason comment is still mandatory, and the pin lives in it;
+  //   - the tree scan is untouched: a range fingerprint has four fields and can
+  //     never match a tree finding's `<path>:<rule>:<line>`.
+  if (e.lineSha256 !== null) {
     const actual = sha256(text);
     if (actual !== e.lineSha256)
       return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} hashes to ${actual}, not the pinned line-sha256 ${e.lineSha256}`;
     return null;
   }
-  return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} is not a ['<migration>.sql', '<sha256>'] pair${e.kind === 'tree' ? ' and the entry pins no line-sha256' : ''}`;
+  return `${e.fingerprint}: line ${e.line} of ${e.path} ${where} is not a ['<migration>.sql', '<sha256>'] pair and the entry pins no line-sha256`;
 }
 
 /** Condition 3 for a range entry, read from git at the fingerprint's own commit. */

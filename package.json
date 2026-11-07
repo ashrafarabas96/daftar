@@ -16,7 +16,8 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web",
+    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web && npm run test:unit",
+    "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run tests/integration tests/security tests/guards",
     "test:golden": "vitest run tests/golden-regression",
     "perf:baseline": "vitest run tests/perf",
@@ -34,6 +35,7 @@
     "check:localization": "tsx scripts/check-localization.ts",
     "check:guards": "tsx scripts/static-guards.ts",
     "check:migrations": "tsx scripts/check-migration-manifest.ts",
+    "check:train-heads": "tsx scripts/check-train-heads.ts",
     "check:supply-chain": "tsx scripts/check-supply-chain.ts",
     "phase4-prefix": "tsx scripts/phase4-prefix.ts",
     "scan:secrets:phase3": "tsx scripts/phase3-secret-scan.ts",
@@ -73,6 +75,8 @@
     "gate:phase3:s8": "tsx scripts/phase3-s8-gate.ts",
     "gate:phase3:corrective": "tsx scripts/phase3-corrective-gate.ts",
     "gate:phase3:release": "tsx scripts/phase3-release-gate.ts",
+    "gate:phase4": "tsx scripts/phase4-gate.ts",
+    "gate:phase4:release": "tsx scripts/phase4-gate.ts",
     "gate:phase4:s1": "tsx scripts/phase4-s1-gate.ts",
     "gate:phase4:s2": "tsx scripts/phase4-s2-gate.ts",
     "gate:phase4:s3": "tsx scripts/phase4-s3-gate.ts",
@@ -99,23 +103,24 @@
     "@typescript-eslint/parser": "8.48.0",
     "embedded-postgres": "^18.4.0-beta.17",
     "eslint": "9.39.1",
-    "playwright-core": "1.56.1",
+    "playwright-core": "1.61.0",
     "prettier": "3.7.1",
     "supertest": "^7.1.4",
     "tsx": "4.23.13",
     "typescript": "5.9.3",
     "typescript-eslint": "^8.48.0",
-    "vite": "7.3.6",
-    "vitest": "4.1.11"
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1136.0",
     "@aws-sdk/s3-request-presigner": "^3.1136.0",
     "@smithy/node-http-handler": "^4.12.1",
-    "nodemailer": "^10.0.10"
+    "nodemailer": "10.1.4"
   },
   "overrides": {
-    "multer": "2.4.0",
+    "body-parser": "2.4.0",
+    "multer": "2.5.0",
     "postcss": "8.5.28",
     "sharp@<0.35.5": "0.35.5",
     "source-map-js": "1.2.2"

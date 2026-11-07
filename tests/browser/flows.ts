@@ -137,36 +137,95 @@ async function fullyVisible(run: Run, target: Locator, what: string): Promise<vo
 
 /** Keyboard: Tab from the top of the page reaches `label` (a button), and Enter presses it. */
 /**
- * The target must EXIST before its reachability can be measured.
+ * Wait for the thing we are about to walk to, using the SAME predicate the
+ * walk uses, so the two can never disagree about what they are looking for.
  *
- * `tabUntil` presses Tab up to 120 times and reports "never reached" when
- * none of them lands on the target. That answer is only about the keyboard if
- * the target is on the page: against a screen still fetching its data it is a
- * statement about the clock, and it reads exactly like an accessibility
- * defect.
+ * Without this the walk races the render: `nav()` returns when the URL has
+ * changed, and the page's own reads land afterwards. Walking then measures
+ * whether the button had arrived yet, which is not what the assertion says it
+ * measures — and it is why this step failed in {ar,en} on one attempt and
+ * {ar,tr} on the next, on the same commit. Pacing the gate below the API's
+ * allowance widened that window; it did not create it.
  *
- * MEASURED, and this is why the wait is here rather than a larger `max`: with
- * the full nineteen-step sequence the `receive` step failed at 768px in `ar`,
- * `en` AND `tr` on one run of the gate, and on the very next run of the SAME
- * build `tr` passed while `ar` and `en` failed. A verdict that changes between
- * runs of one build is not measuring the product. The screenshot kept from the
- * failing run shows the button rendered and plainly visible, so Tab was being
- * pressed before it was there — `nav()` resolves on `waitForURL`, which is
- * navigation and not render, and below `lg` the collapsed menu adds an
- * interaction that moves the timing.
- *
- * So the wait is a PRECONDITION, not a relaxation: nothing about the claim
- * changes, and a button that never renders now fails saying that, instead of
- * being reported as unreachable by keyboard.
+ * This is not a softened assertion. It splits one ambiguous failure into two
+ * precise ones: the element never rendered, or it rendered and the keyboard
+ * could not reach it. The second is the accessibility defect the step exists
+ * to catch, and it stays exactly as strict.
  */
-async function tabToButton(run: Run, label: string): Promise<void> {
-  try {
-    await run.page.getByRole('button', { name: label, exact: true }).first().waitFor({ state: 'visible', timeout: 15000 });
-  } catch {
-    run.fail('flow', `the "${label}" button never rendered, so its keyboard reachability could not be measured`);
-    throw new Error(`render: "${label}" absent`);
+async function waitForFocusTarget(run: Run, predicate: string, what: string): Promise<void> {
+  // Polled with `page.evaluate`, which travels the debugging protocol, and NOT
+  // with `page.waitForFunction`, which installs a polling script INSIDE the
+  // page. This app serves `script-src 'self' 'nonce-…' 'strict-dynamic'` with
+  // no `unsafe-eval`, so that injected script is refused — measured on run
+  // 40607960533: nine `CSP-VIOLATION script-src eval`, the wait never
+  // evaluated once, and every `receive` step reported the button as absent in
+  // all three locales at all three widths. `tabUntil` has always polled this
+  // way for the same reason.
+  //
+  // The 100ms between polls is the interval of a condition-bounded wait, not a
+  // blind sleep: the loop ends the moment the element exists, and the deadline
+  // is the page's own default timeout rather than a raised one.
+  //
+  // The deadline is 20s OF THE APPLICATION'S OWN TIME. Time the gate itself
+  // spent holding this page's requests in `RouteBudgets` is added back, so a
+  // stall the harness imposed is not charged to the app it is measuring.
+  //
+  // This is not a raised timeout and it does not soften the assertion: the
+  // allowance only ever grows by wall-clock the harness admits to taking, it
+  // is measured as a union of blocked intervals so overlapping waits count
+  // once, and an app that is genuinely slow still fails at 20s with the
+  // allowance at zero. Measured on run 40851309513, which is why it exists:
+  // step durations were bimodal - six steps between 19.1s and 23.1s and the
+  // seventh-slowest at 4.98s, with p50 at 1.68s - and the one failure,
+  // `tr 768px receive` at 20.4s, sat just over a deadline that `ar 768px
+  // receive` cleared at 22.4s. Nothing in the app explains a 20s page; the
+  // route the pages read most was at 92% of its 240/min budget, and when that
+  // window saturates `SlidingBudget.take()` waits for the oldest entry to age
+  // out. The harness was racing itself.
+  // The limit, stated rather than left to be discovered: the allowance grows
+  // one-for-one with an OPEN hold, so a page whose request the pacer never
+  // releases has no deadline of its own and is bounded only by the job's
+  // `timeout-minutes`. That is the correct shape - a page held by the harness
+  // has not been measured, and failing it would be reporting a result nobody
+  // took - but it means a wedged budget shows up as a job timeout rather than
+  // as this step's named failure. With the locales running one at a time the
+  // largest hold measured in a whole run is 2ms, so this is a property to know
+  // about, not a risk being run.
+  const start = Date.now();
+  const pacedAtStart = run.pacedWaitMs();
+  const allowed = (): number => 20_000 + (run.pacedWaitMs() - pacedAtStart);
+  for (;;) {
+    const present: unknown = await run.page.evaluate(`(() => Array.from(document.querySelectorAll('*')).some(${predicate}))()`);
+    if (present === true) return;
+    if (Date.now() - start >= allowed()) {
+      // Say what WAS there. Measured on run 40625531024: this branch reported
+      // the receive button absent at 768px in ar and tr, and the error
+      // screenshot taken immediately afterwards shows that button plainly
+      // rendered — so "absent" was true of the predicate at every poll and
+      // false of the page a moment later, and the message could not tell the
+      // two apart. The page's own answer (its URL and the buttons it actually
+      // holds) turns the next occurrence into a named cause instead of a
+      // repeat of this ambiguity: a different label means the predicate is
+      // wrong, the right label means the render landed after the deadline.
+      const seen: unknown = await run.page.evaluate(
+        `(() => JSON.stringify({ url: location.pathname, buttons: Array.from(document.querySelectorAll('button')).map((b) => (b.textContent || '').trim()).filter(Boolean).slice(0, 12) }))()`,
+      );
+      const held = run.pacedWaitMs() - pacedAtStart;
+      run.fail(
+        'flow',
+        `${what} never rendered in ${Date.now() - start}ms (${held}ms of which the pacer held this page's requests, and was allowed for), so the keyboard walk had nothing to reach; the page held ${String(seen)}`,
+      );
+      throw new Error(`render: ${what} absent`);
+    }
+    await run.page.waitForTimeout(100);
   }
-  const presses = await tabUntil(run.page, `(a) => a.tagName === 'BUTTON' && (a.textContent || '').trim() === ${JSON.stringify(label)}`);
+}
+
+const buttonPredicate = (label: string): string => `(a) => a.tagName === 'BUTTON' && (a.textContent || '').trim() === ${JSON.stringify(label)}`;
+
+async function tabToButton(run: Run, label: string): Promise<void> {
+  await waitForFocusTarget(run, buttonPredicate(label), `the "${label}" button`);
+  const presses = await tabUntil(run.page, buttonPredicate(label));
   if (presses === null) {
     run.fail('keyboard', `Tab never reached the "${label}" button`);
     throw new Error(`keyboard: "${label}" unreachable`);
@@ -176,18 +235,11 @@ async function tabToButton(run: Run, label: string): Promise<void> {
 
 /** Keyboard: Tab reaches a list row containing `text`, and Enter opens it. */
 async function tabToRow(run: Run, text: string): Promise<void> {
-  // The same precondition as `tabToButton`, for the same measured reason: a
-  // row that has not rendered yet is not a row the keyboard cannot reach.
-  try {
-    await run.page.locator('main li').filter({ hasText: text }).first().waitFor({ state: 'visible', timeout: 15000 });
-  } catch {
-    run.fail('flow', `a row with "${text}" never rendered, so its keyboard reachability could not be measured`);
-    throw new Error(`render: row "${text}" absent`);
-  }
-  const presses = await tabUntil(
-    run.page,
-    `(a) => a.getAttribute('role') === 'button' && !!a.closest('main li') && (a.textContent || '').includes(${JSON.stringify(text)})`,
-  );
+  const rowPredicate = `(a) => a.getAttribute('role') === 'button' && !!a.closest('main li') && (a.textContent || '').includes(${JSON.stringify(text)})`;
+  // Same race, same helper: a list row is rendered by a read that the pacer
+  // may hold, so the walk waits for it rather than for luck.
+  await waitForFocusTarget(run, rowPredicate, `a row with "${text}"`);
+  const presses = await tabUntil(run.page, rowPredicate);
   if (presses === null) {
     run.fail('keyboard', `Tab never reached a row with "${text}"`);
     throw new Error(`keyboard: row "${text}" unreachable`);
@@ -546,9 +598,15 @@ export async function runFlows(run: Run): Promise<void> {
     await run.row(names.supplierA).waitFor();
     await page.unroute(read);
     await run.expecting(read, async () => {
-      await page.route(read, (route) =>
-        route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'UNAVAILABLE', message: 'refused by the browser gate' }) }),
-      );
+      await page.route(read, (route) => {
+        // Answered here, so it spends no API budget and owes the pacer nothing.
+        run.answeredLocally(route.request().method(), route.request().url(), route.request());
+        return route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 'UNAVAILABLE', message: 'refused by the browser gate' }),
+        });
+      });
       await nav(run, 'purchases');
       const retry = run.button(T('common.tryAgain'));
       await retry.waitFor();

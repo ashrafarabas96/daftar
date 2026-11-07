@@ -14,7 +14,6 @@ import {
   UseInterceptors,
   UsePipes,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request } from 'express';
 import { z } from 'zod';
 import { LOCALES, type LocaleCode } from '@daftar/shared-contracts';
@@ -24,6 +23,7 @@ import { Membership, RequiresPermission } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { CatalogService } from './catalog.service';
 import { MediaService } from './media.service';
+import { MediaMultipartInterceptor, UploadAdmissionInterceptor } from './media-upload.interceptors';
 import { CategoryCreateSchema, ProductCreateSchema, ProductUpdateSchema } from './catalog.schemas';
 
 function localeOf(req: Request): LocaleCode {
@@ -97,7 +97,7 @@ export class CatalogController {
 
   @Post('media')
   @RequiresPermission('media.manage')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 8 * 1024 * 1024 } }))
+  @UseInterceptors(UploadAdmissionInterceptor, MediaMultipartInterceptor)
   async uploadMedia(@Membership() m: MembershipContext, @UploadedFile() file?: { buffer: Buffer; mimetype: string; originalname: string; size: number }) {
     if (!file) throw AppError.validation({ file: ['required'] });
     return this.media.upload(m, file);

@@ -38,7 +38,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { S1_SUITES, isPending, suiteProblems } from '../../scripts/phase4-s1-gate';
+import { S1_SUITES, isPending, suiteProblems, unrosteredElsewhere } from '../../scripts/phase4-s1-gate';
 import { LAWS, atomicSaleLawViolations, type SaleWorld } from '../golden-regression/phase4-s2/atomic-sale-law';
 import { censusDelta, requireSubject } from '../golden-regression/phase4-s2/harness';
 import { stockRefusalCode } from '../golden-regression/phase4-s2/sale-path';
@@ -225,7 +225,15 @@ export function sealedGateWouldReject(path: string): string | null {
   const listed = new Set(S1_SUITES.filter((e) => !isPending(e)).map((e) => (e as { file: string }).file));
   if (listed.has(path)) return null;
   if (dir === 'tests/golden-regression/phase4') return `${path} is a Phase 4 golden no S1_SUITES row lists (suiteProblems GOLDEN_DIR clause)`;
-  if (['tests/integration', 'tests/security', 'tests/performance'].includes(dir) && /^(?:p4|phase4)-/.test(base))
+  // THE RULE IS IMPORTED, NOT COPIED (DR-13-SPEC sweep). This predicate used
+  // to carry `/^(?:p4|phase4)-/` of its own — a THIRD copy of a rule that had
+  // already moved on. The gate requires a dash straight after `p4` no longer:
+  // `unrosteredElsewhere` also catches the SLICED spelling `p4sN-…` and defers
+  // to the foreign rosters that own those basenames. A copy of a rule is a
+  // second truth, and this one was already a generation behind its original —
+  // so a `p4s7-…` suite that the gate WOULD have refused was reported here as
+  // acceptable.
+  if (['tests/integration', 'tests/security', 'tests/performance'].includes(dir) && unrosteredElsewhere(base))
     return `${path} is a Phase 4 suite no S1_SUITES row lists (suiteProblems prefix clause)`;
   return null;
 }
@@ -487,7 +495,11 @@ describe('P4-S2 red proofs: every law, every canary and the exit status are prov
       }
       const escaping: string[] = [];
       for (const f of files) {
-        if (!/^(?:p4|phase4)-.*\.test\.ts$/.test(f)) continue;
+        // THE GATE'S OWN PREDICATE, imported (DR-13-SPEC sweep). The literal
+        // `/^(?:p4|phase4)-.*\.test\.ts$/` stood here and was the stale copy:
+        // it cannot see `p4s7-…`, so this law quantified over fewer suites
+        // than the gate it mirrors judges.
+        if (!f.endsWith('.test.ts') || !unrosteredElsewhere(f)) continue;
         prefixed += 1;
         if (!listed.has(`${dir}/${f}`)) escaping.push(`${dir}/${f}`);
       }
