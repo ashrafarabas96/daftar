@@ -5827,8 +5827,48 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    red about the mechanism. The PAGE fact is asserted beside it,
     //    because the wording alone is about TUPLES while `:4980` charges for
     //    PAGES.
-    const saidNoWait = (a['holder_no_wait']['verbose'] as readonly string[] | undefined)?.join('\n') ?? '';
+    //    ── AND THE MATCH IS NARROWED TO THE PROBE'S OWN HEAP SUMMARY, WHICH
+    //       IS A CORRECTION OF A SILENT FALSE POSITIVE IN THIS VERY ARM.
+    //
+    //       `dr101_probe` has a `text` column, so it has a TOAST relation, and
+    //       one `VACUUM` of the table vacuums BOTH and reports BOTH on the
+    //       same connection. The TOAST table is always empty here, so its own
+    //       summary reads `pages: 0 removed, 0 remain` and
+    //       `0 are dead but not yet removable` -- WHICH SATISFIES BOTH
+    //       PATTERNS BELOW ON ITS OWN. Joining every notice into one string
+    //       therefore asserted nothing about the HEAP: had the heap truncated
+    //       in full, the joined text would STILL have matched, out of the
+    //       TOAST entry. MEASURED, not reasoned: in the log of
+    //       `265c9ec1`, arm 2's notices are four, and entry 1
+    //       (`…public.dr101_probe`) and entry 3 (`…pg_toast.pg_toast_27823`)
+    //       EACH match both patterns by themselves.
+    //
+    //       So the notices are filtered to the entries that NAME the probe's
+    //       heap before they are joined, the filtered text is shown NON-EMPTY
+    //       before any match of it is believed (RULE-18 / RULE-19), and the
+    //       `pg_toast` entry is asserted ABSENT from it -- a positive control
+    //       and a negative one, because a filter that silently matched nothing
+    //       would read as «the server said nothing» and a filter that let the
+    //       TOAST line through would be the defect it replaces (RULE-11,
+    //       RULE-27).
+    const heapNotices = (x: Record<string, unknown>): string =>
+      ((x['verbose'] as readonly string[] | undefined) ?? []).filter((l) => l.includes('public.dr101_probe')).join('\n');
+    const saidNoWait = heapNotices(a['holder_no_wait']);
+    expect(
+      saidNoWait.length,
+      `no notice named the probe's own heap, so the matches below would assert nothing: ${JSON.stringify(a['holder_no_wait']['verbose'])}`,
+    ).toBeGreaterThan(0);
+    expect(saidNoWait, "the probe's heap notices leaked a TOAST summary, which satisfies both patterns below on its own").not.toMatch(/pg_toast/);
     expect(saidNoWait, 'the server did not report the tail as unremovable').toMatch(/dead but not yet removable|cannot be removed yet/);
     expect(saidNoWait, 'the server did not report that it removed no pages').toMatch(/pages: 0 removed/);
+    //    ...AND THE CONTROL ARM IS HELD TO THE SAME READING, which is what
+    //    makes the pair discriminate: the SAME filter on arm 1 must show the
+    //    heap REMOVING pages. Without this line the filter above could be
+    //    wrong in a way that only ever passes.
+    const saidNoHolder = heapNotices(a['no_holder']);
+    expect(saidNoHolder.length, `no notice named the probe's own heap in the control arm: ${JSON.stringify(a['no_holder']['verbose'])}`).toBeGreaterThan(0);
+    expect(saidNoHolder, 'the control arm did not report the heap giving pages back, so the filter is not reading the heap').toMatch(
+      /pages: (?!0 removed)\d+ removed/,
+    );
   });
 });
