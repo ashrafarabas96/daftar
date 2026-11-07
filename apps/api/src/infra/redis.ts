@@ -161,11 +161,18 @@ export class RedisRateLimiter implements RateLimiter {
       this.redis.once('end', onEnd);
       if (this.redis.status === 'ready') settle(resolve); // became ready while we subscribed
     });
-    return promise.finally(() => {
+    const chained: Promise<void> = promise.finally(() => {
+      // THE FIELD HOLDS THE CHAINED PROMISE, so that is what is compared.
+      // Comparing the inner one never matched, so the wait was NEVER cleared:
+      // after the first success every later caller awaited a promise that was
+      // already resolved, `ready()` became a no-op, and nothing ever dialled
+      // again. Measured by `tests-unit/td24-redis-reconnect-law.test.ts`,
+      // which failed on exactly this while the rest of the remedy was right.
       // Only the CURRENT wait may clear the field: a late rejection from a
-      // superseded attempt would otherwise erase a live one.
-      if (this.waiting === promise) this.waiting = null;
+      // superseded attempt must not erase a live one.
+      if (this.waiting === chained) this.waiting = null;
     });
+    return chained;
   }
 
   /** Wrap backend failures into the fail-closed error (RateLimitError passes through). */

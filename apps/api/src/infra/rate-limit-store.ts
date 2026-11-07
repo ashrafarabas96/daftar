@@ -21,8 +21,18 @@
  * `ThrottlerModule.forRoot` is passed no `storage`, so `@nestjs/throttler`
  * binds its own in-process `ThrottlerStorageService`
  * (`dist/throttler.providers.js:17-23`). That is the whole of what remains of
- * TD-24, and `RedisThrottlerStorage` below is what `forRoot` is given
+ * TD-24, and `RedisThrottlerStorage` below is what the guard is given
  * instead.
+ *
+ * HOW it is given matters, because the first wording of this header said
+ * "passed to `forRoot`" and the wire never did that. `forRoot` still carries
+ * no `storage`; the store is a PROVIDER OF THE MODULE THE GUARD LIVES IN
+ * (`app/runtime.ts:556-565`), which is what a consumer in that module
+ * resolves. The difference is not cosmetic: the ROOT of a testing module
+ * answers the same token with the `@Global()` `ThrottlerModule`'s own
+ * instance, which is exactly what made an integration probe read "no shared
+ * store" while the application behaved as shared. Pinned by
+ * `tests-unit/td24-limiter-store-law.test.ts` (TD24-LAW-D/D2/E).
  *
  * A PostgreSQL counter was the first design and was withdrawn on measurement:
  * it would be a SECOND shared store beside a mandatory Redis, it would put a
@@ -229,6 +239,17 @@ export interface DegradationLogger {
   warn(payload: Record<string, unknown>, message: string): void;
 }
 
+/**
+ * How long a caller waits for the handshake before the store degrades.
+ *
+ * NOT a new allowance (DR-41/DR-74): it is the SAME 2s as this file's own
+ * `connectTimeout` and the same bound `infra/redis.ts:20` waits on, named
+ * here so a wait cannot outlive the dial it is waiting for. Unbounded, a
+ * backend that accepts the socket and never speaks would hang every request
+ * instead of failing closed.
+ */
+const READY_TIMEOUT_MS = 2_000;
+
 /** `@nestjs/throttler` reports both remaining times in SECONDS (`dist/throttler.service.js:19-24`). */
 const toSeconds = (ms: number): number => Math.ceil(ms / 1000);
 
@@ -411,44 +432,115 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
     enableOfflineQueue: false,
     retryStrategy: (times) => (times > 3 ? null : Math.min(times * 200, 1_000)),
   });
-  redis.on('error', () => undefined);
-  let connecting: Promise<unknown> | null = null;
+  /**
+   * The client's own last failure, so a refusal from here NAMES ITS CAUSE.
+   *
+   * Measured on a dead port, because the first version of the wait below
+   * threw its own message away over the cause and the evidence got worse:
+   * `connect()` rejects while the status is still `reconnecting`, ioredis
+   * keeps retrying on its own timer, and `end` arrives only after the
+   * retries are spent — later than the bound here. A caller that reported
+   * "did not complete its handshake" where ioredis had said `ECONNREFUSED`
+   * would put the useless half in the degradation log, which is the one line
+   * a real outage gets.
+   *
+   * It is cleared at the start of each wait, so a stale failure can never be
+   * reported as the reason for a later one.
+   */
+  let lastError: unknown;
+  redis.on('error', (e: unknown) => {
+    lastError = e;
+  });
+  /** The one wait every concurrent caller shares while the client is on its way. */
+  let waiting: Promise<void> | null = null;
   let closed = false;
   let dialled = 0;
   /**
-   * Connect once, and be able to connect AGAIN — which the first version of
-   * this function could not, and the second review measured why.
+   * Connect once, be able to connect AGAIN, and NEVER call `connect()` from a
+   * state that rejects it. Three defects sat here in turn, each found by a
+   * review, and the third is why this now reads like `infra/redis.ts` does.
    *
-   * `retryStrategy` returns null after three attempts, and ioredis does not
-   * reset its attempt counter until it reaches `ready`
-   * (`built/redis/event_handler.js`), so an outage of more than about a
-   * second puts the client in status `end` PERMANENTLY: `sendCommand` then
-   * rejects "Connection is closed." without ever dialling again
-   * (`built/Redis.js:331-334`). A `connecting` promise that was only cleared
-   * on failure stayed resolved from the first success, so `ready()` would
-   * never call `connect()` again either. The replica would have counted per
-   * replica for the rest of its life even after Redis came back — TD-24's own
-   * defect, reintroduced by the fix for it.
+   *   (1) `retryStrategy` returns null after three attempts, and ioredis does
+   *       not reset its attempt counter until it reaches `ready`
+   *       (`built/redis/event_handler.js`), so an outage of more than about a
+   *       second puts the client in status `end` PERMANENTLY: `sendCommand`
+   *       rejects "Connection is closed." without ever dialling again
+   *       (`built/Redis.js:331-334`). A promise cleared only on failure
+   *       stayed resolved from the first success, so nothing dialled again
+   *       either, and the replica counted per replica for the rest of its
+   *       life even after Redis came back — TD-24's own defect, reintroduced
+   *       by the fix for it.
+   *   (2) `connect()` IS NOT LEGAL FROM EVERY STATE. It rejects outright from
+   *       `connecting`, `connect` and `ready` (`built/Redis.js:103-110`).
+   *       Calling it after a successful connect had cleared the promise meant
+   *       that a replica whose connection merely DROPPED — with ioredis
+   *       already dialling again on its own timer — answered the next request
+   *       with "Redis is already connecting/connected". That error is
+   *       indistinguishable here from a real outage: `increment` degrades,
+   *       the general allowance goes back to being counted PER REPLICA, and
+   *       `/v1/health/ready` reports `throttlerStore.ok = false` against a
+   *       perfectly healthy Redis. A HEALTHY BACKEND MID-RECONNECT WOULD HAVE
+   *       REOPENED TD-24. From `reconnecting` it is worse than an error: the
+   *       call is accepted and opens a SECOND dial alongside the library's
+   *       own retry timer.
+   *   (3) `dialled` counted calls to this function rather than dials, so
+   *       `TD24-REDIAL`'s "it dialled again" would have held even if
+   *       `connect()` had never fired. It is now incremented at the one place
+   *       a dial actually happens.
    *
-   * So: a resolved attempt is cleared, and a client in `end` or `wait` is
-   * dialled again — `connect()` rejects only from `connecting`/`connect`/
-   * `ready` (`built/Redis.js:103-110`), so this is the supported path.
+   * So `connect()` is called ONLY from `wait` and `end`, the two states it is
+   * legal from; every other state is ALREADY on its way and is waited out, on
+   * the client's own `ready`/`end` events. One shared wait serves all
+   * concurrent callers and clears itself only if it is still the current one
+   * — a stale rejection must not wipe a live caller's wait.
+   *
+   * The offline queue stays off, so a genuine outage still surfaces as an
+   * error on the command and the store still degrades deliberately (§67)
+   * rather than hanging a request behind a reconnect.
    */
+  const awaitReady = (): Promise<void> => {
+    lastError = undefined; // this wait reports only what fails during it
+    /** The client's own failure where there is one; otherwise what this wait can honestly say. */
+    const reason = (fallback: string): Error => (lastError instanceof Error ? lastError : new Error(fallback));
+    const promise = new Promise<void>((resolve, reject) => {
+      if (redis.status === 'wait' || redis.status === 'end') {
+        dialled += 1; // counted WHERE THE DIAL IS, so the count cannot overstate it
+        void redis.connect().catch(() => undefined); // the events below are the answer
+      }
+      const settle = (fn: () => void): void => {
+        clearTimeout(timer);
+        redis.off('ready', onReady);
+        redis.off('end', onEnd);
+        fn();
+      };
+      const onReady = (): void => settle(resolve);
+      const onEnd = (): void => settle(() => reject(reason('the rate limit store backend connection ended before the handshake completed')));
+      const timer = setTimeout(
+        () => settle(() => reject(reason(`the rate limit store backend did not complete its handshake within ${READY_TIMEOUT_MS}ms`))),
+        READY_TIMEOUT_MS,
+      );
+      redis.once('ready', onReady);
+      redis.once('end', onEnd);
+      if (redis.status === 'ready') settle(resolve); // became ready while we subscribed
+    });
+    const chained: Promise<void> = promise.finally(() => {
+      // THE FIELD HOLDS THE CHAINED PROMISE, so that is what is compared.
+      // Comparing the inner one never matched, so the wait was NEVER cleared:
+      // after the first success every later caller awaited a promise that was
+      // already resolved, `ready()` became a no-op, and nothing ever dialled
+      // again. Measured by `tests-unit/td24-redis-reconnect-law.test.ts`,
+      // which failed on exactly this while the rest of the remedy was right.
+      // Only the CURRENT wait may clear the field: a late rejection from a
+      // superseded attempt must not erase a live one.
+      if (waiting === chained) waiting = null;
+    });
+    return chained;
+  };
   const ready = async (): Promise<void> => {
     if (closed) throw new Error('the rate limit store was released with the application and must not reconnect');
     if (redis.status === 'ready') return;
-    if (redis.status === 'end' || redis.status === 'wait') connecting = null;
-    dialled += 1;
-    connecting ??= redis.connect().then(
-      () => {
-        connecting = null; // a finished attempt is not reused as a liveness claim
-      },
-      (e: unknown) => {
-        connecting = null; // a dead attempt is not inherited by the next request
-        throw e;
-      },
-    );
-    await connecting;
+    waiting ??= awaitReady();
+    await waiting;
   };
   return {
     eval: async (script, keys, args) => {
@@ -468,8 +560,17 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
     },
     close: async () => {
       closed = true;
-      // `quit` on a client that never connected rejects; disconnecting is the
-      // honest shutdown either way and leaves no reconnect timer behind.
+      // `quit` on a client that never connected rejects, so `disconnect()`
+      // is the honest shutdown either way.
+      //
+      // And only that much is claimed: an earlier wording here said it
+      // "leaves no reconnect timer behind", which `infra/redis.ts:208-221`
+      // withdraws by name after measuring it. `disconnect()` DOES stop the
+      // reconnect loop — it clears a pending reconnect timer and marks the
+      // close as manual — but it is not a teardown of everything: it arms its
+      // own short `disconnectTimeout` and adds a listener per call in the
+      // connector. Two comments in one PR may not disagree about the same
+      // call, and the measured one wins.
       redis.disconnect();
       await Promise.resolve();
     },
@@ -477,7 +578,8 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
 }
 
 /**
- * The store `ThrottlerModule.forRoot` is given.
+ * The store the guard resolves — bound as a provider of the module the guard
+ * lives in (`app/runtime.ts:556-565`), not passed to `forRoot`.
  *
  * The selection is the SAME CONDITION the identity limiter already uses
  * (`app/runtime.ts`, `REDIS_URL ? RedisRateLimiter : MemoryRateLimiter`), and
@@ -491,8 +593,9 @@ export function createRedisEvaluator(url: string): RateLimitEvaluator {
  *     clears that store's `Map` between two measurements, and that file
  *     belongs to another lane and is not touched by this card.
  *
- * `undefined` means "no opinion": `forRoot` then binds the in-process store
- * itself, so this function never has to name the default twice.
+ * `undefined` means "no opinion": the provider is then absent rather than
+ * defaulted, and `ThrottlerModule` keeps answering with the in-process store
+ * it binds itself — so this function never has to name the default twice.
  */
 export function createThrottlerStorage(
   config: { readonly REDIS_URL?: string | undefined },
