@@ -1,17 +1,17 @@
 /**
  * INTEG S-1 — THE REGISTRY AND `ProviderResolver`, WITH NO DATABASE.
  *
- * The design slice (`docs/design/INTEGRATIONS_CORE_DESIGN_AR.md` §3, §13/S-1)
- * says this layer is code plus unit tests and nothing else: the registry is
- * built FROM CODE at boot, configuration only SELECTS a registered adapter,
- * and resolution returns either a ready adapter or ONE reason from a closed
- * set — with no implicit fallback anywhere.
+ * The registry is built FROM CODE at boot, configuration only SELECTS a
+ * registered adapter, and resolution returns either a ready adapter or ONE
+ * reason from a closed set — with no implicit fallback anywhere.
  *
- * The six reasons are transcribed verbatim from the ADR draft 3.3 and are NOT
- * invented here (design `U-10`). The draft names SIX for FIVE steps: its step 5
- * (the stored health check) has no reason code, so that step is deliberately
- * absent from this resolver rather than given a name this lane has no
- * authority to coin. The absence is asserted below so it cannot be forgotten.
+ * The seven reasons are transcribed, not coined: six from the ADR draft 3.3,
+ * and `quota_exceeded` from the lane's card
+ * (`.local-context/drafts/INTEGRATIONS_CORE_CARD_AR.md:25,57,72,113`, where
+ * acceptance A-3 reads "a test per reason — 7 reasons once `quota exceeded` is
+ * counted"). An earlier version of this suite asserted instead that no reason
+ * mentions "health", which was a claim about a document this lane had not read
+ * AND an assertion that could not fail whatever the code did. Both are gone.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -58,6 +58,7 @@ function allowingFacts(selected: string | undefined): ProviderFacts {
     businessConfigComplete: () => true,
     secretsPresent: () => true,
     entitlementAllows: () => true,
+    quotaAllows: () => true,
   };
 }
 
@@ -90,9 +91,23 @@ describe('the adapter registry is built from code, and refuses what configuratio
     expect(() => AdapterRegistry.build([delivering('wa_me_link', { ...base, allowedHosts: ['wa.me'] })], { production: false })).toThrow(/composes-link/);
   });
 
-  it('rejects a service kind outside the closed set', () => {
+  it('refuses a delivering adapter that declares no egress host', () => {
+    expect(() => AdapterRegistry.build([delivering('whatsapp_cloud', { allowedHosts: [] })], { production: false })).toThrow(/egress hosts/);
+  });
+
+  it('checks every closed set AT RUNTIME, not only in the type system', () => {
     expect(SERVICE_KINDS).toContain('webhook.inbound');
     expect(() => AdapterRegistry.build([delivering('x', { kind: 'notification.telegram' as never })], { production: false })).toThrow(/service kind/);
+    // a `mode` the types forbid but a compiled value carries would otherwise
+    // slip past BOTH composes-link rules and the egress-host rule in silence.
+    expect(() =>
+      AdapterRegistry.build([delivering('x', { mode: 'composes_link' as never, secretSlots: ['s'] })], {
+        production: false,
+      }),
+    ).toThrow(/unknown mode/);
+    expect(() =>
+      AdapterRegistry.build([delivering('x', { capabilities: { ...CAPS, webhookSignatureScheme: 'hmac_sha1_body' as never } })], { production: false }),
+    ).toThrow(/signature scheme/);
   });
 });
 
@@ -116,14 +131,16 @@ describe('ProviderResolver returns a ready adapter or one reason, and never a se
     expect(registry.get('notification.whatsapp', 'other_cloud')).toBeDefined();
   });
 
-  it('names each reason from the closed six', () => {
+  it('names each reason from the closed seven', () => {
     const facts = allowingFacts('whatsapp_cloud');
     const cases: Array<[Partial<ProviderFacts>, string]> = [
       [{ platformEnabled: () => false }, 'not_enabled_platform'],
       [{ selectedAdapterKey: () => undefined }, 'not_configured_business'],
+      [{ selectedAdapterKey: () => '' }, 'not_configured_business'],
       [{ businessConfigComplete: () => false }, 'not_configured_business'],
       [{ secretsPresent: () => false }, 'secret_missing'],
       [{ entitlementAllows: () => false }, 'entitlement_denied'],
+      [{ quotaAllows: () => false }, 'quota_exceeded'],
     ];
     for (const [over, reason] of cases) {
       const r = new ProviderResolver(registry, { ...facts, ...over }, { production: false }).resolve('notification.whatsapp', 'b1');
@@ -142,6 +159,20 @@ describe('ProviderResolver returns a ready adapter or one reason, and never a se
     if (!r.ok) expect(r.reason).toBe('test_double_in_production');
   });
 
+  it('skips the secret check only for an adapter that declares no secret', () => {
+    const links = AdapterRegistry.build([delivering('wa_me_link', { mode: 'composes-link', secretSlots: [], allowedHosts: [] })], { production: false });
+    const facts = { ...allowingFacts('wa_me_link'), secretsPresent: () => false };
+    const r = new ProviderResolver(links, facts, { production: false }).resolve('notification.whatsapp', 'b1');
+    expect(r.ok).toBe(true);
+    // positive control: the same denial DOES bite an adapter with a secret slot.
+    const withSecret = new ProviderResolver(
+      AdapterRegistry.build([delivering('whatsapp_cloud')], { production: false }),
+      { ...allowingFacts('whatsapp_cloud'), secretsPresent: () => false },
+      { production: false },
+    ).resolve('notification.whatsapp', 'b1');
+    expect(withSecret.ok).toBe(false);
+  });
+
   it('is deterministic when several facts fail at once: the EARLIEST step wins', () => {
     const r = new ProviderResolver(
       registry,
@@ -151,6 +182,7 @@ describe('ProviderResolver returns a ready adapter or one reason, and never a se
         businessConfigComplete: () => false,
         secretsPresent: () => false,
         entitlementAllows: () => false,
+        quotaAllows: () => false,
       },
       { production: false },
     ).resolve('notification.whatsapp', 'b1');
@@ -158,11 +190,18 @@ describe('ProviderResolver returns a ready adapter or one reason, and never a se
     if (!r.ok) expect(r.reason).toBe('not_enabled_platform');
   });
 
-  it('carries exactly the six reasons of the ADR draft, and no coined seventh', () => {
+  it('carries exactly the seven transcribed reasons', () => {
+    expect(UNAVAILABLE_REASONS).toHaveLength(7);
     expect([...UNAVAILABLE_REASONS].sort()).toEqual(
-      ['adapter_unknown', 'entitlement_denied', 'not_configured_business', 'not_enabled_platform', 'secret_missing', 'test_double_in_production'].sort(),
+      [
+        'adapter_unknown',
+        'entitlement_denied',
+        'not_configured_business',
+        'not_enabled_platform',
+        'quota_exceeded',
+        'secret_missing',
+        'test_double_in_production',
+      ].sort(),
     );
-    // the stored-health step has no reason in the draft, so it is absent here.
-    expect([...UNAVAILABLE_REASONS].some((r) => r.includes('health'))).toBe(false);
   });
 });

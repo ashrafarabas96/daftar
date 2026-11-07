@@ -1,4 +1,5 @@
-import { ADAPTER_KEY_PATTERN, type AdapterDescriptor } from './adapter';
+import { ADAPTER_KEY_PATTERN, isAdapterMode, type AdapterDescriptor } from './adapter';
+import { isWebhookSignatureScheme } from './capabilities';
 import { isServiceKind } from './service-kinds';
 import type { ServiceKind } from './service-kinds';
 
@@ -15,6 +16,12 @@ import type { ServiceKind } from './service-kinds';
  * mode and no "skip the bad one" path: a registry that silently dropped a
  * descriptor would resolve to a different adapter than the one configured,
  * which is the fallback this design forbids outright.
+ *
+ * Every closed set a descriptor claims is checked AT RUNTIME here, not only in
+ * the type system. A descriptor reaches this function from compiled code that
+ * may have been built against an older shape, and a `mode` the types forbid
+ * but the value carries would otherwise walk past both `composes-link` rules
+ * and the egress-host rule without a sound.
  */
 export class AdapterRegistry {
   private constructor(private readonly byKey: ReadonlyMap<string, AdapterDescriptor>) {}
@@ -27,6 +34,14 @@ export class AdapterRegistry {
       }
       if (!ADAPTER_KEY_PATTERN.test(d.adapterKey)) {
         throw new Error(`integrations.registry: adapterKey ${JSON.stringify(d.adapterKey)} does not match ${String(ADAPTER_KEY_PATTERN)}`);
+      }
+      if (!isAdapterMode(d.mode)) {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} claims an unknown mode ${JSON.stringify(d.mode)}`);
+      }
+      if (!isWebhookSignatureScheme(d.capabilities.webhookSignatureScheme)) {
+        throw new Error(
+          `integrations.registry: ${d.kind}/${d.adapterKey} claims an unknown webhook signature scheme ${JSON.stringify(d.capabilities.webhookSignatureScheme)}`,
+        );
       }
       if (d.isTestDouble && opts.production) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a test double and this is production`);

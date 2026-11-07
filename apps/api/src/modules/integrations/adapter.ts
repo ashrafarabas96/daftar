@@ -12,9 +12,15 @@ export const ADAPTER_KEY_PATTERN = /^[a-z0-9_]+$/;
  *                       it needs a secret, a queue, a quota, health, a worker.
  *   - `composes-link` — the adapter produces something the USER delivers (the
  *                       `wa.me` link of phase one). It needs none of those, and
- *                       the registry below refuses it if it claims any.
+ *                       the registry refuses it if it claims any.
  */
-export type AdapterMode = 'delivers' | 'composes-link';
+export const ADAPTER_MODES = ['delivers', 'composes-link'] as const;
+
+export type AdapterMode = (typeof ADAPTER_MODES)[number];
+
+export function isAdapterMode(value: unknown): value is AdapterMode {
+  return typeof value === 'string' && (ADAPTER_MODES as readonly string[]).includes(value);
+}
 
 export interface AdapterDescriptor {
   readonly kind: ServiceKind;
