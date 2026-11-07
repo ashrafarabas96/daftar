@@ -225,18 +225,47 @@ export class WebhookGate {
     } catch {
       return { accepted: false, rejection: 'identity_malformed' };
     }
-    if (identity === undefined) return { accepted: false, rejection: 'identity_absent' };
-    if (identity.externalEventId === undefined || identity.externalEventId === '' || identity.accountRef === undefined || identity.accountRef === '') {
+    // `== null` on purpose: the type says `undefined`, and a compiled caller
+    // returning `null` is both idiomatic for "no identity" and what `exec`
+    // itself returns. Reading a field off it threw out of `verify` — the same
+    // escape that was closed two lines above, through a nearer door.
+    if (identity === undefined || identity === null) return { accepted: false, rejection: 'identity_absent' };
+    if (
+      identity.externalEventId === undefined ||
+      identity.externalEventId === null ||
+      identity.externalEventId === '' ||
+      identity.accountRef === undefined ||
+      identity.accountRef === null ||
+      identity.accountRef === ''
+    ) {
       return { accepted: false, rejection: 'identity_absent' };
     }
     if (!isAcceptableIdentityField(identity.externalEventId) || !isAcceptableIdentityField(identity.accountRef)) {
       return { accepted: false, rejection: 'identity_malformed' };
     }
 
-    // THE TENANT IS AUTHENTICATED HERE, and nowhere else. The signed bytes
-    // must name the same provider account the caller resolved this business
-    // from; without this, a secret shared across tenants lets one genuine
-    // delivery be replayed at every other tenant's route.
+    // THE TENANT IS CHECKED HERE, and nowhere else. The signed bytes must name
+    // the same provider account the caller resolved this business from;
+    // without it, a secret shared across tenants lets one genuine delivery be
+    // replayed at every other tenant's route.
+    //
+    // This NARROWS the assumption rather than ending it, and the review was
+    // right to say so. The invariant becomes "the signed bytes name the
+    // account the caller claims", which is strictly stronger than "the secret
+    // was resolved for this business" but still rests on two facts no code
+    // here can see — and so they are obligations on the configuration slice
+    // that owns the mapping, in the same terms as the store's obligations:
+    //
+    //  1. an account reference is UNIQUE across businesses. Without that
+    //     constraint, two businesses may both declare one reference, one
+    //     signed delivery passes this check at each of them, and each gets its
+    //     own replay key and its own ledger entry.
+    //  2. `businessId` and `expectedAccountRef` come from the SAME row. The
+    //     design's `W-9` says the business is "resolved FROM the reference",
+    //     which is a lookup, not a comparison against a caller's claim. Where
+    //     the secret is per-business the caller must resolve before it can
+    //     verify, so the comparison is the only shape available — and then
+    //     these two obligations are what make it sound.
     if (identity.accountRef !== request.expectedAccountRef) {
       return { accepted: false, rejection: 'account_mismatch' };
     }
@@ -246,7 +275,7 @@ export class WebhookGate {
     // follows it.
     const key = replayKeyOf({
       businessId: request.businessId,
-      eventSource: adapter.adapterKey,
+      eventSource: `${adapter.kind}/${adapter.adapterKey}`,
       externalEventId: identity.externalEventId,
     });
     const first = await this.store.remember(key);

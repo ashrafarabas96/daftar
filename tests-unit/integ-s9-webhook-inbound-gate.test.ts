@@ -148,7 +148,9 @@ function gate(
   };
 }
 
-const keyFor = (id: string = EVENT_ID, businessId = 'b1'): string => replayKeyOf({ businessId, eventSource: 'whatsapp_cloud', externalEventId: id });
+const EVENT_SOURCE = 'notification.whatsapp/whatsapp_cloud';
+
+const keyFor = (id: string = EVENT_ID, businessId = 'b1'): string => replayKeyOf({ businessId, eventSource: EVENT_SOURCE, externalEventId: id });
 
 describe('the gate refuses to exist without the three parameters nobody should default', () => {
   it('rejects a nonsense window, an unstated scheme policy, and an unstated environment', () => {
@@ -383,10 +385,17 @@ describe("the owner's own acceptance condition, in the owner's words", () => {
    * id, is accepted today and must be refused", with the positive control
    * "the original message is accepted exactly once".
    *
-   * It was run red first, and the red was produced by putting the hole back:
-   * with the body removed from the signed message (so the id it contains is
-   * no longer covered), the first assertion below fails — the forged id is
-   * accepted. Restored, both pass. The exit codes are in the commit message.
+   * It was run red first, and the red is on the DEFECTIVE CODE ITSELF, not on
+   * a mutant of the current gate. The gate as it stood at 8ad606ce took the
+   * event id as a field on the request, beside the body, so changing it does
+   * not touch the signature: the owner's case run against that commit gives
+   * EXIT=1, "expected true to be false" — the forged id really was accepted.
+   *
+   * An earlier version of this comment claimed the red came from removing the
+   * body from the signed message. That is the attempt I DISCARDED, and the
+   * claim was also wrong on its face: with the body uncovered every signature
+   * fails, so the first assertion below PASSES and it is the positive control
+   * that breaks — red for the wrong reason, which proves nothing.
    */
   it('refuses a correctly signed message re-sent with a different id, and accepts the original exactly once', async () => {
     const { gate: g, store } = gate();
@@ -540,6 +549,54 @@ describe('an absent or unusable event id is refused by name — the second money
       adapter({ extract: () => ({ accountRef: ACCOUNT, externalEventId: 'e'.repeat(MAX_IDENTITY_FIELD_LENGTH) }) }),
     );
     expect(atCap.accepted).toBe(true);
+  });
+});
+
+describe("the replay namespace is the registry's own identity, not the bare adapter key", () => {
+  it('keeps one provider registered under two service kinds in separate namespaces', async () => {
+    // The registry identifies an adapter by `kind/adapterKey`, and the card
+    // expects one provider under two kinds — `payment.platform_billing` for
+    // P5 and `payment.merchant_checkout` for P6. Keyed on the bare adapter
+    // key, two INDEPENDENT events sharing an external id collapse: the second
+    // is reported as a replay, which is a money event behind a success.
+    const { gate: g, store } = gate();
+    const ts = String(NOW_S);
+    const body = bodyWith(EVENT_ID);
+    const req = request({ rawBody: body, timestampHeader: ts, signatureHeader: signTsBody(ts, body) });
+
+    const underCheckout = await g.verify(req, SECRET, { ...adapter(), kind: 'payment.merchant_checkout' });
+    const underInbound = await g.verify(req, SECRET, { ...adapter(), kind: 'webhook.inbound' });
+
+    expect(underCheckout.accepted).toBe(true);
+    expect(underInbound.accepted).toBe(true);
+    if (underCheckout.accepted && underInbound.accepted) {
+      expect(underCheckout.replay).toBe(false);
+      expect(underInbound.replay).toBe(false);
+      expect(underCheckout.key).not.toBe(underInbound.key);
+    }
+    expect((store as DurableLikeStore).size()).toBe(2);
+
+    // positive control: the SAME kind twice is still one namespace, so the
+    // separation above is the kind and not two keys for everything.
+    const again = await g.verify(req, SECRET, { ...adapter(), kind: 'webhook.inbound' });
+    expect(again.accepted).toBe(true);
+    if (again.accepted) expect(again.replay).toBe(true);
+    expect((store as DurableLikeStore).size()).toBe(2);
+  });
+});
+
+describe('an extractor that returns null is a refusal, not a crash', () => {
+  it('refuses instead of throwing out of verify', async () => {
+    const { gate: g } = gate();
+    // `null` is what `RegExp.exec` returns, and what a compiled caller writes
+    // for "no identity". Read as an object it threw out of `verify`.
+    const v = await g.verify(request(), SECRET, adapter({ extract: () => null as never }));
+    expect(v.accepted).toBe(false);
+    if (!v.accepted) expect(v.rejection).toBe('identity_absent');
+
+    const partial = await g.verify(request(), SECRET, adapter({ extract: () => ({ accountRef: ACCOUNT, externalEventId: null as never }) }));
+    expect(partial.accepted).toBe(false);
+    if (!partial.accepted) expect(partial.rejection).toBe('identity_absent');
   });
 });
 
