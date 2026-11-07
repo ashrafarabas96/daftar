@@ -309,56 +309,6 @@ jobs:
           npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
           npm run build -w packages/accounting
           npm run build -w packages/inventory
-      - name: Migration manifest check
-        run: npm run check:migrations
-      # The three historical invariants, on every push: the accepted Phase 2
-      # prefix 0000–0052, the accepted Phase 3 prefix 0053–0073 and the Phase 4
-      # floor stay byte-identical, and later migrations are permitted. All three
-      # run in seconds with no database. Until P3-S9 the Phase 2 one ran only
-      # inside `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
-      - name: Phase 2 migration prefix
-        run: npx tsx scripts/phase2-prefix.ts
-      - name: Phase 3 migration prefix
-        run: npx tsx scripts/phase3-prefix.ts
-      # Phase 4 (P4-AL-60): the inherited history 0000–0073 is intact and
-      # `frozenThrough` is a FLOOR at it. It asserts nothing about a file after
-      # 0073, so it is already true today, with no `0074` in the tree, and stays
-      # true when `0074` lands. Each Phase 4 acceptance commit appends that
-      # slice's accepted digests to the module, and the same checks then protect
-      # them. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
-      - name: Phase 4 migration prefix
-        run: npm run phase4-prefix
-      - name: Phase 1 machine gate
-        run: npm run gate:phase1
-      - name: Static guards
-        run: npm run check:guards
-      - name: Localization check
-        run: npm run check:localization
-      - name: Format
-        run: npm run format
-      # `eslint . --max-warnings 0` walks the whole monorepo in one process and
-      # died here with a V8 "Ineffective mark-compacts near heap limit" abort
-      # (exit 134) against a ~2057MB ceiling. It is the fourteenth step of this
-      # job, so its abort left steps 15-36 `skipped` — Typecheck, the unit
-      # tests, the fresh PostgreSQL bring-up, the migrations, the integration
-      # and security suites, the golden regression suite, every Phase 2 slice
-      # gate, the Phase 3 corrective gate and the API build. A memory ceiling
-      # was silently standing in for all of that evidence.
-      #
-      # Raising the ceiling for THIS STEP ONLY is the honest fix. The runner has
-      # far more memory than 6144MB, so nothing here is oversubscribed. What is
-      # deliberately NOT done: narrowing what Lint covers, lowering
-      # --max-warnings, or adding ignore entries. Each of those would turn a
-      # resource limit into permanently unreported lint errors, which is the
-      # opposite of what a gate is for.
-      - name: Lint
-        run: npm run lint
-        env:
-          NODE_OPTIONS: --max-old-space-size=6144
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Unit tests
-        run: npm test
       # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
       # manually prepared database), then migrations, then a no-op second pass,
       # then the test suites run against THAT database (PG_PORT=5432 makes the
@@ -478,95 +428,6 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
       - name: Integration + security tests
         run: npm run test:integration
-        env:
-          PG_PORT: '5432'
-      - name: Golden regression suite
-        run: npm run test:golden
-        env:
-          PG_PORT: '5432'
-      # Phase 2 slice gate: structural boundary checks (migration numbers,
-      # frozen history, no journal/posting surface, the 21-key registry, guard
-      # G-3) plus the composed P2-S1 suites. A gate that only runs locally is a
-      # gate that drifts.
-      - name: Phase 2 slice gate — P2-S1
-        run: npm run gate:phase2:s1
-        env:
-          PG_PORT: '5432'
-      # P2-S2 keeps P2-S1 as a permanent predecessor and adds the journal
-      # structural core: the migration boundary (0042 + 0043, nothing after),
-      # no P2-S3 posting surface, both deferred validators, bidirectional
-      # deferred bindings, unconditional immutability, guards G-1/G-2/G-3, and
-      # the live privilege and invariant matrices.
-      - name: Phase 2 slice gate — P2-S2
-        run: npm run gate:phase2:s2
-        env:
-          PG_PORT: '5432'
-      # P2-S3 keeps P2-S2 (and through it P2-S1 and Phase 1) as permanent
-      # predecessors and adds the secure posting engine: 0044/0045 present and
-      # still candidates, no 0046, the assertion key domain, the primitive's
-      # protections and its single-role EXECUTE surface (guard G-4), the
-      # @daftar/accounting workspace with the shared acctfp/1 vectors, key
-      # separation from provisioning, and the posting, concurrency, parity,
-      # authority and engine-shape matrices.
-      - name: Phase 2 slice gate — P2-S3
-        run: npm run gate:phase2:s3
-        env:
-          PG_PORT: '5432'
-      # P2-S4 keeps the whole chain above as permanent predecessors and adds
-      # the three accounting-native sources: 0046/0047 present, nothing beyond
-      # them, both still candidates; the source tables and commands; no
-      # reversal marker on the journal; physical uniqueness for reversals and
-      # posted opening balances; supersession only after a reversal; G-4
-      # widened to protect EVERY journal writer; no bypass seam; exactly three
-      # merchant endpoints; and the source, concurrency, authority and upgrade
-      # matrices.
-      - name: Phase 2 slice gate — P2-S4
-        run: npm run gate:phase2:s4
-        env:
-          PG_PORT: '5432'
-      # P2-S5 keeps the whole chain above as permanent predecessors and adds
-      # the FX rate foundation: 0048 frozen at its accepted digest, on disk and
-      # in the manifest; the append-only registry with its composite ownership,
-      # currency references and four physical rules; a lookup that never
-      # invents a reciprocal, a cross-rate or an implicit 1; the second,
-      # domain-separated acctctl/1 assertion format; one elevated write path
-      # granted to the merchant runtime alone; the clock audit over the whole
-      # migration; the pure realized-FX and rounding primitives; and the
-      # registry, authority, concurrency, HTTP, parity, upgrade and portability
-      # matrices. It has no opinion about a later authorized migration.
-      - name: Phase 2 slice gate — P2-S5
-        run: npm run gate:phase2:s5
-        env:
-          PG_PORT: '5432'
-      # P2-S6 keeps the whole chain above as permanent predecessors and adds
-      # accounting periods: 0049 present, still a candidate and the last
-      # migration with no 0050; civil-date boundaries, a closed status
-      # vocabulary and a REAL gist EXCLUDE for non-overlap, with btree_gist
-      # installed by bootstrap rather than by widening the migration
-      # principal; no DELETE path, no boundary move and no identity exemption;
-      # a closed-period refusal that lives in a trigger on journal_entries and
-      # activates nothing until a merchant creates their first period; two
-      # permissions where reopen is never implied by manage; an operation
-      # registry that decides a replay before any state is read; one lock
-      # order, business before period, on the command path and the posting
-      # path alike; a mandatory reopen reason that is audited and never
-      # published; and the period, parity, concurrency, HTTP, authority,
-      # upgrade and portability matrices.
-      - name: Phase 2 slice gate — P2-S6
-        run: npm run gate:phase2:s6
-        env:
-          PG_PORT: '5432'
-      # P2-S7 — the financial reads. Proves that every reported figure is
-      # aggregated from the journal at read time and nothing is stored; that
-      # no report writes, pages by OFFSET, renders today's exchange rate over
-      # yesterday's posting, hides a deactivated account's history, or turns
-      # an amount into a double; that a whole-business trial balance balances
-      # exactly or is refused; that `accounting.view` and Phase 1 branch scope
-      # guard all six routes; and that each figure equals an independent
-      # recomputation from the journal rows. Composes the P2-S6 gate, and
-      # through it the whole chain back to Phase 1.
-      - name: Phase 2 slice gate — P2-S7
-        run: npm run gate:phase2:s7
         env:
           PG_PORT: '5432'
       # P2-S8 — the hardening and reconciliation slice, and the first gate in
@@ -846,92 +707,6 @@ jobs:
             release/browser-red-proof
           if-no-files-found: ignore
           retention-days: 30
-      - name: Tampered-migration hard-fail proof
-        run: |
-          set -e
-          psql postgres://postgres:postgres@localhost:5432/daftar -c \
-            "INSERT INTO schema_migrations(name, sha256) VALUES ('9999_foreign_tamper.sql', 'deadbeef')" >/dev/null
-          if npm run verify:history; then
-            echo "tampered history was ACCEPTED — gate broken"; exit 1
-          fi
-          psql postgres://postgres:postgres@localhost:5432/daftar -c \
-            "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
-        env:
-          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
-      # ── THE PERFORMANCE BUDGETS' NEGATIVE CONTROLS (owner decision DR-74) ──
-      #
-      # A budget that cannot fail is not a budget, and until DR-74 nothing in
-      # this workflow had ever made one fail. The accounting suite carried a
-      # slowdown knob for its B budget alone, never set by CI; the POS suite
-      # carried none at all. So every green tick those budgets ever reported
-      # was green for an unknown reason: a measurement that cannot go red and
-      # a measurement that is passing look exactly alike from here.
-      #
-      # These two steps deliberately slow the measured point of each budget
-      # and REQUIRE THE SUITE TO FAIL. A step that merely runs a suite with a
-      # knob set is not a control — it is a second run.
-      #
-      # And failing is not enough either. A suite whose fixture cannot start,
-      # whose database is unreachable, or that matches no test file also exits
-      # non-zero, and a control satisfied by that would be green while the
-      # budgets it claims to exercise were never evaluated. So each step also
-      # requires the inverted run to have failed ON THE BUDGET'S OWN
-      # ASSERTION, by its pure-ASCII tag — `PERF01-BUDGET-A`, `-B`, `-RATIO`,
-      # `-P4A`, `-P4B`, each pinned in the suite beside the ceiling it guards.
-      #
-      # Neither step touches a ceiling: `60` ms, `15` ms, `150` ms and the
-      # `1.6` ratio are the suites' own and are never raised to obtain a pass.
-      # The knobs are unset in every other step of this job, and inert then.
-      #
-      # Why a shell block rather than a plain `npx vitest run …`:
-      # `tests/performance/plan-evidence-contract.test.ts` proves that deleting
-      # the step which MEASURES `pos-s3-budgets.test.ts` leaves that file
-      # unreached by the required job. A control run — which demands the suite
-      # fail — is not a measurement, and a second plain `npx` step naming the
-      # same file would make that proof come back green with the measurement
-      # gone. The shell form keeps the control honest and the proof's subject
-      # intact; it is also the shape the tampered-migration proof above
-      # already uses, for the same reason: the exit code has to be inverted.
-      - name: Budget negative control — the accounting A and B budgets must be able to fail
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-accounting.log"
-          if npx vitest run tests/performance/accounting-budgets.test.ts >"$log" 2>&1; then
-            tail -80 "$log"
-            echo "the SLOWED accounting budgets PASSED — A and B cannot fail, so their green means nothing"; exit 1
-          fi
-          grep -q 'PERF01-BUDGET-A' "$log" || {
-            tail -120 "$log"
-            echo "the slowed run failed, but NOT on budget A's assertion — the control proves nothing about A"; exit 1
-          }
-          grep -q 'PERF01-BUDGET-B' "$log" || {
-            tail -120 "$log"
-            echo "the slowed run failed, but NOT on budget B's assertion — the control proves nothing about B"; exit 1
-          }
-        env:
-          PG_PORT: '5432'
-          PERF01_NEGATIVE_CONTROL_MS: '200'
-      - name: Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-pos.log"
-          if npx vitest run tests/performance/pos-s3-budgets.test.ts >"$log" 2>&1; then
-            tail -80 "$log"
-            echo "the SLOWED POS budgets PASSED — the ratio gate and P4-A/P4-B cannot fail, so their green means nothing"; exit 1
-          fi
-          for tag in PERF01-BUDGET-RATIO PERF01-BUDGET-P4A PERF01-BUDGET-P4B; do
-            grep -q "$tag" "$log" || {
-              tail -120 "$log"
-              echo "the slowed run failed, but NOT on $tag's assertion — the control proves nothing about it"; exit 1
-            }
-          done
-        env:
-          PG_PORT: '5432'
-          POS_PERF_NEGATIVE_CONTROL_MS: '200'
-      - name: Database contract from zero (throw-away embedded server; same check as the release gate)
-        run: npm run check:db-from-zero
-      - name: API build
-        run: npm run build -w @daftar/api
 
   # -------------------------------------------------------------------------
   # 3. Web + Admin builds.
@@ -1465,3 +1240,1112 @@ jobs:
           name: secret-history-scan
           path: release/secret-history-scan.json
           if-no-files-found: ignore
+
+
+  # -------------------------------------------------------------------------
+  # 2a. Backend — the no-database checks.
+  # -------------------------------------------------------------------------
+  backend-static:
+    needs: workspaces
+    # DR-105 (CI-SPEED, phase 1). This job holds steps MOVED OUT of the
+    # required `backend` job, byte for byte, with their comments. Nothing here
+    # is new work and nothing here was weakened: no budget, no timeout, no
+    # `--max-warnings`, no `continue-on-error`, no `if:`, no `retry`.
+    #
+    # It has NO `needs` on `backend` and `backend` has none on it: there is no
+    # aggregating job, so no step's verdict is read through another job's
+    # `skipped`. Each of these jobs is a REQUIRED check of its own, added to
+    # `main`'s protection WITHOUT removing any existing one.
+    #
+    # It is written AFTER `web-admin:` on purpose. The plan-evidence contract
+    # slices this file POSITIONALLY, from `\n  backend:` to `\n  web-admin:`
+    # (tests/performance/plan-evidence-contract.test.ts), so a job written
+    # above that boundary would be read as part of `backend` and the law would
+    # stay green for a reason that has nothing to do with the required job.
+    #
+    # `fetch-depth: 0` is kept from the prelude it was copied with. Which of
+    # these steps read git history is NOT measured, and a shallow checkout
+    # would fail such a step for a reason unrelated to the code.
+    #
+    # No service and no PostgreSQL install, MEASURED from the sources and not
+    # assumed: `npm test` is the workspace suites plus `test:unit`, whose
+    # `vitest.unit.config.ts` exists precisely because the root config's
+    # `globalSetup` needs a live server; and `check:db-from-zero` starts its
+    # OWN throw-away server out of the `embedded-postgres` package in
+    # `node_modules`, never a system cluster.
+    runs-on: ubuntu-26.04
+    steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Migration manifest check
+        run: npm run check:migrations
+      # The three historical invariants, on every push: the accepted Phase 2
+      # prefix 0000–0052, the accepted Phase 3 prefix 0053–0073 and the Phase 4
+      # floor stay byte-identical, and later migrations are permitted. All three
+      # run in seconds with no database. Until P3-S9 the Phase 2 one ran only
+      # inside `gate:phase2:release`, which no workflow on the Phase 3 branch runs.
+      - name: Phase 2 migration prefix
+        run: npx tsx scripts/phase2-prefix.ts
+      - name: Phase 3 migration prefix
+        run: npx tsx scripts/phase3-prefix.ts
+      # Phase 4 (P4-AL-60): the inherited history 0000–0073 is intact and
+      # `frozenThrough` is a FLOOR at it. It asserts nothing about a file after
+      # 0073, so it is already true today, with no `0074` in the tree, and stays
+      # true when `0074` lands. Each Phase 4 acceptance commit appends that
+      # slice's accepted digests to the module, and the same checks then protect
+      # them. `[[daftar-a-closure-rule-is-not-an-invariant]]`.
+      - name: Phase 4 migration prefix
+        run: npm run phase4-prefix
+      - name: Phase 1 machine gate
+        run: npm run gate:phase1
+      - name: Static guards
+        run: npm run check:guards
+      - name: Localization check
+        run: npm run check:localization
+      - name: Format
+        run: npm run format
+      # `eslint . --max-warnings 0` walks the whole monorepo in one process and
+      # died here with a V8 "Ineffective mark-compacts near heap limit" abort
+      # (exit 134) against a ~2057MB ceiling. It is the fourteenth step of this
+      # job, so its abort left steps 15-36 `skipped` — Typecheck, the unit
+      # tests, the fresh PostgreSQL bring-up, the migrations, the integration
+      # and security suites, the golden regression suite, every Phase 2 slice
+      # gate, the Phase 3 corrective gate and the API build. A memory ceiling
+      # was silently standing in for all of that evidence.
+      #
+      # Raising the ceiling for THIS STEP ONLY is the honest fix. The runner has
+      # far more memory than 6144MB, so nothing here is oversubscribed. What is
+      # deliberately NOT done: narrowing what Lint covers, lowering
+      # --max-warnings, or adding ignore entries. Each of those would turn a
+      # resource limit into permanently unreported lint errors, which is the
+      # opposite of what a gate is for.
+      - name: Lint
+        run: npm run lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Unit tests
+        run: npm test
+      - name: Database contract from zero (throw-away embedded server; same check as the release gate)
+        run: npm run check:db-from-zero
+      - name: API build
+        run: npm run build -w @daftar/api
+
+  # -------------------------------------------------------------------------
+  # 2b. Backend — the Phase 2 slice gates P2-S1 … P2-S7.
+  # -------------------------------------------------------------------------
+  backend-gates-p2:
+    needs: workspaces
+    # DR-105 (CI-SPEED, phase 1). This job holds steps MOVED OUT of the
+    # required `backend` job, byte for byte, with their comments. Nothing here
+    # is new work and nothing here was weakened: no budget, no timeout, no
+    # `--max-warnings`, no `continue-on-error`, no `if:`, no `retry`.
+    #
+    # It has NO `needs` on `backend` and `backend` has none on it: there is no
+    # aggregating job, so no step's verdict is read through another job's
+    # `skipped`. Each of these jobs is a REQUIRED check of its own, added to
+    # `main`'s protection WITHOUT removing any existing one.
+    #
+    # It is written AFTER `web-admin:` on purpose. The plan-evidence contract
+    # slices this file POSITIONALLY, from `\n  backend:` to `\n  web-admin:`
+    # (tests/performance/plan-evidence-contract.test.ts), so a job written
+    # above that boundary would be read as part of `backend` and the law would
+    # stay green for a reason that has nothing to do with the required job.
+    #
+    # `fetch-depth: 0` is kept from the prelude it was copied with. Which of
+    # these steps read git history is NOT measured, and a shallow checkout
+    # would fail such a step for a reason unrelated to the code.
+    #
+    # The `postgres:16` service and the whole PGDG cluster bring-up are
+    # repeated here from zero rather than inherited: these jobs run in
+    # PARALLEL with `backend`, so they cannot share its database. The measured
+    # cost of the bring-up is small next to the gates it carries.
+    #
+    # P2-S1 … P2-S7 are in ONE job and are NOT split further. Their rosters
+    # are cumulative, so any cut between them puts the same test files in two
+    # jobs — measured at seven files on the first split that was tried, which
+    # is why the conservation law's assignment is read per GATE and the
+    # crossings are named file by file in the evidence.
+    #
+    # P2-S8 is NOT here. It is pinned to `backend` by the plan-evidence
+    # contract and stays there, which is also why its predecessor step list
+    # still reads correctly: it composes S7 inside itself.
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
+      # manually prepared database), then migrations, then a no-op second pass,
+      # then the test suites run against THAT database (PG_PORT=5432 makes the
+      # test harness reuse the service instead of an embedded instance).
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # Phase 2 slice gate: structural boundary checks (migration numbers,
+      # frozen history, no journal/posting surface, the 21-key registry, guard
+      # G-3) plus the composed P2-S1 suites. A gate that only runs locally is a
+      # gate that drifts.
+      - name: Phase 2 slice gate — P2-S1
+        run: npm run gate:phase2:s1
+        env:
+          PG_PORT: '5432'
+      # P2-S2 keeps P2-S1 as a permanent predecessor and adds the journal
+      # structural core: the migration boundary (0042 + 0043, nothing after),
+      # no P2-S3 posting surface, both deferred validators, bidirectional
+      # deferred bindings, unconditional immutability, guards G-1/G-2/G-3, and
+      # the live privilege and invariant matrices.
+      - name: Phase 2 slice gate — P2-S2
+        run: npm run gate:phase2:s2
+        env:
+          PG_PORT: '5432'
+      # P2-S3 keeps P2-S2 (and through it P2-S1 and Phase 1) as permanent
+      # predecessors and adds the secure posting engine: 0044/0045 present and
+      # still candidates, no 0046, the assertion key domain, the primitive's
+      # protections and its single-role EXECUTE surface (guard G-4), the
+      # @daftar/accounting workspace with the shared acctfp/1 vectors, key
+      # separation from provisioning, and the posting, concurrency, parity,
+      # authority and engine-shape matrices.
+      - name: Phase 2 slice gate — P2-S3
+        run: npm run gate:phase2:s3
+        env:
+          PG_PORT: '5432'
+      # P2-S4 keeps the whole chain above as permanent predecessors and adds
+      # the three accounting-native sources: 0046/0047 present, nothing beyond
+      # them, both still candidates; the source tables and commands; no
+      # reversal marker on the journal; physical uniqueness for reversals and
+      # posted opening balances; supersession only after a reversal; G-4
+      # widened to protect EVERY journal writer; no bypass seam; exactly three
+      # merchant endpoints; and the source, concurrency, authority and upgrade
+      # matrices.
+      - name: Phase 2 slice gate — P2-S4
+        run: npm run gate:phase2:s4
+        env:
+          PG_PORT: '5432'
+      # P2-S5 keeps the whole chain above as permanent predecessors and adds
+      # the FX rate foundation: 0048 frozen at its accepted digest, on disk and
+      # in the manifest; the append-only registry with its composite ownership,
+      # currency references and four physical rules; a lookup that never
+      # invents a reciprocal, a cross-rate or an implicit 1; the second,
+      # domain-separated acctctl/1 assertion format; one elevated write path
+      # granted to the merchant runtime alone; the clock audit over the whole
+      # migration; the pure realized-FX and rounding primitives; and the
+      # registry, authority, concurrency, HTTP, parity, upgrade and portability
+      # matrices. It has no opinion about a later authorized migration.
+      - name: Phase 2 slice gate — P2-S5
+        run: npm run gate:phase2:s5
+        env:
+          PG_PORT: '5432'
+      # P2-S6 keeps the whole chain above as permanent predecessors and adds
+      # accounting periods: 0049 present, still a candidate and the last
+      # migration with no 0050; civil-date boundaries, a closed status
+      # vocabulary and a REAL gist EXCLUDE for non-overlap, with btree_gist
+      # installed by bootstrap rather than by widening the migration
+      # principal; no DELETE path, no boundary move and no identity exemption;
+      # a closed-period refusal that lives in a trigger on journal_entries and
+      # activates nothing until a merchant creates their first period; two
+      # permissions where reopen is never implied by manage; an operation
+      # registry that decides a replay before any state is read; one lock
+      # order, business before period, on the command path and the posting
+      # path alike; a mandatory reopen reason that is audited and never
+      # published; and the period, parity, concurrency, HTTP, authority,
+      # upgrade and portability matrices.
+      - name: Phase 2 slice gate — P2-S6
+        run: npm run gate:phase2:s6
+        env:
+          PG_PORT: '5432'
+      # P2-S7 — the financial reads. Proves that every reported figure is
+      # aggregated from the journal at read time and nothing is stored; that
+      # no report writes, pages by OFFSET, renders today's exchange rate over
+      # yesterday's posting, hides a deactivated account's history, or turns
+      # an amount into a double; that a whole-business trial balance balances
+      # exactly or is refused; that `accounting.view` and Phase 1 branch scope
+      # guard all six routes; and that each figure equals an independent
+      # recomputation from the journal rows. Composes the P2-S6 gate, and
+      # through it the whole chain back to Phase 1.
+      - name: Phase 2 slice gate — P2-S7
+        run: npm run gate:phase2:s7
+        env:
+          PG_PORT: '5432'
+
+  # -------------------------------------------------------------------------
+  # 2c. Backend — the golden regression suite and the tamper proof.
+  # -------------------------------------------------------------------------
+  backend-golden:
+    needs: workspaces
+    # DR-105 (CI-SPEED, phase 1). This job holds steps MOVED OUT of the
+    # required `backend` job, byte for byte, with their comments. Nothing here
+    # is new work and nothing here was weakened: no budget, no timeout, no
+    # `--max-warnings`, no `continue-on-error`, no `if:`, no `retry`.
+    #
+    # It has NO `needs` on `backend` and `backend` has none on it: there is no
+    # aggregating job, so no step's verdict is read through another job's
+    # `skipped`. Each of these jobs is a REQUIRED check of its own, added to
+    # `main`'s protection WITHOUT removing any existing one.
+    #
+    # It is written AFTER `web-admin:` on purpose. The plan-evidence contract
+    # slices this file POSITIONALLY, from `\n  backend:` to `\n  web-admin:`
+    # (tests/performance/plan-evidence-contract.test.ts), so a job written
+    # above that boundary would be read as part of `backend` and the law would
+    # stay green for a reason that has nothing to do with the required job.
+    #
+    # `fetch-depth: 0` is kept from the prelude it was copied with. Which of
+    # these steps read git history is NOT measured, and a shallow checkout
+    # would fail such a step for a reason unrelated to the code.
+    #
+    # The `postgres:16` service and the whole PGDG cluster bring-up are
+    # repeated here from zero rather than inherited: these jobs run in
+    # PARALLEL with `backend`, so they cannot share its database. The measured
+    # cost of the bring-up is small next to the gates it carries.
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
+      # manually prepared database), then migrations, then a no-op second pass,
+      # then the test suites run against THAT database (PG_PORT=5432 makes the
+      # test harness reuse the service instead of an embedded instance).
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Golden regression suite
+        run: npm run test:golden
+        env:
+          PG_PORT: '5432'
+      - name: Tampered-migration hard-fail proof
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/daftar -c \
+            "INSERT INTO schema_migrations(name, sha256) VALUES ('9999_foreign_tamper.sql', 'deadbeef')" >/dev/null
+          if npm run verify:history; then
+            echo "tampered history was ACCEPTED — gate broken"; exit 1
+          fi
+          psql postgres://postgres:postgres@localhost:5432/daftar -c \
+            "DELETE FROM schema_migrations WHERE name='9999_foreign_tamper.sql'" >/dev/null
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+
+  # -------------------------------------------------------------------------
+  # 2d. Backend — the performance budgets' negative controls (DR-74).
+  # -------------------------------------------------------------------------
+  backend-neg-controls:
+    needs: workspaces
+    # DR-105 (CI-SPEED, phase 1). This job holds steps MOVED OUT of the
+    # required `backend` job, byte for byte, with their comments. Nothing here
+    # is new work and nothing here was weakened: no budget, no timeout, no
+    # `--max-warnings`, no `continue-on-error`, no `if:`, no `retry`.
+    #
+    # It has NO `needs` on `backend` and `backend` has none on it: there is no
+    # aggregating job, so no step's verdict is read through another job's
+    # `skipped`. Each of these jobs is a REQUIRED check of its own, added to
+    # `main`'s protection WITHOUT removing any existing one.
+    #
+    # It is written AFTER `web-admin:` on purpose. The plan-evidence contract
+    # slices this file POSITIONALLY, from `\n  backend:` to `\n  web-admin:`
+    # (tests/performance/plan-evidence-contract.test.ts), so a job written
+    # above that boundary would be read as part of `backend` and the law would
+    # stay green for a reason that has nothing to do with the required job.
+    #
+    # `fetch-depth: 0` is kept from the prelude it was copied with. Which of
+    # these steps read git history is NOT measured, and a shallow checkout
+    # would fail such a step for a reason unrelated to the code.
+    #
+    # The `postgres:16` service and the whole PGDG cluster bring-up are
+    # repeated here from zero rather than inherited: these jobs run in
+    # PARALLEL with `backend`, so they cannot share its database. The measured
+    # cost of the bring-up is small next to the gates it carries.
+    #
+    # ISOLATED on purpose (RULE-10): these two steps deliberately SLOW a
+    # measured point and require the suite to fail. Sharing a runner with the
+    # heavy gates is how a timing control becomes a measurement of the
+    # neighbour's load. Neither ceiling is touched here — 60 ms, 15 ms,
+    # 150 ms and the 1.6 ratio stay the suites' own.
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
+      # manually prepared database), then migrations, then a no-op second pass,
+      # then the test suites run against THAT database (PG_PORT=5432 makes the
+      # test harness reuse the service instead of an embedded instance).
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # ── THE PERFORMANCE BUDGETS' NEGATIVE CONTROLS (owner decision DR-74) ──
+      #
+      # A budget that cannot fail is not a budget, and until DR-74 nothing in
+      # this workflow had ever made one fail. The accounting suite carried a
+      # slowdown knob for its B budget alone, never set by CI; the POS suite
+      # carried none at all. So every green tick those budgets ever reported
+      # was green for an unknown reason: a measurement that cannot go red and
+      # a measurement that is passing look exactly alike from here.
+      #
+      # These two steps deliberately slow the measured point of each budget
+      # and REQUIRE THE SUITE TO FAIL. A step that merely runs a suite with a
+      # knob set is not a control — it is a second run.
+      #
+      # And failing is not enough either. A suite whose fixture cannot start,
+      # whose database is unreachable, or that matches no test file also exits
+      # non-zero, and a control satisfied by that would be green while the
+      # budgets it claims to exercise were never evaluated. So each step also
+      # requires the inverted run to have failed ON THE BUDGET'S OWN
+      # ASSERTION, by its pure-ASCII tag — `PERF01-BUDGET-A`, `-B`, `-RATIO`,
+      # `-P4A`, `-P4B`, each pinned in the suite beside the ceiling it guards.
+      #
+      # Neither step touches a ceiling: `60` ms, `15` ms, `150` ms and the
+      # `1.6` ratio are the suites' own and are never raised to obtain a pass.
+      # The knobs are unset in every other step of this job, and inert then.
+      #
+      # Why a shell block rather than a plain `npx vitest run …`:
+      # `tests/performance/plan-evidence-contract.test.ts` proves that deleting
+      # the step which MEASURES `pos-s3-budgets.test.ts` leaves that file
+      # unreached by the required job. A control run — which demands the suite
+      # fail — is not a measurement, and a second plain `npx` step naming the
+      # same file would make that proof come back green with the measurement
+      # gone. The shell form keeps the control honest and the proof's subject
+      # intact; it is also the shape the tampered-migration proof above
+      # already uses, for the same reason: the exit code has to be inverted.
+      - name: Budget negative control — the accounting A and B budgets must be able to fail
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-accounting.log"
+          if npx vitest run tests/performance/accounting-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the SLOWED accounting budgets PASSED — A and B cannot fail, so their green means nothing"; exit 1
+          fi
+          grep -q 'PERF01-BUDGET-A' "$log" || {
+            tail -120 "$log"
+            echo "the slowed run failed, but NOT on budget A's assertion — the control proves nothing about A"; exit 1
+          }
+          grep -q 'PERF01-BUDGET-B' "$log" || {
+            tail -120 "$log"
+            echo "the slowed run failed, but NOT on budget B's assertion — the control proves nothing about B"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          PERF01_NEGATIVE_CONTROL_MS: '200'
+      - name: Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-pos.log"
+          if npx vitest run tests/performance/pos-s3-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the SLOWED POS budgets PASSED — the ratio gate and P4-A/P4-B cannot fail, so their green means nothing"; exit 1
+          fi
+          for tag in PERF01-BUDGET-RATIO PERF01-BUDGET-P4A PERF01-BUDGET-P4B; do
+            grep -q "$tag" "$log" || {
+              tail -120 "$log"
+              echo "the slowed run failed, but NOT on $tag's assertion — the control proves nothing about it"; exit 1
+            }
+          done
+        env:
+          PG_PORT: '5432'
+          POS_PERF_NEGATIVE_CONTROL_MS: '200'
