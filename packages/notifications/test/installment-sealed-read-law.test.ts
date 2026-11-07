@@ -173,7 +173,18 @@ describe('the installment kinds are disabled BY LAW until a migration carries th
     // `0084`'s, and `0084 > frozenThrough = 0079`, which means it is not even
     // frozen. Measured here, in this repository, not relayed.
     const live = agingBody(MIGRATIONS_TEXT);
-    expect(live.sites.length, 'no definition of customer_ar_aging was found in the migrations at all').toBe(3);
+    // THREE TODAY, AND THE BOUND IS `>=`, NOT `=`. The first writing pinned it
+    // to exactly 3, and the P4 seal lane named what that costs: the owner's
+    // DR-106 provides for a FOURTH definition on purpose, by a numbered
+    // migration, the day aging moves to installment logic. An exact 3 would
+    // then red — a false failure whose natural repair is "raise it to 4", which
+    // is editing a control to pass a change, the one thing this repository does
+    // not allow. So the bound asserts only that the probe SEES something, and a
+    // change in the count is an EVENT TO READ, never a number to raise: the
+    // body below is always the LAST definition, which is the live one, whatever
+    // the count becomes.
+    expect(live.sites.length, 'no definition of customer_ar_aging was found in the migrations at all').toBeGreaterThanOrEqual(3);
+    expect(live.sites[live.sites.length - 1], 'the sliced body is not the last definition, so it is not the live one').toBe(Math.max(...live.sites));
     expect(live.body, 'the live body could not be sliced out, so "blind" below would be a fact about the slicer').toContain('invoice_outstanding');
     expect(INSTALLMENT_NAME.test(live.body), 'the LIVE aging read now mentions installments — see the backward direction').toBe(false);
 
