@@ -331,48 +331,42 @@ jobs:
           # AFTER the restart and applied with a reload, not a second restart.
           dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
           dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
-          # AND THE SIZE OF THE INSTRUMENT'S OWN TABLE, which is not a ceiling,
-          # a timeout or a tolerance: it is how many statements the server can
-          # account for before it starts FORGETTING the least-used ones, and a
-          # forgotten entry takes its time with it. MEASURED on run 42302707648
-          # attempt 2, job 128251525396 (commit c5bbf8b2): the counter stood at
-          # `dealloc 9393` before the measurement even opened and moved to 9394
-          # during it, because the whole `backend` job shares one server and the
-          # default `max` is 5 000. Raising it makes the instrument account for
-          # MORE of what it measures, never less, and the per-window eviction
-          # refusal in `tests/helpers/in-database-time.ts` is unchanged and
-          # still the thing that decides whether a figure may be reported.
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
           #
-          # `pg_stat_statements.max` is a postmaster parameter: it needs a
-          # RESTART, not a reload, and it does not exist as a parameter until
-          # the library is loaded -- which is why it is set here, after the
-          # first restart, and applied by a second one.
-          dsql "ALTER SYSTEM SET pg_stat_statements.max = '50000'"
-          docker restart "$cid" >/dev/null
-          ready=0
-          for i in $(seq 1 60); do
-            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
-            sleep 1
-          done
-          # A server that cannot start with this much shared memory for the
-          # instrument fails HERE, by name, in the sixth step of the job -- not
-          # three hours later as a budget that could not be measured.
-          test "$ready" -eq 1
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
           dsql "SELECT pg_reload_conf()" >/dev/null
           # Read back from the server, not assumed from what was written.
           libs=$(dsql "SHOW shared_preload_libraries")
           track=$(dsql "SHOW pg_stat_statements.track")
           utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
           pgssmax=$(dsql "SHOW pg_stat_statements.max")
           echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
           test -n "$libs"
           printf '%s' "$libs" | grep -q 'pg_stat_statements'
           test "$track" = "top"
           test "$utility" = "on"
-          # The positive control for the restart: the value the server reports
-          # is the one that was asked for, so a restart that silently kept the
-          # old table size fails by name instead of measuring with it.
-          test "$pgssmax" = "50000"
           # And through the published port, which is where every later step
           # looks. A bash TCP open, not `pg_isready`: the client packages are
           # installed by a later step and this one must not depend on them.
