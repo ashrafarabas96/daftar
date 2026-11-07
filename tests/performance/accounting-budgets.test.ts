@@ -269,14 +269,14 @@ async function measure(
   const samples: number[] = [];
   const inDatabaseSamples: number[] = [];
   for (let i = 0; i < iterations; i += 1) {
-    const dbBefore = inDatabase === undefined ? 0 : await inDatabase.cumulativeMs();
+    const dbBefore = inDatabase === undefined ? null : await inDatabase.read();
     const started = process.hrtime.bigint();
     await once();
     samples.push(Number(process.hrtime.bigint() - started) / 1e6);
-    if (inDatabase !== undefined) inDatabaseSamples.push(InDatabaseClock.delta(dbBefore, await inDatabase.cumulativeMs()));
+    if (inDatabase !== undefined && dbBefore !== null) inDatabaseSamples.push(InDatabaseClock.delta(dbBefore, await inDatabase.read()));
   }
   // A series that lost entries to eviction is not a series.
-  if (inDatabase !== undefined) await inDatabase.assertNoEviction();
+  // The eviction check is per WINDOW now, inside `delta`. See that method.
   return summarise(name, budgetMs, samples, inDatabase === undefined ? undefined : inDatabaseSamples);
 }
 

@@ -70,12 +70,24 @@ export interface InstrumentSettings {
   readonly serverVersion: string;
 }
 
+/**
+ * ONE READ OF THE INSTRUMENT: the cumulative executed milliseconds AND the
+ * server's eviction counter, taken in the SAME query so they describe the same
+ * instant. A window's figure is the difference between two of these, and it is
+ * trustworthy only if no entry was forgotten BETWEEN them — which is why the
+ * counter travels with the number instead of being asked for separately.
+ */
+export interface InDatabaseReading {
+  readonly ms: number;
+  /** `pg_stat_statements_info.dealloc`: how many times the server has forgotten entries. */
+  readonly dealloc: number;
+}
+
 export class InDatabaseClock {
   private constructor(
     private readonly client: Client,
     private readonly databaseOid: number,
     private readonly probeRoleOid: number,
-    private readonly deallocAtOpen: number,
     readonly settings: InstrumentSettings,
   ) {}
 
@@ -125,8 +137,7 @@ export class InDatabaseClock {
       const db = await client.query<{ oid: number }>(`SELECT oid::int AS oid FROM pg_database WHERE datname = $1`, [databaseName]);
       if (db.rows[0] === undefined) throw new InstrumentError('UNAVAILABLE', `database "${databaseName}" does not exist`);
       const me = await client.query<{ oid: number }>(`SELECT oid::int AS oid FROM pg_roles WHERE rolname = current_user`);
-      const info = await client.query<{ dealloc: string }>(`SELECT dealloc::text AS dealloc FROM pg_stat_statements_info`);
-      return new InDatabaseClock(client, db.rows[0].oid, must(me.rows[0]).oid, Number(must(info.rows[0]).dealloc), settings);
+      return new InDatabaseClock(client, db.rows[0].oid, must(me.rows[0]).oid, settings);
     } catch (e) {
       await client.end().catch(() => undefined);
       throw e;
@@ -141,11 +152,24 @@ export class InDatabaseClock {
    * about. `calibrate` proves that, rather than this comment asserting it.
    */
   async cumulativeMs(): Promise<number> {
-    const r = await this.client.query<{ ms: number }>(
-      `SELECT coalesce(sum(total_exec_time), 0)::float8 AS ms FROM pg_stat_statements WHERE dbid = $1 AND userid <> $2`,
+    return (await this.read()).ms;
+  }
+
+  /**
+   * The same cumulative sum, WITH the eviction counter, in one query.
+   *
+   * WHY ONE QUERY. The two facts must describe the same instant: a counter read
+   * after a separate statement could have moved for an eviction that happened
+   * between the two reads, which would refuse a sound window, or could be read
+   * before one that happened before the sum, which would accept an unsound one.
+   */
+  async read(): Promise<InDatabaseReading> {
+    const r = await this.client.query<{ ms: number; dealloc: string }>(
+      `SELECT coalesce(sum(s.total_exec_time), 0)::float8 AS ms, (SELECT i.dealloc::text FROM pg_stat_statements_info i) AS dealloc
+         FROM pg_stat_statements s WHERE s.dbid = $1 AND s.userid <> $2`,
       [this.databaseOid, this.probeRoleOid],
     );
-    return must(r.rows[0]).ms;
+    return { ms: must(r.rows[0]).ms, dealloc: Number(must(r.rows[0]).dealloc) };
   }
 
   /**
@@ -168,29 +192,47 @@ export class InDatabaseClock {
     return seen;
   }
 
-  /** One window's in-database milliseconds, from the two reads around it. */
-  static delta(before: number, after: number): number {
-    const d = after - before;
+  /**
+   * ONE WINDOW'S IN-DATABASE MILLISECONDS, from the two readings around it —
+   * and the eviction check belongs HERE, per window, not to the clock's whole
+   * lifetime.
+   *
+   * `pg_stat_statements` forgets its least-used entries once it holds
+   * `pg_stat_statements.max` of them, and a forgotten entry takes its time with
+   * it, so a window whose `after` lost an entry that its `before` had counted
+   * reads LOWER than it was. The server counts those forgettings (`dealloc`).
+   *
+   * WHY THE CHECK MOVED, MEASURED ON LINUX. It used to be a separate
+   * `assertNoEviction()` compared against the counter AT CLOCK OPEN, and that
+   * reference never advanced: one eviction anywhere after `open` refused every
+   * series taken afterwards, including series no eviction touched. Run
+   * 42302707648 attempt 2, job 128251525396, commit c5bbf8b2, step #41:
+   * `PERF01-INSTRUMENT-EVICTED ... (dealloc 9393 -> 9394)` -- ONE eviction in a
+   * three-hour job that had already evicted 9393 times before the clock was
+   * opened, and attempt 1 of the same commit passed with zero. The counter sits
+   * at the table's capacity throughout the job because the whole backend job
+   * shares one server, so whether the next forgetting lands inside a measured
+   * window is a coin toss, and the WIDE claim loses that toss.
+   *
+   * THIS IS NOT A WEAKENING, and the direction of the change is stated: an
+   * eviction between two windows cannot alter either window's difference, since
+   * each window takes its own `before`; an eviction INSIDE a window can, and
+   * that is exactly what is now refused, per sample, by name. So every figure
+   * this returns carries a stronger guarantee than before -- its own window was
+   * eviction-free -- and no figure is clamped, discarded, retried or skipped.
+   */
+  static delta(before: InDatabaseReading, after: InDatabaseReading): number {
+    if (after.dealloc !== before.dealloc) {
+      throw new InstrumentError(
+        'EVICTED',
+        `pg_stat_statements forgot entries INSIDE one measured window (dealloc ${before.dealloc} -> ${after.dealloc}): ` +
+          `that window's in-database figure is not trustworthy, and a measurement that cannot be trusted is refused rather than reported`,
+      );
+    }
+    const d = after.ms - before.ms;
     if (d < 0)
       throw new InstrumentError('NEGATIVE', `the cumulative sum went DOWN by ${(-d).toFixed(3)} ms inside one window: statistics were reset or evicted`);
     return d;
-  }
-
-  /**
-   * `pg_stat_statements` forgets the least-used entries once it holds
-   * `pg_stat_statements.max` of them, and a forgotten entry takes its time with
-   * it, which would make a later window read LOWER than it was. The server
-   * counts those evictions (`dealloc`); none may have happened since `open`.
-   */
-  async assertNoEviction(): Promise<void> {
-    const info = await this.client.query<{ dealloc: string }>(`SELECT dealloc::text AS dealloc FROM pg_stat_statements_info`);
-    const now = Number(must(info.rows[0]).dealloc);
-    if (now !== this.deallocAtOpen) {
-      throw new InstrumentError(
-        'EVICTED',
-        `pg_stat_statements evicted entries during the run (dealloc ${this.deallocAtOpen} -> ${now}): the in-database sums are not trustworthy`,
-      );
-    }
   }
 
   async close(): Promise<void> {

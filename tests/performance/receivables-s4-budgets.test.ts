@@ -137,7 +137,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'supertest';
 import { Client } from 'pg';
 import { appDbUrl, ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
-import { InDatabaseClock } from '../helpers/in-database-time';
+import { InDatabaseClock, type InDatabaseReading } from '../helpers/in-database-time';
 import { must } from '../helpers/inventory-commands';
 import { readAs } from '../helpers/merchant-reads';
 import { classifyPlanEvidence, planEvidenceBanner, readPlanEvidenceEnvironment, type PlanEvidenceEnvironment } from '../helpers/plan-evidence-env';
@@ -615,7 +615,7 @@ async function measure(
   const clock = judged === 'in-database' ? must(inDatabase, `${name}: the in-database instrument`) : null;
   for (let i = 0; i < iterations; i += 1) {
     await before();
-    const dbBefore = clock === null ? 0 : await clock.cumulativeMs();
+    const dbBefore = clock === null ? null : await clock.read();
     const started = process.hrtime.bigint();
     // Inert in every normal run. Applied to EVERY window taken through this
     // function, including the median read and the two RLS halves, so that the
@@ -624,10 +624,10 @@ async function measure(
     await plantControlDelays();
     await once();
     samplesMs.push(Number(process.hrtime.bigint() - started) / 1e6);
-    if (clock !== null) inDatabaseMs.push(InDatabaseClock.delta(dbBefore, await clock.cumulativeMs()));
+    if (clock !== null) inDatabaseMs.push(InDatabaseClock.delta(must(dbBefore, `${name}: the opening instrument reading`), await clock.read()));
   }
-  // A series that lost entries to eviction is not a series.
-  if (clock !== null) await clock.assertNoEviction();
+  // The eviction check is per WINDOW now, inside `delta`, where the claim it
+  // makes is the claim each figure needs. See `InDatabaseClock.delta`.
   return clock === null ? { name, budgetMs, samplesMs } : { name, budgetMs, samplesMs, inDatabaseMs };
 }
 
@@ -940,11 +940,11 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
   // arm, so how much of the HTTP figure is the instrument is a number a reader
   // has rather than a reassurance. Nothing is subtracted from a judged figure.
   const clock = inDatabase;
-  const readClock = async (): Promise<number> => {
-    if (clock === null) return 0;
+  const readClock = async (): Promise<InDatabaseReading | null> => {
+    if (clock === null) return null;
     const at = process.hrtime.bigint();
     try {
-      return await clock.cumulativeMs();
+      return await clock.read();
     } finally {
       instrumentMs += Number(process.hrtime.bigint() - at) / 1e6;
     }
@@ -960,7 +960,11 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
       return await original(...args);
     } finally {
       txnMs += Number(process.hrtime.bigint() - started) / 1e6;
-      if (clock !== null) txnInDatabaseMs += InDatabaseClock.delta(dbBefore, await readClock());
+      if (clock !== null)
+        txnInDatabaseMs += InDatabaseClock.delta(
+          must(dbBefore, 'the opening instrument reading of the transaction window'),
+          must(await readClock(), 'the closing instrument reading of the transaction window'),
+        );
     }
   });
   let res: Response;
@@ -1021,8 +1025,9 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
     transactionsPerCommand.push(r.transactions);
     paymentIds.push(r.paymentId);
   }
-  // DR-98: a series that lost entries to eviction is not a series.
-  if (inDatabase !== null) await inDatabase.assertNoEviction();
+  // DR-98: the eviction check is per WINDOW, inside `InDatabaseClock.delta`,
+  // which is where each figure's own trust claim lives. See that method for the
+  // measured reason the whole-lifetime check was wrong here.
   return { arm, shape, currency, httpMs, txnMs, txnInDatabaseMs, instrumentMs, transactionsPerCommand, paymentIds };
 }
 
