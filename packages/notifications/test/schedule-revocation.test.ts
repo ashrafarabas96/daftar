@@ -27,9 +27,17 @@ function firing(over: Partial<ScheduleFiring> = {}): ScheduleFiring {
 }
 
 describe('PART 7.5 — the scheduled path exists, and fails closed', () => {
-  it('the five scheduled kinds are reachable: each one`s schedule id resolves to it', () => {
+  it('each of the five scheduled ids RESOLVES to a scheduled kind', () => {
     // The gap, as a measurement: before this round every one of these returned
     // a kind that no function could fire.
+    //
+    // The title used to say "reachable", and that word is now FALSE of two of
+    // the five: `p8.installment.due_soon` and `p8.installment.overdue` resolve
+    // here and are refused `notification.sealed_read_missing` by the gate in
+    // `planFromScheduleFiring`, because no numbered migration carries their
+    // read. What this case asserts — that the id resolves to a kind whose
+    // trigger is a schedule — is unchanged and still true of all five; only the
+    // sentence was wrong. See `installment-sealed-read-law.test.ts`.
     const ids = ['p8.statement.monthly', 'p8.installment.due_soon', 'p8.installment.overdue', 'p8.report.daily_sales', 'p8.alert.low_stock'];
     for (const id of ids) {
       const kinds = scheduledKindsFor(id);

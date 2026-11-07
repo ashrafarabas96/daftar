@@ -27,7 +27,7 @@
  *    be an obligation whose origin lies about where it came from.
  */
 import { refuse, type NotificationRefusalCode } from './errors';
-import { catalogEntry, scheduledKindsFor, type NotificationKind } from './catalog';
+import { awaitsSealedRead, catalogEntry, scheduledKindsFor, type NotificationKind } from './catalog';
 import { originKeyFieldsAreValid } from './identity';
 import type { DispatchIntent } from './consumer';
 
@@ -82,6 +82,23 @@ export function planFromScheduleFiring(firing: ScheduleFiring, schedules: Schedu
   const kinds = scheduledKindsFor(firing.scheduleId);
   if (kinds.length === 0) {
     return { plan: 'refuse', code: 'notification.kind_unknown', detail: `no kind is bound to ${firing.scheduleId}` };
+  }
+
+  // The sealed-read gate, and it stands BEFORE the configuration is read on
+  // purpose. A kind whose canonical read has no migration behind it is refused
+  // WHATEVER the business configured, so `enabled: true` cannot reach a
+  // dispatch; were this check after the read, the refusal would be a setting's
+  // consequence and an operator could answer it by turning the schedule on.
+  // Every kind bound to the id must be awaiting, because a schedule that also
+  // fires a ready kind must keep firing it — measured on this head: the two
+  // installment schedule ids bind exactly one kind each.
+  const awaiting = kinds.filter((k) => awaitsSealedRead(k));
+  if (awaiting.length === kinds.length) {
+    return {
+      plan: 'refuse',
+      code: 'notification.sealed_read_missing',
+      detail: `${firing.scheduleId}/${awaiting.join('+')}`,
+    };
   }
 
   // §41, fail closed: the schedule must be configured AND enabled for THIS

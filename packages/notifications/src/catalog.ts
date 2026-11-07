@@ -183,6 +183,39 @@ const CATALOG: readonly CatalogEntry[] = [
 
 export const NOTIFICATION_KINDS: readonly NotificationKind[] = CATALOG.map((e) => e.kind);
 
+/**
+ * Kinds whose canonical read HAS NO MIGRATION BEHIND IT, and which are
+ * therefore refused whatever a business configures.
+ *
+ * This list is not a setting and not a feature flag. `enabled: false` in a
+ * business's schedule configuration is a setting: somebody can set it to
+ * `true`. This is a REFUSAL IN SOURCE, and the law in
+ * `test/installment-sealed-read-law.test.ts` holds it to the database: it reds
+ * if either kind reaches `plan: 'dispatch'` with `enabled: true`, AND it reds
+ * in the other direction once a numbered migration actually creates the
+ * installment table and its aging function — so lifting the ban costs a
+ * deliberate act in the same commit and cannot happen by silence.
+ *
+ * Measured on this head (87 migrations, frozen through
+ * `0079_phase4_pos_till_sessions_cart.sql`): ZERO `CREATE TABLE` whose name
+ * carries `instal`, and zero such function. The only installment surface in
+ * the repository is `infrastructure/database/specifications/
+ * p4s7-installment-aging.spec.sql` — a specification — and tests that build
+ * their objects in a scratch database. A specification is not a schema and a
+ * scratch table is not a schema.
+ *
+ * It is NOT a Phase 8 item to fix: the read belongs to P4-S7. The blocking
+ * card is `.local-context/cards/P8_NOTIFICATIONS_PRODUCTION_MIGRATION_AR.md`
+ * and the P4 card it defers to is
+ * `.local-context/cards/P4S7_INSTALLMENT_AGING_NOT_IN_MIGRATIONS_AR.md`.
+ */
+export const KINDS_AWAITING_SEALED_READ: readonly NotificationKind[] = ['installment_due_soon', 'installment_overdue'];
+
+/** True when the kind has no sealed canonical read, and so may never dispatch. */
+export function awaitsSealedRead(kind: string): boolean {
+  return (KINDS_AWAITING_SEALED_READ as readonly string[]).includes(kind);
+}
+
 const BY_KIND = new Map<string, CatalogEntry>(CATALOG.map((e) => [e.kind, e]));
 
 export function catalogEntries(): readonly CatalogEntry[] {

@@ -30,6 +30,16 @@ export type NotificationRefusalCode =
   /** §41: a scheduled kind fired with no configured schedule behind it. */
   | 'notification.schedule_not_configured'
   /**
+   * The kind's canonical read has no sealed migration behind it yet, so the
+   * kind is refused WHATEVER the business configured. This is deliberately NOT
+   * `schedule_not_configured`: that code says "nobody asked for this", and a
+   * business CAN answer it by configuring the schedule. This one says "the
+   * truth this message would state does not exist in the database yet", and no
+   * configuration can answer it. Reading the two as one would let an operator
+   * "fix" a missing read by turning the schedule on.
+   */
+  | 'notification.sealed_read_missing'
+  /**
    * Mission §15: consent was ALLOWED at enqueue and refuses NOW. A consent
    * snapshot taken when the obligation was created is an audit record, not a
    * lasting right to send — so this is its own code, distinct from a message
