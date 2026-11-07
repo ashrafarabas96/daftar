@@ -1173,6 +1173,110 @@ jobs:
         env:
           PG_PORT: '5432'
           P4_S4_CLIENT_DELAY_MS: '200'
+      # DR-98 EXTENDED TO `P4-AL-72`'s ALLOCATION SCALING RATIO (owner decision
+      # 2026-11-07). BOTH halves of that quotient are now the IN-DATABASE
+      # series, read from `pg_stat_statements` around the same transaction
+      # windows, so the ratio has controls of its own and BOTH of them run.
+      #
+      # WHY IT CANNOT BORROW STEPS 54 AND 55. Step 54's knob plants its delay at
+      # the head of EVERY measured window, so it adds the same `d` to the
+      # numerator and to the denominator: `(a + d) / (b + d)` moves TOWARDS 1
+      # and can never exceed `a / b`. Step 54 therefore CANNOT make this verdict
+      # miss, and reading its green as this ratio's control would be reading a
+      # control that never ran — the false negative RULE-27 and DR-55 are about.
+      # `P4_S4_IN_DB_DELAY_MS_FIVE` plants the delay in the FIVE-INVOICE arm
+      # alone, which is the one shape that raises a quotient.
+      #
+      # `-t 'P4-AL-72, OD-P4-14'` pins both runs to that single case. The string
+      # is a literal with no regex metacharacter and it matches exactly ONE `it`
+      # in the whole test tree (measured on this tree), so step A's red is that
+      # case's red and not another budget's. The fixture still seeds and still
+      # measures both arms in full; only the verdicts are filtered.
+      #
+      # Neither step touches a ceiling, a ratio constant, an iteration count, a
+      # percentile or a timeout; neither carries `continue-on-error` or an `if:`;
+      # and the knob is unset — and then inert — in every other step of this job.
+      - name: Ratio negative control — a delay INSIDE the database in the FIVE-invoice arm alone must fail P4-AL-72
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-al72-numerator.log"
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "a 200 ms pg_sleep planted in the NUMERATOR arm alone left P4-AL-72 green — then that ratio cannot fail on database time and its green means nothing"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # POSITIVE CONTROL FOR THE RED: the case actually REACHED its verdict.
+          # A `-t` that matched no test also exits non-zero, and a fixture that
+          # died before the arms were measured does too — either would make the
+          # red above unattributed.
+          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the run failed but printed no in-database ratio monitor line, so the P4-AL-72 case never reached its verdict and this red says nothing about it"; exit 1
+          }
+          # THE CLAIM: it failed on P4-AL-72's OWN assertion, by its own marker.
+          grep -q 'P4-S4-RATIO-FAIL-AL72 judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the run failed, but NOT on P4-AL-72's own in-database assertion — the control proves nothing about that ratio"; exit 1
+          }
+          if grep -q 'P4-S4-RATIO-OK-AL72' "$log"; then
+            echo "the same run printed both the FAIL and the OK marker for P4-AL-72, so the markers do not distinguish a miss from a hold"; exit 1
+          fi
+          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log"
+        env:
+          PG_PORT: '5432'
+          P4_S4_IN_DB_DELAY_MS_FIVE: '200'
+      - name: Ratio negative control — a delay OUTSIDE the database must NOT fail P4-AL-72
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-al72-client-side.log"
+          # This run is expected to PASS. `-t` leaves one verdict standing and it
+          # is the in-database ratio; a `setTimeout` outside every query is not
+          # in it. The wall figures of BOTH arms rise, which is what the numeric
+          # check below reads as proof that the delay really fired.
+          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1 || {
+            tail -160 "$log"
+            echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio — that verdict still listens to something outside PostgreSQL"; exit 1
+          }
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          grep -q 'P4-S4-RATIO-OK-AL72' "$log" || {
+            tail -160 "$log"
+            echo "the run exited green but printed no P4-S4-RATIO-OK-AL72 line, so the verdict was never reached and its silence is not a pass"; exit 1
+          }
+          if grep -q 'P4-S4-RATIO-FAIL-AL72' "$log"; then
+            echo "the run exited green and still printed P4-AL-72's failure marker — the exit code and the markers disagree"; exit 1
+          fi
+          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log" >"$RUNNER_TEMP/al72-monitor.txt" || true
+          test -s "$RUNNER_TEMP/al72-monitor.txt" || { echo "no P4-S4-RATIO-MONITOR-AL72 line was printed, so neither quotient can be read"; exit 1; }
+          cat "$RUNNER_TEMP/al72-monitor.txt"
+          # AND THE NUMBERS, not just the exit code: the client delay really did
+          # reach the WALL figures of both arms, and the in-database quotient
+          # stayed inside the constant while it did.
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-RATIO-MONITOR-AL72"));
+            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
+            const wall = lines.find((l) => l.includes("depth=in-transaction"));
+            const indb = lines.find((l) => l.includes("depth=in-database"));
+            let bad = 0;
+            if (wall === undefined) { console.log("MISSING the in-transaction wall monitor line"); bad += 1; }
+            else {
+              const one = num(wall, "oneP95"), five = num(wall, "fiveP95");
+              console.log("wall p95: 1-invoice " + one + " ms, 5-invoice " + five + " ms (both must be >= 200, or the client delay never fired)");
+              if (!(one >= 200 && five >= 200)) bad += 1;
+            }
+            if (indb === undefined) { console.log("MISSING the in-database monitor line"); bad += 1; }
+            else {
+              const ratio = num(indb, "ratio"), max = num(indb, "max");
+              console.log("in-database ratio " + ratio + " against the constant " + max);
+              if (!(ratio > 0 && ratio <= max)) bad += 1;
+            }
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$RUNNER_TEMP/al72-monitor.txt" || {
+            echo "the client-side ratio control did not prove what it claims: either the delay never reached the wall figures or the in-database quotient did not hold"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          P4_S4_CLIENT_DELAY_MS: '200'
       - name: Database contract from zero (throw-away embedded server; same check as the release gate)
         run: npm run check:db-from-zero
       - name: API build

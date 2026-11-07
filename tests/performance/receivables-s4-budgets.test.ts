@@ -287,6 +287,32 @@ const IN_DB_DELAY_MS = Number(process.env['P4_S4_IN_DB_DELAY_MS'] ?? '0') || 0;
  */
 const CLIENT_DELAY_MS = Number(process.env['P4_S4_CLIENT_DELAY_MS'] ?? '0') || 0;
 
+/**
+ * CONTROL KNOB 3 — the same real `pg_sleep` INSIDE the database, planted in
+ * the FIVE-INVOICE ARM ALONE: the NUMERATOR of `P4-AL-72`'s allocation
+ * scaling ratio, and nothing else.
+ *
+ * WHY A THIRD KNOB AND NOT KNOB 1, MEASURED AS AN ARGUMENT ABOUT ARITHMETIC
+ * AND NOT AS A PREFERENCE. Knob 1 plants its delay at the head of EVERY
+ * measured window, so it adds the same `d` to the one-invoice arm and to the
+ * five-invoice arm. The ratio is a QUOTIENT: `(a + d) / (b + d)` moves
+ * TOWARDS 1 as `d` grows and can never exceed `a / b` when `a > b`. So knob 1
+ * can never make this verdict miss, and a green ratio under knob 1 would be
+ * read as a control that held when no control ran at all — the exact false
+ * negative RULE-27 and DR-55 are about. This knob adds `d` to the numerator
+ * only, which is the one shape that raises the quotient.
+ *
+ * It must be large enough that `p95(5) / p95(1)` exceeds the constant
+ * whatever the host measured for the denominator. CI sets 200 ms, and the
+ * denominator it has to beat is single-digit to low-double-digit
+ * milliseconds: on `4cac6738` (run 42348282323, job 128330740569) the
+ * one-invoice arm's WALL p95 was 10.574 ms and its in-database p95 is
+ * necessarily lower still, since the wall figure contains it.
+ *
+ * Inert and unset in every normal run.
+ */
+const IN_DB_DELAY_MS_FIVE = Number(process.env['P4_S4_IN_DB_DELAY_MS_FIVE'] ?? '0') || 0;
+
 /** The in-database instrument the converted budgets are judged on (DR-98). */
 let inDatabase: InDatabaseClock | null = null;
 /** The `daftar_app` connection control knob 1 plants its delay on. Null unless the knob is set. */
@@ -297,13 +323,21 @@ const sleep = async (ms: number): Promise<void> => {
 };
 
 /**
- * The two control delays, at the HEAD of a measured window — where the
- * operation's own cost sits — so a red is the budget's own assertion missing
- * its own ceiling. Both are inert unless their knob is set.
+ * The control delays, at the HEAD of a measured window — where the operation's
+ * own cost sits — so a red is the budget's own assertion missing its own
+ * ceiling. All three are inert unless their knob is set.
+ *
+ * `shape` is the invoice count of the window being measured, or `null` for a
+ * window that has no invoice count (the `P4-D` reads, the median read and the
+ * two RLS halves). Knob 3 reads it, and only it: knobs 1 and 2 are
+ * shape-blind by design and stay so.
  */
-async function plantControlDelays(): Promise<void> {
+async function plantControlDelays(shape: number | null): Promise<void> {
   if (CLIENT_DELAY_MS > 0) await sleep(CLIENT_DELAY_MS);
-  if (delayer !== null) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
+  if (delayer === null) return;
+  if (IN_DB_DELAY_MS > 0) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
+  // Knob 3: the numerator of `P4-AL-72`'s ratio and no other window.
+  if (IN_DB_DELAY_MS_FIVE > 0 && shape === 5) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS_FIVE / 1000]);
 }
 
 /**
@@ -620,8 +654,11 @@ async function measure(
     // Inert in every normal run. Applied to EVERY window taken through this
     // function, including the median read and the two RLS halves, so that the
     // host-independent ratios see the same delay on both sides and stay green:
-    // a control that broke a ratio would be a control about the ratio.
-    await plantControlDelays();
+    // a control that broke a ratio would be a control about the ratio. The
+    // control that is MEANT to break a ratio is knob 3, which plants its delay
+    // in one arm of one quotient and never reaches this function at all —
+    // `null` here says so rather than leaving it to be inferred.
+    await plantControlDelays(null);
     await once();
     samplesMs.push(Number(process.hrtime.bigint() - started) / 1e6);
     if (clock !== null) inDatabaseMs.push(InDatabaseClock.delta(must(dbBefore, `${name}: the opening instrument reading`), await clock.read()));
@@ -955,8 +992,9 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
     const started = process.hrtime.bigint();
     try {
       // The control delays, at the head of the measured transaction window.
-      // Inert in every normal run.
-      await plantControlDelays();
+      // Inert in every normal run. `shape` is what knob 3 selects on: it fires
+      // in the five-invoice arm and nowhere else.
+      await plantControlDelays(shape);
       return await original(...args);
     } finally {
       txnMs += Number(process.hrtime.bigint() - started) / 1e6;
@@ -1196,11 +1234,16 @@ async function buildFixture(): Promise<void> {
   // Control knob 1's connection, as `daftar_app`: the same principal the
   // budgets are about, so the planted delay is accounted exactly as the
   // product's own statements are. Null — and the knob inert — in every normal run.
-  if (IN_DB_DELAY_MS > 0) {
+  if (IN_DB_DELAY_MS > 0 || IN_DB_DELAY_MS_FIVE > 0) {
     delayer = new Client({ connectionString: appDbUrl });
     await delayer.connect();
-    console.log(`\n[P4-S4 budgets] CONTROL 1 ARMED — a ${IN_DB_DELAY_MS} ms pg_sleep is planted INSIDE every measured window, on a daftar_app connection\n`);
   }
+  if (IN_DB_DELAY_MS > 0)
+    console.log(`\n[P4-S4 budgets] CONTROL 1 ARMED — a ${IN_DB_DELAY_MS} ms pg_sleep is planted INSIDE every measured window, on a daftar_app connection\n`);
+  if (IN_DB_DELAY_MS_FIVE > 0)
+    console.log(
+      `\n[P4-S4 budgets] CONTROL 3 ARMED — a ${IN_DB_DELAY_MS_FIVE} ms pg_sleep is planted INSIDE the FIVE-INVOICE allocation window ONLY, on a daftar_app connection: P4-AL-72's numerator and not its denominator\n`,
+    );
   if (CLIENT_DELAY_MS > 0)
     console.log(
       `\n[P4-S4 budgets] CONTROL 2 ARMED — a ${CLIENT_DELAY_MS} ms setTimeout is planted OUTSIDE every query, at the head of every measured window\n`,
@@ -1444,8 +1487,14 @@ function performanceRecord(): Record<string, unknown> {
       'P4-D': 'inDatabaseExecMs',
       'P4-F-TXN': 'inDatabaseExecMs',
       'P4-F-HTTP': 'wallClockClientMs — deliberately not converted: its subject is the endpoint over HTTP',
+      'P4-AL-72 allocation 1-to-5 scaling ratio':
+        'inDatabaseExecMs on BOTH halves — numerator and denominator from the same instrument (owner decision 2026-11-07)',
     },
-    controls: { inDatabaseDelayMs: IN_DB_DELAY_MS, clientSideDelayMs: CLIENT_DELAY_MS },
+    controls: {
+      inDatabaseDelayMs: IN_DB_DELAY_MS,
+      inDatabaseDelayMsFiveInvoiceArmOnly: IN_DB_DELAY_MS_FIVE,
+      clientSideDelayMs: CLIENT_DELAY_MS,
+    },
     distributions: diagnostics.map((d) => ({ name: d.name, iterations: d.iterations, p95: d.p95, thresholdMs: d.thresholdMs, orderedMs: d.orderedMs })),
   };
 }
@@ -1928,6 +1977,17 @@ describe('P4-F — the customer payment allocation', () => {
         oneInvoiceP95Ms: quantile(one.httpMs, 0.95),
         fiveInvoiceP95Ms: quantile(five.httpMs, 0.95),
       },
+      // DR-98, owner decision 2026-11-07: the series the RATIO case below now
+      // judges, printed here beside the wall-clock ones it used to judge, so
+      // the two quotients are readable side by side in every run. This case
+      // asserts the sample counts and nothing about either ratio.
+      inDatabase: {
+        oneInvoiceMedianMs: quantile(one.txnInDatabaseMs, 0.5),
+        fiveInvoiceMedianMs: quantile(five.txnInDatabaseMs, 0.5),
+        medianScaling1to5: quantile(one.txnInDatabaseMs, 0.5) === 0 ? null : quantile(five.txnInDatabaseMs, 0.5) / quantile(one.txnInDatabaseMs, 0.5),
+        oneInvoiceP95Ms: quantile(one.txnInDatabaseMs, 0.95),
+        fiveInvoiceP95Ms: quantile(five.txnInDatabaseMs, 0.95),
+      },
       iterations: { one: one.txnMs.length, five: five.txnMs.length },
     };
     console.log(`\nP4-F SCALING — ${JSON.stringify(report, null, 1)}\n`);
@@ -1946,28 +2006,127 @@ describe('P4-F — the customer payment allocation', () => {
     });
   });
 
-  it(`RATIO (host-independent, P4-AL-72, OD-P4-14): p95(5 invoices) <= ${RATIOS.ALLOCATION_5_OVER_1.max} x p95(1 invoice)`, () => {
+  /**
+   * DR-98 EXTENDED TO `P4-AL-72`'s ALLOCATION SCALING RATIO — OWNER DECISION,
+   * 2026-11-07. BOTH HALVES ARE MEASURED INSIDE POSTGRESQL, THE SAME WAY.
+   *
+   * The numerator and the denominator are both `txnInDatabaseMs`: the same
+   * `pg_stat_statements` delta instrument, read around the same transaction
+   * windows, in the same order, on the same run. So the quotient is no longer a
+   * quotient of two quantities that were defined differently, and the owner's
+   * first condition — «the numerator and the denominator are both measured
+   * inside PostgreSQL in the same way, so the ratio is not compared between two
+   * different units» — is what the code does rather than what it claims.
+   *
+   * WHAT IS UNTOUCHED. The constant is still `RATIOS.ALLOCATION_5_OVER_1.max`,
+   * still imported from `scripts/phase4-budget-ratchet.ts`, still 3, and still
+   * CALIBRATION-DERIVED and TIGHTEN-ONLY under OD-P4-14 — the ratchet guard
+   * `tests/guards/p4s4-budget-ratchet-law.test.ts` is what refuses it upward
+   * and this arm does not touch it. The sample count is still
+   * `SHORT_PERCENTILE_ITERATIONS` on both arms, the estimator is still
+   * `quantile` from `./percentile`, and `P4-AL-76`'s completeness assertion on
+   * both arms is the REPORT case above, untouched. Nothing here is a `retry`, a
+   * `skip`, a `continue-on-error`, a timeout, a dropped outlier or a widened
+   * constant.
+   *
+   * WHY, MEASURED. On `4cac6738` (run 42348282323, job 128330740569, step 41)
+   * this was the suite's ONLY failure out of eighteen cases: in-transaction
+   * p95(5) 51.438 ms over p95(1) 10.574 ms = 4.86x against 3. In the SAME run
+   * the five-invoice arm's median was 23.352 ms — a median quotient near 2.3 —
+   * its in-database p95 was 19.841 ms, and its wall max was 140.020 ms. A
+   * verdict that reads 2.3 at the median and 4.86 at p95 because the
+   * ninety-fifth wall-clock sample of one arm was scheduled late is a verdict
+   * about the runner's scheduling, not about how the allocation scales.
+   *
+   * ── WHAT THIS CONVERSION GIVES UP, BECAUSE IT IS NOT A FREE WIN ─────────
+   *
+   * THE WALL-CLOCK RATIO STOPS BEING A VERDICT AT BOTH DEPTHS, and the
+   * `over HTTP` depth stops being asserted at all. Two regressions leave this
+   * gate's reach with it: Node-side allocation arithmetic that scaled worse
+   * than the constant with the invoice count, and an HTTP envelope that did.
+   * Neither is left unguarded — `P4-F-TXN` still holds a ceiling over the
+   * transaction and `P4-F over HTTP` still holds a WALL-CLOCK ceiling of
+   * `BUDGET.F_ALLOCATION_HTTP_P95` ms over the whole endpoint, both on every
+   * run — but their GROWTH with the invoice count is no longer asserted
+   * anywhere. That is the cost, it is deliberate, and it is kept VISIBLE and
+   * not described: both wall-clock quotients are computed and printed on an
+   * UNCONDITIONAL monitor line below, in every run, whether the verdict holds
+   * or misses, and the printed line says `judgedOn=none` so no reader can take
+   * it for a gate.
+   *
+   * THE DIRECTION OF THE SUBSTITUTION, STATED. The in-database figure is
+   * always LESS THAN OR EQUAL TO the wall figure of the same window, because
+   * the wall window contains it. It is removed from BOTH halves, so the
+   * quotient can move either way: it falls when the numerator carried more
+   * non-database time than the denominator did, and it RISES when the shared
+   * per-request overhead that used to dilute both halves is taken out. This
+   * conversion is therefore NOT a loosening dressed as a measurement, and it
+   * is not assumed to be a pass either — which is why the denominator's
+   * in-database series is printed by the REPORT case above whether this
+   * verdict holds or not.
+   */
+  it(`RATIO (host-independent, P4-AL-72, OD-P4-14): in-database p95(5 invoices) <= ${RATIOS.ALLOCATION_5_OVER_1.max} x in-database p95(1 invoice)`, () => {
     requireFixture();
     const one = armOf('base-1');
     const five = armOf('base-5');
+
+    // MONITORING, UNCONDITIONAL AND FIRST, so a missed verdict cannot take it
+    // off the log: the two wall-clock quotients this arm used to judge.
     for (const [depth, oneMs, fiveMs] of [
       ['in-transaction', one.txnMs, five.txnMs],
       ['over HTTP', one.httpMs, five.httpMs],
     ] as const) {
-      const oneP95 = quantile(oneMs, 0.95);
-      const fiveP95 = quantile(fiveMs, 0.95);
-      const ratio = oneP95 === 0 ? null : fiveP95 / oneP95;
-      expect(ratio, `${depth}: the 1-invoice arm measured zero, so the scaling ratio has no denominator`).not.toBeNull();
-      expect(
-        must(ratio),
-        `P4-AL-72's allocation scaling constant is p95(5) <= ${RATIOS.ALLOCATION_5_OVER_1.max} x p95(1), and OD-P4-14 (TL 2026-09-30 OPTION A) makes it ` +
-          `CALIBRATION-DERIVED and TIGHTEN-ONLY — a measured poor result may never be fixed by raising it. ` +
-          `Measured ${depth}: ${fiveP95.toFixed(3)} ms over ${oneP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x. ` +
-          `The constant is PROVISIONAL (${RATIOS.ALLOCATION_5_OVER_1.anchorOwed}).\n` +
-          `1-invoice series: ${JSON.stringify(distribution(oneMs, BUDGET.F_ALLOCATION_HTTP_P95).orderedMs)}\n` +
-          `5-invoice series: ${JSON.stringify(distribution(fiveMs, BUDGET.F_ALLOCATION_HTTP_P95).orderedMs)}`,
-      ).toBeLessThanOrEqual(RATIOS.ALLOCATION_5_OVER_1.max);
+      const o = quantile(oneMs, 0.95);
+      const f = quantile(fiveMs, 0.95);
+      console.log(
+        `P4-S4-RATIO-MONITOR-AL72 depth=${depth} judgedOn=none oneP95=${o.toFixed(3)} fiveP95=${f.toFixed(3)} ` +
+          `ratio=${o === 0 ? 'no-denominator' : (f / o).toFixed(3)} max=${RATIOS.ALLOCATION_5_OVER_1.max}`,
+      );
     }
+
+    // THE VERDICT. `d1` and `d5` are two characters on purpose, the `dv`/`dw`/
+    // `dr`/`tg` convention this file already follows for the measured reason
+    // recorded at `assertInDatabaseWithin`: `discover-plan-claims.ts` taints
+    // identifiers of three characters or more per FILE, and a longer name here
+    // would seed plan-gate claims nothing in this file asserts.
+    const d1 = one.txnInDatabaseMs;
+    const d5 = five.txnInDatabaseMs;
+    expect(
+      [d1.length, d5.length],
+      `the in-database series of the two arms are ${d1.length} and ${d5.length} samples against ${one.txnMs.length} and ${five.txnMs.length} ` +
+        `wall-clock ones — both halves of this quotient are taken in the same windows as their wall figures and must be the same length (P4-AL-76)`,
+    ).toEqual([one.txnMs.length, five.txnMs.length]);
+    const oneP95 = quantile(d1, 0.95);
+    const fiveP95 = quantile(d5, 0.95);
+    const ratio = oneP95 === 0 ? null : fiveP95 / oneP95;
+    expect(
+      ratio,
+      `the 1-invoice arm's IN-DATABASE p95 is zero, so this quotient has no denominator. A zero there is not a fast database: it is an instrument ` +
+        `that accounted nothing to ${SHORT_PERCENTILE_ITERATIONS} transactions, and InDatabaseClock.calibrate is what refuses that case at fixture time (DR-98).`,
+    ).not.toBeNull();
+    console.log(
+      `P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs oneP95=${oneP95.toFixed(3)} fiveP95=${fiveP95.toFixed(3)} ` +
+        `ratio=${must(ratio).toFixed(3)} max=${RATIOS.ALLOCATION_5_OVER_1.max}`,
+    );
+    expect(
+      must(ratio),
+      `P4-S4-RATIO-FAIL-AL72 judgedOn=inDatabaseExecMs ` +
+        `P4-AL-72's allocation scaling constant is p95(5) <= ${RATIOS.ALLOCATION_5_OVER_1.max} x p95(1), and OD-P4-14 (TL 2026-09-30 OPTION A) makes it ` +
+        `CALIBRATION-DERIVED and TIGHTEN-ONLY — a measured poor result may never be fixed by raising it. ` +
+        `Measured IN-DATABASE, both halves from the same pg_stat_statements instrument: ` +
+        `${fiveP95.toFixed(3)} ms over ${oneP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x. ` +
+        `The constant is PROVISIONAL (${RATIOS.ALLOCATION_5_OVER_1.anchorOwed}).\n` +
+        `MONITORING ONLY, judging nothing: the wall-clock quotients of the same two arms are ` +
+        `in-transaction ${quantile(five.txnMs, 0.95).toFixed(3)} / ${quantile(one.txnMs, 0.95).toFixed(3)} ms and ` +
+        `over HTTP ${quantile(five.httpMs, 0.95).toFixed(3)} / ${quantile(one.httpMs, 0.95).toFixed(3)} ms.\n` +
+        `1-invoice IN-DATABASE series: ${JSON.stringify(distribution(d1, BUDGET.F_ALLOCATION_TXN_P95).orderedMs)}\n` +
+        `5-invoice IN-DATABASE series: ${JSON.stringify(distribution(d5, BUDGET.F_ALLOCATION_TXN_P95).orderedMs)}\n` +
+        `1-invoice wall series: ${JSON.stringify(distribution(one.txnMs, BUDGET.F_ALLOCATION_HTTP_P95).orderedMs)}\n` +
+        `5-invoice wall series: ${JSON.stringify(distribution(five.txnMs, BUDGET.F_ALLOCATION_HTTP_P95).orderedMs)}`,
+    ).toBeLessThanOrEqual(RATIOS.ALLOCATION_5_OVER_1.max);
+    // Printed only AFTER the assertion held, so a run that executed nothing
+    // cannot satisfy the control that greps for it.
+    console.log(`P4-S4-RATIO-OK-AL72`);
   });
 });
 
