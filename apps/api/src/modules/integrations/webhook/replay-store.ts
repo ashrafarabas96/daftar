@@ -32,14 +32,15 @@ export interface RawWebhookRequest {
  *
  * This is a PORT, and the only implementation in this slice is the in-memory
  * one below, which is for tests. The durable one is a table with
- * `UNIQUE(business_id, event_source, external_event_id)` whose migration is
- * neither written nor numbered here: the design loads that same table with
- * columns that bind an event to the ledger, which makes it a money migration
- * owned by the finance lane, and its number must be reserved before the file
- * is written.
+ * `UNIQUE(business_id, event_source, external_event_id)`, and its number is
+ * RESERVED but its file is not written: `0087`, reserved by the owner's order
+ * of 2026-11-08 in `.local-context/LANES.md`, and owned by the finance lane
+ * because the design loads that same table with columns that bind an event to
+ * the ledger. Its `event_source` column takes the composite of
+ * `eventSourceOf`, by the same decision.
  *
- * TWO OBLIGATIONS ON ANY DURABLE IMPLEMENTATION, both from review and neither
- * expressible in this signature:
+ * THREE OBLIGATIONS ON ANY DURABLE IMPLEMENTATION, none of them expressible in
+ * this signature — two from review and one from the owner:
  *
  *  1. `remember` is the WRITE-AHEAD row, and it must be in the SAME database
  *     transaction as the queue insert that follows it. As written, the gate
@@ -47,7 +48,13 @@ export interface RawWebhookRequest {
  *     the enqueue has lost the event for good, because the next delivery sees
  *     `replay` and the caller has nothing queued. One transaction, or the
  *     at-least-once queue cannot save it.
- *  2. It must be `INSERT … ON CONFLICT DO NOTHING` and report whether a row
+ *  2. The `UNIQUE(business_id, event_source, external_event_id)` constraint
+ *     STAYS, ALWAYS. By the owner's decision of 2026-11-08 it is never
+ *     exempted from any retention prune and never dropped, because where the
+ *     provider does not sign a timestamp it is the only defence against an
+ *     unbounded replay of a genuinely signed body. A prune that drops old rows
+ *     does not merely lose history: it makes every pruned event replayable.
+ *  3. It must be `INSERT … ON CONFLICT DO NOTHING` and report whether a row
  *     was written — never `SELECT` then `INSERT`. Two legitimate concurrent
  *     deliveries of the same event would both read "absent" and both proceed.
  */

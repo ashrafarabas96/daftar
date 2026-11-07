@@ -53,6 +53,8 @@ import {
 
 const SECRET = Buffer.from('f3a1b2c3d4e5f60718293a4b5c6d7e8f', 'hex');
 const WINDOW = 300;
+/** The owner's "small declared skew": five minutes. */
+const SKEW = 300;
 const NOW_MS = 1_780_000_000_000;
 const NOW_S = Math.floor(NOW_MS / 1000);
 const EVENT_ID = 'wamid.HBgMOTk5';
@@ -88,6 +90,7 @@ function adapter(
     kind?: ServiceKind;
     scheme?: WebhookSignatureScheme;
     extract?: AdapterDescriptor['extractWebhookIdentity'];
+    producesFinancialEvent?: boolean;
   } = {},
 ): AdapterDescriptor {
   const scheme = over.scheme ?? 'hmac_sha256_ts_body';
@@ -110,6 +113,7 @@ function adapter(
     secretSlots: ['access_token'],
     allowedHosts: ['graph.facebook.com'],
     isTestDouble: false,
+    producesFinancialEvent: over.producesFinancialEvent ?? false,
     extractWebhookIdentity: scheme === 'none' ? undefined : (over.extract ?? extractIdentity),
   };
 }
@@ -148,6 +152,7 @@ function gate(
     acceptTimestampUnboundScheme?: boolean;
     production?: boolean;
     adapters?: readonly AdapterDescriptor[];
+    skewSeconds?: number;
   } = {},
 ) {
   const store = opts.store ?? new DurableLikeStore();
@@ -160,6 +165,7 @@ function gate(
         timestampWindowSeconds: WINDOW,
         acceptTimestampUnboundScheme: opts.acceptTimestampUnboundScheme ?? false,
         production: opts.production ?? false,
+        maxSignedInstantAheadOfArrivalSeconds: opts.skewSeconds ?? SKEW,
       },
       store,
       registry,
@@ -169,6 +175,20 @@ function gate(
   };
 }
 
+/**
+ * The accepted verdict in full. With no signed instant in the payload the
+ * economic instant IS the arrival instant, and the flag says so — which is
+ * what the owner's decision requires a consumer to be able to tell.
+ */
+const acceptedWith = (key: string, replay = false) => ({
+  accepted: true,
+  replay,
+  key,
+  economicInstantMs: NOW_MS,
+  arrivalInstantMs: NOW_MS,
+  economicInstantSigned: false,
+});
+
 const keyFor = (id: string = EVENT_ID, businessId = 'b1', kind = 'notification.whatsapp'): string =>
   replayKeyOf({ businessId, kind, adapterKey: 'whatsapp_cloud', externalEventId: id });
 
@@ -176,7 +196,7 @@ describe('the gate refuses to exist without the three parameters nobody should d
   it('rejects a nonsense window, an unstated scheme policy, and an unstated environment', () => {
     const store = new DurableLikeStore();
     const registry = AdapterRegistry.build([adapter()], { production: false });
-    const base = { acceptTimestampUnboundScheme: false, production: false };
+    const base = { acceptTimestampUnboundScheme: false, production: false, maxSignedInstantAheadOfArrivalSeconds: SKEW };
     for (const bad of [undefined, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => new WebhookGate({ ...base, timestampWindowSeconds: bad as never }, store, registry, () => NOW_MS)).toThrow(/timestampWindowSeconds/);
     }
@@ -186,6 +206,11 @@ describe('the gate refuses to exist without the three parameters nobody should d
     expect(() => new WebhookGate({ ...base, timestampWindowSeconds: WINDOW, production: undefined as never }, store, registry, () => NOW_MS)).toThrow(
       /production/,
     );
+    for (const bad of [undefined, -1, 1.5, Number.NaN]) {
+      expect(
+        () => new WebhookGate({ ...base, timestampWindowSeconds: WINDOW, maxSignedInstantAheadOfArrivalSeconds: bad as never }, store, registry, () => NOW_MS),
+      ).toThrow(/maxSignedInstantAheadOfArrivalSeconds/);
+    }
     expect(new WebhookGate({ ...base, timestampWindowSeconds: WINDOW }, store, registry, () => NOW_MS)).toBeDefined();
   });
 });
@@ -281,7 +306,7 @@ describe("a scheme that does not bind the timestamp is the owner's call, not a d
     const req = request({ rawBody: body, signatureHeader: signBody(body) });
     const durable = gate({ adapters: [adapter({ scheme: 'hmac_sha256_body' })], acceptTimestampUnboundScheme: true });
     const accepted = await durable.gate.verify(req, SECRET, ...WA);
-    expect(accepted).toEqual({ accepted: true, replay: false, key: keyFor() });
+    expect(accepted).toEqual(acceptedWith(keyFor()));
 
     const staleBody = bodyWith('evt_stale');
     const stale = await durable.gate.verify({ ...req, timestampHeader: '1', rawBody: staleBody, signatureHeader: signBody(staleBody) }, SECRET, ...WA);
@@ -414,7 +439,7 @@ describe('the identity comes out of the SIGNED bytes — the first money defect'
     if (!forged.accepted) expect(forged.rejection).toBe('signature_mismatch');
 
     const honest = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, ...WA);
-    expect(honest).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID) });
+    expect(honest).toEqual(acceptedWith(keyFor(EVENT_ID)));
   });
 
   it('offers no field in which to pass an identity beside the body', () => {
@@ -455,8 +480,8 @@ describe("the owner's own acceptance condition, in the owner's words", () => {
 
     const first = await g.verify(request({ rawBody: original, timestampHeader: ts, signatureHeader: signature }), SECRET, ...WA);
     const second = await g.verify(request({ rawBody: original, timestampHeader: ts, signatureHeader: signature }), SECRET, ...WA);
-    expect(first).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID) });
-    expect(second).toEqual({ accepted: true, replay: true, key: keyFor(EVENT_ID) });
+    expect(first).toEqual(acceptedWith(keyFor(EVENT_ID)));
+    expect(second).toEqual(acceptedWith(keyFor(EVENT_ID), true));
     expect((store as DurableLikeStore).size()).toBe(1);
 
     expect(Object.keys(request())).not.toContain('externalEventId');
@@ -492,7 +517,7 @@ describe('the TENANT is checked too — the third money defect, and the sharpest
     // tenant the payload names, so the refusal is the account, not the
     // signature.
     const atOwnTenant = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signature }), SECRET, ...WA);
-    expect(atOwnTenant).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID, 'b1') });
+    expect(atOwnTenant).toEqual(acceptedWith(keyFor(EVENT_ID, 'b1')));
   });
 
   it('refuses an absent or unusable account reference by name', async () => {
@@ -571,7 +596,7 @@ describe('an absent or unusable event id is refused by name — the second money
     }
     const honest = gate();
     const real = await honest.gate.verify(request(), SECRET, ...WA);
-    expect(real).toEqual({ accepted: true, replay: false, key: keyFor() });
+    expect(real).toEqual(acceptedWith(keyFor()));
   });
 
   it('refuses an id carrying a newline, a space, a control byte, or more than the cap', async () => {
@@ -621,7 +646,12 @@ describe("the replay namespace is the registry's own identity, not the bare adap
     // an external id collapse: the second is reported as a replay, which is a
     // money event behind a success.
     const { gate: g, store } = gate({
-      adapters: [adapter({ kind: 'payment.merchant_checkout' }), adapter({ kind: 'webhook.inbound' })],
+      adapters: [
+        // a payment kind must declare its financial effect, so this is
+        // what a real registration of it looks like
+        adapter({ kind: 'payment.merchant_checkout', producesFinancialEvent: true }),
+        adapter({ kind: 'webhook.inbound' }),
+      ],
     });
     const ts = String(NOW_S);
     const body = bodyWith(EVENT_ID);
@@ -661,14 +691,139 @@ describe("the replay namespace is the registry's own identity, not the bare adap
   });
 });
 
+describe('a money adapter may never ride an unsigned timestamp', () => {
+  /**
+   * The owner's decision (2026-11-08, DR-107/2): the body-only scheme is
+   * permitted ONLY for an adapter that produces no financial effect — inbound
+   * messages, as WhatsApp — and FORBIDDEN BY LAW for any adapter that produces
+   * a money event, "with a control that fails if the two are combined".
+   *
+   * So the control is at BUILD time and does not depend on the deployment
+   * option: a descriptor claiming both is refused outright, whatever any
+   * environment says. `acceptTimestampUnboundScheme` can then only ever widen
+   * the non-financial case, never reach a financial one.
+   */
+  it('refuses the combination at build time, whatever the deployment allows', () => {
+    expect(() =>
+      AdapterRegistry.build([adapter({ scheme: 'hmac_sha256_body', producesFinancialEvent: true })], {
+        production: false,
+      }),
+    ).toThrow(/financial/i);
+    // positive control, both halves: each property on its own builds, so the
+    // refusal is the COMBINATION and not either one.
+    expect(
+      AdapterRegistry.build([adapter({ scheme: 'hmac_sha256_body', producesFinancialEvent: false })], {
+        production: false,
+      }).get(...WA),
+    ).toBeDefined();
+    expect(
+      AdapterRegistry.build([adapter({ scheme: 'hmac_sha256_ts_body', producesFinancialEvent: true })], {
+        production: false,
+      }).get(...WA),
+    ).toBeDefined();
+  });
+
+  it('refuses a payment adapter that declares itself free of financial effect', () => {
+    // Not the owner's words but a consequence of them: the two payment kinds
+    // are money by construction, so a descriptor claiming otherwise declares
+    // something that cannot be true — and the law above would be bypassed by
+    // writing `false`.
+    for (const kind of ['payment.platform_billing', 'payment.merchant_checkout'] as const) {
+      expect(() => AdapterRegistry.build([adapter({ kind, producesFinancialEvent: false })], { production: false })).toThrow(/financial/i);
+    }
+    expect(
+      AdapterRegistry.build([adapter({ kind: 'payment.merchant_checkout', producesFinancialEvent: true })], {
+        production: false,
+      }).get('payment.merchant_checkout', 'whatsapp_cloud'),
+    ).toBeDefined();
+  });
+
+  it('still lets the non-financial inbound case through, which is what the permission is for', async () => {
+    const body = bodyWith(EVENT_ID);
+    const { gate: g } = gate({
+      adapters: [adapter({ scheme: 'hmac_sha256_body', producesFinancialEvent: false })],
+      acceptTimestampUnboundScheme: true,
+    });
+    const v = await g.verify(request({ rawBody: body, signatureHeader: signBody(body) }), SECRET, ...WA);
+    expect(v.accepted).toBe(true);
+  });
+});
+
+describe('the economic instant is what the provider signed', () => {
+  /**
+   * DR-107/3: the time the provider signs INSIDE the payload is the economic
+   * truth of the event; the arrival time is recorded in its own field; where no
+   * signed time exists the arrival time is used; and a signed time ahead of
+   * arrival by more than a small declared skew is refused.
+   */
+  const withInstant = (ms: number | undefined): AdapterDescriptor =>
+    adapter({
+      extract: (b) => {
+        const base = extractIdentity(b);
+        return base === undefined ? undefined : { ...base, signedInstantMs: ms };
+      },
+    });
+
+  it('takes the signed instant as the economic one, and records arrival separately', async () => {
+    const signedAt = NOW_MS - 90_000;
+    const { gate: g } = gate({ adapters: [withInstant(signedAt)] });
+    const v = await g.verify(request(), SECRET, ...WA);
+    expect(v.accepted).toBe(true);
+    if (v.accepted) {
+      expect(v.economicInstantMs).toBe(signedAt);
+      expect(v.arrivalInstantMs).toBe(NOW_MS);
+      expect(v.economicInstantSigned).toBe(true);
+      expect(v.economicInstantMs).not.toBe(v.arrivalInstantMs);
+    }
+  });
+
+  it('falls back to arrival when the provider signs no instant, and says that it did', async () => {
+    const { gate: g } = gate({ adapters: [withInstant(undefined)] });
+    const v = await g.verify(request(), SECRET, ...WA);
+    expect(v.accepted).toBe(true);
+    if (v.accepted) {
+      expect(v.economicInstantMs).toBe(NOW_MS);
+      expect(v.arrivalInstantMs).toBe(NOW_MS);
+      // The flag is the point: a consumer must be able to tell a provider
+      // instant from a platform one, or it cannot know what it is posting on.
+      expect(v.economicInstantSigned).toBe(false);
+    }
+  });
+
+  it('refuses a signed instant ahead of arrival by more than the declared skew, and accepts the exact bound', async () => {
+    const onBound = gate({ adapters: [withInstant(NOW_MS + SKEW * 1000)] });
+    expect((await onBound.gate.verify(request(), SECRET, ...WA)).accepted).toBe(true);
+
+    const beyond = gate({ adapters: [withInstant(NOW_MS + SKEW * 1000 + 1)] });
+    const v = await beyond.gate.verify(request(), SECRET, ...WA);
+    expect(v.accepted).toBe(false);
+    if (!v.accepted) expect(v.rejection).toBe('instant_ahead_of_arrival');
+  });
+
+  it('refuses an unusable signed instant rather than coercing it', async () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, 1.5, -1, '1780000000000']) {
+      const { gate: g } = gate({ adapters: [withInstant(bad as never)] });
+      const v = await g.verify(request(), SECRET, ...WA);
+      expect(v.accepted, String(bad)).toBe(false);
+      if (!v.accepted) expect(v.rejection).toBe('instant_malformed');
+    }
+  });
+
+  it('does not bound the signed instant in the PAST, which the decision deliberately does not ask for', async () => {
+    const { gate: g } = gate({ adapters: [withInstant(NOW_MS - 400 * 24 * 3600 * 1000)] });
+    const v = await g.verify(request(), SECRET, ...WA);
+    expect(v.accepted).toBe(true);
+  });
+});
+
 describe('a re-delivery is processed once, and the key is byte-identical across attempts', () => {
   it('accepts the first delivery and marks the second a replay', async () => {
     const { gate: g, store } = gate();
     const first = await g.verify(request(), SECRET, ...WA);
     const second = await g.verify(request(), SECRET, ...WA);
 
-    expect(first).toEqual({ accepted: true, replay: false, key: keyFor() });
-    expect(second).toEqual({ accepted: true, replay: true, key: keyFor() });
+    expect(first).toEqual(acceptedWith(keyFor()));
+    expect(second).toEqual(acceptedWith(keyFor(), true));
     expect((store as DurableLikeStore).size()).toBe(1);
   });
 
@@ -696,7 +851,10 @@ describe('the verdict acknowledges, and carries no payload beyond the identity',
     const { gate: g } = gate();
     const v = await g.verify(request({ rawBody: raw, timestampHeader: ts, signatureHeader: signTsBody(ts, raw) }), SECRET, ...WA);
     expect(v.accepted).toBe(true);
-    expect(Object.keys(v).sort()).toEqual(['accepted', 'key', 'replay']);
+    // Six fields now, not three: the owner's decision requires the economic
+    // instant and the arrival instant to be carried separately. None of them is
+    // payload CONTENT, which is the property this test is about.
+    expect(Object.keys(v).sort()).toEqual(['accepted', 'arrivalInstantMs', 'economicInstantMs', 'economicInstantSigned', 'key', 'replay'].sort());
     expect(JSON.stringify(v)).not.toContain(marker);
     // positive control: the marker IS in the bytes, so the absence above is
     // about the verdict and not about a marker that was never there.

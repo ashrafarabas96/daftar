@@ -38,7 +38,10 @@ export const WEBHOOK_REJECTIONS = [
   'timestamp_outside_window',
   'identity_absent',
   'identity_malformed',
+  'instant_malformed',
+  'instant_ahead_of_arrival',
   'account_mismatch',
+  'financial_adapter_requires_timestamp_binding',
 ] as const;
 
 export type WebhookRejection = (typeof WEBHOOK_REJECTIONS)[number];
@@ -60,7 +63,25 @@ export type WebhookRejection = (typeof WEBHOOK_REJECTIONS)[number];
  * claim committed and the posting did not.
  */
 export type WebhookVerdict =
-  | { readonly accepted: true; readonly replay: boolean; readonly key: string }
+  | {
+      readonly accepted: true;
+      readonly replay: boolean;
+      readonly key: string;
+      /**
+       * The economic truth of the event, by the owner's decision of
+       * 2026-11-08: the instant the provider signed inside the payload, or the
+       * arrival instant where the provider signed none.
+       */
+      readonly economicInstantMs: number;
+      /** The platform's own arrival instant, in its own field, always. */
+      readonly arrivalInstantMs: number;
+      /**
+       * Whether `economicInstantMs` came from the signed payload. A consumer
+       * that cannot tell a provider instant from a platform one does not know
+       * what date it is posting on.
+       */
+      readonly economicInstantSigned: boolean;
+    }
   | { readonly accepted: false; readonly rejection: WebhookRejection };
 
 export interface WebhookGateOptions {
@@ -88,6 +109,13 @@ export interface WebhookGateOptions {
    * decision written in a comment, and the review was right to block it.
    */
   readonly acceptTimestampUnboundScheme: boolean;
+  /**
+   * The "small declared skew" of the owner's decision: how far ahead of
+   * arrival a provider-signed instant may be before it is refused. Required,
+   * with no default, like the window — and bounded only in the FUTURE
+   * direction, which is what the decision asks for and all it asks for.
+   */
+  readonly maxSignedInstantAheadOfArrivalSeconds: number;
   /**
    * Required, because the test-double store refusal depends on it and a
    * default would make the refusal depend on nobody's decision.
@@ -158,6 +186,10 @@ export class WebhookGate {
     if (typeof opts.production !== 'boolean') {
       throw new Error('integrations.webhook: production must be stated explicitly, true or false');
     }
+    const skew = opts.maxSignedInstantAheadOfArrivalSeconds;
+    if (typeof skew !== 'number' || !Number.isInteger(skew) || skew < 0) {
+      throw new Error('integrations.webhook: maxSignedInstantAheadOfArrivalSeconds must be a whole number of seconds, zero or more');
+    }
     this.hmac = hmac ?? ((key, message) => createHmac('sha256', key).update(message).digest());
   }
 
@@ -185,6 +217,11 @@ export class WebhookGate {
       return { accepted: false, rejection: 'request_malformed' };
     }
 
+    // Arrival is read ONCE, here, and reused: the window check and the
+    // economic-instant comparison must not be able to disagree about when this
+    // request arrived.
+    const arrivalInstantMs = this.now();
+
     // No secret means no authority. Checked before any hashing, so no HMAC is
     // ever computed under an absent or empty key — a comparison against a key
     // nobody set is not a weak check, it is no check.
@@ -209,6 +246,12 @@ export class WebhookGate {
       return { accepted: false, rejection: 'scheme_unknown' };
     }
     const timestampBound = scheme === 'hmac_sha256_ts_body';
+    // Defence in depth for the owner's law. The registry refuses this
+    // combination at build time, so through a validated registry this is
+    // unreachable — and there is deliberately no test claiming to reach it.
+    if (!timestampBound && adapter.producesFinancialEvent) {
+      return { accepted: false, rejection: 'financial_adapter_requires_timestamp_binding' };
+    }
     if (!timestampBound && !this.opts.acceptTimestampUnboundScheme) {
       return { accepted: false, rejection: 'scheme_not_timestamp_bound' };
     }
@@ -241,7 +284,7 @@ export class WebhookGate {
         return { accepted: false, rejection: 'timestamp_malformed' };
       }
       const sent = Number.parseInt(request.timestampHeader, 10);
-      const nowSeconds = Math.floor(this.now() / 1000);
+      const nowSeconds = Math.floor(arrivalInstantMs / 1000);
       if (Math.abs(nowSeconds - sent) > this.opts.timestampWindowSeconds) {
         return { accepted: false, rejection: 'timestamp_outside_window' };
       }
@@ -303,6 +346,22 @@ export class WebhookGate {
     //     the secret is per-business the caller must resolve before it can
     //     verify, so the comparison is the only shape available — and then
     //     these two obligations are what make it sound.
+    // The economic instant, by the owner's decision. The signed one where the
+    // provider carries one, arrival otherwise — and a signed instant ahead of
+    // arrival by more than the declared skew is refused, because `entry_date`
+    // is derived from it and a future instant crosses both the civil-date
+    // bound (`0045_accounting_post_entry.sql:757-759`) and the closed-period
+    // bound (`0049_accounting_periods.sql:762`).
+    const signedInstant = identity.signedInstantMs;
+    const economicInstantSigned = signedInstant !== undefined && signedInstant !== null;
+    if (economicInstantSigned && (typeof signedInstant !== 'number' || !Number.isInteger(signedInstant) || signedInstant < 0)) {
+      return { accepted: false, rejection: 'instant_malformed' };
+    }
+    const economicInstantMs = economicInstantSigned ? (signedInstant as number) : arrivalInstantMs;
+    if (economicInstantMs - arrivalInstantMs > this.opts.maxSignedInstantAheadOfArrivalSeconds * 1000) {
+      return { accepted: false, rejection: 'instant_ahead_of_arrival' };
+    }
+
     if (identity.accountRef !== request.expectedAccountRef) {
       return { accepted: false, rejection: 'account_mismatch' };
     }
@@ -317,6 +376,6 @@ export class WebhookGate {
       externalEventId: identity.externalEventId,
     });
     const first = await this.store.remember(key);
-    return { accepted: true, replay: !first, key };
+    return { accepted: true, replay: !first, key, economicInstantMs, arrivalInstantMs, economicInstantSigned };
   }
 }

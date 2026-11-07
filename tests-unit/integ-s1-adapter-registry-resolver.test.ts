@@ -46,6 +46,7 @@ function delivering(adapterKey: string, over: Partial<AdapterDescriptor> = {}): 
     secretSlots: ['access_token'],
     allowedHosts: ['graph.facebook.com'],
     isTestDouble: false,
+    producesFinancialEvent: false,
     ...over,
   };
 }

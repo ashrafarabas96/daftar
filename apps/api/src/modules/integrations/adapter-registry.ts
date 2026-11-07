@@ -52,6 +52,24 @@ export class AdapterRegistry {
       if (scheme === 'none' && d.extractWebhookIdentity !== undefined) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} signs no webhook and must not declare extractWebhookIdentity`);
       }
+      if (typeof d.producesFinancialEvent !== 'boolean') {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} must state producesFinancialEvent explicitly, true or false`);
+      }
+      // THE OWNER'S LAW (2026-11-08). A timestamp-unbound signature leaves the
+      // replay store as the only thing standing between a genuinely signed
+      // body and an unbounded replay. That is tolerable where no money moves
+      // and forbidden where it does — and it is refused HERE, at build time,
+      // rather than behind a deployment option, so no environment can permit
+      // the combination.
+      if (d.producesFinancialEvent && scheme === 'hmac_sha256_body') {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} produces a financial event and may not use the timestamp-unbound scheme ${scheme}`);
+      }
+      // The flag is a declaration, and this is the part of it that can be
+      // checked: a payment kind is money by construction, so declaring `false`
+      // would be untrue AND would walk straight past the law above.
+      if (d.kind.startsWith('payment.') && !d.producesFinancialEvent) {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a payment kind and cannot declare that it produces no financial event`);
+      }
       if (d.isTestDouble && opts.production) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a test double and this is production`);
       }

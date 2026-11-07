@@ -34,6 +34,19 @@ export interface AdapterDescriptor {
   readonly allowedHosts: readonly string[];
   readonly isTestDouble: boolean;
   /**
+   * Whether this adapter's events produce a financial effect.
+   *
+   * The owner's decision of 2026-11-08 turns on it: a signature scheme that
+   * does not bind a timestamp is permitted ONLY where there is no money
+   * effect — inbound messages — and forbidden by law where there is, because
+   * then the replay store is the sole defence against an unbounded replay of a
+   * genuinely signed body.
+   *
+   * It is a declaration, so the registry checks what it can: the two payment
+   * kinds are money by construction and may not declare `false`.
+   */
+  readonly producesFinancialEvent: boolean;
+  /**
    * How THIS provider's identity is read out of a verified webhook body.
    *
    * It lives on the descriptor and not on the call, because the review showed

@@ -32,6 +32,17 @@ export interface WebhookIdentity {
    */
   readonly accountRef: string;
   readonly externalEventId: string;
+  /**
+   * The instant the PROVIDER signed inside the payload, in epoch
+   * milliseconds, where the provider carries one.
+   *
+   * By the owner's decision of 2026-11-08 this is the economic truth of the
+   * event, and the platform's arrival instant is recorded separately. It comes
+   * out of the verified bytes like the rest of the identity, so it cannot be
+   * supplied beside them; where the provider signs no instant the gate falls
+   * back to arrival and says so in the verdict.
+   */
+  readonly signedInstantMs?: number;
 }
 
 /**
