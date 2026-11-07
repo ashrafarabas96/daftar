@@ -185,8 +185,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
     const jobs = found.get(step) ?? [];
     if (jobs.length < 2) {
       problems.push(
-        `C-4: \`${step}\` is declared shared but runs in ${jobs.length} job(s) — ` +
-          `a unique step in the shared list is an assignment nobody checks`,
+        `C-4: \`${step}\` is declared shared but runs in ${jobs.length} job(s) — ` + `a unique step in the shared list is an assignment nobody checks`,
       );
     }
   }
@@ -231,14 +230,11 @@ describe('the job-conservation law (DR-105)', () => {
   });
 
   it('RED: a step runs in two jobs while the register still claims one', () => {
-    const planted = ci.replace(
-      / {2}backend-golden:\n {4}needs: workspaces\n/,
-      '  backend-golden:\n    needs: workspaces\n',
-    );
+    const planted = ci.replace(/ {2}backend-golden:\n {4}needs: workspaces\n/, '  backend-golden:\n    needs: workspaces\n');
     // Duplicate the Lint step — assigned to `backend-static` — into `backend-golden`.
     const dup = planted.replace(
       / {6}- name: Tampered-migration hard-fail proof\n/,
-      "      - name: Lint\n        run: npm run lint\n      - name: Tampered-migration hard-fail proof\n",
+      '      - name: Lint\n        run: npm run lint\n      - name: Tampered-migration hard-fail proof\n',
     );
     expect(dup, 'the tamper step was not found to duplicate beside — update this proof').not.toBe(planted);
     const problems = conservationProblems(dup, register);
@@ -248,7 +244,7 @@ describe('the job-conservation law (DR-105)', () => {
   it('RED: a step runs that the register knows nothing about', () => {
     const planted = ci.replace(
       / {6}- name: Tampered-migration hard-fail proof\n/,
-      "      - name: A step nobody registered\n        run: echo nothing\n      - name: Tampered-migration hard-fail proof\n",
+      '      - name: A step nobody registered\n        run: echo nothing\n      - name: Tampered-migration hard-fail proof\n',
     );
     expect(planted, 'the tamper step was not found to insert beside — update this proof').not.toBe(ci);
     const problems = conservationProblems(planted, register);

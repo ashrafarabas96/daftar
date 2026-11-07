@@ -1241,7 +1241,6 @@ jobs:
           path: release/secret-history-scan.json
           if-no-files-found: ignore
 
-
   # -------------------------------------------------------------------------
   # 2a. Backend — the no-database checks.
   # -------------------------------------------------------------------------
