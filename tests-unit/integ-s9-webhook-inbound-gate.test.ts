@@ -374,6 +374,46 @@ describe('the identity comes out of the SIGNED bytes — the first money defect'
   });
 });
 
+describe("the owner's own acceptance condition, in the owner's words", () => {
+  /**
+   * The owner stated the rule and the test together: the event id must be
+   * INSIDE what the signature covers — extracted from the signed body or
+   * carried in the signing string — and no id from outside the signed bytes
+   * is accepted. Then: "a correctly signed message, re-sent with a different
+   * id, is accepted today and must be refused", with the positive control
+   * "the original message is accepted exactly once".
+   *
+   * It was run red first, and the red was produced by putting the hole back:
+   * with the body removed from the signed message (so the id it contains is
+   * no longer covered), the first assertion below fails — the forged id is
+   * accepted. Restored, both pass. The exit codes are in the commit message.
+   */
+  it('refuses a correctly signed message re-sent with a different id, and accepts the original exactly once', async () => {
+    const { gate: g, store } = gate();
+    const original = bodyWith(EVENT_ID);
+    const ts = String(NOW_S);
+    const signature = signTsBody(ts, original);
+
+    // (2a) the same signature, a different id. This must be refused.
+    const resentWithAnotherId = Buffer.from(original.toString('utf8').replace(EVENT_ID, 'wamid.OTHER01'), 'utf8');
+    const forged = await g.verify(request({ rawBody: resentWithAnotherId, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
+    expect(forged.accepted).toBe(false);
+
+    // (2b) the positive control: the original is accepted, ONCE. Not "the
+    // second call is also accepted and flagged" — once, meaning exactly one
+    // key was claimed and the second delivery is not a new event.
+    const first = await g.verify(request({ rawBody: original, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
+    const second = await g.verify(request({ rawBody: original, timestampHeader: ts, signatureHeader: signature }), SECRET, adapter());
+    expect(first).toEqual({ accepted: true, replay: false, key: keyFor(EVENT_ID) });
+    expect(second).toEqual({ accepted: true, replay: true, key: keyFor(EVENT_ID) });
+    expect((store as DurableLikeStore).size()).toBe(1);
+
+    // (1) and there is no id from outside the signed bytes to accept: the
+    // request type carries none, and the extraction rule is the adapter's.
+    expect(Object.keys(request())).not.toContain('externalEventId');
+  });
+});
+
 describe('the TENANT is authenticated too — the third money defect, and the sharpest', () => {
   it('refuses one signed delivery replayed at another tenant, under a secret shared between them', async () => {
     // The whole point: ONE secret, as with a single Meta app serving every
