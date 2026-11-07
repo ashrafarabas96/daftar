@@ -30,7 +30,14 @@
  *     a row this layer never reads: the gate is told which account to expect
  *     and proves the signed bytes name it.
  */
-export { SERVICE_KINDS, isServiceKind, type ServiceKind } from './service-kinds';
+export {
+  MONEY_BEARING_SERVICE_KINDS,
+  NON_MONEY_BEARING_SERVICE_KINDS,
+  SERVICE_KINDS,
+  isMoneyBearingServiceKind,
+  isServiceKind,
+  type ServiceKind,
+} from './service-kinds';
 export { WEBHOOK_SIGNATURE_SCHEMES, isWebhookSignatureScheme, type CapabilityFlags, type WebhookSignatureScheme } from './capabilities';
 export { ADAPTER_KEY_PATTERN, ADAPTER_MODES, isAdapterMode, type AdapterDescriptor, type AdapterMode } from './adapter';
 export { AdapterRegistry } from './adapter-registry';

@@ -1,6 +1,6 @@
 import { ADAPTER_KEY_PATTERN, isAdapterMode, type AdapterDescriptor } from './adapter';
 import { isWebhookSignatureScheme } from './capabilities';
-import { isServiceKind } from './service-kinds';
+import { isMoneyBearingServiceKind, isServiceKind } from './service-kinds';
 import type { ServiceKind } from './service-kinds';
 
 /**
@@ -65,10 +65,17 @@ export class AdapterRegistry {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} produces a financial event and may not use the timestamp-unbound scheme ${scheme}`);
       }
       // The flag is a declaration, and this is the part of it that can be
-      // checked: a payment kind is money by construction, so declaring `false`
-      // would be untrue AND would walk straight past the law above.
-      if (d.kind.startsWith('payment.') && !d.producesFinancialEvent) {
-        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a payment kind and cannot declare that it produces no financial event`);
+      // checked: a money-bearing kind is money by construction, so declaring
+      // `false` would be untrue AND would walk straight past the law above.
+      //
+      // Against the SET and not a `payment.` prefix, which is the finance
+      // review's correction rather than a tidying: the prefix missed
+      // `fx.rates`, whose rate the ledger recomputes amounts from, so an
+      // adapter could have declared itself non-financial, ridden the
+      // timestamp-unbound scheme, and moved every amount posted against its
+      // rate.
+      if (isMoneyBearingServiceKind(d.kind) && !d.producesFinancialEvent) {
+        throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a money-bearing kind and cannot declare that it produces no financial event`);
       }
       if (d.isTestDouble && opts.production) {
         throw new Error(`integrations.registry: ${d.kind}/${d.adapterKey} is a test double and this is production`);

@@ -186,6 +186,13 @@ export class WebhookGate {
     if (typeof opts.production !== 'boolean') {
       throw new Error('integrations.webhook: production must be stated explicitly, true or false');
     }
+    // Zero is allowed here while the window requires more than zero, and the
+    // asymmetry is deliberate rather than an oversight: a window of zero would
+    // refuse every request, whereas a skew of zero is the coherent strict
+    // choice, "accept no clock ahead of ours at all". It is still a sharp edge
+    // — a provider clock one millisecond fast then refuses genuine deliveries —
+    // so it is named here, because it would present as an outage rather than as
+    // a setting.
     const skew = opts.maxSignedInstantAheadOfArrivalSeconds;
     if (typeof skew !== 'number' || !Number.isInteger(skew) || skew < 0) {
       throw new Error('integrations.webhook: maxSignedInstantAheadOfArrivalSeconds must be a whole number of seconds, zero or more');
@@ -346,6 +353,10 @@ export class WebhookGate {
     //     the secret is per-business the caller must resolve before it can
     //     verify, so the comparison is the only shape available — and then
     //     these two obligations are what make it sound.
+    if (identity.accountRef !== request.expectedAccountRef) {
+      return { accepted: false, rejection: 'account_mismatch' };
+    }
+
     // The economic instant, by the owner's decision. The signed one where the
     // provider carries one, arrival otherwise — and a signed instant ahead of
     // arrival by more than the declared skew is refused, because `entry_date`
@@ -360,10 +371,6 @@ export class WebhookGate {
     const economicInstantMs = economicInstantSigned ? (signedInstant as number) : arrivalInstantMs;
     if (economicInstantMs - arrivalInstantMs > this.opts.maxSignedInstantAheadOfArrivalSeconds * 1000) {
       return { accepted: false, rejection: 'instant_ahead_of_arrival' };
-    }
-
-    if (identity.accountRef !== request.expectedAccountRef) {
-      return { accepted: false, rejection: 'account_mismatch' };
     }
 
     // Only a request that PASSED is remembered: recording a rejected one would

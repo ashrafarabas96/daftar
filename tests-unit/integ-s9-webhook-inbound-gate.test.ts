@@ -38,6 +38,9 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   AdapterRegistry,
+  MONEY_BEARING_SERVICE_KINDS,
+  NON_MONEY_BEARING_SERVICE_KINDS,
+  SERVICE_KINDS,
   InMemoryReplayStore,
   MAX_IDENTITY_FIELD_LENGTH,
   WebhookGate,
@@ -721,6 +724,31 @@ describe('a money adapter may never ride an unsigned timestamp', () => {
         production: false,
       }).get(...WA),
     ).toBeDefined();
+  });
+
+  it('refuses a MONEY-BEARING adapter that declares itself free of financial effect', () => {
+    // The rule is a set against the closed list, not a `payment.` prefix. The
+    // prefix missed `fx.rates`, which the finance review caught: a rate is not
+    // a posting, but the ledger recomputes amounts from it, so a replayed or
+    // stale rate moves every amount posted against it.
+    for (const kind of MONEY_BEARING_SERVICE_KINDS) {
+      expect(() => AdapterRegistry.build([adapter({ kind, producesFinancialEvent: false })], { production: false })).toThrow(/money-bearing/i);
+    }
+    expect(MONEY_BEARING_SERVICE_KINDS).toContain('fx.rates');
+    // positive control: a non-money kind may declare false and does build.
+    expect(
+      AdapterRegistry.build([adapter({ kind: 'notification.sms', producesFinancialEvent: false })], {
+        production: false,
+      }).get('notification.sms', 'whatsapp_cloud'),
+    ).toBeDefined();
+  });
+
+  it('classifies EVERY service kind, so a new one cannot join the exempt side in silence', () => {
+    const classified = [...MONEY_BEARING_SERVICE_KINDS, ...NON_MONEY_BEARING_SERVICE_KINDS].sort();
+    expect(classified).toEqual([...SERVICE_KINDS].sort());
+    // and the two sides do not overlap, or the law would be ambiguous.
+    const overlap = MONEY_BEARING_SERVICE_KINDS.filter((k) => (NON_MONEY_BEARING_SERVICE_KINDS as readonly string[]).includes(k));
+    expect(overlap).toEqual([]);
   });
 
   it('refuses a payment adapter that declares itself free of financial effect', () => {
