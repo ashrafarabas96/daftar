@@ -1,3 +1,62 @@
+-- ███████████████████████████████████████████████████████████████████████████
+-- ██                                                                       ██
+-- ██  THIS FILE IS AN UNAPPLIED DESIGN. IT IS NOT A MIGRATION AND IT IS    ██
+-- ██  NOT THE LAW. DO NOT APPLY IT TO A MIGRATED DATABASE.                 ██
+-- ██                                                                       ██
+-- ███████████████████████████████████████████████████████████████████████████
+--
+-- OWNER DECISION DR-106 (2026-11-07): «`0084` is the live law of receivables
+-- aging, and this specification is a design for the future, not a law.»
+--
+-- WHAT THAT MEANS, CONCRETELY, AND WHY IT IS WRITTEN AT THE TOP OF THE FILE:
+--
+--   * The `customer_ar_aging` definition in section 3a of this file IS NOT THE
+--     LAW. The law is the body shipped by
+--     `infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql`
+--     at `:705..:739` — 35 lines, which that same migration installs after
+--     `DROP FUNCTION public.customer_ar_aging(UUID, UUID, DATE, INTEGER[])` at
+--     `:478` retires the `0075` body.
+--
+--   * The two bodies carry THE SAME signature, language, volatility and
+--     `search_path` and DIFFERENT laws: the one below is 551 lines and reads
+--     `has_active_installment_plan` off the invoice row, so it is an aging law
+--     that reckons with instalment plans. The live one does not. Nobody has
+--     compared the two bodies' OUTPUT on the same data; what is measured is
+--     that the texts and the inputs differ.
+--
+--   * Because the definition below says `CREATE OR REPLACE`, APPLYING THIS
+--     FILE TO A TREE THAT HAS RUN THE MIGRATIONS SUBSTITUTES A LIVE FINANCIAL
+--     READ WITHOUT ANY WARNING. Customer receivables aging is a figure a
+--     merchant invoices against. That is the whole reason this header exists.
+--
+--   * No numbered migration creates any instalment table or routine — zero,
+--     measured across all 87 migration files. This file's instalment objects
+--     exist only in the scratch databases its own suites build.
+--
+-- WHAT THIS FILE IS STILL FOR, AND WHY IT IS NEITHER DELETED NOR RENAMED:
+-- twelve tracked files consume it, nine of them computing its path in code
+-- (`INSTALLMENT_REMEDY_SPEC` in `apps/api/src/modules/selling/selling-errors.ts`
+-- is production code), and `scripts/guards/p4s7-body-digests.ts` matches this
+-- file's routine HEADS as literal strings to digest their bodies. Renaming the
+-- file, renaming the routine, or dropping `OR REPLACE` from it each break a
+-- measured consumer, so DR-106 §2's other option — marking, unmistakably — is
+-- what was taken. Deletion is in the owner's stop-and-ask list (DR-103 II/4).
+--
+-- THE AUTOMATIC GUARD THAT BACKS THIS HEADER: DR-106 §2.1, implemented in
+-- `scripts/guards/sealed-function-replacement.ts` and asserted by
+-- `tests/guards/dr106-sealed-function-replacement-law.test.ts`. It fails if any
+-- file outside `infrastructure/database/migrations/` gains a replacement of a
+-- function name that a SEALED migration (<= `frozenThrough`) creates. The
+-- occurrence below is pinned in that guard's measured baseline, so a NEW one
+-- is red.
+--
+-- ANY FUTURE MOVE TO INSTALMENT AGING IS A NEW NUMBERED MIGRATION, after the
+-- instalment-plan tables are built, with a `daftar-finance` review, and with
+-- THE TWO BODIES' OUTPUT COMPARED ON THE SAME DATA BEFORE THE SUBSTITUTION
+-- (DR-106 §2.3). Not by applying this file.
+--
+-- ███████████████████████████████████████████████████████████████████████████
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- P4-S7 — INSTALLMENT AGING GRANULARITY: THE DDL SPECIFICATION.
 --
