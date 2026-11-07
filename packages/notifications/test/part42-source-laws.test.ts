@@ -11,17 +11,28 @@
  * asserts that its mutation actually LANDED in the copy it scans.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const SRC = join(__dirname, '..', 'src');
+
+/**
+ * The key is the POSIX-shaped relative path, and that is not cosmetic.
+ * `relative()` returns the host's separator, so on Windows this map was keyed
+ * `providers\whatsapp-cloud.ts` while every law below names
+ * `providers/whatsapp-cloud.ts`. Three of them failed there and passed on
+ * Linux — the subject-set law among them, which exists to catch exactly a
+ * subject that is not what the laws address. A measurement that depends on the
+ * host's path separator is a measurement about the host.
+ */
+const key = (full: string): string => relative(SRC, full).split(sep).join('/');
 
 function readSource(dir = SRC): Record<string, string> {
   const out: Record<string, string> = {};
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) Object.assign(out, readSource(full));
-    else if (name.endsWith('.ts')) out[relative(SRC, full)] = readFileSync(full, 'utf8');
+    else if (name.endsWith('.ts')) out[key(full)] = readFileSync(full, 'utf8');
   }
   return out;
 }

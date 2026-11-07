@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 429,
+    "hits": 450,
     "planGates": 119,
     "assertions": 31,
-    "files": 54
+    "files": 55
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 50,
       "assertions": 11,
-      "mentions": 119
+      "mentions": 140
     },
     "phase-2": {
       "planGates": 0,
@@ -253,6 +253,12 @@
       "assertions": 3,
       "mentions": 5,
       "phase": "phase-4"
+    },
+    "packages/notifications/proof/p8-case-helpers.sql": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 21,
+      "phase": "cross-phase"
     },
     "scripts/bootstrap-platform-owner.ts": {
       "planGates": 0,
@@ -1641,6 +1647,174 @@
       "kind": "plan-gate",
       "via": ["block"],
       "text": "expect(sqlCodeOnly(specAgingBody()), 'the detector is blind, so the absence above means nothing').toMatch(/least\\(greatest\\(/);"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1018,
+      "phase": "cross-phase",
+      "signals": ["explain", "query-plan-json"],
+      "kind": "mention",
+      "text": "-- So the set is taken FROM THE SERVER instead. `EXPLAIN (FORMAT JSON)` of the"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1028,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--   * the plan is what a non-ANALYZE EXPLAIN shows, so a relation reached by"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1030,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--     EXPLAIN construction's question, not this one's: `Y1` plans as exactly"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1059,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- role — one holding nothing but the reads `EXPLAIN` needs — in place of the"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1109,
+      "phase": "cross-phase",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "EXECUTE 'EXPLAIN (FORMAT JSON, VERBOSE, COSTS OFF) ' || stmt INTO j;"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1396,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- is processed; `EXPLAIN` starts the executor and processes no row. So:"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1402,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--   EXPLAIN INSERT INTO nogrant …    → 42501 permission denied   (same)"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1403,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--   EXPLAIN SELECT * FROM nogrant    → 42501 permission denied"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1405,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--   EXPLAIN INSERT INTO t3 VALUES ('BAD')  → a PLAN, no refusal"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1425,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--       EXPLAIN INSERT INTO t VALUES ('x')  → a PLAN"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1436,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- waved through. `EXPLAIN TRUNCATE t` is a syntax error (42601), so a"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1444,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "EXECUTE 'EXPLAIN ' || stmt;"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1462,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "'arrive from EXPLAIN, which processes no row, and the server answered '"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1463,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "'[%] % to EXPLAIN of this statement. TRUNCATE is the known shape. Write '"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1563,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- `assert_arriving_class`, the handler ban and the EXPLAIN"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1679,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- statement's own block, and the EXPLAIN construction is relation-only."
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1861,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- `SELECT 1/0 FROM @REL@` is folded by the PLANNER, so EXPLAIN"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1867,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- ban and the EXPLAIN construction bound\". That sentence was FALSE"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 1874,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- and this trigger has none; the EXPLAIN construction is the"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 2080,
+      "phase": "cross-phase",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "--         under EXPLAIN, which satisfies the construction. Written"
+    },
+    {
+      "file": "packages/notifications/proof/p8-case-helpers.sql",
+      "line": 2087,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "--   * Take the row form's reach from `EXPLAIN (ANALYZE, FORMAT JSON)`"
     },
     {
       "file": "scripts/bootstrap-platform-owner.ts",

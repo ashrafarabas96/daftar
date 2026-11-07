@@ -12,12 +12,14 @@
     "packages/accounting",
     "packages/inventory",
     "packages/shared-contracts",
-    "packages/design-system"
+    "packages/design-system",
+    "packages/notifications"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web && npm run test:unit",
+    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web && npm run test -w @daftar/notifications && npm run test:unit",
     "test:unit": "vitest run --config vitest.unit.config.ts",
+    "test:p8:db": "bash packages/notifications/proof/run-p8-ci.sh",
     "test:integration": "vitest run tests/integration tests/security tests/guards",
     "test:golden": "vitest run tests/golden-regression",
     "perf:baseline": "vitest run tests/perf",

@@ -932,6 +932,23 @@ jobs:
         run: npm run check:db-from-zero
       - name: API build
         run: npm run build -w @daftar/api
+      # Phase 8 (notifications) re-founded on the sealed Phase 4 head, DR-19.
+      # The pack carried a 6,000-line real-schema gate that applies the FROZEN
+      # migration history with the project own applier and then proves each
+      # named law refuses by its own name — and nothing ran it anywhere, so its
+      # result was never a fact about a commit. It cannot share the services:
+      # postgres on 5432: it DROPS AND CREATES a database called daftar, which
+      # the integration suites are using. So it gets its own throwaway cluster,
+      # built by the wrapper out of the PGDG binaries this job already installs,
+      # on a unix socket with TCP refused.
+      #
+      # No continue-on-error, and the floors are OUTSIDE the subject: the
+      # wrapper declares 101 executed cases and 279 named arms and reds below
+      # either, so a commit that lowers the gate own literal cannot lower the
+      # bar. Measured on the sibling lane: a step that executed zero cases
+      # exited 0 and a required job went green with every case NOT_RUN.
+      - name: Phase 8 notifications — real-schema DB proof on its own PostgreSQL 16 cluster
+        run: npm run test:p8:db
 
   # -------------------------------------------------------------------------
   # 3. Web + Admin builds.
