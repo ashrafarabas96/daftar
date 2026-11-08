@@ -1229,22 +1229,67 @@ jobs:
         run: |
           set -e
           log="$RUNNER_TEMP/negative-control-al72-client-side.log"
-          # This run is expected to PASS. `-t` leaves one verdict standing and it
-          # is the in-database ratio; a `setTimeout` outside every query is not
-          # in it. The wall figures of BOTH arms rise, which is what the numeric
-          # check below reads as proof that the delay really fired.
-          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1 || {
-            tail -160 "$log"
-            echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio — that verdict still listens to something outside PostgreSQL"; exit 1
-          }
+          # ── WHY THIS STEP WAS REWRITTEN, MEASURED AND NOT SUPPOSED ────────
+          #
+          # It used to read `npx vitest ... || { echo "a 200 ms CLIENT-SIDE
+          # delay failed the P4-AL-72 in-database ratio"; exit 1; }` — the
+          # EXIT CODE as the ratio's verdict. That is false on this file by
+          # construction: `auditTheRun` is a census of `DECLARED_CASES = 18`
+          # and `-t` leaves 17 of them unrun, so a `-t` run of this file ALWAYS
+          # exits non-zero whatever the ratio did. Measured: run 42431995284,
+          # job 128582737049, step 59 — the ratio case RAN and PASSED (`Tests
+          # 1 passed | 17 skipped`), the failure was `auditTheRun` at
+          # `receivables-s4-budgets.test.ts:1595`, and the step printed a
+          # sentence blaming the ratio for a red the ratio did not cause. Step
+          # 58 reads the same non-zero code safely only because it gates on
+          # `P4-S4-RATIO-FAIL-AL72` afterwards; this step had no such gate on
+          # the path it actually took, so it never reached its own numeric
+          # checks — RULE-1 exactly, and the control was unexecuted.
+          #
+          # SO THE EXIT CODE IS NO LONGER READ AS THE VERDICT. The markers are,
+          # and the exit code must then AGREE with them: a non-zero code is
+          # accepted only when the log proves the census — and nothing else —
+          # is what failed. Nothing is skipped, and no failure is tolerated
+          # without being named.
+          set +e
+          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1
+          rc=$?
+          set -e
           test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # 1. THE CASE REACHED ITS VERDICT. No silent skip: a `-t` that matched
+          #    nothing, or a fixture that died, leaves this line absent.
+          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the P4-AL-72 in-database case never reached its verdict (no judgedOn=inDatabaseExecMs monitor line), so this run says NOTHING about that ratio — an unexecuted control is a failure, never a pass"; exit 1
+          }
+          # 2. AND IT HELD.
           grep -q 'P4-S4-RATIO-OK-AL72' "$log" || {
             tail -160 "$log"
-            echo "the run exited green but printed no P4-S4-RATIO-OK-AL72 line, so the verdict was never reached and its silence is not a pass"; exit 1
+            echo "the P4-AL-72 case reached its verdict and did NOT print P4-S4-RATIO-OK-AL72, so a delay OUTSIDE the database moved an in-database quotient"; exit 1
           }
           if grep -q 'P4-S4-RATIO-FAIL-AL72' "$log"; then
-            echo "the run exited green and still printed P4-AL-72's failure marker — the exit code and the markers disagree"; exit 1
+            tail -160 "$log"
+            echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio by its own marker — that verdict still listens to something outside PostgreSQL"; exit 1
           fi
+          # 3. THE EXIT CODE AGREES WITH THE MARKERS, by name on both branches.
+          if [ "$rc" -eq 0 ]; then
+            if grep -q 'declared cases did not run to a verdict' "$log"; then
+              echo "the run exited 0 while the census reported unrun cases — the exit code and the audit disagree"; exit 1
+            fi
+          else
+            grep -q '17 of 18 declared cases did not run to a verdict' "$log" || {
+              tail -160 "$log"
+              echo "the run exited $rc for something OTHER than the -t census of this file, and an unexplained red cannot be read as this control holding"; exit 1
+            }
+            grep -qE 'Tests[[:space:]]+1 passed \| 17 skipped' "$log" || {
+              tail -160 "$log"
+              echo "the run exited $rc and its own tally is not '1 passed | 17 skipped', so more than the census failed"; exit 1
+            }
+          fi
+          # AND THE VERDICT IS PRINTED FROM THE LOG, not asserted in prose.
+          echo "P4-AL-72 CLIENT-SIDE CONTROL — the verdict as the run itself recorded it:"
+          grep -hE 'P4-S4-RATIO-OK-AL72|Tests[[:space:]]+[0-9]+ passed' "$log"
+          echo "wrapper exit code $rc, and the only failure in the log is the -t census (proven above, not assumed)"
           grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log" >"$RUNNER_TEMP/al72-monitor.txt" || true
           test -s "$RUNNER_TEMP/al72-monitor.txt" || { echo "no P4-S4-RATIO-MONITOR-AL72 line was printed, so neither quotient can be read"; exit 1; }
           cat "$RUNNER_TEMP/al72-monitor.txt"

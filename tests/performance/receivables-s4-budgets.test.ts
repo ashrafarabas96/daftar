@@ -904,8 +904,8 @@ async function statementCostMs(path: string, principal: 'daftar_app' | 'owner', 
 interface Allocated {
   readonly httpMs: number;
   readonly txnMs: number;
-  /** DR-98: what PostgreSQL accounted to the statements inside the transaction span. The VERDICT of `P4-F-TXN`. */
-  readonly txnInDatabaseMs: number;
+  /** DR-98: what PostgreSQL accounted to this REQUEST, read outside its wall-clock window. The VERDICT of `P4-F-TXN`. */
+  readonly reqInDatabaseMs: number;
   /** The wall cost of the instrument's own two reads, which sit inside the HTTP window. Monitoring only. */
   readonly instrumentMs: number;
   readonly transactions: number;
@@ -958,24 +958,59 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
   const db = w.t.app.get(Database);
   const original = db.withBusinessInventoryAccountingTransaction.bind(db);
   let txnMs = 0;
-  let txnInDatabaseMs = 0;
+  let reqInDatabaseMs = 0;
   let instrumentMs = 0;
   let transactions = 0;
-  // ── WHERE THE IN-DATABASE READS SIT, AND WHAT THAT COSTS (DR-98) ────────
+  // ── WHERE THE IN-DATABASE READS SIT, AND WHY THEY MOVED (DR-98, and the
+  //    owner's remedy of 2026-11-08) ───────────────────────────────
   //
-  // `P4-F-TXN`'s subject is the TRANSACTION, so the instrument reads the
-  // server's cumulative executed milliseconds immediately around the
-  // transaction span and nowhere else. That span is NESTED INSIDE the HTTP
-  // window, so unlike PERF01 — where both reads sat outside every measured
-  // window — these two reads are inside the window `P4-F-HTTP` is measured on,
-  // and they cost it two round trips to PostgreSQL.
+  // THEY USED TO SIT INSIDE THE JUDGED WINDOW, AND THAT WAS MEASURED TO BE
+  // THE WHOLE OF `P4-F over HTTP`'s INFLATION. The two reads bracketed the
+  // TRANSACTION span, and that span is nested inside the HTTP window, so the
+  // HTTP figure carried two round trips to PostgreSQL. Proved on ONE commit
+  // in ONE job — run 42431995284, steps 41 and 42, the same arm measured
+  // twice with the same samples and the same ceiling, once with the
+  // instrument inside the window and once without:
+  //   FHTTP-FOREIGN-5   p50 57.315 → 25.413 ms    p95 65.769 → 28.668 ms
+  //   FHTTP-BASE-5      p50 56.309 → 24.920 ms    p95 60.642 → 29.596 ms
+  // and the instrument's OWN cost, measured independently in the same run,
+  // was 28.730 and 28.619 ms, against median shifts of 31.902 and 31.389 —
+  // agreeing to 3.172 and 2.770 ms. The inflation was the instrument.
   //
-  // That is declared rather than hidden, and its DIRECTION is stated: the two
-  // reads can only make the HTTP figure LARGER, so the unconverted HTTP budget
-  // becomes slightly STRICTER than it was and can never be made to pass by the
-  // instrument. The cost is measured — `instrumentMs` below — and printed per
-  // arm, so how much of the HTTP figure is the instrument is a number a reader
-  // has rather than a reassurance. Nothing is subtracted from a judged figure.
+  // THE REMEDY. The reads now bracket the WHOLE REQUEST from OUTSIDE the
+  // wall-clock window: one before the timer starts, one after it stops.
+  // Nothing is subtracted from any judged figure, no ceiling is moved and no
+  // sample count is changed.
+  //
+  // WHAT THE FIGURE NOW IS, STATED RATHER THAN HIDDEN. It is no longer the
+  // transaction's milliseconds alone: it is every millisecond the server
+  // executed for this request — the transaction plus whatever SQL the request
+  // runs around it. It is therefore GREATER THAN OR EQUAL TO the figure it
+  // replaces, and the two laws that read it move in OPPOSITE directions — said
+  // plainly, because a single reassuring sentence here would be false:
+  //   • `P4-F-TXN`'s in-database CEILING becomes STRICTER. A larger figure
+  //     against an unmoved 40 ms is harder to satisfy, so a widened subject
+  //     cannot buy that pass.
+  //   • `P4-AL-72`'s in-database RATIO becomes LOOSER, by the same arithmetic
+  //     this file already records for knob 1: the per-request SQL outside the
+  //     transaction is very nearly the same `d` in both halves, and
+  //     `(a + d) / (b + d)` moves TOWARDS 1 when `a > b`. That is a real cost
+  //     of the remedy and it is NOT left to be inferred. What answers it is
+  //     the control, not a claim: knob 3 plants its delay in the NUMERATOR arm
+  //     alone, and that control is executed on every run and measured to make
+  //     this verdict miss — 28.107 against the constant 3 on run 42431995284,
+  //     step 58. A ratio whose negative control still fires is a ratio that
+  //     can still fail.
+  // That is why the field is
+  // `reqInDatabaseMs` and not `txnInDatabaseMs` any more — the name carries
+  // the subject, so no later reader can take it for the transaction's own.
+  //
+  // WHY PER REQUEST AND NOT PER ARM. The instruction read "before the arm and
+  // after it"; one read per ARM would leave ONE in-database sample where
+  // `P4-F-TXN` and `P4-AL-72` each need 200, and the same instruction forbids
+  // changing the samples. So the reads left the window and stayed per
+  // request. `instrumentMs` keeps being measured and printed, and it is now a
+  // cost that sits OUTSIDE every judged figure.
   const clock = inDatabase;
   const readClock = async (): Promise<InDatabaseReading | null> => {
     if (clock === null) return null;
@@ -988,7 +1023,6 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
   };
   const spy = vi.spyOn(db, 'withBusinessInventoryAccountingTransaction').mockImplementation(async (...args: Parameters<typeof original>) => {
     transactions += 1;
-    const dbBefore = await readClock();
     const started = process.hrtime.bigint();
     try {
       // The control delays, at the head of the measured transaction window.
@@ -998,14 +1032,11 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
       return await original(...args);
     } finally {
       txnMs += Number(process.hrtime.bigint() - started) / 1e6;
-      if (clock !== null)
-        txnInDatabaseMs += InDatabaseClock.delta(
-          must(dbBefore, 'the opening instrument reading of the transaction window'),
-          must(await readClock(), 'the closing instrument reading of the transaction window'),
-        );
     }
   });
   let res: Response;
+  // THE OPENING READ, OUTSIDE THE WINDOW: before the wall-clock timer starts.
+  const dbBefore = await readClock();
   const started = process.hrtime.bigint();
   try {
     res = await collectPayment(w.t, w.headers, input);
@@ -1013,10 +1044,17 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
     spy.mockRestore();
   }
   const httpMs = Number(process.hrtime.bigint() - started) / 1e6;
+  // AND THE CLOSING READ, OUTSIDE THE WINDOW: after it stops. Neither read
+  // can reach `httpMs`, which is what run 42431995284 proved was needed.
+  if (clock !== null)
+    reqInDatabaseMs = InDatabaseClock.delta(
+      must(dbBefore, 'the opening instrument reading, taken before the request and outside its measured window'),
+      must(await readClock(), 'the closing instrument reading, taken after the request and outside its measured window'),
+    );
   return {
     httpMs,
     txnMs,
-    txnInDatabaseMs,
+    reqInDatabaseMs,
     instrumentMs,
     transactions,
     status: res.status,
@@ -1033,8 +1071,8 @@ interface AllocationSeries {
   readonly currency: 'base' | 'foreign';
   readonly httpMs: readonly number[];
   readonly txnMs: readonly number[];
-  /** DR-98: the in-database execution time of each transaction window, in the same order. */
-  readonly txnInDatabaseMs: readonly number[];
+  /** DR-98: the in-database execution time of each REQUEST, in the same order, both reads outside the window. */
+  readonly reqInDatabaseMs: readonly number[];
   /** The instrument's own wall cost inside each HTTP window, in the same order. Monitoring only. */
   readonly instrumentMs: readonly number[];
   readonly transactionsPerCommand: readonly number[];
@@ -1049,7 +1087,7 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
   }
   const httpMs: number[] = [];
   const txnMs: number[] = [];
-  const txnInDatabaseMs: number[] = [];
+  const reqInDatabaseMs: number[] = [];
   const instrumentMs: number[] = [];
   const transactionsPerCommand: number[] = [];
   const paymentIds: string[] = [];
@@ -1058,7 +1096,7 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
     expect(r.status, `the ${arm} collection ${i} commits: ${JSON.stringify(r.body)}`).toBeLessThan(300);
     httpMs.push(r.httpMs);
     txnMs.push(r.txnMs);
-    txnInDatabaseMs.push(r.txnInDatabaseMs);
+    reqInDatabaseMs.push(r.reqInDatabaseMs);
     instrumentMs.push(r.instrumentMs);
     transactionsPerCommand.push(r.transactions);
     paymentIds.push(r.paymentId);
@@ -1066,7 +1104,7 @@ async function measureAllocations(arm: string, shape: number, currency: 'base' |
   // DR-98: the eviction check is per WINDOW, inside `InDatabaseClock.delta`,
   // which is where each figure's own trust claim lives. See that method for the
   // measured reason the whole-lifetime check was wrong here.
-  return { arm, shape, currency, httpMs, txnMs, txnInDatabaseMs, instrumentMs, transactionsPerCommand, paymentIds };
+  return { arm, shape, currency, httpMs, txnMs, reqInDatabaseMs, instrumentMs, transactionsPerCommand, paymentIds };
 }
 
 const series = new Map<string, AllocationSeries>();
@@ -1911,7 +1949,7 @@ describe('P4-F — the customer payment allocation', () => {
                 name: `P4-F in-transaction, ${s.shape} invoices, ${s.currency} currency`,
                 budgetMs: BUDGET.F_ALLOCATION_TXN_P95,
                 samplesMs: s.txnMs,
-                inDatabaseMs: s.txnInDatabaseMs,
+                inDatabaseMs: s.reqInDatabaseMs,
               },
               BUDGET.F_ALLOCATION_TXN_P95,
               'P4-F (in-transaction)',
@@ -1982,11 +2020,11 @@ describe('P4-F — the customer payment allocation', () => {
       // the two quotients are readable side by side in every run. This case
       // asserts the sample counts and nothing about either ratio.
       inDatabase: {
-        oneInvoiceMedianMs: quantile(one.txnInDatabaseMs, 0.5),
-        fiveInvoiceMedianMs: quantile(five.txnInDatabaseMs, 0.5),
-        medianScaling1to5: quantile(one.txnInDatabaseMs, 0.5) === 0 ? null : quantile(five.txnInDatabaseMs, 0.5) / quantile(one.txnInDatabaseMs, 0.5),
-        oneInvoiceP95Ms: quantile(one.txnInDatabaseMs, 0.95),
-        fiveInvoiceP95Ms: quantile(five.txnInDatabaseMs, 0.95),
+        oneInvoiceMedianMs: quantile(one.reqInDatabaseMs, 0.5),
+        fiveInvoiceMedianMs: quantile(five.reqInDatabaseMs, 0.5),
+        medianScaling1to5: quantile(one.reqInDatabaseMs, 0.5) === 0 ? null : quantile(five.reqInDatabaseMs, 0.5) / quantile(one.reqInDatabaseMs, 0.5),
+        oneInvoiceP95Ms: quantile(one.reqInDatabaseMs, 0.95),
+        fiveInvoiceP95Ms: quantile(five.reqInDatabaseMs, 0.95),
       },
       iterations: { one: one.txnMs.length, five: five.txnMs.length },
     };
@@ -2010,9 +2048,11 @@ describe('P4-F — the customer payment allocation', () => {
    * DR-98 EXTENDED TO `P4-AL-72`'s ALLOCATION SCALING RATIO — OWNER DECISION,
    * 2026-11-07. BOTH HALVES ARE MEASURED INSIDE POSTGRESQL, THE SAME WAY.
    *
-   * The numerator and the denominator are both `txnInDatabaseMs`: the same
-   * `pg_stat_statements` delta instrument, read around the same transaction
-   * windows, in the same order, on the same run. So the quotient is no longer a
+   * The numerator and the denominator are both `reqInDatabaseMs`: the same
+   * `pg_stat_statements` delta instrument, read around the same REQUESTS and
+   * from OUTSIDE their measured windows (the owner's remedy of 2026-11-08, and
+   * the reason that field is no longer called `txnInDatabaseMs`), in the same
+   * order, on the same run. So the quotient is no longer a
    * quotient of two quantities that were defined differently, and the owner's
    * first condition — «the numerator and the denominator are both measured
    * inside PostgreSQL in the same way, so the ratio is not compared between two
@@ -2089,8 +2129,8 @@ describe('P4-F — the customer payment allocation', () => {
     // recorded at `assertInDatabaseWithin`: `discover-plan-claims.ts` taints
     // identifiers of three characters or more per FILE, and a longer name here
     // would seed plan-gate claims nothing in this file asserts.
-    const d1 = one.txnInDatabaseMs;
-    const d5 = five.txnInDatabaseMs;
+    const d1 = one.reqInDatabaseMs;
+    const d5 = five.reqInDatabaseMs;
     expect(
       [d1.length, d5.length],
       `the in-database series of the two arms are ${d1.length} and ${d5.length} samples against ${one.txnMs.length} and ${five.txnMs.length} ` +
@@ -2191,7 +2231,7 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
       const arm = must(series.get(`${currency}-${shape}`), `the ${currency}-${shape} allocation arm`);
       lengths[`P4-F ${currency}-${shape} in-transaction`] = arm.txnMs.length;
       lengths[`P4-F ${currency}-${shape} over HTTP`] = arm.httpMs.length;
-      lengths[`P4-F ${currency}-${shape} IN-DATABASE (the verdict)`] = arm.txnInDatabaseMs.length;
+      lengths[`P4-F ${currency}-${shape} IN-DATABASE (the verdict)`] = arm.reqInDatabaseMs.length;
     }
     // The diagnostic series is thirty iterations by declaration, not 200, and
     // it is a diagnostic rather than a verdict — so it is counted and named
