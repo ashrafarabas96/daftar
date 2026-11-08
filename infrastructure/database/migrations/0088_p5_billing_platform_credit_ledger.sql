@@ -1441,3 +1441,142 @@ ALTER FUNCTION public.pca_credit_agrees() OWNER TO daftar_accounting_internal;
 -- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
 -- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
+
+-- ===== HARDENING SECTION END — everything below is the DECLARED DR-108 SECTION =====
+
+-- ── WHY THIS THIRD SECTION EXISTS ────────────────────────────────────────
+-- OWNER DECISION E, which the hardening section above named and did NOT take,
+-- is TAKEN, by the owner, in his own words:
+--
+--   «القرار E: سياسة `accounting_validator` على سابقة `0081:552`، دون أي
+--    تعديل في نص القانونين.»
+--
+--   — decision E: the `accounting_validator` policy, on the precedent of
+--     `0081:552`, with NO edit to the text of the two laws.
+--
+-- The contradiction it resolves was MEASURED, not inferred. Three standing
+-- laws require a guard outside the accepted prefix to be a SECURITY DEFINER of
+-- an internal principal with the pinned path
+-- (`tests/security/phase3-s8-definer-law.test.ts`,
+-- `tests/security/p3c-td18-definer-ownership.test.ts`, and the two-shape rule
+-- of `tests/integration/migration-portability.test.ts`, which admits exactly a
+-- definer guard of an internal principal OR a STABLE invoker read owned by the
+-- applier — and a VOLATILE trigger function that is INVOKER is neither). The
+-- production policies, meanwhile, BLIND such an owner:
+-- `0052_accounting_journal_lines_rls_performance.sql:244` defines `app_bypass()`
+-- as `CURRENT_USER = 'daftar_platform'` and nothing else, and the PERMISSIVE
+-- `*_tenant_membership` policies of this file name NO principal at all. So an
+-- internal owner satisfies the laws and sees zero rows — and a guard that sees
+-- zero rows stops refusing: `pca_chronology` would admit an out-of-order ledger
+-- and `sca_no_attempt_while_unresolved` would admit a second collection
+-- attempt. THE POLICY IS WHAT CLOSES THAT.
+--
+-- Every statement of this section is attributed to `DR-108` and to NO law,
+-- because no law commands a policy: this is the owner's decision, carried out.
+--
+-- ── THE PRECEDENT, FOLLOWED TO THE LETTER ───────────────────────────────
+-- `0081_phase4_customer_payments_credits.sql:552-553`, verbatim:
+--
+--   CREATE POLICY accounting_validator ON payments
+--     FOR SELECT TO daftar_accounting_internal USING (true);
+--
+-- carried here with the `public.` qualification the rest of this file uses and
+-- with NOTHING else changed. `FOR SELECT` ALONE — no INSERT, no UPDATE, no
+-- DELETE, no `ALL` — and `daftar_accounting_internal` ALONE: the decision names
+-- no other principal, so `daftar_inventory_internal` gets nothing here. The
+-- device is established: `accounting_validator` already stands on 28 relations
+-- across 13 migrations (`0042`, `0046`, `0048`, `0049`, `0061`, `0063`, `0065`,
+-- `0067`, `0072`, `0075`, `0077`, `0081`).
+--
+-- ── WHICH OF THE FIVE ACTUALLY READS — MEASURED FROM THE BODIES ─────────
+-- The policy changes what a guard can READ, so the five are not alike:
+--
+--   * `pca_chronology()` READS — `SELECT max(occurred_at) FROM
+--     public.platform_credit_adjustments` (the monotonicity refusal).
+--   * `sca_no_attempt_while_unresolved()` READS — `SELECT 1 FROM
+--     public.subscription_charge_attempts WHERE … outcome = 'unknown'`.
+--   * `pca_append_only()`, `si_immutable()` and
+--     `sca_append_only_except_reconciliation()` READ NO RELATION AT ALL: their
+--     bodies compare `NEW` to `OLD` and raise. The policy cannot change their
+--     verdict, and the laws above still require their owner — so they are
+--     converted FOR THE LAW and not for the read, and that is said here rather
+--     than left to be assumed.
+--
+-- ── OWNER DECISION C IS STILL OPEN, AND IT IS WHAT THIS SECTION CANNOT DO ─
+-- A POLICY IS NOT A PRIVILEGE. `0081` pairs the policy with a grant — at
+-- `0081:618`, `GRANT SELECT ON payments, payment_allocations, customer_credits,
+-- customer_credit_applications TO daftar_accounting_internal` — and this file
+-- carries NO `GRANT` on any of its four relations, because the grant set for
+-- production roles is OWNER DECISION C, referred to the owner above and not
+-- decided here.
+--
+-- THE DIRECTION OF THAT ERROR IS NAMED, and it is the SAFE one: row-level
+-- security is applied AFTER table privileges, so an internal owner that has the
+-- policy and not `SELECT` does not see zero rows — it is REFUSED, with
+-- `permission denied for table …`. `pca_chronology` then refuses every ledger
+-- INSERT instead of admitting an out-of-order one, and
+-- `pca_maintain_remainder()` — already an internal definer since the hardening
+-- section, and a WRITER on `platform_credit_grant_remainders` — is refused the
+-- same way. A refusal is the safe direction and it is STILL A DEFECT, because a
+-- legitimate consumption is refused with it. WHAT THIS SECTION BUYS is that
+-- when C is decided, the grant lands on a relation whose policy already admits
+-- the principal, so the guard reads a WHOLE relation rather than an empty one.
+-- REFERRED TO THE OWNER, and asserted by no run.
+--
+-- ── THE ONE MECHANICAL PRECONDITION, DECLARED ───────────────────────────
+-- `GRANT CREATE ON SCHEMA public` brackets the five hand-overs for the reason
+-- the hardening section states above in this same file: PostgreSQL requires the
+-- NEW owner of a routine to hold CREATE on the routine's schema, and
+-- `bootstrap.sql:198` grants this principal USAGE only. The hardening section's
+-- own bracket is CLOSED before this section begins, so this section opens and
+-- closes one of its own, exactly as `0070`, `0077` and the hardening section do.
+-- It is NOT a policy and NOT an `ALTER FUNCTION`, so it is a DECLARED EXCEPTION
+-- to the shape of this section, it is counted as such by
+-- `tests-unit/dr100-migration-0088-matches-accepted-ddl.test.ts`, and the net
+-- privilege it leaves behind is ZERO — which
+-- `tests/integration/migration-portability.test.ts` asserts independently with
+-- `has_schema_privilege(role, 'public', 'CREATE')` being false for both internal
+-- principals. WITHOUT IT THE FIVE `OWNER TO` STATEMENTS CANNOT APPLY AT ALL, so
+-- naming the exception is the honest move and dropping the statements is not.
+
+-- ── (1) THE FOUR RELATIONS ADMIT THE INVARIANT PRINCIPAL FOR SELECT ─────
+-- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
+CREATE POLICY accounting_validator ON public.platform_credit_adjustments
+  FOR SELECT TO daftar_accounting_internal USING (true);
+-- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
+CREATE POLICY accounting_validator ON public.platform_credit_grant_remainders
+  FOR SELECT TO daftar_accounting_internal USING (true);
+-- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
+CREATE POLICY accounting_validator ON public.subscription_invoices
+  FOR SELECT TO daftar_accounting_internal USING (true);
+-- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
+CREATE POLICY accounting_validator ON public.subscription_charge_attempts
+  FOR SELECT TO daftar_accounting_internal USING (true);
+
+-- ── (2) THE FIVE REMAINING TRIGGER FUNCTIONS BECOME SECURITY DEFINER ────
+-- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+ALTER FUNCTION public.pca_append_only() SECURITY DEFINER;
+-- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+ALTER FUNCTION public.pca_chronology() SECURITY DEFINER;
+-- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+ALTER FUNCTION public.si_immutable() SECURITY DEFINER;
+-- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+ALTER FUNCTION public.sca_no_attempt_while_unresolved() SECURITY DEFINER;
+-- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+ALTER FUNCTION public.sca_append_only_except_reconciliation() SECURITY DEFINER;
+
+-- ── (3) AND THEIR OWNER IS THE INVARIANT PRINCIPAL, NOT THE APPLIER ─────
+-- DR-108: the declared mechanical precondition — PostgreSQL requires the new owner of a routine to hold CREATE on its schema, and this bracket is closed inside this same section below.
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+-- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+ALTER FUNCTION public.pca_append_only() OWNER TO daftar_accounting_internal;
+-- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+ALTER FUNCTION public.pca_chronology() OWNER TO daftar_accounting_internal;
+-- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+ALTER FUNCTION public.si_immutable() OWNER TO daftar_accounting_internal;
+-- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+ALTER FUNCTION public.sca_no_attempt_while_unresolved() OWNER TO daftar_accounting_internal;
+-- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+ALTER FUNCTION public.sca_append_only_except_reconciliation() OWNER TO daftar_accounting_internal;
+-- DR-108: the declared mechanical precondition, CLOSED — the net schema privilege of this section is zero, which the portability law asserts independently.
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;

@@ -473,6 +473,102 @@ anybody is reported as §17 condition 1.
 | 163 | `warehouses_home_branch_maintain()` | `daftar_inventory_internal` | trigger | no | yes |
 | 164 | `warehouses_require_home_branch()` | `daftar_inventory_internal` | trigger | yes | no |
 
+## Part C — the ten internal definers of migration `0088` (`DR-108`)
+
+`0088_p5_billing_platform_credit_ledger.sql` is a Phase 5 file, and §14 is not
+scoped to a phase: it asks for **every** `SECURITY DEFINER` routine owned by an
+internal principal. `0088` hands **ten** routines to
+`daftar_accounting_internal` — five in its hardening section and five under the
+owner's decision **`DR-108`** — and they are recorded here, in the same shape
+Part B uses, because every one of them has an **explicit, empty ACL** and
+therefore no caller but its owner.
+
+The owner's decision, in his own words:
+
+> «القرار E: سياسة `accounting_validator` على سابقة `0081:552`، دون أي تعديل في
+> نص القانونين.»
+
+`reads` and `writes` below are read from the **routine body**, the way the law
+reads them (`readsIn` is a `SELECT`, `writesIn` is an `INSERT INTO`, an `UPDATE`
+of a relation or a `DELETE FROM`, both over the comment-stripped source). The
+three guards that read **nothing** are recorded as reading nothing: they compare
+`NEW` to `OLD` and raise, so the `accounting_validator` policy cannot change
+their verdict, and they are elevated for the **law** and not for the read.
+
+| # | signature | owner | kind | reads | writes | elevated by |
+| - | --------- | ----- | ---- | ----- | ------ | ----------- |
+| 165 | `assert_invoice_credit_agrees(uuid)` | `daftar_accounting_internal` | helper | yes | no | the accepted DDL (parity region) |
+| 166 | `lock_grants_in_order(uuid,uuid,text)` | `daftar_accounting_internal` | helper | yes | no | the accepted DDL (parity region) |
+| 167 | `pca_append_only()` | `daftar_accounting_internal` | trigger | no | no | `DR-108` |
+| 168 | `pca_chronology()` | `daftar_accounting_internal` | trigger | yes | no | `DR-108` |
+| 169 | `pca_credit_agrees()` | `daftar_accounting_internal` | trigger | no | no | the hardening section |
+| 170 | `pca_maintain_remainder()` | `daftar_accounting_internal` | trigger | no | yes | the accepted DDL (parity region) |
+| 171 | `sca_append_only_except_reconciliation()` | `daftar_accounting_internal` | trigger | no | no | `DR-108` |
+| 172 | `sca_no_attempt_while_unresolved()` | `daftar_accounting_internal` | trigger | yes | no | `DR-108` |
+| 173 | `si_credit_agrees()` | `daftar_accounting_internal` | trigger | no | no | the hardening section |
+| 174 | `si_immutable()` | `daftar_accounting_internal` | trigger | no | no | `DR-108` |
+
+### §17 condition 1 — can PUBLIC, or a runtime principal, execute one of these?
+
+**No, and it is written in the migration, not inferred.** `0088` carries
+**ten** `REVOKE ALL ON FUNCTION … FROM PUBLIC` statements, one per routine — the
+three of the accepted DDL's own round 14, and the seven the hardening section
+adds for the trigger functions PostgreSQL had left on the default PUBLIC
+`EXECUTE`. Each is a materialized ACL with no grantee, which is what clause 4 of
+`tests/security/phase3-s8-definer-law.test.ts` additionally requires of a
+trigger function. **Positive control on the same probe, in the same file:** the
+count of `GRANT EXECUTE`/`GRANT ALL ON FUNCTION` statements in `0088` is
+**zero**, and the probe that returned ten for the revokes returned zero for the
+grants — so the zero is a measurement and not an empty grep. The only `GRANT`
+in the whole file is `GRANT CREATE ON SCHEMA public`, twice bracketed and twice
+revoked, which is a schema privilege and not an `EXECUTE`.
+
+### §17 condition 2 — can a caller reach one without an authority proof?
+
+**The eight trigger functions: no caller exists.** `prorettype` is `trigger`,
+and a trigger function cannot be invoked except by the trigger manager
+(`0A000`) — the same ground Part B stands on, and the ground the accepted DDL's
+own round 14 note already measured rather than assumed.
+
+**The two helpers: NOT PROVEN HERE, AND RECORDED AS A GAP.** In
+production neither has an `EXECUTE` grantee at all, because `0088` grants none.
+The grants the proof lane relies on live in
+`packages/billing/test/db/sql/credit-ledger-roles.sql`, which is **test-lane
+only**, and the production grant set is **OWNER DECISION C** — named in `0088`'s
+header and **not decided**. So "who may call `lock_grants_in_order` and
+`assert_invoice_credit_agrees` in production, and what proves that caller's
+authority" is **not yet a fact about this estate**, and this page does not write
+it down as one. When C is decided it becomes a Part A door and needs its own row
+with a recorded authority proof.
+
+### What this page does NOT claim about these ten
+
+1. **A policy is not a privilege.** `DR-108` adds `accounting_validator` **FOR
+   SELECT** on the four relations, following `0081:552-553`. `0081` pairs that
+   policy with a grant — `0081:618`, `GRANT SELECT ON payments, …  TO
+   daftar_accounting_internal` — and `0088` carries **no** table grant, because
+   that is OWNER DECISION C. Row-level security is applied **after** table
+   privileges, so until C is decided these guards are **refused**
+   (`permission denied for table …`), not blinded: `pca_chronology` refuses
+   every ledger `INSERT` rather than admitting an out-of-order one, and
+   `pca_maintain_remainder()` — a **writer**, and a `FOR SELECT` policy does not
+   cover a write either — is refused the same way. **The direction is the safe
+   one and it is still a defect**, and it is the owner's to close.
+2. **The suite's own roster is not this page.** §14 compares the live catalogue
+   to `DOORS` + `SEALED` **inside**
+   `tests/security/p4s4-internal-definer-inventory.test.ts`, and that file's
+   text is **not touched by this lane**. Those two arrays do not carry these ten
+   signatures, so `live.length` exceeds `DOORS.length + SEALED.length` by ten
+   and §14 stays red **however complete this page is**. Naming the ten here is
+   necessary — the suite also asserts that this page names every recorded
+   signature — and it is **not sufficient**. **Referred to the owner and to the
+   lane that owns that file.**
+3. **The counts in "What was measured" are not re-measured here.** They were
+   taken from a catalogue built from the migrations **before** `0088` existed,
+   and the ten rows above would move several of them. Re-measuring needs a live
+   PostgreSQL catalogue, which this lane did not run, so the figures above this
+   section are left exactly as they were measured and this sentence says why.
+
 ## The red proof
 
 A law with no demonstrated failure is a decoration. The suite's

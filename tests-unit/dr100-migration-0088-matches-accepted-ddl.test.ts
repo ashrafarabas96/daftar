@@ -269,7 +269,15 @@ interface HardeningEntry {
 function parseHardening(migration: string): { readonly entries: HardeningEntry[]; readonly malformed: string[] } {
   const at = migration.indexOf(HARDENING_MARKER);
   if (at === -1) throw new Error('the hardening marker is missing from the migration');
-  const lines = migration.slice(at + HARDENING_MARKER.length).split('\n');
+  // BOUNDED AT THE THIRD CATEGORY. `DR-108` is a separate declared section with
+  // its own marker and its own attribution (`-- DR-108:` rather than `-- LAW:`),
+  // because no law commands a policy. A missing DR-108 marker is NOT treated as
+  // "no DR-108 section": it would silently pull those statements into this
+  // section's equality, so it throws — the same discipline `parityRegion` keeps.
+  const tail = migration.slice(at + HARDENING_MARKER.length);
+  const stop = tail.indexOf(DR108_MARKER);
+  if (stop === -1) throw new Error('the DR-108 marker is missing from the migration, so the hardening section has no end');
+  const lines = tail.slice(0, stop).split('\n');
   const entries: HardeningEntry[] = [];
   const malformed: string[] = [];
   let laws: { file: string; needle: string }[] = [];
@@ -501,5 +509,260 @@ describe('DR-100 item 2 — the hardening section is exactly the law-commanded s
     // Positive control: the forbidden recogniser does fire on a real DDL statement.
     expect(forbidden.test('CREATE TABLE public.x (id uuid);')).toBe(true);
     for (const e of entries) expect(/^(ALTER|REVOKE|GRANT)\b/.test(e.statement), e.statement).toBe(true);
+  });
+});
+
+/**
+ * DR-100 ITEM 2, THIRD CATEGORY — THE `DR-108` SECTION, COUNTED AND ATTRIBUTED.
+ *
+ * `DR-108` is the owner's direct decision, in his own words:
+ *
+ *   «القرار E: سياسة `accounting_validator` على سابقة `0081:552`، دون أي تعديل
+ *    في نص القانونين.»
+ *
+ * It is a THIRD declared category, not a growth of the hardening section, and
+ * the difference is the point: a hardening statement is commanded by a standing
+ * LAW and carries `-- LAW: <file> :: <text>`; a `DR-108` statement is commanded
+ * by the OWNER and carries `-- DR-108: …`. No law commands a policy, so a
+ * policy cannot live in the hardening section without making `-- LAW:`
+ * decoration — which is exactly what category (b) exists to prevent.
+ *
+ * `parseHardening` is therefore BOUNDED at this section's marker. Nothing of the
+ * hardening section's own text changes: category (b) is still the same equality
+ * over the same statements, and this file asserts the three categories are
+ * disjoint, ordered, and each non-empty.
+ *
+ * What this category asserts:
+ *
+ *   (c) the section is EXACTLY `DR108_STATEMENTS`, in order, each statement
+ *       carrying at least one `-- DR-108:` attribution, and nothing in it but
+ *       `CREATE POLICY`, `ALTER FUNCTION` and the TWO declared bracket
+ *       statements that PostgreSQL requires of a routine's new owner;
+ *   (d) three negative controls, each failing BY NAME: an unattributed
+ *       statement, a deleted statement, and a policy that widens the decision
+ *       — `FOR ALL` instead of `FOR SELECT`, or a principal other than
+ *       `daftar_accounting_internal`. The decision's EDGE is measured, not
+ *       described.
+ */
+const DR108_MARKER = '-- ===== HARDENING SECTION END — everything below is the DECLARED DR-108 SECTION =====';
+
+/** The attribution a `DR-108` statement carries instead of a `-- LAW:` reference. */
+const DR108_TAG = '-- DR-108:';
+
+/**
+ * The two statements of the section that are neither a policy nor an
+ * `ALTER FUNCTION`. They are a MECHANICAL PRECONDITION, not a decision:
+ * PostgreSQL requires the new owner of a routine to hold CREATE on the
+ * routine's schema, `bootstrap.sql` grants `daftar_accounting_internal` USAGE
+ * only, and the hardening section's own bracket is closed before this section
+ * starts. The net privilege is zero, which the portability law asserts
+ * independently with `has_schema_privilege`.
+ */
+const DR108_BRACKET = [
+  'GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;',
+  'REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;',
+] as const;
+
+/** The policy the decision commands, as a shape. `FOR SELECT` only; one principal only. */
+const DR108_POLICY = /^CREATE POLICY accounting_validator ON public\.[a-z_]+ FOR SELECT TO daftar_accounting_internal USING \(true\);$/;
+
+/**
+ * Every statement the `DR-108` section may carry, in order, whitespace
+ * collapsed. The list is the law's left-hand side, so a statement added to the
+ * file and not here is reported, and one removed from the file is reported too.
+ */
+const DR108_STATEMENTS: readonly string[] = [
+  // (1) The four relations admit the invariant principal FOR SELECT — 0081:552.
+  'CREATE POLICY accounting_validator ON public.platform_credit_adjustments FOR SELECT TO daftar_accounting_internal USING (true);',
+  'CREATE POLICY accounting_validator ON public.platform_credit_grant_remainders FOR SELECT TO daftar_accounting_internal USING (true);',
+  'CREATE POLICY accounting_validator ON public.subscription_invoices FOR SELECT TO daftar_accounting_internal USING (true);',
+  'CREATE POLICY accounting_validator ON public.subscription_charge_attempts FOR SELECT TO daftar_accounting_internal USING (true);',
+  // (2) The five trigger functions the hardening section left to the applier.
+  'ALTER FUNCTION public.pca_append_only() SECURITY DEFINER;',
+  'ALTER FUNCTION public.pca_chronology() SECURITY DEFINER;',
+  'ALTER FUNCTION public.si_immutable() SECURITY DEFINER;',
+  'ALTER FUNCTION public.sca_no_attempt_while_unresolved() SECURITY DEFINER;',
+  'ALTER FUNCTION public.sca_append_only_except_reconciliation() SECURITY DEFINER;',
+  // (3) …and their owner, inside the bracket PostgreSQL requires, closed here.
+  'GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.pca_append_only() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.pca_chronology() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.si_immutable() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.sca_no_attempt_while_unresolved() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.sca_append_only_except_reconciliation() OWNER TO daftar_accounting_internal;',
+  'REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;',
+];
+
+interface Dr108Entry {
+  readonly statement: string;
+  readonly attributions: number;
+}
+
+/**
+ * The `DR-108` section, parsed as (attributions, statement) pairs. A statement
+ * may span lines — the policy is written in the two-line shape `0081:552-553`
+ * uses — so lines are joined until one ends in `;`, and a statement that never
+ * does is reported rather than mis-parsed.
+ */
+function parseDr108(migration: string): { readonly entries: Dr108Entry[]; readonly malformed: string[] } {
+  const at = migration.indexOf(DR108_MARKER);
+  if (at === -1) throw new Error('the DR-108 marker is missing from the migration');
+  const lines = migration.slice(at + DR108_MARKER.length).split('\n');
+  const entries: Dr108Entry[] = [];
+  const malformed: string[] = [];
+  let attributions = 0;
+  let buffer: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (buffer.length === 0) {
+      if (line.startsWith(DR108_TAG)) {
+        attributions += 1;
+        continue;
+      }
+      if (/^--\s*LAW:/.test(line.trimStart())) {
+        malformed.push(`a -- LAW: reference is inside the DR-108 section: ${line.slice(0, 90)}`);
+        continue;
+      }
+      if (line.trim() === '' || line.trimStart().startsWith('--')) continue;
+    }
+    buffer.push(line.trim());
+    if (!line.endsWith(';')) continue;
+    entries.push({ statement: buffer.join(' ').replace(/\s+/g, ' ').trim(), attributions });
+    buffer = [];
+    attributions = 0;
+  }
+  if (buffer.length > 0) malformed.push(`a DR-108 statement never ends in ";": ${buffer.join(' ').slice(0, 90)}`);
+  if (attributions > 0) malformed.push(`${attributions} trailing -- DR-108: attribution(s) belong to no statement`);
+  return { entries, malformed };
+}
+
+/** The findings of category (c), as a list. Empty is green, and each finding names the statement. */
+function dr108Findings(migration: string): string[] {
+  const { entries, malformed } = parseDr108(migration);
+  const findings = [...malformed];
+  const actual = entries.map((e) => e.statement);
+  for (let i = 0; i < Math.max(actual.length, DR108_STATEMENTS.length); i++) {
+    const e = DR108_STATEMENTS[i];
+    const a = actual[i];
+    if (e === undefined) findings.push(`+ a DR-108 statement no decision counts: ${a ?? ''}`);
+    else if (a === undefined) findings.push(`- a counted DR-108 statement is missing: ${e}`);
+    else if (e !== a) findings.push(`~ at position ${i + 1} the counted statement is "${e}" and the file has "${a}"`);
+  }
+  for (const entry of entries) {
+    if (entry.attributions === 0) findings.push(`no DR-108 attribution for: ${entry.statement}`);
+    const isBracket = (DR108_BRACKET as readonly string[]).includes(entry.statement);
+    if (!isBracket && !/^(CREATE POLICY|ALTER FUNCTION)\b/.test(entry.statement))
+      findings.push(`the DR-108 section carries neither a policy nor an ALTER FUNCTION nor the declared bracket: ${entry.statement}`);
+    if (entry.statement.startsWith('CREATE POLICY') && !DR108_POLICY.test(entry.statement))
+      findings.push(`a DR-108 policy is not the 0081:552 shape — FOR SELECT, to daftar_accounting_internal, USING (true): ${entry.statement}`);
+  }
+  const grant = actual.indexOf(DR108_BRACKET[0]);
+  const revoke = actual.indexOf(DR108_BRACKET[1]);
+  if (grant !== -1 && revoke === -1) findings.push(`the DR-108 schema-CREATE bracket is opened and never closed: ${DR108_BRACKET[0]}`);
+  if (grant !== -1 && revoke !== -1 && revoke < grant) findings.push('the DR-108 schema-CREATE bracket is closed before it is opened');
+  return findings;
+}
+
+describe('DR-108 — the third declared category is exactly the owner-decided statements', () => {
+  it('the three categories are disjoint and ordered, and none of them is empty', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    expect(migration.split('\n').filter((l) => l === DR108_MARKER)).toHaveLength(1);
+    expect(migration.indexOf(DR108_MARKER)).toBeGreaterThan(migration.indexOf(HARDENING_MARKER));
+    // The hardening section is bounded at this marker, so a DR-108 statement
+    // cannot be read as an uncounted hardening statement, and the other way.
+    const hardeningText = migration.slice(migration.indexOf(HARDENING_MARKER), migration.indexOf(DR108_MARKER));
+    expect(hardeningText.includes('-- DR-108:'), 'a DR-108 attribution is inside the hardening section').toBe(false);
+    const dr108Text = migration.slice(migration.indexOf(DR108_MARKER));
+    expect(dr108Text.includes('-- LAW:'), 'a -- LAW: reference is inside the DR-108 section').toBe(false);
+    expect(DR108_STATEMENTS.length).toBe(16);
+    expect(HARDENING_STATEMENTS.length).toBeGreaterThan(20);
+  });
+
+  it('the section is the counted statement list, in order, each attributed to DR-108 and nothing but a policy, an ALTER FUNCTION or the declared bracket', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const findings = dr108Findings(migration);
+    expect(findings, `the DR-108 section is not the counted, attributed list:\n${findings.join('\n')}`).toEqual([]);
+    const { entries } = parseDr108(migration);
+    expect(entries).toHaveLength(DR108_STATEMENTS.length);
+    // Not vacuous: the four policies and the ten function alterations are there.
+    expect(entries.filter((e) => DR108_POLICY.test(e.statement))).toHaveLength(4);
+    expect(entries.filter((e) => e.statement.startsWith('ALTER FUNCTION'))).toHaveLength(10);
+  });
+
+  it('the decision stays FOR SELECT and names one principal: the five converted guards and the four relations, by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries } = parseDr108(migration);
+    const policies = entries.filter((e) => e.statement.startsWith('CREATE POLICY')).map((e) => e.statement);
+    expect(policies.map((p) => (/ON public\.([a-z_]+) /.exec(p) ?? [])[1])).toEqual([
+      'platform_credit_adjustments',
+      'platform_credit_grant_remainders',
+      'subscription_invoices',
+      'subscription_charge_attempts',
+    ]);
+    for (const p of policies) {
+      expect(p, 'FOR SELECT alone').toContain('FOR SELECT');
+      for (const widening of [' FOR ALL ', ' FOR INSERT ', ' FOR UPDATE ', ' FOR DELETE ']) expect(p).not.toContain(widening);
+      expect(p, 'daftar_inventory_internal is not part of this decision').not.toContain('daftar_inventory_internal');
+    }
+    const converted = entries.filter((e) => e.statement.endsWith('SECURITY DEFINER;')).map((e) => (/public\.([a-z_]+)\(/.exec(e.statement) ?? [])[1]);
+    expect(converted).toEqual([
+      'pca_append_only',
+      'pca_chronology',
+      'si_immutable',
+      'sca_no_attempt_while_unresolved',
+      'sca_append_only_except_reconciliation',
+    ]);
+    const owned = entries.filter((e) => e.statement.includes('OWNER TO')).map((e) => (/public\.([a-z_]+)\(/.exec(e.statement) ?? [])[1]);
+    expect(owned, 'every converted guard is also handed to the invariant principal').toEqual(converted);
+  });
+
+  /**
+   * THE THREE NEGATIVE CONTROLS. Each one mutates the REAL section text and
+   * asserts the finding names the statement, so the edge of the decision is
+   * MEASURED and not described. They run on a copy in memory: the file on disk
+   * is not touched, and the same three mutations were also seeded into the file
+   * itself and reverted under `git hash-object`, as the card requires.
+   */
+  it('RED: a statement in the section with no DR-108 attribution fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const target = 'ALTER FUNCTION public.pca_chronology() SECURITY DEFINER;';
+    const attribution = migration
+      .slice(migration.indexOf(DR108_MARKER))
+      .split('\n')
+      .find((l) => l.startsWith(DR108_TAG));
+    expect(attribution, 'the probe found no attribution line to remove, so its removal proves nothing').toBeDefined();
+    const at = migration.indexOf(`\n${target}`);
+    expect(at, 'the probe did not find the statement it mutates').toBeGreaterThan(0);
+    const lineStart = migration.lastIndexOf('\n', at - 1);
+    const mutated = `${migration.slice(0, lineStart)}${migration.slice(at)}`;
+    const findings = dr108Findings(mutated);
+    expect(findings.join('\n')).toContain(`no DR-108 attribution for: ${target}`);
+  });
+
+  it('RED: a statement deleted from the section fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const target = 'ALTER FUNCTION public.si_immutable() OWNER TO daftar_accounting_internal;';
+    expect(migration).toContain(target);
+    const findings = dr108Findings(migration.replace(`${target}\n`, ''));
+    const report = findings.join('\n');
+    expect(report, 'the deletion is reported').toContain('a counted DR-108 statement is missing');
+    expect(report, 'and the deleted statement is named').toContain(target);
+  });
+
+  it('RED: a policy widened to FOR ALL, or handed another principal, fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    // The needle names ONE policy statement, so the mutation cannot land on the
+    // verbatim `0081:552` quotation in this section's own prose instead — which
+    // it did, silently, and the finding list came back empty (RULE-27).
+    const real = 'ON public.subscription_charge_attempts\n  FOR SELECT TO daftar_accounting_internal USING (true);';
+    expect(migration.split(real).length - 1, 'the probe must find exactly one such policy statement to mutate').toBe(1);
+    const wide = dr108Findings(migration.replace(real, real.replace('FOR SELECT', 'FOR ALL')));
+    expect(wide.join('\n')).toContain('a DR-108 policy is not the 0081:552 shape');
+    expect(wide.join('\n')).toContain('FOR ALL TO daftar_accounting_internal');
+    const other = dr108Findings(migration.replace(real, real.replace('daftar_accounting_internal', 'daftar_inventory_internal')));
+    expect(other.join('\n')).toContain('a DR-108 policy is not the 0081:552 shape');
+    expect(other.join('\n')).toContain('daftar_inventory_internal');
+    // Positive control for the same probe: the unmutated text has no such finding.
+    expect(dr108Findings(migration)).toEqual([]);
   });
 });
