@@ -455,3 +455,284 @@ describe('P4S7-BUILD section 6 — the comparison can find agreement AND differe
     expect(shipped, 'the agreement after cancelling is not the agreement section 3 measured').toEqual(M['s3_sealed']);
   });
 });
+
+/**
+ * P4S7-BUILD section 7 — THE ARM THE OTHER SECTIONS CANNOT REACH:
+ * a foreign currency and a PART-PAID invoice.
+ *
+ * `daftar-finance` refused this file's first version, and the refusal was
+ * right. Every invoice in sections 1 to 6 carries `source_to_base_rate = 1`
+ * and `total_base_minor = total_txn_minor`, and not one of them is paid, so
+ * `paid_txn_minor = 0` throughout. On that data the two most delicate parts of
+ * the new law are INERT BY CONSTRUCTION:
+ *
+ *   * `supplier_ap_release(B, T, b, a)` is the IDENTITY when `B = T`, so the
+ *     carrying-value distribution across the schedule performs no rounding and
+ *     cannot be wrong;
+ *   * the settlement clamp `L(c) = least(greatest(c, paid), T)` never clamps,
+ *     because `paid = 0` makes `greatest(c, 0) = c` for every level.
+ *
+ * So `sum(base) == sum(base)` was green BY NECESSITY and not by measurement.
+ *
+ * WHAT THIS SECTION ADDS, AND WHY IT IS THE REAL TEST. One invoice in USD at
+ * `3.6512`, part-paid, under a plan whose down payment is SMALLER than the
+ * amount already collected:
+ *
+ *     total_txn  =  80 000   total_base = 292 096   paid = 30 001
+ *     schedule   =  down 10 000  +  30 000  +  40 000   ( = 80 000 )
+ *
+ * The level boundaries are `0, 10 000, 40 000, 80 000`; the clamp lifts the
+ * first two to `30 001`, so the DOWN PAYMENT's share collapses to zero and the
+ * first instalment carries `9 999` instead of `30 000`. THE CLAMP IS DOING
+ * WORK HERE — on the data of sections 1 to 6 it does none. And every base
+ * share is a difference of two ROUNDED cumulative values, so the telescoping
+ * has to survive real rounding rather than exact division.
+ *
+ * THE FIXTURE'S LAWFULNESS IS ENFORCED, NOT ASSERTED. The payment and its
+ * allocation are inserted in ONE transaction with EVERY TRIGGER ENABLED, so
+ * `payment_allocations_guard` (`0081:1279`) and the deferred
+ * `payment_allocations_value_complete` (`0081:1282`) both run at COMMIT — and
+ * the second one REFUSES any row whose
+ * `invoice_carrying_base_released_minor` is not exactly
+ * `supplier_ap_release(total_base, total_txn, before, applied)` (`0081:1035`,
+ * `:1053`). The value is therefore computed by calling that very routine in
+ * the INSERT and then certified by the database's own verifier. A fixture
+ * written with `DISABLE TRIGGER` would be a number this file chose; this one
+ * is a number the estate's law admits.
+ *
+ * AND THAT IS WHY THE TOTALS MAY BE COMPARED AT ALL. The live law reports
+ * `total_base − Σ invoice_carrying_base_released_minor`; the new law reports
+ * `total_base − F(paid)` where `F` is the same cumulative carrying law. The
+ * two agree exactly when the stored releases sum to `F(paid)` — which is
+ * R-81, and which `0081`'s verifier enforces row by row rather than leaving to
+ * trust. So a disagreement here would be a real finding about either the
+ * telescoping or R-81, and an agreement is a measurement of both.
+ */
+describe('P4S7-BUILD section 7 — a foreign currency, part-paid, with the clamp doing work', () => {
+  const FX = {
+    totalTxn: 80_000,
+    totalBase: 292_096,
+    rate: '3.6512000000',
+    paid: 30_001,
+    down: 10_000,
+    first: 30_000,
+    second: 40_000,
+  } as const;
+  let fxCustomerId: string;
+  let fxInvoiceId: string;
+  let fxPlanId: string;
+
+  it('the world builds, and the database itself certifies the allocation is lawful', async () => {
+    const c = await sup.connect();
+    try {
+      await c.query('BEGIN');
+      await c.query('ALTER TABLE invoices DROP CONSTRAINT IF EXISTS invoices_binding_fk');
+      await c.query('ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_binding_fk');
+      await c.query('ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_binding_fk');
+      await c.query('ALTER TABLE payment_allocations DROP CONSTRAINT IF EXISTS payment_allocations_binding_fk');
+      await c.query('ALTER TABLE sales DISABLE TRIGGER USER');
+      // DISCLOSED, AND NARROW ON PURPOSE. `payment_methods` carries its own
+      // creation guard — `payment_method.field_immutable: a payment method is
+      // created active at revision 1 by its own command's transaction`, measured
+      // by this fixture's first attempt — which only a signed command satisfies.
+      // The method is SCAFFOLDING here, not the measurement, so its guard alone
+      // is silenced. The two triggers that judge THE ALLOCATION stay enabled:
+      // `payment_allocations_guard` and the deferred
+      // `payment_allocations_value_complete`, which is the one that certifies
+      // the carrying release this section exists to test.
+      await c.query('ALTER TABLE payment_methods DISABLE TRIGGER USER');
+      const one = async (sql: string, p: readonly unknown[] = []): Promise<string> => String((await c.query<{ id: string }>(sql, [...p])).rows[0]?.id);
+      fxCustomerId = randomUUID();
+      await c.query(
+        `INSERT INTO customers (tenant_id,business_id,id,name,status,revision,create_intent_sha256,last_intent_sha256,business_transaction_id,created_by,updated_by)
+         VALUES ($1,$2,$3,'FX Customer','active',1,$4,$4,gen_random_uuid(),$5,$5)`,
+        [world.tenantId, world.businessId, fxCustomerId, SHA, world.userId],
+      );
+      const branchId = await one(`SELECT id FROM branches WHERE business_id = $1 LIMIT 1`, [world.businessId]);
+      const warehouseId = await one(`SELECT id FROM warehouses WHERE business_id = $1 LIMIT 1`, [world.businessId]);
+      const saleId = randomUUID();
+      await c.query(
+        `INSERT INTO sales (tenant_id,business_id,id,customer_id,branch_id,warehouse_id,status,settlement_mode,document_date,currency_code,
+                            subtotal_txn_minor,discount_txn_minor,total_txn_minor,total_base_minor,source_to_base_rate,rate_source,rate_timestamp,
+                            customer_name_snapshot,commit_intent_sha256,confirmed_by,confirmed_at,business_transaction_id,created_by,binding_source_id)
+         VALUES ($1,$2,$3,$4,$5,$6,'confirmed','credit','2026-01-02','USD',$7,0,$7,$8,$9,'manual',$10::timestamptz,'FX Customer',$11,$12,$10::timestamptz,gen_random_uuid(),$12,$3)`,
+        [world.tenantId, world.businessId, saleId, fxCustomerId, branchId, warehouseId, FX.totalTxn, FX.totalBase, FX.rate, STAMP, SHA, world.userId],
+      );
+      fxInvoiceId = randomUUID();
+      await c.query(
+        `INSERT INTO invoices (tenant_id,business_id,id,sale_id,customer_id,branch_id,document_kind,document_number,number_seq,period,issue_date,due_date,
+                               currency_code,status,subtotal_txn_minor,discount_txn_minor,tax_minor,total_txn_minor,total_base_minor,source_to_base_rate,
+                               rate_source,rate_timestamp,customer_name_snapshot,issue_intent_sha256,business_transaction_id,created_by,binding_source_id)
+         VALUES ($1,$2,$3,$4,$5,$6,'invoice','INV-FX',9,'2026','2026-01-02','2026-01-02','USD','open',$7,0,0,$7,$8,$9,'manual',$10::timestamptz,
+                 'FX Customer',$11,gen_random_uuid(),$12,$3)`,
+        [world.tenantId, world.businessId, fxInvoiceId, saleId, fxCustomerId, branchId, FX.totalTxn, FX.totalBase, FX.rate, STAMP, SHA, world.userId],
+      );
+      // The chart of accounts is seeded for every business by
+      // `accounting_seed_chart_trg()` (`0040:378`), so an account to post a
+      // payment method against already exists and is not invented here.
+      const accountId = await one(`SELECT id FROM accounts WHERE business_id = $1 ORDER BY code LIMIT 1`, [world.businessId]);
+      const methodId = randomUUID();
+      await c.query(
+        `INSERT INTO payment_methods (tenant_id,business_id,id,system_type,posting_account_id,is_active,requires_reference,sort_order,revision,
+                                      create_intent_sha256,last_intent_sha256,business_transaction_id,created_by,updated_by)
+         VALUES ($1,$2,$3,'cash',$4,true,false,1,1,$5,$5,gen_random_uuid(),$6,$6)`,
+        [world.tenantId, world.businessId, methodId, accountId, SHA, world.userId],
+      );
+      // THE PAYMENT AND ITS ALLOCATION, IN THIS TRANSACTION AND WITH TRIGGERS
+      // ENABLED. `payment_allocation_guard` (`0081:993`) requires the payment
+      // to have been created in the same transaction, and the deferred
+      // verifier judges the carrying release at COMMIT.
+      const paymentId = randomUUID();
+      // `payment_allocation_guard` (`0081:982`) requires the allocation to join a
+      // payment whose `business_transaction_id` equals
+      // `inventory_business_transaction_id()` — the transaction-local carrier
+      // `app.business_transaction_id`, which `0055:80` documents as «audit
+      // metadata only … Never authority». Setting it is how an ordinary
+      // transaction presents the same trace a command would, and it buys no
+      // privilege: the carrying release is still judged by the deferred
+      // verifier below.
+      const traceId = randomUUID();
+      const allocationId = randomUUID();
+      await c.query(`SELECT set_config('app.business_transaction_id', $1, true)`, [traceId]);
+      // And the scope the settlement guard judges the posting account in —
+      // `accounting.scope_mismatch: a settlement account is judged only for the
+      // transaction's business`, measured by this fixture's third attempt. These
+      // are the same two carriers every read in this file sets; as the cluster
+      // owner they buy no privilege, they only say WHICH business this
+      // transaction is about.
+      await c.query(`SELECT set_config('app.tenant_id', $1, true)`, [world.tenantId]);
+      await c.query(`SELECT set_config('app.business_id', $1, true)`, [world.businessId]);
+      // EVERY DERIVED FIGURE IS COMPUTED BY THE ESTATE'S OWN ROUTINES, in the
+      // INSERT itself, so not one of them is a number this file chose:
+      //   `invoice_carrying_base_released_minor` = `supplier_ap_release(B,T,0,a)`
+      //   `payment_base_amount_minor`            = `supplier_convert_base(a,r,2,2)`
+      //   `ar_dust_base_minor`                   = release - conversion (`0081:1054`)
+      //   `realized_fx_gain_loss_minor`          = payment base - release (`0081:335`)
+      // The deferred verifier recomputes all four at COMMIT and refuses any
+      // disagreement, so the fixture is certified rather than asserted.
+      await c.query(
+        `INSERT INTO payments (tenant_id,business_id,id,customer_id,payment_method_id,posting_account_id,currency_code,amount_minor,
+                               payment_to_base_rate,rate_source,rate_timestamp,base_amount_minor,payment_date,allocation_count,
+                               intent_sha256,business_transaction_id,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,'USD',$7,$8,'manual',$9::timestamptz,
+                 public.supplier_convert_base($7::BIGINT,$8::NUMERIC,2,2),
+                 '2026-03-01',1,$10,$11,$12)`,
+        [world.tenantId, world.businessId, paymentId, fxCustomerId, methodId, accountId, FX.paid, FX.rate, STAMP, SHA, traceId, world.userId],
+      );
+      await c.query(
+        `INSERT INTO payment_allocations (tenant_id,business_id,id,payment_id,customer_id,invoice_id,line_no,payment_currency,payment_amount_minor,
+                                          payment_to_base_rate,payment_base_amount_minor,invoice_currency,invoice_amount_applied_minor,
+                                          invoice_historical_to_base_rate,ar_released_before_txn_minor,invoice_carrying_base_released_minor,
+                                          ar_dust_base_minor,realized_fx_gain_loss_minor,binding_source_id)
+         VALUES ($1,$2,$3,$4,$5,$6,1,'USD',$7,$8,
+                 public.supplier_convert_base($7::BIGINT,$8::NUMERIC,2,2),
+                 'USD',$7,$8,0,
+                 public.supplier_ap_release($9::BIGINT,$10::BIGINT,0::BIGINT,$7::BIGINT),
+                 public.supplier_ap_release($9::BIGINT,$10::BIGINT,0::BIGINT,$7::BIGINT)
+                   - public.supplier_convert_base($7::BIGINT,$8::NUMERIC,2,2),
+                 public.supplier_convert_base($7::BIGINT,$8::NUMERIC,2,2)
+                   - public.supplier_ap_release($9::BIGINT,$10::BIGINT,0::BIGINT,$7::BIGINT),
+                 $3)`,
+        [world.tenantId, world.businessId, allocationId, paymentId, fxCustomerId, fxInvoiceId, FX.paid, FX.rate, FX.totalBase, FX.totalTxn],
+      );
+      // COMMIT is the assertion: the deferred verifier runs here, and a
+      // carrying release that is not exactly the law's own figure is refused.
+      await c.query('COMMIT');
+      await c.query('ALTER TABLE sales ENABLE TRIGGER USER');
+      await c.query('ALTER TABLE payment_methods ENABLE TRIGGER USER');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      await c.query('ALTER TABLE sales ENABLE TRIGGER USER').catch(() => undefined);
+      await c.query('ALTER TABLE payment_methods ENABLE TRIGGER USER').catch(() => undefined);
+      throw new Error(`the FX fixture did not build, and the database refused it: ${err(e)}`);
+    } finally {
+      c.release();
+    }
+
+    const out = await withCtx<{ paid_txn_minor: string; paid_base_minor: string; outstanding_txn_minor: string; outstanding_base_minor: string }>(
+      sup,
+      {},
+      async (q) => q(`SELECT * FROM public.invoice_outstanding($1, ARRAY[$2]::UUID[])`, [world.businessId, fxInvoiceId]),
+    );
+    const row = out[0];
+    expect(row, 'NO SUBJECT — the reader of record returned no row for the FX invoice').toBeDefined();
+    // THE CLAMP AND THE ROUNDING ARE BOTH LIVE, and these two numbers are what
+    // makes them so. A `paid` of zero or a base equal to the transaction total
+    // would make this section measure nothing.
+    expect(row?.paid_txn_minor, 'the invoice is not part-paid, so the settlement clamp would be inert here too').toBe(String(FX.paid));
+    expect(BigInt(row?.paid_base_minor ?? '0') > 0n, 'no carrying value was released, so the distribution would be inert').toBe(true);
+    expect(row?.outstanding_txn_minor).toBe(String(FX.totalTxn - FX.paid));
+    M['s7_outstanding'] = row;
+  });
+
+  it('with no plan, the two laws agree on a foreign-currency part-paid invoice too', async () => {
+    const { sealed, shipped } = await bothLaws(app, fxCustomerId);
+    M['s7_noPlan_sealed'] = sealed;
+    M['s7_noPlan_shipped'] = shipped;
+    expect(sealed.length, 'NO SUBJECT — the live law returned nothing for the FX invoice').toBeGreaterThan(0);
+    expect(shipped, 'the two laws disagree on a part-paid foreign-currency invoice with no plan').toEqual(sealed);
+    expect(sum(sealed, 'txn_minor'), 'the live law does not report the FX outstanding').toBe(BigInt(FX.totalTxn - FX.paid));
+  });
+
+  it('a plan commits whose DOWN PAYMENT is smaller than what is already paid, so the clamp binds', async () => {
+    fxPlanId = randomUUID();
+    const ctx = { 'app.tenant_id': world.tenantId, 'app.business_id': world.businessId };
+    await withCtx(mig, ctx, async (q) => {
+      await q(
+        `INSERT INTO installment_plans (tenant_id,business_id,id,invoice_id,customer_id,status,down_payment_minor,down_payment_due_date,created_by,business_transaction_id)
+         VALUES ($1,$2,$3,$4,$5,'active',$6,'2026-01-02'::DATE,$7,gen_random_uuid())`,
+        [world.tenantId, world.businessId, fxPlanId, fxInvoiceId, fxCustomerId, FX.down, world.userId],
+      );
+      return q(
+        `INSERT INTO installments (tenant_id,business_id,id,plan_id,seq_no,due_date,amount_txn_minor)
+         VALUES ($1,$2,gen_random_uuid(),$3,1,'2026-02-02'::DATE,$4),
+                ($1,$2,gen_random_uuid(),$3,2,'2026-06-02'::DATE,$5)`,
+        [world.tenantId, world.businessId, fxPlanId, FX.first, FX.second],
+      );
+    });
+    const flag = await withCtx<{ f: boolean }>(sup, {}, async (q) => q(`SELECT has_active_installment_plan AS f FROM invoices WHERE id = $1`, [fxInvoiceId]));
+    expect(flag[0]?.f, 'the fact trigger did not write the flag on the FX invoice').toBe(true);
+  });
+
+  it('THE MEASUREMENT: the carrying value telescopes EXACTLY under real rounding, and the clamp is doing work', async () => {
+    const { sealed, shipped } = await bothLaws(app, fxCustomerId);
+    M['s7_plan_sealed'] = sealed;
+    M['s7_plan_shipped'] = shipped;
+    expect(shipped.length, 'NO SUBJECT — the new law returned nothing with the FX plan in place').toBeGreaterThan(0);
+
+    // (1) THE INVARIANT, and now it is not green by necessity. The live law
+    //     reports `total_base − Σ invoice_carrying_base_released_minor`; the
+    //     new law reports `total_base − F(paid)` summed over the schedule's
+    //     rounded levels. Equality is R-81 plus exact telescoping, and neither
+    //     is reachable on the data of sections 1 to 6.
+    expect(sum(shipped, 'base_minor'), 'the base shares do not total the authoritative outstanding base — the telescoping lost or gained a minor unit').toBe(
+      sum(sealed, 'base_minor'),
+    );
+    expect(sum(shipped, 'txn_minor'), 'the transaction shares do not total the authoritative outstanding').toBe(sum(sealed, 'txn_minor'));
+
+    // (2) AND THE BASE TOTAL IS NOT THE TRANSACTION TOTAL, which is the
+    //     control proving the rate really is not 1 in this arm. Without it,
+    //     (1) could still be the identity case in disguise.
+    expect(sum(sealed, 'base_minor') === sum(sealed, 'txn_minor'), 'base equals transaction here, so this section is the identity case again').toBe(false);
+
+    // (3) THE CLAMP BOUND. The down payment of 10 000 sits entirely below the
+    //     30 001 already paid, so its share must be ZERO and the first
+    //     instalment must carry 9 999 — not 30 000. If the clamp were absent
+    //     the schedule would re-age money the customer has already paid, and
+    //     the bands would not total the outstanding at all. The test of that
+    //     is the TOTAL above; what is asserted here is that the state was
+    //     actually reached, so (1) is not a measurement of an easier case.
+    expect(BigInt(FX.down) < BigInt(FX.paid), 'the fixture no longer has a down payment below the paid figure, so the clamp is not exercised').toBe(true);
+    const differences = (() => {
+      const key = (r: Bucket): string => `${r.bucket_no}:${r.currency_code}`;
+      const a = Object.fromEntries(sealed.map((r) => [key(r), `${r.txn_minor}/${r.base_minor}/${r.invoice_count}`]));
+      const b = Object.fromEntries(shipped.map((r) => [key(r), `${r.txn_minor}/${r.base_minor}/${r.invoice_count}`]));
+      return [...new Set([...Object.keys(a), ...Object.keys(b)])]
+        .sort()
+        .filter((k) => a[k] !== b[k])
+        .map((k) => `${k}: live=${a[k] ?? '(none)'} new=${b[k] ?? '(none)'}`);
+    })();
+    M['s7_differences'] = differences;
+    expect(differences.length, 'the two laws agree bucket by bucket even with an active plan, so the FX arm measured nothing new').toBeGreaterThan(0);
+  });
+});
