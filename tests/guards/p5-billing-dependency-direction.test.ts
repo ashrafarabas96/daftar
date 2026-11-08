@@ -57,7 +57,12 @@ function importSpecifiers(source: string): string[] {
   ];
   for (const re of patterns) {
     let m: RegExpExecArray | null;
-    while ((m = re.exec(source)) !== null) specs.push(m[1]);
+    while ((m = re.exec(source)) !== null) {
+      // `noUncheckedIndexedAccess` is on: the group is typed optional even
+      // though every pattern above has exactly one capturing group.
+      const spec = m[1];
+      if (spec !== undefined) specs.push(spec);
+    }
   }
   return specs;
 }
