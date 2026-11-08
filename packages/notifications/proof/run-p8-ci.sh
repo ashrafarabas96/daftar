@@ -125,10 +125,64 @@ git --git-dir="$P8_GIT_ANCHOR_DIR" rev-parse --verify "${ANCHOR_PIN}^{commit}" >
 git --git-dir="$P8_GIT_ANCHOR_DIR" merge-base --is-ancestor "$ANCHOR_PIN" HEAD 2>/dev/null   || fail "the anchor repository $P8_GIT_ANCHOR_DIR holds $ANCHOR_PIN but HEAD does not DESCEND from it, so it is a repository that happens to hold the object and the gate would refuse it as ANCHOR LINEAGE."
 echo "P8_CI_ANCHOR_PIN: $ANCHOR_PIN present, and HEAD descends from it"
 
+# ── The mount namespace ───────────────────────────────────────────────
+# OWNER DECISION 2026-11-08, route A. Thirteen DECLARED arms live behind
+# `mount --bind`, which an unprivileged user may not call. The gate names
+# that condition — ISOLATION i8: PLANT NOT ESTABLISHED — and reds, and the
+# arm census then reds by ARM MISSING. Run 42442391409 on a GitHub runner
+# and three local runs in a WSL container printed the SAME sentence
+# (`must be superuser to use mount.`), so the condition is the
+# environment's and not the tree's.
+#
+# `unshare -r -m` gives the gate its own mount namespace with the invoking
+# user mapped to root INSIDE it, which is how a bind mount is built without
+# privilege. Three things are MEASURED here rather than assumed:
+#
+#   1. the namespace can be created AND a bind mount inside it succeeds;
+#   2. the cluster, which runs OUTSIDE this namespace, is still reachable
+#      from INSIDE it — the socket path and the peer credential are the
+#      gate's only route to the database, and both cross a namespace
+#      boundary that did not exist when the cluster was started;
+#   3. when either fails, the gate runs EXACTLY as before, outside any
+#      namespace, and reds by ISOLATION i8 and ARM MISSING under their own
+#      names. There is no skip, no raised limit, no floor change and no
+#      re-seal: the sealed numbers stay 101 cases and 279 arms, and the
+#      gate's own text is not touched by this decision.
+#
+# The probe is a FILE, not an inlined string, because a quoted-in-quoted
+# body would be the shell's reading of this file rather than the
+# namespace's own behaviour.
+USERNS_OK=no
+UNS_LOG=$D/userns.log
+UNS_PROBE=$D/userns-probe.sh
+{
+  echo 'set -eu'
+  echo 'p=$(mktemp -d)'
+  echo 'mkdir -p "$p/a" "$p/b"'
+  echo 'mount --bind "$p/a" "$p/b"'
+  echo 'mountpoint -q "$p/b"'
+  echo '"$PG_BIN/psql" -h "$PG_DIR" -p "$PG_PORT" -U p8super -d postgres -Atc "select 1" > "$p/sel" 2>&1'
+  echo 'grep -qx 1 "$p/sel"'
+  echo 'echo "PROBE OK: namespace created, bind mount held, cluster answered from inside"'
+} > "$UNS_PROBE"
+
+if ! command -v unshare >/dev/null 2>&1; then
+  echo "P8_CI_USERNS: NOT AVAILABLE — there is no unshare binary on PATH, so the gate runs outside any namespace and will red by ISOLATION i8 and ARM MISSING under their own names"
+elif PG_BIN="$B" PG_DIR="$D" PG_PORT="$P" unshare -r -m bash "$UNS_PROBE" > "$UNS_LOG" 2>&1; then
+  USERNS_OK=yes
+  echo "P8_CI_USERNS: OK — $(tail -1 "$UNS_LOG")"
+else
+  echo "P8_CI_USERNS: NOT AVAILABLE — unshare -r -m, or the bind mount inside it, or the cluster as seen from inside it, refused. The gate runs outside any namespace and reds by ISOLATION i8 and ARM MISSING under their own names, as it did before this decision. THE TOOL'S OWN WORDS: $(head -3 "$UNS_LOG" | tr '\n' ' ')"
+fi
+
 # ── The gate ──────────────────────────────────────────────────────────
 # Its exit code is read from the command itself and not from the end of a
 # pipe. Its own log is the evidence the floors below are read from.
-PG_BIN="$B" PG_DIR="$D" PG_PORT="$P" RUN_ID="$RUN" bash "$HERE/run-p8-real-proof.sh"
+if [ "$USERNS_OK" = yes ]; then
+  PG_BIN="$B" PG_DIR="$D" PG_PORT="$P" RUN_ID="$RUN" unshare -r -m bash "$HERE/run-p8-real-proof.sh"
+else
+  PG_BIN="$B" PG_DIR="$D" PG_PORT="$P" RUN_ID="$RUN" bash "$HERE/run-p8-real-proof.sh"
+fi
 gate_rc=$?
 echo "P8_CI_GATE_RC=$gate_rc"
 
@@ -182,6 +236,37 @@ else
         echo "P8_CI_FLOOR_ARMS: $arms_got named arms, floor $P8_CI_MIN_ARMS"
       fi ;;
   esac
+fi
+
+# ── The thirteen arms the namespace was adopted for ───────────────────
+# The census reds by ARM MISSING when any declared identity stops naming
+# itself, which is the law. This block is the POSITIVE control the owner
+# required of route A: it names the thirteen that the bind mount gates and
+# reads each one out of the gate's own log, so a reader is not left to
+# infer from a total that they ran. The list lives HERE, outside the
+# census and outside the gate, exactly as the two counts above do; it adds
+# no identity and changes no floor.
+BIND_ARMS="ISOLATION i10|ISOLATION i11|ISOLATION i12|GUARD-CTL y20a|GUARD-CTL y20b|GUARD-CTL y20c|GUARD-CTL y20d|GUARD-CTL y21a|GUARD-CTL y21b|GUARD-CTL y21c|GUARD-CTL y21d|CENSUS-MULT a2|CENSUS-MULT-CTL"
+bind_named=0; bind_absent=
+OLDIFS=$IFS; IFS='|'
+for arm in $BIND_ARMS; do
+  # An arm that RAN and failed names itself as `FAIL: <arm> —`, and one that
+  # ran and held names itself as `<arm>:`. Both are the arm reporting; only
+  # silence is the loss this reads for, so the pattern admits either.
+  if grep -qE "\] (FAIL: )?$arm[ :]" "$LOG"; then
+    bind_named=$((bind_named + 1))
+  else
+    bind_absent="$bind_absent $arm,"
+  fi
+done
+IFS=$OLDIFS
+if [ "$bind_named" -eq 13 ]; then
+  echo "P8_CI_BIND_ARMS: all 13 of the arms that depend on the bind mount named themselves in the gate's own log, under a namespace this step measured before using (P8_CI_USERNS above)"
+elif [ "$USERNS_OK" = yes ]; then
+  echo "P8_CI_BIND_ARMS: FAIL — the namespace was measured usable and the gate still did not name $((13 - bind_named)) of the 13 bind arms:${bind_absent%,} — so the mount is not what was standing between this step and them, and nothing here may be read as a pass." >&2
+  floor_failed=1
+else
+  echo "P8_CI_BIND_ARMS: $bind_named of 13 — no usable mount namespace, so these are the arms the census reds by name:${bind_absent%,}" >&2
 fi
 
 verdict=$(grep -oE "FAILED=[0-9]+" "$LOG" | tail -1)
