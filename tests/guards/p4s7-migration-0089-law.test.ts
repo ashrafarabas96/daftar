@@ -610,13 +610,64 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
     return out;
   };
 
-  /** Every migration carrying a SCHEMA-QUALIFIED definition of `name`. */
-  const qualifiedDefinitionsOf = (name: string, files?: Readonly<Record<string, string>>): string[] => {
-    const probe = new RegExp(String.raw`\bFUNCTION\s+"?[a-z_][a-z0-9_]*"?\s*\.\s*"?${name}"?\s*\(`, 'i');
+  /**
+   * EVERY PLACE THE SYMBOL IS NAMED AS A ROUTINE, however it is spelled.
+   *
+   * THIS IS THE ONE LAW THAT CLOSES THE CLASS, and it replaces two probes that
+   * were each chasing a spelling. Three rounds of money review produced seven
+   * spellings of a second definition — bare; `public.`; `PUBLIC.`;
+   * `"public" . ` with whitespace around the dot; another schema `acct.`;
+   * a block comment sitting between the keyword and the name; and the whole statement inside
+   * `DO $mig$ … EXECUTE '…' … $mig$;`, WHICH IS THIS FILE'S OWN IDIOM. Each
+   * one defeated a probe keyed on the previous one, and the guard exempts them
+   * all because it normalises to the bare name.
+   *
+   * So the question stops being «which spelling?» and becomes «how many times
+   * is this symbol named as a routine AT ALL?». For every occurrence of the
+   * symbol followed by `(`, the text before it is read backwards — block
+   * comments removed, then an optional quote, an optional schema qualifier and
+   * whitespace stripped — and the occurrence counts when what remains ends in
+   * `FUNCTION`. It is not anchored to a line, so a statement inside an
+   * `EXECUTE` string is seen; and it does not enumerate separators, so the
+   * eighth spelling is caught without being predicted.
+   */
+  type MentionKind = 'create' | 'binding' | 'grant' | 'revoke' | 'comment' | 'alter' | 'unknown';
+  const KIND_OF: ReadonlyArray<readonly [MentionKind, RegExp]> = [
+    ['create', /\bCREATE\s+(?:OR\s+REPLACE\s+)?$/i],
+    ['grant', /\bGRANT\s+EXECUTE\s+ON\s+$/i],
+    ['revoke', /\bREVOKE\s+(?:ALL|EXECUTE)\s+ON\s+$/i],
+    ['comment', /\bCOMMENT\s+ON\s+$/i],
+    ['alter', /\bALTER\s+$/i],
+    ['binding', /\bEXECUTE\s+$/i],
+  ];
+
+  const functionMentionsOf = (
+    name: string,
+    files?: Readonly<Record<string, string>>,
+  ): Array<{ file: string; kind: MentionKind; qualified: boolean; excerpt: string }> => {
+    const out: Array<{ file: string; kind: MentionKind; qualified: boolean; excerpt: string }> = [];
     const source = files ?? Object.fromEntries(migrationNames().map((f) => [f, readFileSync(join(MIGRATIONS_DIR, f), 'utf8')]));
-    return Object.entries(source)
-      .filter(([, text]) => probe.test(text))
-      .map(([f]) => f);
+    const occurrence = new RegExp(String.raw`(?<![a-z0-9_])"?${name}"?\s*\(`, 'gi');
+    for (const [file, text] of Object.entries(source)) {
+      for (const m of text.matchAll(occurrence)) {
+        const before = text.slice(Math.max(0, m.index - 240), m.index).replace(/\/\*[\s\S]*?\*\//g, ' ');
+        // Strip, in order: trailing space, an opening quote, a schema
+        // qualifier (quoted or not, with space around the dot), more space.
+        const stripped = before.replace(/\s*"?\s*(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?$/i, '');
+        if (!/\bFUNCTION\s*$/i.test(stripped)) continue;
+        const keyword = stripped.replace(/\bFUNCTION\s*$/i, '');
+        out.push({
+          file,
+          kind: KIND_OF.find(([, re]) => re.test(keyword))?.[0] ?? 'unknown',
+          qualified: /\.\s*$/.test(before.replace(/\s*"?\s*$/, '')),
+          excerpt: text
+            .slice(Math.max(0, m.index - 60), m.index + name.length + 1)
+            .replace(/\s+/g, ' ')
+            .trim(),
+        });
+      }
+    }
+    return out;
   };
 
   it('THE FILE DIMENSION: the exempt name is defined in exactly ONE migration, and writes only invoices across all of them', () => {
@@ -635,13 +686,61 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
     // the law above could not see. It is refused rather than chased, because
     // chasing leaves `"public".`, another schema and whitespace around the dot
     // to be found one at a time.
-    const qualified = qualifiedDefinitionsOf(EXEMPT);
-    expect(qualified, `a schema-qualified definition of the exempt name is in ${qualified.join(', ')}, and this law admits the bare spelling only`).toEqual([]);
-    // POSITIVE CONTROL for that zero: the same probe, on a planted file, hits.
+    const mentions = functionMentionsOf(EXEMPT);
+    // MEASURED, NOT ASSUMED: the migration names this routine SIX times, and
+    // five of them must. One `CREATE`, one trigger binding
+    // (`EXECUTE FUNCTION`), and the four authority statements `REVOKE`,
+    // `GRANT`, `COMMENT ON` and `ALTER … OWNER TO`. The law is therefore not
+    // «one mention» — it is ONE DEFINITION, every other mention classified,
+    // and nothing unclassified.
+    const creates = mentions.filter((o) => o.kind === 'create');
     expect(
-      qualifiedDefinitionsOf(EXEMPT, { 'planted.sql': `CREATE OR REPLACE FUNCTION public.${EXEMPT}() RETURNS TRIGGER AS $x$ BEGIN RETURN NEW; END $x$;` }),
-      'the qualified-spelling probe finds nothing even when a qualified definition is planted, so its zero above is blindness',
-    ).toEqual(['planted.sql']);
+      creates.map((o) => `${o.file}${o.qualified ? ' (qualified)' : ''}`),
+      `the symbol is DEFINED somewhere other than once, unqualified, in ${MIGRATION}: ${creates.map((o) => o.excerpt).join(' | ')}`,
+    ).toEqual([MIGRATION]);
+    expect(
+      mentions.filter((o) => o.kind === 'unknown').map((o) => `${o.file}: ${o.excerpt}`),
+      'the symbol is named by a statement kind this law does not classify — read it before admitting it',
+    ).toEqual([]);
+    expect(
+      [...new Set(mentions.map((o) => o.kind))].sort(),
+      'the set of statement kinds naming this routine changed, which is a change in how it is reached',
+    ).toEqual(['alter', 'binding', 'comment', 'create', 'grant', 'revoke']);
+  });
+
+  it('POSITIVE CONTROL — the mention law sees all seven spellings a money review produced', () => {
+    const head = (spelling: string): string =>
+      `CREATE OR REPLACE FUNCTION ${spelling}() RETURNS TRIGGER LANGUAGE plpgsql AS $x$\nBEGIN\n  UPDATE public.supplier_credit_notes SET note_no = 0 WHERE false;\n  RETURN NEW;\nEND\n$x$;\n`;
+    const spellings: ReadonlyArray<readonly [string, string]> = [
+      ['bare', head(EXEMPT)],
+      ['public.', head(`public.${EXEMPT}`)],
+      ['PUBLIC. in upper case', head(`PUBLIC.${EXEMPT}`)],
+      ['quoted schema with spaces around the dot', head(`"public" . "${EXEMPT}"`)],
+      ['another schema', head(`acct.${EXEMPT}`)],
+      ['a block comment between the keyword and the name', head(`/* c */ public.${EXEMPT}`)],
+      [
+        'inside DO/EXECUTE, which is this file own idiom',
+        `DO $mig$\nBEGIN\n  EXECUTE 'CREATE OR REPLACE FUNCTION ${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $y$ BEGIN RETURN NEW; END $y$';\nEND\n$mig$;\n`,
+      ],
+    ];
+    for (const [what, planted] of spellings) {
+      const seen = functionMentionsOf(EXEMPT, { '0099_planted.sql': planted }).filter((o) => o.kind === 'create');
+      expect(seen.length, `NOT SEEN — a second DEFINITION spelled «${what}» is invisible to the mention law`).toBeGreaterThan(0);
+      expect(seen[0]?.file, `the definition spelled «${what}» was attributed to the wrong file`).toBe('0099_planted.sql');
+    }
+    // NEGATIVE CONTROL FOR THE LAW ITSELF: a mention that is not a routine
+    // NAME — a call, a trigger binding of another routine, prose — must not
+    // count, or the law would refuse this file's own comments.
+    for (const [what, text] of [
+      ['a call', `BEGIN\n  PERFORM ${EXEMPT}();\nEND`],
+      ['a trigger binding of another routine', `CREATE TRIGGER t AFTER INSERT ON x FOR EACH ROW EXECUTE FUNCTION other_name();`],
+      ['prose', `-- the routine ${EXEMPT}() is discussed here`],
+    ] as const) {
+      expect(
+        functionMentionsOf(EXEMPT, { '0099_planted.sql': text }).filter((o) => o.kind === 'create'),
+        `a ${what} was counted as a DEFINITION, which would make the law refuse ordinary text`,
+      ).toEqual([]);
+    }
   });
 
   it('ONE STATEMENT, ONE TABLE, ONE COLUMN — and no dynamic statement at all', () => {
@@ -718,17 +817,32 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
     const tables = [...new Set(withBare.flatMap((d) => writesOf(d.body)).map(([, t]) => t))];
     expect(tables, `a second definition writing another truth table was not caught (tables: ${tables.join(', ')})`).not.toEqual(['invoices']);
 
-    // (b) THE QUALIFIED SPELLING, which the bare probe CANNOT see — that is
-    //     the measured blocker — and which the qualified law refuses instead.
-    const qualified = `CREATE OR REPLACE FUNCTION public.${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $q$\nBEGIN\n  UPDATE public.supplier_credit_notes SET note_no = 0 WHERE false;\n  RETURN NEW;\nEND\n$q$;\n`;
-    const planted = { ...clean, '0099_qualified.sql': qualified };
-    expect(
-      definitionsAcrossMigrations(EXEMPT, planted).length,
-      'the bare probe now sees the qualified spelling, so the law below is no longer the thing that catches it — re-read both',
-    ).toBe(1);
-    expect(qualifiedDefinitionsOf(EXEMPT, planted), 'the qualified second definition was not caught by the law that exists for it').toEqual([
-      '0099_qualified.sql',
-    ]);
+    // (b) THE SPELLINGS THE BODY PROBE CANNOT SEE. `definitionsAcrossMigrations`
+    //     matches `FUNCTION <bare-name>(` and so misses a qualification, a
+    //     comment between the keyword and the name, and the whole statement
+    //     inside `EXECUTE` — seven spellings in all, measured over three
+    //     rounds. The MENTION law is what refuses them, and this proves both
+    //     halves: the body probe stays blind (so the catch has not silently
+    //     moved) and the mention law catches.
+    for (const [what, text] of [
+      ['schema-qualified', `CREATE OR REPLACE FUNCTION public.${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $q$ BEGIN RETURN NEW; END $q$;`],
+      [
+        'a comment between the keyword and the name',
+        `CREATE OR REPLACE FUNCTION /* c */ public.${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $q$ BEGIN RETURN NEW; END $q$;`,
+      ],
+      [
+        'inside DO/EXECUTE',
+        `DO $mig$\nBEGIN\n  EXECUTE 'CREATE OR REPLACE FUNCTION ${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $y$ BEGIN RETURN NEW; END $y$';\nEND\n$mig$;\n`,
+      ],
+    ] as const) {
+      const planted = { ...clean, '0099_planted.sql': text };
+      expect(
+        definitionsAcrossMigrations(EXEMPT, planted).length,
+        `the body probe now sees «${what}», so the catch has moved to another law without anyone noticing — re-read both`,
+      ).toBe(1);
+      const seen = functionMentionsOf(EXEMPT, planted).filter((o) => o.file === '0099_planted.sql' && o.kind === 'create');
+      expect(seen.length, `NOT CAUGHT — a second definition spelled «${what}»`).toBeGreaterThan(0);
+    }
   });
 
   it('NEGATIVE CONTROL — ANOTHER routine writing invoices is still refused by rule 22 itself', async () => {

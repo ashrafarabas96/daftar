@@ -76,18 +76,24 @@
  *   NAMES, and an exempt routine is skipped by name BEFORE every other check,
  *   so neither the column, nor the statement count, nor the FILE is bounded
  *   here. They are bounded in `tests/guards/p4s7-migration-0089-law.test.ts`
- *   section 5, which fails if that name is defined in more than one migration
- *   under its BARE spelling, if ANY migration defines it SCHEMA-QUALIFIED at
- *   all (`FUNCTION public.<name>(` — refused outright, because this guard
- *   normalises to the bare name and would exempt it while a bare-name probe
- *   could not see it), if any of its definitions writes a table other than
- *   `invoices`, if it assigns a second column anywhere in a `SET` clause, if
- *   it carries a second write statement — `COPY` and `MERGE` included, quoted
- *   and qualified table names included — or if it carries `EXECUTE` or a
- *   subquery inside a `SET` value at all, those being writes and values no
- *   text probe can bound. Nine plants two rounds of a money review used
- *   against weaker versions of those laws are kept there as negative
- *   controls, each required to fail. And note the granularity of THIS law when reading them: it is
+ *   section 5. Its FILE law does not match spellings, because three rounds of
+ *   money review produced seven of them — bare, `public.`, `PUBLIC.`,
+ *   `"public" . `, another schema, a block comment between the keyword and the
+ *   name, and the whole statement inside `DO … EXECUTE '…'`, which is `0089`'s
+ *   own idiom — and each defeated a probe keyed on the previous one. It instead
+ *   COUNTS EVERY PLACE THE SYMBOL IS NAMED AS A ROUTINE, classifies each by
+ *   the statement that names it, and requires: exactly ONE `CREATE`, bare, in
+ *   `0089`; every other mention to be one of the five kinds that migration
+ *   legitimately uses (the trigger binding, `GRANT`, `REVOKE`, `COMMENT ON`,
+ *   `ALTER … OWNER TO` — six mentions in all, measured); and NOTHING
+ *   unclassified, so a new way of naming it fails loudly rather than passing.
+ *   The same section fails if any definition writes a table other than
+ *   `invoices`, if a second column is assigned anywhere in a `SET` clause, if
+ *   a second write statement appears — `COPY` and `MERGE` included, quoted and
+ *   qualified table names included — or if `EXECUTE` or a subquery inside a
+ *   `SET` value appears at all, those being writes and values no text probe
+ *   can bound. Sixteen plants from three rounds of money review are kept there
+ *   as negative controls, each required to fail. And note the granularity of THIS law when reading them: it is
  *   the TABLE, not the column, so an exception here is an exception on a table
  *   that carries money, and the column-level narrowing lives in the
  *   column-scoped GRANT (`0089`) and in those laws — not in rule 22.
