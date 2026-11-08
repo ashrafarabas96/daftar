@@ -241,6 +241,23 @@ build(){           # build <overlay-file> <logdir>
   # cannot do. Its documented failure is `permission denied for schema public`.
   # So if bootstrap did not establish that ownership, the build below reds by
   # itself; this is not an absence taken on trust.
+  #
+  # ROUND 29, CI-1b, AND A CLAIM OF MINE THAT WAS FALSE. The first version of
+  # this change dropped the owner clause and said the DATABASE's owner "is not
+  # a subject here", on the ground that nothing reads `datdba`. Reading
+  # `datdba` is not the only way to depend on ownership: the first end-to-end
+  # run of this gate measured `ATTRIB-BENCH: PLANT NOT ESTABLISHED — ERROR:
+  # permission denied for database daftar`, and about thirty ATTRIB arms behind
+  # it then reported "it refused, but not by …", because the bench runs as
+  # `daftar_migrator` and issues `CREATE SCHEMA p8other` — and CREATE ON
+  # DATABASE is exactly what `bootstrap.sql` deliberately does NOT grant that
+  # role. Database ownership had been supplying it implicitly all along.
+  #
+  # So the owner is restored, in the only order a fresh cluster allows: the
+  # database is created by the superuser, `bootstrap.sql` creates the roles
+  # inside it, and THEN the ownership the original line asked for is set. The
+  # end state is the one the gate always had — `datdba = daftar_migrator` —
+  # and the first statement no longer needs a role that does not exist yet.
   if ! sup "CREATE DATABASE daftar" >"$ld/createdb.log" 2>&1; then
     echo "the database could not be created: $(tail -1 "$ld/createdb.log")"; return 1
   fi
@@ -248,6 +265,13 @@ build(){           # build <overlay-file> <logdir>
   # created under that name and the file runs unmodified.
   "$B/psql" -h "$D" -p "$P" -U p8super -d daftar -q -v ON_ERROR_STOP=1 -f "$REPO/infrastructure/database/bootstrap.sql" > "$ld/bootstrap.log" 2>&1 \
     || { echo "bootstrap failed"; return 1; }
+  # The owner the first statement could not name, now that bootstrap has made
+  # the role. It fails CLOSED and keeps its stderr: without it the attribution
+  # bench cannot create its schema, and thirty arms behind it report a wrong
+  # reason rather than this one.
+  if ! sup "ALTER DATABASE daftar OWNER TO daftar_migrator" >"$ld/dbowner.log" 2>&1; then
+    echo "the database's owner could not be set: $(tail -1 "$ld/dbowner.log")"; return 1
+  fi
   assert_roles || return 1
   # THE REPOSITORY'S OWN APPLIER, as the deploy role, with NO external privilege
   # lend. It checksum-verifies each file, takes an advisory lock, applies each
