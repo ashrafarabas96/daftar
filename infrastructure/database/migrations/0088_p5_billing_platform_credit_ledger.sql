@@ -1296,6 +1296,15 @@ REVOKE ALL ON FUNCTION public.assert_invoice_credit_agrees(uuid) FROM PUBLIC;
 -- and until it is decided those five keep the applier's ownership and the
 -- caller's privileges, which is the shape they were proved in.
 --
+-- WHAT THE OWNER DECIDED AFTERWARDS, SO THIS PARAGRAPH IS NOT READ AS CURRENT:
+-- the referral was answered. The policy device quoted above was taken as
+-- DECISION E and then WITHDRAWN, and DECISION C was taken in its place — least
+-- privilege grants and TENANT-ISOLATED policies, in the DR-108-C section at the
+-- end of this file. The five routines named in this paragraph ARE now handed to
+-- the invariant principal, in the DR-108 section below. This paragraph is left
+-- as written because it records what the HARDENING section did and did not do,
+-- and that is unchanged.
+--
 -- ── OWNER DECISION B, UPDATED BY THE LAWS ────────────────────────────────
 --
 -- B above said this file adds no `ALTER … OWNER TO` because choosing the owner
@@ -1444,84 +1453,89 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 
 -- ===== HARDENING SECTION END — everything below is the DECLARED DR-108 SECTION =====
 
--- ── WHY THIS THIRD SECTION EXISTS ────────────────────────────────────────
--- OWNER DECISION E, which the hardening section above named and did NOT take,
--- is TAKEN, by the owner, in his own words:
+-- ── WHY THIS THIRD SECTION EXISTS, AND WHAT WAS WITHDRAWN FROM IT ───────
+-- OWNER DECISION E was taken here, and it is now WITHDRAWN BY THE OWNER, who
+-- replaced it with OWNER DECISION C, in his own words:
 --
---   «القرار E: سياسة `accounting_validator` على سابقة `0081:552`، دون أي
---    تعديل في نص القانونين.»
+--   «القرار C بدل E… وسجّل أن E سُحب، ولماذا (اصطدامه بالقانون 15).»
 --
---   — decision E: the `accounting_validator` policy, on the precedent of
---     `0081:552`, with NO edit to the text of the two laws.
+--   — decision C instead of E… and record that E was withdrawn, and why (its
+--     collision with law 15).
 --
--- The contradiction it resolves was MEASURED, not inferred. Three standing
--- laws require a guard outside the accepted prefix to be a SECURITY DEFINER of
--- an internal principal with the pinned path
--- (`tests/security/phase3-s8-definer-law.test.ts`,
--- `tests/security/p3c-td18-definer-ownership.test.ts`, and the two-shape rule
--- of `tests/integration/migration-portability.test.ts`, which admits exactly a
--- definer guard of an internal principal OR a STABLE invoker read owned by the
--- applier — and a VOLATILE trigger function that is INVOKER is neither). The
--- production policies, meanwhile, BLIND such an owner:
--- `0052_accounting_journal_lines_rls_performance.sql:244` defines `app_bypass()`
--- as `CURRENT_USER = 'daftar_platform'` and nothing else, and the PERMISSIVE
--- `*_tenant_membership` policies of this file name NO principal at all. So an
--- internal owner satisfies the laws and sees zero rows — and a guard that sees
--- zero rows stops refusing: `pca_chronology` would admit an out-of-order ledger
--- and `sca_no_attempt_while_unresolved` would admit a second collection
--- attempt. THE POLICY IS WHAT CLOSES THAT.
+-- WHAT E WAS, AND THE TWO MEASURED REASONS IT IS GONE. E carried four
+-- `CREATE POLICY accounting_validator ON <relation> FOR SELECT TO
+-- daftar_accounting_internal USING (true)` statements, on the precedent of
+-- `0081:552`. They are REMOVED from this section. Neither reason is taste:
+--
+--   1. `USING (true)` is PERMISSIVE, and PostgreSQL OR-s permissive policies
+--      together. OR-ed with `pca_tenant_membership` (`:513`) it UNPINNED
+--      `tenant_id` for that principal — a WIDENING, on money rows. The owner's
+--      replacement is TENANT ISOLATION (`DR-60`), which narrows the reach
+--      instead, and narrowing is the safe direction.
+--   2. E COLLIDED WITH LAW 15, AND WITHDRAWING IT DOES NOT CLEAR THE COLLISION.
+--      `tests/security/p4s4-internal-definer-inventory.test.ts:1774` asserts
+--      `live.length === DOORS.length + SEALED.length`, and the number recorded
+--      in its own text is `221`. Measured: `221` before any hardening, `226`
+--      after the hardening section's FIVE `OWNER TO` conversions, `231` after
+--      this section's five. Withdrawing E takes the live count `231` → `226`,
+--      NOT to `221`. So law 15 stays red BY FIVE — the hardening section's
+--      conversions — and those five are REQUIRED by three other laws
+--      (`phase3-s8-definer-law`, `p3c-td18-definer-ownership`,
+--      `migration-portability`). Dropping them would redden three laws to green
+--      one. NOT ONE CONVERSION IS WITHDRAWN HERE, and the choice between law 15
+--      and those three laws is REFERRED TO THE OWNER, by those numbers.
+--
+-- WHAT REMAINS IN THIS SECTION IS THE TEN CONVERSIONS AND NOTHING ELSE: five
+-- `SECURITY DEFINER` elevations and five `OWNER TO` hand-overs, inside the
+-- bracket PostgreSQL requires. They are here because the three laws above admit
+-- exactly a definer guard of an internal principal OR a STABLE invoker read
+-- owned by the applier — and a VOLATILE trigger function that is INVOKER is
+-- neither. The contradiction that forced the elevation was MEASURED, not
+-- inferred: `0052_accounting_journal_lines_rls_performance.sql:244` defines
+-- `app_bypass()` as `CURRENT_USER = 'daftar_platform'` and nothing else, and
+-- the PERMISSIVE `*_tenant_membership` policies of this file name NO principal
+-- at all, so an internal owner satisfies the laws and would see zero rows — and
+-- a guard that sees zero rows stops refusing. WHAT ADMITS THAT OWNER NOW is the
+-- RESTRICTIVE `*_business_isolation` policies of this file, which name
+-- `daftar_accounting_internal` BY NAME (`:517`, `:1064`, `:1206`), together
+-- with the privileges and the tenant-isolated policies of the DR-108-C section
+-- at the end of this file.
 --
 -- Every statement of this section is attributed to `DR-108` and to NO law,
--- because no law commands a policy: this is the owner's decision, carried out.
---
--- ── THE PRECEDENT, FOLLOWED TO THE LETTER ───────────────────────────────
--- `0081_phase4_customer_payments_credits.sql:552-553`, verbatim:
---
---   CREATE POLICY accounting_validator ON payments
---     FOR SELECT TO daftar_accounting_internal USING (true);
---
--- carried here with the `public.` qualification the rest of this file uses and
--- with NOTHING else changed. `FOR SELECT` ALONE — no INSERT, no UPDATE, no
--- DELETE, no `ALL` — and `daftar_accounting_internal` ALONE: the decision names
--- no other principal, so `daftar_inventory_internal` gets nothing here. The
--- device is established: `accounting_validator` already stands on 28 relations
--- across 13 migrations (`0042`, `0046`, `0048`, `0049`, `0061`, `0063`, `0065`,
--- `0067`, `0072`, `0075`, `0077`, `0081`).
+-- because no law commands an owner's decision: this is the owner's, carried out.
 --
 -- ── WHICH OF THE FIVE ACTUALLY READS — MEASURED FROM THE BODIES ─────────
--- The policy changes what a guard can READ, so the five are not alike:
+-- Elevation changes WHO a guard runs as, so what each of the five needs from
+-- the DR-108-C section below is not alike:
 --
 --   * `pca_chronology()` READS — `SELECT max(occurred_at) FROM
---     public.platform_credit_adjustments` (the monotonicity refusal).
+--     public.platform_credit_adjustments` (`:451`-`:454`, the monotonicity
+--     refusal).
 --   * `sca_no_attempt_while_unresolved()` READS — `SELECT 1 FROM
---     public.subscription_charge_attempts WHERE … outcome = 'unknown'`.
+--     public.subscription_charge_attempts WHERE … outcome = 'unknown'`
+--     (`:1150`-`:1153`).
 --   * `pca_append_only()`, `si_immutable()` and
 --     `sca_append_only_except_reconciliation()` READ NO RELATION AT ALL: their
---     bodies compare `NEW` to `OLD` and raise. The policy cannot change their
---     verdict, and the laws above still require their owner — so they are
---     converted FOR THE LAW and not for the read, and that is said here rather
---     than left to be assumed.
+--     bodies compare `NEW` to `OLD` and raise. No privilege and no policy can
+--     change their verdict, and the laws above still require their owner — so
+--     they are converted FOR THE LAW and not for the read, and that is said
+--     here rather than left to be assumed.
 --
--- ── OWNER DECISION C IS STILL OPEN, AND IT IS WHAT THIS SECTION CANNOT DO ─
--- A POLICY IS NOT A PRIVILEGE. `0081` pairs the policy with a grant — at
--- `0081:618`, `GRANT SELECT ON payments, payment_allocations, customer_credits,
--- customer_credit_applications TO daftar_accounting_internal` — and this file
--- carries NO `GRANT` on any of its four relations, because the grant set for
--- production roles is OWNER DECISION C, referred to the owner above and not
--- decided here.
+-- ── OWNER DECISION C IS NO LONGER OPEN: IT IS THE FOURTH SECTION ────────
+-- The hardening section referred the GRANT SET to the owner as DECISION C, and
+-- the owner has now decided it: LEAST PRIVILEGE — named operations only, the
+-- named principal only, never `ALL` — and a TENANT-ISOLATED write policy on the
+-- remainder table in place of E's `USING (true)`. It is carried out in the
+-- DR-108-C section at the end of this file, where every statement names the
+-- body line that forces it.
 --
--- THE DIRECTION OF THAT ERROR IS NAMED, and it is the SAFE one: row-level
--- security is applied AFTER table privileges, so an internal owner that has the
--- policy and not `SELECT` does not see zero rows — it is REFUSED, with
--- `permission denied for table …`. `pca_chronology` then refuses every ledger
--- INSERT instead of admitting an out-of-order one, and
--- `pca_maintain_remainder()` — already an internal definer since the hardening
--- section, and a WRITER on `platform_credit_grant_remainders` — is refused the
--- same way. A refusal is the safe direction and it is STILL A DEFECT, because a
--- legitimate consumption is refused with it. WHAT THIS SECTION BUYS is that
--- when C is decided, the grant lands on a relation whose policy already admits
--- the principal, so the guard reads a WHOLE relation rather than an empty one.
--- REFERRED TO THE OWNER, and asserted by no run.
+-- THE DIRECTION OF THE ERROR IS STILL NAMED, because it is what C closes: row
+-- level security is applied AFTER table privileges, so a principal that holds a
+-- policy and not `SELECT` is not shown zero rows — it is REFUSED, with
+-- `permission denied for table …`. A refusal is the safe direction AND IT IS
+-- STILL A DEFECT, because a legitimate consumption is refused with it. That
+-- defect is what the fourth section closes, and it is why the grant could not
+-- stay open forever.
 --
 -- ── THE ONE MECHANICAL PRECONDITION, DECLARED ───────────────────────────
 -- `GRANT CREATE ON SCHEMA public` brackets the five hand-overs for the reason
@@ -1539,44 +1553,163 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 -- principals. WITHOUT IT THE FIVE `OWNER TO` STATEMENTS CANNOT APPLY AT ALL, so
 -- naming the exception is the honest move and dropping the statements is not.
 
--- ── (1) THE FOUR RELATIONS ADMIT THE INVARIANT PRINCIPAL FOR SELECT ─────
--- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
-CREATE POLICY accounting_validator ON public.platform_credit_adjustments
-  FOR SELECT TO daftar_accounting_internal USING (true);
--- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
-CREATE POLICY accounting_validator ON public.platform_credit_grant_remainders
-  FOR SELECT TO daftar_accounting_internal USING (true);
--- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
-CREATE POLICY accounting_validator ON public.subscription_invoices
-  FOR SELECT TO daftar_accounting_internal USING (true);
--- DR-108: owner decision E — the `accounting_validator` policy, on the precedent of 0081:552, FOR SELECT only, to daftar_accounting_internal only.
-CREATE POLICY accounting_validator ON public.subscription_charge_attempts
-  FOR SELECT TO daftar_accounting_internal USING (true);
-
--- ── (2) THE FIVE REMAINING TRIGGER FUNCTIONS BECOME SECURITY DEFINER ────
--- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+-- ── (1) THE FIVE REMAINING TRIGGER FUNCTIONS BECOME SECURITY DEFINER ────
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
 ALTER FUNCTION public.pca_append_only() SECURITY DEFINER;
--- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
 ALTER FUNCTION public.pca_chronology() SECURITY DEFINER;
--- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
 ALTER FUNCTION public.si_immutable() SECURITY DEFINER;
--- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
 ALTER FUNCTION public.sca_no_attempt_while_unresolved() SECURITY DEFINER;
--- DR-108: owner decision E — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the five trigger functions the hardening section left as the applier's INVOKER routines are elevated, which is the shape the definer and portability laws admit.
 ALTER FUNCTION public.sca_append_only_except_reconciliation() SECURITY DEFINER;
 
--- ── (3) AND THEIR OWNER IS THE INVARIANT PRINCIPAL, NOT THE APPLIER ─────
+-- ── (2) AND THEIR OWNER IS THE INVARIANT PRINCIPAL, NOT THE APPLIER ─────
 -- DR-108: the declared mechanical precondition — PostgreSQL requires the new owner of a routine to hold CREATE on its schema, and this bracket is closed inside this same section below.
 GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
--- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name; the privileges it needs to read are in the DR-108-C section below.
 ALTER FUNCTION public.pca_append_only() OWNER TO daftar_accounting_internal;
--- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name; the privileges it needs to read are in the DR-108-C section below.
 ALTER FUNCTION public.pca_chronology() OWNER TO daftar_accounting_internal;
--- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name; the privileges it needs to read are in the DR-108-C section below.
 ALTER FUNCTION public.si_immutable() OWNER TO daftar_accounting_internal;
--- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name; the privileges it needs to read are in the DR-108-C section below.
 ALTER FUNCTION public.sca_no_attempt_while_unresolved() OWNER TO daftar_accounting_internal;
--- DR-108: owner decision E — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name and the one the four policies above now admit for SELECT.
+-- DR-108: E is withdrawn and THESE CONVERSIONS ARE NOT — the owner is daftar_accounting_internal, the one principal this file's RESTRICTIVE policies already admit by name; the privileges it needs to read are in the DR-108-C section below.
 ALTER FUNCTION public.sca_append_only_except_reconciliation() OWNER TO daftar_accounting_internal;
 -- DR-108: the declared mechanical precondition, CLOSED — the net schema privilege of this section is zero, which the portability law asserts independently.
 REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
+
+-- ===== DR-108 SECTION END — everything below is the DECLARED DR-108-C SECTION =====
+
+-- ── WHY THIS FOURTH SECTION EXISTS ──────────────────────────────────────
+-- OWNER DECISION C, in the owner's own words, with its first two conditions:
+--
+--   «(1) أقل صلاحية: المنح على العلاقات الأربع بالعمليات اللازمة وحدها
+--    (لا `ALL`)، للدور المحدد وحده. (2) سياسة الكتابة على جدول البقايا: RLS
+--    بعزل المستأجر (`DR-60`)، ولا `BYPASSRLS` لأي دور.»
+--
+--   — (1) LEAST PRIVILEGE: the grants on the four relations carry THE NEEDED
+--     OPERATIONS ALONE, never `ALL`, to THE NAMED ROLE ALONE. (2) the write
+--     policy on the remainder table is RLS WITH TENANT ISOLATION (`DR-60`), and
+--     NO role is given `BYPASSRLS`.
+--
+-- THE PRECEDENT IS THIS HOUSE'S OWN SHAPE FOR THIS SAME PRINCIPAL,
+-- `0081_phase4_customer_payments_credits.sql:617`-`:620`: named operations, a
+-- named column where a column is enough, and never `ALL`.
+--
+--   GRANT SELECT ON … TO daftar_app;
+--   GRANT SELECT, INSERT ON … TO daftar_inventory_internal;
+--   GRANT UPDATE (remaining_amount_minor, remaining_carrying_base_amount_minor)
+--     ON customer_credits TO daftar_inventory_internal;
+--   GRANT SELECT ON … TO daftar_accounting_internal;
+--
+-- `daftar_inventory_internal` IS NOT PART OF THIS DECISION and is granted
+-- NOTHING here. `BYPASSRLS` is granted by this file to NO role: `bootstrap.sql`
+-- creates every internal principal NOBYPASSRLS and this section does not touch
+-- that. Measured on this file: ZERO EXECUTABLE occurrence of the token — every
+-- occurrence is inside a comment, two of them the word `NOBYPASSRLS` in the
+-- parity and hardening sections (`:62`, `:1407`) and the rest this section's
+-- own prose.
+--
+-- WHY A GRANT IS NEEDED AT ALL: table privileges are checked BEFORE row level
+-- security, so the ten conversions above, WITHOUT these grants, leave every
+-- elevated guard refused with `permission denied for table …` — the safe
+-- direction, and still a defect. These grants are what let a guard read the
+-- relation it exists to judge.
+--
+-- WHY A POLICY IS NEEDED ON THE REMAINDER TABLE AND ON NO OTHER RELATION.
+-- `platform_credit_adjustments`, `subscription_invoices` and
+-- `subscription_charge_attempts` each carry a PERMISSIVE `*_tenant_membership`
+-- policy that pins `tenant_id` and a RESTRICTIVE `*_business_isolation` policy
+-- that admits `daftar_accounting_internal` BY NAME (`:513`/`:517`,
+-- `:1060`/`:1064`, `:1202`/`:1206`), so an elevated guard reads those three
+-- tenant-isolated already. `platform_credit_grant_remainders` is `ENABLE`d AND
+-- `FORCE`d (`:474`-`:475`) and, once E is withdrawn, carries NO POLICY AT ALL —
+-- and `FORCE` binds the table's own owner too. With no policy, every `INSERT`
+-- of a grant remainder is refused and every remainder read finds no row. THAT
+-- IS THE DEFECT THIS SECTION CLOSES.
+--
+-- THE THREE ROUTES INTO THAT TABLE, EACH WITH ITS LINE AND THE PRIVILEGE IT
+-- FORCES — read from the bodies, not assumed:
+--
+--   `:346`         `pca_maintain_remainder()` INSERTs the remainder of a new
+--                  grant (tenant_id, business_id, currency, grant_id,
+--                  granted_minor, remaining_minor)
+--                  ⇒ INSERT, and a policy with `WITH CHECK`.
+--   `:354`         the same routine's `UPDATE … SET remaining_minor =
+--                  remaining_minor - NEW.amount_minor WHERE grant_id = …`
+--                  ⇒ UPDATE on `remaining_minor`, and SELECT — a WHERE clause
+--                  and a read-modify-write expression are both reads — and,
+--                  because an `UPDATE` that references columns applies the
+--                  SELECT policies TOO, both a SELECT policy and an UPDATE
+--                  policy carrying BOTH `USING` and `WITH CHECK`.
+--   `:703`-`:708`  `lock_grants_in_order()` reads `r.grant_id` under
+--                  `FOR UPDATE OF r`, joined to `platform_credit_adjustments`
+--                  ⇒ SELECT on BOTH relations, plus THE ROW-LOCK ACL.
+--
+-- THE ROW-LOCK ACL, AND WHY ONE NAMED COLUMN SATISFIES IT. PostgreSQL requires,
+-- for a locking clause, SELECT **plus one of** UPDATE/DELETE/TRUNCATE on the
+-- locked table, and it honours the clause on the strength of UPDATE on ANY
+-- SINGLE COLUMN. `0081:646`-`:649` states exactly that and says it was measured
+-- on a live cluster, and `0081:663` is the statement that relies on it. So
+-- `GRANT UPDATE (remaining_minor)` carries BOTH the decrement at `:354` AND the
+-- row lock at `:708`, and no table-level UPDATE, DELETE or TRUNCATE is granted
+-- to anyone. DELETE and TRUNCATE go to NOBODY: nothing in this file removes a
+-- remainder row, so this principal cannot either.
+--
+-- A CORRECTION TO THE MEASUREMENT THIS SECTION WAS HANDED, STATED BECAUSE IT
+-- WIDENS THE GRANT RATHER THAN NARROWING IT: the remainder table was described
+-- as written and never read. IT IS READ — `lock_grants_in_order` at `:703`-
+-- `:708` — so SELECT is forced by a THIRD site, not only as the read half of
+-- `:354`.
+--
+-- WHY `app_bypass()` IS NOT IN THESE THREE POLICIES, AND THE RESIDUAL THAT
+-- LEAVES. Every route into this table runs inside a `SECURITY DEFINER` owned by
+-- `daftar_accounting_internal`, and inside a definer `CURRENT_USER` IS THE
+-- ROUTINE'S OWNER — which this file measures above, in
+-- `lock_grants_in_order`'s own rounds 14 and 17. So `app_bypass()`, which is
+-- `CURRENT_USER = 'daftar_platform'` and nothing else, is a CONSTANT FALSE in
+-- every one of these bodies: writing it into the policy would be DEAD TEXT, and
+-- dead text in a money policy reads as a protection that is not there. THE
+-- RESIDUAL, NAMED: a `daftar_platform` session that writes the ledger WITHOUT a
+-- tenant and business context set is refused at the remainder with `new row
+-- violates row-level security policy`. That is NARROWER than what it replaces —
+-- with no policy at all that session was refused too — and the direction is a
+-- refusal, not a silent write. WHETHER THE PLATFORM ROLE SHOULD HAVE A BYPASS
+-- ROUTE INTO THIS TABLE IS AN OWNER DECISION, and it is not taken here.
+--
+-- WHAT THIS SECTION DOES NOT CLAIM. Not one statement below is asserted by any
+-- run. There is no PostgreSQL cluster on the machine this was written on, and
+-- the package's own proof lane runs in `p5scratch` with its own roles and does
+-- not touch these privileges or these policies, so ITS GREEN IS NOT EVIDENCE OF
+-- THIS BEHAVIOUR. Every catalogue claim and every access claim here is
+-- `NOT_RUN` (DR-95/5) and waits on CI.
+
+-- ── (1) LEAST PRIVILEGE: THE NEEDED OPERATIONS, TO THE NAMED ROLE ───────
+-- DR-108-C: forced by pca_chronology() at :451-:454, by assert_invoice_credit_agrees() at :1014-:1016, and by lock_grants_in_order()'s join at :705. Relation-level SELECT is 0081:620's shape for this same principal, whose comparison columns are its body's and not a fixed list.
+GRANT SELECT ON TABLE public.platform_credit_adjustments TO daftar_accounting_internal;
+-- DR-108-C: forced by assert_invoice_credit_agrees() at :915-:917, which reads credit_minor, state, tenant_id and business_id of the invoice it judges.
+GRANT SELECT ON TABLE public.subscription_invoices TO daftar_accounting_internal;
+-- DR-108-C: forced by sca_no_attempt_while_unresolved() at :1150-:1153, which reads invoice_id and outcome.
+GRANT SELECT ON TABLE public.subscription_charge_attempts TO daftar_accounting_internal;
+-- DR-108-C: INSERT forced by pca_maintain_remainder() at :346; SELECT forced by the same routine's WHERE and read-modify-write at :354 and by lock_grants_in_order() at :703-:708. No DELETE and no TRUNCATE: nothing in this file removes a remainder row.
+GRANT SELECT, INSERT ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;
+-- DR-108-C: forced by the decrement at :354, and it is the whole of the row-lock ACL for FOR UPDATE OF r at :708 (0081:646-:649). One column, named: the only column any route writes.
+GRANT UPDATE (remaining_minor) ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;
+
+-- ── (2) THE REMAINDER TABLE: TENANT ISOLATION, NOT USING (true) ─────────
+-- DR-108-C: the read half, in this file's own spelling (:514, :1061) and scoped to the named role alone. Forced on its own account: an UPDATE that references columns applies the SELECT policies too, so :354 and the FOR UPDATE OF r at :708 both need it.
+CREATE POLICY pcgr_accounting_tenant_read ON public.platform_credit_grant_remainders
+  FOR SELECT TO daftar_accounting_internal
+  USING (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);
+-- DR-108-C: the write half for the grant path at :346 — WITH CHECK and not USING alone, so a remainder cannot be written into another tenant's or another business's rows.
+CREATE POLICY pcgr_accounting_tenant_insert ON public.platform_credit_grant_remainders
+  FOR INSERT TO daftar_accounting_internal
+  WITH CHECK (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);
+-- DR-108-C: the write half for the consumption path at :354, with BOTH USING and WITH CHECK, so another tenant's row is invisible to the decrement AND a row cannot be moved to another tenant by updating it.
+CREATE POLICY pcgr_accounting_tenant_update ON public.platform_credit_grant_remainders
+  FOR UPDATE TO daftar_accounting_internal
+  USING (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid)
+  WITH CHECK (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);

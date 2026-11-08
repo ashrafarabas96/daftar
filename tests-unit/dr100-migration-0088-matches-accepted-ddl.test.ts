@@ -563,8 +563,17 @@ const DR108_BRACKET = [
   'REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;',
 ] as const;
 
-/** The policy the decision commands, as a shape. `FOR SELECT` only; one principal only. */
-const DR108_POLICY = /^CREATE POLICY accounting_validator ON public\.[a-z_]+ FOR SELECT TO daftar_accounting_internal USING \(true\);$/;
+/**
+ * E IS WITHDRAWN, AND THE SHAPE IT CARRIED IS NOW A FINDING. Owner decision E
+ * put four `CREATE POLICY accounting_validator … USING (true)` statements in
+ * this section; the owner withdrew it and replaced it with decision C. So this
+ * section may carry NO policy at all, and a policy reintroduced into it is
+ * reported BY NAME. The withdrawal has two measured reasons, both written into
+ * the migration: `USING (true)` is PERMISSIVE and unpinned `tenant_id` for that
+ * principal, and E collided with law 15 (`221` recorded, `231` live, `226`
+ * after the withdrawal — so the withdrawal does not clear the collision).
+ */
+const DR108_WITHDRAWN_POLICY = /^CREATE POLICY\b/;
 
 /**
  * Every statement the `DR-108` section may carry, in order, whitespace
@@ -572,18 +581,13 @@ const DR108_POLICY = /^CREATE POLICY accounting_validator ON public\.[a-z_]+ FOR
  * file and not here is reported, and one removed from the file is reported too.
  */
 const DR108_STATEMENTS: readonly string[] = [
-  // (1) The four relations admit the invariant principal FOR SELECT — 0081:552.
-  'CREATE POLICY accounting_validator ON public.platform_credit_adjustments FOR SELECT TO daftar_accounting_internal USING (true);',
-  'CREATE POLICY accounting_validator ON public.platform_credit_grant_remainders FOR SELECT TO daftar_accounting_internal USING (true);',
-  'CREATE POLICY accounting_validator ON public.subscription_invoices FOR SELECT TO daftar_accounting_internal USING (true);',
-  'CREATE POLICY accounting_validator ON public.subscription_charge_attempts FOR SELECT TO daftar_accounting_internal USING (true);',
-  // (2) The five trigger functions the hardening section left to the applier.
+  // (1) The five trigger functions the hardening section left to the applier.
   'ALTER FUNCTION public.pca_append_only() SECURITY DEFINER;',
   'ALTER FUNCTION public.pca_chronology() SECURITY DEFINER;',
   'ALTER FUNCTION public.si_immutable() SECURITY DEFINER;',
   'ALTER FUNCTION public.sca_no_attempt_while_unresolved() SECURITY DEFINER;',
   'ALTER FUNCTION public.sca_append_only_except_reconciliation() SECURITY DEFINER;',
-  // (3) …and their owner, inside the bracket PostgreSQL requires, closed here.
+  // (2) …and their owner, inside the bracket PostgreSQL requires, closed here.
   'GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;',
   'ALTER FUNCTION public.pca_append_only() OWNER TO daftar_accounting_internal;',
   'ALTER FUNCTION public.pca_chronology() OWNER TO daftar_accounting_internal;',
@@ -591,6 +595,64 @@ const DR108_STATEMENTS: readonly string[] = [
   'ALTER FUNCTION public.sca_no_attempt_while_unresolved() OWNER TO daftar_accounting_internal;',
   'ALTER FUNCTION public.sca_append_only_except_reconciliation() OWNER TO daftar_accounting_internal;',
   'REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;',
+];
+
+/**
+ * ── CATEGORY (e): THE `DR-108-C` SECTION ────────────────────────────────────
+ *
+ * OWNER DECISION C, which the hardening section referred to the owner and the
+ * DR-108 section could not take, is TAKEN, and it REPLACES the withdrawn E.
+ * Its two conditions are shapes this law can measure:
+ *
+ *   1. LEAST PRIVILEGE — named operations only, never `ALL` and never
+ *      `ON ALL TABLES`, to the NAMED PRINCIPAL ONLY. Decision C names
+ *      `daftar_accounting_internal` and no other role, so a grant to any other
+ *      principal — `daftar_inventory_internal` above all, which the decision
+ *      explicitly excludes — is a finding.
+ *   2. The remainder table's write path is RLS WITH TENANT ISOLATION (`DR-60`),
+ *      NOT `USING (true)`: every policy of this section must constrain both
+ *      `tenant_id` and `business_id`, and a write policy must carry
+ *      `WITH CHECK` — `USING` alone does not bound what a write may produce.
+ *
+ * What this category asserts: (e) the section is EXACTLY `DR108C_STATEMENTS`,
+ * in order, each statement carrying at least one `-- DR-108-C:` attribution,
+ * and nothing in it but `GRANT` and `CREATE POLICY`; and (f) FOUR negative
+ * controls, each failing BY NAME — an unattributed statement, a deleted
+ * statement, a grant widened to `GRANT ALL` or `ON ALL TABLES`, and a grant
+ * handed a principal the decision does not name.
+ *
+ * WHAT IT DOES NOT ASSERT, SAID HERE SO IT IS NOT READ INTO THE GREEN: this is
+ * a TEXT law. It does not execute a grant, read a catalogue, or show that any
+ * principal can or cannot reach any row. Every such claim is `NOT_RUN` and
+ * belongs to CI (DR-95/5).
+ */
+const DR108C_MARKER = '-- ===== DR-108 SECTION END — everything below is the DECLARED DR-108-C SECTION =====';
+
+/** The attribution a decision-C statement carries. Distinct from `DR108_TAG` by construction. */
+const DR108C_TAG = '-- DR-108-C:';
+
+/** No grant of this decision may be widened to every privilege or every relation. */
+const DR108C_WIDENINGS = ['GRANT ALL', 'ON ALL TABLES', 'ON ALL SEQUENCES', 'ON ALL FUNCTIONS', 'WITH GRANT OPTION'] as const;
+
+/** The one principal decision C names. A grant or policy naming any other is a finding. */
+const DR108C_PRINCIPAL = 'daftar_accounting_internal';
+
+/**
+ * Every statement the `DR-108-C` section may carry, in order, whitespace
+ * collapsed. Each is the narrowest shape that the routine body named in its
+ * own attribution comment forces.
+ */
+const DR108C_STATEMENTS: readonly string[] = [
+  // (1) Least privilege: the needed operations, to the named role.
+  'GRANT SELECT ON TABLE public.platform_credit_adjustments TO daftar_accounting_internal;',
+  'GRANT SELECT ON TABLE public.subscription_invoices TO daftar_accounting_internal;',
+  'GRANT SELECT ON TABLE public.subscription_charge_attempts TO daftar_accounting_internal;',
+  'GRANT SELECT, INSERT ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;',
+  'GRANT UPDATE (remaining_minor) ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;',
+  // (2) The remainder table's three policies: tenant isolation, not USING (true).
+  "CREATE POLICY pcgr_accounting_tenant_read ON public.platform_credit_grant_remainders FOR SELECT TO daftar_accounting_internal USING (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);",
+  "CREATE POLICY pcgr_accounting_tenant_insert ON public.platform_credit_grant_remainders FOR INSERT TO daftar_accounting_internal WITH CHECK (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);",
+  "CREATE POLICY pcgr_accounting_tenant_update ON public.platform_credit_grant_remainders FOR UPDATE TO daftar_accounting_internal USING (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid) WITH CHECK (tenant_id = NULLIF(app_tenant(), '')::uuid AND business_id = NULLIF(app_business(), '')::uuid);",
 ];
 
 interface Dr108Entry {
@@ -607,7 +669,17 @@ interface Dr108Entry {
 function parseDr108(migration: string): { readonly entries: Dr108Entry[]; readonly malformed: string[] } {
   const at = migration.indexOf(DR108_MARKER);
   if (at === -1) throw new Error('the DR-108 marker is missing from the migration');
-  const lines = migration.slice(at + DR108_MARKER.length).split('\n');
+  // BOUNDED AT THE FOURTH CATEGORY, for the same reason `parseHardening` is
+  // bounded at the third: `DR-108-C` is a separate declared section with its own
+  // marker and its own attribution (`-- DR-108-C:`). A missing DR-108-C marker is
+  // NOT read as "no DR-108-C section" — it would silently pull decision C's
+  // grants and policies into this category, where the statement list would then
+  // report them as uncounted and the real finding (a missing marker) would be
+  // buried under five of them.
+  const tail = migration.slice(at + DR108_MARKER.length);
+  const stop = tail.indexOf(DR108C_MARKER);
+  if (stop === -1) throw new Error('the DR-108-C marker is missing from the migration, so the DR-108 section has no end');
+  const lines = tail.slice(0, stop).split('\n');
   const entries: Dr108Entry[] = [];
   const malformed: string[] = [];
   let attributions = 0;
@@ -651,10 +723,10 @@ function dr108Findings(migration: string): string[] {
   for (const entry of entries) {
     if (entry.attributions === 0) findings.push(`no DR-108 attribution for: ${entry.statement}`);
     const isBracket = (DR108_BRACKET as readonly string[]).includes(entry.statement);
-    if (!isBracket && !/^(CREATE POLICY|ALTER FUNCTION)\b/.test(entry.statement))
-      findings.push(`the DR-108 section carries neither a policy nor an ALTER FUNCTION nor the declared bracket: ${entry.statement}`);
-    if (entry.statement.startsWith('CREATE POLICY') && !DR108_POLICY.test(entry.statement))
-      findings.push(`a DR-108 policy is not the 0081:552 shape — FOR SELECT, to daftar_accounting_internal, USING (true): ${entry.statement}`);
+    if (!isBracket && !/^ALTER FUNCTION\b/.test(entry.statement))
+      findings.push(`the DR-108 section carries neither an ALTER FUNCTION nor the declared bracket: ${entry.statement}`);
+    if (DR108_WITHDRAWN_POLICY.test(entry.statement))
+      findings.push(`owner decision E is WITHDRAWN, so the DR-108 section carries no policy: ${entry.statement}`);
   }
   const grant = actual.indexOf(DR108_BRACKET[0]);
   const revoke = actual.indexOf(DR108_BRACKET[1]);
@@ -664,46 +736,55 @@ function dr108Findings(migration: string): string[] {
 }
 
 describe('DR-108 — the third declared category is exactly the owner-decided statements', () => {
-  it('the three categories are disjoint and ordered, and none of them is empty', () => {
+  it('the four categories are disjoint and ordered, and none of them is empty', () => {
     const migration = readNormalized(MIGRATION_PATH);
     expect(migration.split('\n').filter((l) => l === DR108_MARKER)).toHaveLength(1);
+    expect(migration.split('\n').filter((l) => l === DR108C_MARKER)).toHaveLength(1);
     expect(migration.indexOf(DR108_MARKER)).toBeGreaterThan(migration.indexOf(HARDENING_MARKER));
+    expect(migration.indexOf(DR108C_MARKER)).toBeGreaterThan(migration.indexOf(DR108_MARKER));
     // The hardening section is bounded at this marker, so a DR-108 statement
     // cannot be read as an uncounted hardening statement, and the other way.
     const hardeningText = migration.slice(migration.indexOf(HARDENING_MARKER), migration.indexOf(DR108_MARKER));
     expect(hardeningText.includes('-- DR-108:'), 'a DR-108 attribution is inside the hardening section').toBe(false);
-    const dr108Text = migration.slice(migration.indexOf(DR108_MARKER));
+    const dr108Text = migration.slice(migration.indexOf(DR108_MARKER), migration.indexOf(DR108C_MARKER));
     expect(dr108Text.includes('-- LAW:'), 'a -- LAW: reference is inside the DR-108 section').toBe(false);
-    expect(DR108_STATEMENTS.length).toBe(16);
+    expect(dr108Text.includes(DR108C_TAG), 'a DR-108-C attribution is inside the DR-108 section').toBe(false);
+    const dr108cText = migration.slice(migration.indexOf(DR108C_MARKER));
+    expect(dr108cText.includes('-- LAW:'), 'a -- LAW: reference is inside the DR-108-C section').toBe(false);
+    // `-- DR-108-C:` does not contain `-- DR-108:`, so this is a real test of the
+    // bare tag and not a tautology — the next case measures that both ways.
+    expect(dr108cText.includes(DR108_TAG), 'a bare DR-108 attribution is inside the DR-108-C section').toBe(false);
+    expect(DR108_STATEMENTS.length).toBe(12);
+    expect(DR108C_STATEMENTS.length).toBe(8);
     expect(HARDENING_STATEMENTS.length).toBeGreaterThan(20);
   });
 
-  it('the section is the counted statement list, in order, each attributed to DR-108 and nothing but a policy, an ALTER FUNCTION or the declared bracket', () => {
+  it('the two attribution tags are distinguishable, in both directions', () => {
+    // RULE-27 in miniature: if `-- DR-108-C:` contained `-- DR-108:` as a
+    // substring, every bounding assertion above would be vacuous.
+    expect(DR108C_TAG.includes(DR108_TAG)).toBe(false);
+    expect(DR108_TAG.includes(DR108C_TAG)).toBe(false);
+    expect(DR108C_TAG.startsWith('-- DR-108-')).toBe(true);
+  });
+
+  it('the section is the counted statement list, in order, each attributed to DR-108 and nothing but an ALTER FUNCTION or the declared bracket', () => {
     const migration = readNormalized(MIGRATION_PATH);
     const findings = dr108Findings(migration);
     expect(findings, `the DR-108 section is not the counted, attributed list:\n${findings.join('\n')}`).toEqual([]);
     const { entries } = parseDr108(migration);
     expect(entries).toHaveLength(DR108_STATEMENTS.length);
-    // Not vacuous: the four policies and the ten function alterations are there.
-    expect(entries.filter((e) => DR108_POLICY.test(e.statement))).toHaveLength(4);
+    // Not vacuous: the ten function alterations are there, and NO policy is.
     expect(entries.filter((e) => e.statement.startsWith('ALTER FUNCTION'))).toHaveLength(10);
+    expect(entries.filter((e) => DR108_WITHDRAWN_POLICY.test(e.statement))).toHaveLength(0);
   });
 
-  it('the decision stays FOR SELECT and names one principal: the five converted guards and the four relations, by name', () => {
+  it('E stays withdrawn and not one conversion is withdrawn with it: the ten, by name', () => {
     const migration = readNormalized(MIGRATION_PATH);
     const { entries } = parseDr108(migration);
-    const policies = entries.filter((e) => e.statement.startsWith('CREATE POLICY')).map((e) => e.statement);
-    expect(policies.map((p) => (/ON public\.([a-z_]+) /.exec(p) ?? [])[1])).toEqual([
-      'platform_credit_adjustments',
-      'platform_credit_grant_remainders',
-      'subscription_invoices',
-      'subscription_charge_attempts',
-    ]);
-    for (const p of policies) {
-      expect(p, 'FOR SELECT alone').toContain('FOR SELECT');
-      for (const widening of [' FOR ALL ', ' FOR INSERT ', ' FOR UPDATE ', ' FOR DELETE ']) expect(p).not.toContain(widening);
-      expect(p, 'daftar_inventory_internal is not part of this decision').not.toContain('daftar_inventory_internal');
-    }
+    expect(
+      entries.filter((e) => e.statement.startsWith('CREATE POLICY')),
+      'owner decision E is withdrawn, so no policy is in this section',
+    ).toEqual([]);
     const converted = entries.filter((e) => e.statement.endsWith('SECURITY DEFINER;')).map((e) => (/public\.([a-z_]+)\(/.exec(e.statement) ?? [])[1]);
     expect(converted).toEqual([
       'pca_append_only',
@@ -749,20 +830,216 @@ describe('DR-108 — the third declared category is exactly the owner-decided st
     expect(report, 'and the deleted statement is named').toContain(target);
   });
 
-  it('RED: a policy widened to FOR ALL, or handed another principal, fails by name', () => {
+  it('RED: owner decision E reintroduced into this section fails by name', () => {
     const migration = readNormalized(MIGRATION_PATH);
-    // The needle names ONE policy statement, so the mutation cannot land on the
-    // verbatim `0081:552` quotation in this section's own prose instead — which
-    // it did, silently, and the finding list came back empty (RULE-27).
-    const real = 'ON public.subscription_charge_attempts\n  FOR SELECT TO daftar_accounting_internal USING (true);';
-    expect(migration.split(real).length - 1, 'the probe must find exactly one such policy statement to mutate').toBe(1);
-    const wide = dr108Findings(migration.replace(real, real.replace('FOR SELECT', 'FOR ALL')));
-    expect(wide.join('\n')).toContain('a DR-108 policy is not the 0081:552 shape');
-    expect(wide.join('\n')).toContain('FOR ALL TO daftar_accounting_internal');
-    const other = dr108Findings(migration.replace(real, real.replace('daftar_accounting_internal', 'daftar_inventory_internal')));
-    expect(other.join('\n')).toContain('a DR-108 policy is not the 0081:552 shape');
-    expect(other.join('\n')).toContain('daftar_inventory_internal');
+    // The seed is E's own withdrawn statement, placed where E had it: attributed,
+    // so the finding cannot be the attribution finding by accident, and anchored
+    // on a statement that exists exactly once (RULE-27).
+    const anchor = 'ALTER FUNCTION public.pca_append_only() SECURITY DEFINER;';
+    expect(migration.split(anchor).length - 1, 'the probe must find exactly one anchor to seed before').toBe(1);
+    const seed = [
+      '-- DR-108: owner decision E, reintroduced by the seed.',
+      'CREATE POLICY accounting_validator ON public.platform_credit_adjustments',
+      '  FOR SELECT TO daftar_accounting_internal USING (true);',
+      '',
+    ].join('\n');
+    const findings = dr108Findings(migration.replace(anchor, `${seed}${anchor}`));
+    const report = findings.join('\n');
+    expect(report, 'the withdrawal is enforced and the statement is named').toContain(
+      'owner decision E is WITHDRAWN, so the DR-108 section carries no policy: CREATE POLICY accounting_validator ON public.platform_credit_adjustments FOR SELECT TO daftar_accounting_internal USING (true);',
+    );
+    expect(report, 'and the shape finding names it too').toContain('carries neither an ALTER FUNCTION nor the declared bracket');
     // Positive control for the same probe: the unmutated text has no such finding.
     expect(dr108Findings(migration)).toEqual([]);
+  });
+});
+
+/**
+ * The `DR-108-C` section, parsed as (attributions, statement) pairs. Same line
+ * joining as `parseDr108`, because a policy here is written across lines too,
+ * and a statement that never ends in `;` is reported rather than mis-parsed.
+ * This section runs to the END of the file, which is measured: a fifth section
+ * added later without its own marker would be pulled in here and reported as
+ * uncounted statements, which is the loud failure and not the silent one.
+ */
+function parseDr108c(migration: string): { readonly entries: Dr108Entry[]; readonly malformed: string[] } {
+  const at = migration.indexOf(DR108C_MARKER);
+  if (at === -1) throw new Error('the DR-108-C marker is missing from the migration');
+  const lines = migration.slice(at + DR108C_MARKER.length).split('\n');
+  const entries: Dr108Entry[] = [];
+  const malformed: string[] = [];
+  let attributions = 0;
+  let buffer: string[] = [];
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (buffer.length === 0) {
+      if (line.startsWith(DR108C_TAG)) {
+        attributions += 1;
+        continue;
+      }
+      if (/^--\s*LAW:/.test(line.trimStart())) {
+        malformed.push(`a -- LAW: reference is inside the DR-108-C section: ${line.slice(0, 90)}`);
+        continue;
+      }
+      if (line.trim() === '' || line.trimStart().startsWith('--')) continue;
+    }
+    buffer.push(line.trim());
+    if (!line.endsWith(';')) continue;
+    entries.push({ statement: buffer.join(' ').replace(/\s+/g, ' ').trim(), attributions });
+    buffer = [];
+    attributions = 0;
+  }
+  if (buffer.length > 0) malformed.push(`a DR-108-C statement never ends in ";": ${buffer.join(' ').slice(0, 90)}`);
+  if (attributions > 0) malformed.push(`${attributions} trailing -- DR-108-C: attribution(s) belong to no statement`);
+  return { entries, malformed };
+}
+
+/** The findings of category (e), as a list. Empty is green, and each finding names the statement. */
+function dr108cFindings(migration: string): string[] {
+  const { entries, malformed } = parseDr108c(migration);
+  const findings = [...malformed];
+  const actual = entries.map((e) => e.statement);
+  for (let i = 0; i < Math.max(actual.length, DR108C_STATEMENTS.length); i++) {
+    const e = DR108C_STATEMENTS[i];
+    const a = actual[i];
+    if (e === undefined) findings.push(`+ a DR-108-C statement no decision counts: ${a ?? ''}`);
+    else if (a === undefined) findings.push(`- a counted DR-108-C statement is missing: ${e}`);
+    else if (e !== a) findings.push(`~ at position ${i + 1} the counted statement is "${e}" and the file has "${a}"`);
+  }
+  for (const entry of entries) {
+    const s = entry.statement;
+    if (entry.attributions === 0) findings.push(`no DR-108-C attribution for: ${s}`);
+    if (!/^(GRANT|CREATE POLICY)\b/.test(s)) findings.push(`the DR-108-C section carries neither a GRANT nor a CREATE POLICY: ${s}`);
+    for (const w of DR108C_WIDENINGS) if (s.includes(w)) findings.push(`a DR-108-C statement is widened beyond least privilege with "${w}": ${s}`);
+    // The decision names ONE principal. Every `TO <role>` in this section must be
+    // that one, and a role named anywhere else in the statement is a finding too.
+    for (const role of s.match(/daftar_[a-z_]+/g) ?? [])
+      if (role !== DR108C_PRINCIPAL) findings.push(`a DR-108-C statement names a principal the decision does not: ${role} in ${s}`);
+    if (!s.includes(` TO ${DR108C_PRINCIPAL}`)) findings.push(`a DR-108-C statement does not name the one principal the decision names: ${s}`);
+    if (s.startsWith('CREATE POLICY')) {
+      if (s.includes('USING (true)')) findings.push(`decision C replaced USING (true) with tenant isolation: ${s}`);
+      for (const column of ['tenant_id', 'business_id'])
+        if (!s.includes(column)) findings.push(`a DR-108-C policy does not constrain ${column}, so it is not tenant-isolated: ${s}`);
+      const isWrite = / FOR (INSERT|UPDATE) /.test(s);
+      if (isWrite && !s.includes('WITH CHECK')) findings.push(`a DR-108-C write policy has no WITH CHECK, so it does not bound what a write produces: ${s}`);
+      if (/ FOR UPDATE /.test(s) && !s.includes('USING (')) findings.push(`a DR-108-C UPDATE policy has no USING, so the row it updates is unbounded: ${s}`);
+    }
+  }
+  return findings;
+}
+
+describe('DR-108-C — the fourth declared category is exactly the owner-decided grant set', () => {
+  it('the section is the counted statement list, in order, each attributed to DR-108-C and nothing but a GRANT or a CREATE POLICY', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const findings = dr108cFindings(migration);
+    expect(findings, `the DR-108-C section is not the counted, attributed list:\n${findings.join('\n')}`).toEqual([]);
+    const { entries } = parseDr108c(migration);
+    expect(entries).toHaveLength(DR108C_STATEMENTS.length);
+    // Not vacuous: five grants and three policies are there, and the probe counts them.
+    expect(entries.filter((e) => e.statement.startsWith('GRANT'))).toHaveLength(5);
+    expect(entries.filter((e) => e.statement.startsWith('CREATE POLICY'))).toHaveLength(3);
+  });
+
+  it('least privilege, measured: named operations only, one principal, and the row-lock ACL is one named column', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries } = parseDr108c(migration);
+    const grants = entries.filter((e) => e.statement.startsWith('GRANT')).map((e) => e.statement);
+    expect(grants, 'the probe found no grant to judge, so its verdict would be vacuous').not.toEqual([]);
+    for (const g of grants) {
+      for (const w of DR108C_WIDENINGS) expect(g, `no widening: ${w}`).not.toContain(w);
+      expect(g, 'the decision names one principal').toContain(` TO ${DR108C_PRINCIPAL}`);
+      expect(g, 'daftar_inventory_internal is not part of this decision').not.toContain('daftar_inventory_internal');
+      expect(g, 'no table-level DELETE').not.toMatch(/\bDELETE\b/);
+      expect(g, 'no TRUNCATE').not.toMatch(/\bTRUNCATE\b/);
+    }
+    // The ONE `UPDATE` of the decision is column-named, on the one column any
+    // route writes — and it is also the whole of the row-lock ACL (0081:646-649).
+    const updates = grants.filter((g) => /\bUPDATE\b/.test(g));
+    expect(updates).toEqual(['GRANT UPDATE (remaining_minor) ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;']);
+    // Every grant is on one of the four relations of this migration and no other.
+    const RELATIONS = [
+      'public.platform_credit_adjustments',
+      'public.platform_credit_grant_remainders',
+      'public.subscription_invoices',
+      'public.subscription_charge_attempts',
+    ];
+    for (const g of grants)
+      expect(
+        RELATIONS.some((r) => g.includes(r)),
+        `a grant outside the four relations: ${g}`,
+      ).toBe(true);
+  });
+
+  it('the remainder policies are tenant-isolated, and the write halves carry WITH CHECK', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries } = parseDr108c(migration);
+    const policies = entries.filter((e) => e.statement.startsWith('CREATE POLICY')).map((e) => e.statement);
+    expect(policies, 'the probe found no policy to judge').not.toEqual([]);
+    // All three are on the one relation that carries no policy of its own.
+    for (const p of policies) {
+      expect(p).toContain('ON public.platform_credit_grant_remainders');
+      expect(p, 'decision C replaced USING (true)').not.toContain('USING (true)');
+      expect(p).toContain("tenant_id = NULLIF(app_tenant(), '')::uuid");
+      expect(p).toContain("business_id = NULLIF(app_business(), '')::uuid");
+      expect(p, 'the named principal only').toContain(` TO ${DR108C_PRINCIPAL}`);
+    }
+    expect(policies.map((p) => (/ FOR ([A-Z]+) /.exec(p) ?? [])[1])).toEqual(['SELECT', 'INSERT', 'UPDATE']);
+    const [, insert, update] = policies;
+    expect(insert).toContain('WITH CHECK');
+    expect(update, 'an UPDATE needs both halves').toContain('USING (');
+    expect(update).toContain('WITH CHECK');
+  });
+
+  /**
+   * THE FOUR NEGATIVE CONTROLS. Each mutates the REAL section text in memory and
+   * asserts the finding names the statement. The file on disk is not touched by
+   * these cases; the same four mutations were also seeded into the file itself
+   * and reverted, each proved applied by `git hash-object` BEFORE its result was
+   * read and by the same digest afterwards (RULE-27).
+   */
+  it('RED: a DR-108-C statement with no attribution fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const target = 'GRANT SELECT ON TABLE public.subscription_invoices TO daftar_accounting_internal;';
+    const at = migration.indexOf(`\n${target}`);
+    expect(at, 'the probe did not find the statement it mutates').toBeGreaterThan(0);
+    const lineStart = migration.lastIndexOf('\n', at - 1);
+    const removed = migration.slice(lineStart, at);
+    expect(removed.startsWith(`\n${DR108C_TAG}`), 'the probe must remove an attribution line, or its removal proves nothing').toBe(true);
+    const findings = dr108cFindings(`${migration.slice(0, lineStart)}${migration.slice(at)}`);
+    expect(findings.join('\n')).toContain(`no DR-108-C attribution for: ${target}`);
+  });
+
+  it('RED: a DR-108-C statement deleted from the section fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const target = 'GRANT UPDATE (remaining_minor) ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;';
+    expect(migration).toContain(target);
+    const report = dr108cFindings(migration.replace(`${target}\n`, '')).join('\n');
+    expect(report, 'the deletion is reported').toContain('a counted DR-108-C statement is missing');
+    expect(report, 'and the deleted statement is named').toContain(target);
+  });
+
+  it('RED: a grant widened to GRANT ALL, or to ON ALL TABLES, fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const real = 'GRANT SELECT ON TABLE public.platform_credit_adjustments TO daftar_accounting_internal;';
+    expect(migration.split(real).length - 1, 'the probe must find exactly one such grant to mutate').toBe(1);
+    const all = dr108cFindings(migration.replace(real, 'GRANT ALL ON TABLE public.platform_credit_adjustments TO daftar_accounting_internal;')).join('\n');
+    expect(all).toContain('is widened beyond least privilege with "GRANT ALL"');
+    expect(all).toContain('GRANT ALL ON TABLE public.platform_credit_adjustments');
+    const every = dr108cFindings(migration.replace(real, 'GRANT SELECT ON ALL TABLES IN SCHEMA public TO daftar_accounting_internal;')).join('\n');
+    expect(every).toContain('is widened beyond least privilege with "ON ALL TABLES"');
+    // Positive control for the same probe: the unmutated text has no such finding.
+    expect(dr108cFindings(migration)).toEqual([]);
+  });
+
+  it('RED: a grant handed a principal the decision does not name fails by name', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const real = 'GRANT SELECT, INSERT ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;';
+    expect(migration.split(real).length - 1, 'the probe must find exactly one such grant to mutate').toBe(1);
+    const other = dr108cFindings(migration.replace(real, real.replace(DR108C_PRINCIPAL, 'daftar_inventory_internal'))).join('\n');
+    expect(other, 'the excluded principal is named').toContain('names a principal the decision does not: daftar_inventory_internal');
+    const app = dr108cFindings(migration.replace(real, real.replace(DR108C_PRINCIPAL, 'daftar_app'))).join('\n');
+    expect(app).toContain('names a principal the decision does not: daftar_app');
+    expect(app).toContain('does not name the one principal the decision names');
+    expect(dr108cFindings(migration)).toEqual([]);
   });
 });

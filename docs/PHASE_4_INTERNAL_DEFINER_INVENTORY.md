@@ -483,17 +483,28 @@ owner's decision **`DR-108`** — and they are recorded here, in the same shape
 Part B uses, because every one of them has an **explicit, empty ACL** and
 therefore no caller but its owner.
 
-The owner's decision, in his own words:
+The owner's decision, in his own words — **`E` was withdrawn and replaced by
+`C`**, and the earlier wording of this page quoted `E` as taken:
 
-> «القرار E: سياسة `accounting_validator` على سابقة `0081:552`، دون أي تعديل في
-> نص القانونين.»
+> «القرار C بدل E، بشروط: (1) أقل صلاحية: المنح على العلاقات الأربع بالعمليات
+> اللازمة وحدها (لا `ALL`)، للدور المحدد وحده. (2) سياسة الكتابة على جدول
+> البقايا: RLS بعزل المستأجر (`DR-60`)، ولا `BYPASSRLS` لأي دور.»
+
+**What the withdrawal changed on this page, and what it did not.** `E`'s four
+`CREATE POLICY accounting_validator … FOR SELECT … USING (true)` statements are
+**gone from `0088`**, for two reasons written into the migration: `USING (true)`
+is PERMISSIVE and therefore unpinned `tenant_id` for that principal, and `E`
+collided with §14/law 15 — and withdrawing it does **not** clear that collision
+(`221` recorded, `231` live, `226` after the withdrawal; see item 2 below). What
+did **not** change is this table: **not one of the ten conversions was
+withdrawn**, because three other laws require them.
 
 `reads` and `writes` below are read from the **routine body**, the way the law
 reads them (`readsIn` is a `SELECT`, `writesIn` is an `INSERT INTO`, an `UPDATE`
 of a relation or a `DELETE FROM`, both over the comment-stripped source). The
 three guards that read **nothing** are recorded as reading nothing: they compare
-`NEW` to `OLD` and raise, so the `accounting_validator` policy cannot change
-their verdict, and they are elevated for the **law** and not for the read.
+`NEW` to `OLD` and raise, so **no** policy and **no** privilege can change their
+verdict, and they are elevated for the **law** and not for the read.
 
 | # | signature | owner | kind | reads | writes | elevated by |
 | - | --------- | ----- | ---- | ----- | ------ | ----------- |
@@ -519,9 +530,15 @@ adds for the trigger functions PostgreSQL had left on the default PUBLIC
 trigger function. **Positive control on the same probe, in the same file:** the
 count of `GRANT EXECUTE`/`GRANT ALL ON FUNCTION` statements in `0088` is
 **zero**, and the probe that returned ten for the revokes returned zero for the
-grants — so the zero is a measurement and not an empty grep. The only `GRANT`
-in the whole file is `GRANT CREATE ON SCHEMA public`, twice bracketed and twice
-revoked, which is a schema privilege and not an `EXECUTE`.
+grants — so the zero is a measurement and not an empty grep. The `GRANT`
+statements the file does carry are **not** `EXECUTE` and do not reach a routine:
+`GRANT CREATE ON SCHEMA public`, twice bracketed and twice revoked, which is a
+schema privilege; and, under **decision `C`** (`DR-108-C`), **five table grants**
+to `daftar_accounting_internal` — `SELECT` on three relations, `SELECT, INSERT`
+on `platform_credit_grant_remainders`, and `UPDATE (remaining_minor)` on that
+same relation. Those five change what these definers may **read and write**;
+they change **nothing** about who may `EXECUTE` them, which is the subject of
+this section and is still nobody.
 
 ### §17 condition 2 — can a caller reach one without an authority proof?
 
@@ -534,32 +551,49 @@ own round 14 note already measured rather than assumed.
 production neither has an `EXECUTE` grantee at all, because `0088` grants none.
 The grants the proof lane relies on live in
 `packages/billing/test/db/sql/credit-ledger-roles.sql`, which is **test-lane
-only**, and the production grant set is **OWNER DECISION C** — named in `0088`'s
-header and **not decided**. So "who may call `lock_grants_in_order` and
+only**. **Decision `C` is now taken, and it does NOT close this gap** — it
+decided the **table** privileges of `daftar_accounting_internal`, not `EXECUTE`
+on any routine, and this page does not read a table grant as an execute
+authority. So "who may call `lock_grants_in_order` and
 `assert_invoice_credit_agrees` in production, and what proves that caller's
-authority" is **not yet a fact about this estate**, and this page does not write
-it down as one. When C is decided it becomes a Part A door and needs its own row
-with a recorded authority proof.
+authority" is **still not a fact about this estate**, and this page does not
+write it down as one. When an `EXECUTE` grantee is decided, each becomes a
+Part A door and needs its own row with a recorded authority proof.
 
 ### What this page does NOT claim about these ten
 
-1. **A policy is not a privilege.** `DR-108` adds `accounting_validator` **FOR
-   SELECT** on the four relations, following `0081:552-553`. `0081` pairs that
-   policy with a grant — `0081:618`, `GRANT SELECT ON payments, …  TO
-   daftar_accounting_internal` — and `0088` carries **no** table grant, because
-   that is OWNER DECISION C. Row-level security is applied **after** table
-   privileges, so until C is decided these guards are **refused**
-   (`permission denied for table …`), not blinded: `pca_chronology` refuses
-   every ledger `INSERT` rather than admitting an out-of-order one, and
-   `pca_maintain_remainder()` — a **writer**, and a `FOR SELECT` policy does not
-   cover a write either — is refused the same way. **The direction is the safe
-   one and it is still a defect**, and it is the owner's to close.
+1. **That these ten can now read and write what they judge — NOT RUN.**
+   Decision `C` wrote the privileges and the policies that `E` could not:
+   relation-level `SELECT` on `platform_credit_adjustments`,
+   `subscription_invoices` and `subscription_charge_attempts`;
+   `SELECT, INSERT` plus `UPDATE (remaining_minor)` on
+   `platform_credit_grant_remainders`; and three **tenant-isolated** policies on
+   that one relation, which carries `ENABLE`+`FORCE` RLS and had **no policy at
+   all** once `E` was withdrawn. The precedent is `0081:617-620` — named
+   operations, a named column where a column is enough, never `ALL` — and
+   `daftar_inventory_internal` is **not** part of the decision and gets nothing.
+   **What is not claimed:** no statement of that section was executed by any run
+   on this lane. There is no PostgreSQL cluster on this machine, and the
+   package's proof lane runs in `p5scratch` with its own roles and does not
+   touch these privileges or these policies, so **its green is not evidence of
+   this behaviour**. Every catalogue and access claim about them is `NOT_RUN`
+   (DR-95/5) and waits on CI. The error direction is unchanged and still named:
+   row-level security is applied **after** table privileges, so a missing
+   privilege is a **refusal** (`permission denied for table …`), not a blinding
+   — a safe direction, and still a defect while it stands.
 2. **The suite's own roster is not this page.** §14 compares the live catalogue
    to `DOORS` + `SEALED` **inside**
    `tests/security/p4s4-internal-definer-inventory.test.ts`, and that file's
    text is **not touched by this lane**. Those two arrays do not carry these ten
    signatures, so `live.length` exceeds `DOORS.length + SEALED.length` by ten
-   and §14 stays red **however complete this page is**. Naming the ten here is
+   and §14 stays red **however complete this page is**. **By the numbers:** the
+   figure recorded in that file's own text is **221**; the live count is **231**;
+   withdrawing `E` takes it to **226**, **not** to 221, because the hardening
+   section's five conversions remain — and those five are required by
+   `phase3-s8-definer-law`, `p3c-td18-definer-ownership` and
+   `migration-portability`, so withdrawing them would redden three laws to green
+   one. **No conversion was withdrawn, and that trade is the owner's to make.**
+   Naming the ten here is
    necessary — the suite also asserts that this page names every recorded
    signature — and it is **not sufficient**. **Referred to the owner and to the
    lane that owns that file.**
