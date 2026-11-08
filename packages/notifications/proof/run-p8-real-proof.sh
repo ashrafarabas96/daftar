@@ -216,7 +216,32 @@ build(){           # build <overlay-file> <logdir>
   if ! sup "DROP DATABASE IF EXISTS daftar" >"$ld/dropdb.log" 2>&1; then
     echo "the database could not be dropped: $(tail -1 "$ld/dropdb.log")"; return 1
   fi
-  if ! sup "CREATE DATABASE daftar OWNER daftar_migrator" >"$ld/createdb.log" 2>&1; then
+  # ROUND 29, CI-1. The OWNER clause was here, and it made this gate unable to
+  # run on a cluster FROM ZERO: `daftar_migrator` is created by bootstrap.sql,
+  # bootstrap.sql runs INSIDE `daftar`, and `CREATE DATABASE ... OWNER` needs
+  # the role to exist already — so the first build on a fresh cluster died with
+  # `role "daftar_migrator" does not exist`, and nothing downstream ran. It
+  # passed wherever a previous run had left the roles behind in the cluster,
+  # which is the only reason the precondition was never seen; the first CI run
+  # that gave this gate a throwaway cluster is what exposed it.
+  #
+  # The repository's own from-zero contract, `scripts/db-from-zero.ts`, whose
+  # header says it proves the bootstrap contract "exactly as production does
+  # it", creates the database with NO owner clause and lets bootstrap.sql hand
+  # over what the history actually needs: `ALTER SCHEMA public OWNER TO
+  # daftar_migrator` (bootstrap.sql:234), which exists precisely because
+  # `public` otherwise belongs to `pg_database_owner`. Measured: nothing in
+  # this gate, in bootstrap.sql or in the 87 migrations reads `datdba` or
+  # names `pg_database_owner`, so the DATABASE's owner is not a subject here.
+  #
+  # And the ownership that IS a subject keeps a live control rather than a new
+  # one: the history is applied by the project's own applier AS
+  # `daftar_migrator`, and migration 0040 and the eight after it hand objects
+  # over inside their transaction — which a role that does not own `public`
+  # cannot do. Its documented failure is `permission denied for schema public`.
+  # So if bootstrap did not establish that ownership, the build below reds by
+  # itself; this is not an absence taken on trust.
+  if ! sup "CREATE DATABASE daftar" >"$ld/createdb.log" 2>&1; then
     echo "the database could not be created: $(tail -1 "$ld/createdb.log")"; return 1
   fi
   # bootstrap.sql grants ON DATABASE by the name `daftar`, so the database is
