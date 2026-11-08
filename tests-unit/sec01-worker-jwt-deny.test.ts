@@ -103,15 +103,20 @@ describe('SEC-01: PROCESS_MODE=worker is denied the session signing key', () => 
     // allowed to hold — no planting, no private import, nothing the worker
     // process does not already have.
     let workerConfig: ReturnType<typeof loadConfig> | undefined;
+    let refusal: unknown;
     try {
       workerConfig = loadConfig({ ...WORKER_PROD, JWT_SECRET: SESSION_SECRET });
-    } catch {
+    } catch (e) {
       // The remedy has landed: the worker never obtains a config with the
       // session key, so there is no ring to sign with. That is the fix.
+      refusal = e;
       workerConfig = undefined;
     }
     if (workerConfig === undefined) {
-      expect(true, 'the worker is refused the session key at startup').toBe(true);
+      // Assert what was refused and why, rather than `expect(true).toBe(true)`.
+      // A tautology here would keep this test green against ANY startup
+      // failure — a typo in the worker environment would read as the fix.
+      expect(String((refusal as Error)?.message), 'the refusal names the variable and the mode').toMatch(/JWT_SECRET.*must NOT be set in PROCESS_MODE=worker/s);
       return;
     }
 

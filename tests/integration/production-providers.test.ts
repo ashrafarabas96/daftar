@@ -165,6 +165,13 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
   });
 
   it('worker: requires worker DB + key ring + SMTP; REJECTS merchant/platform DB URLs and JWT', () => {
+    // KEPT ON PURPOSE, and labelled so it is not mistaken for the JWT check:
+    // this pattern is GENERAL. `PROD_ENV` carries the merchant and platform
+    // database URLs, so APP_DATABASE_URL alone satisfies it and it would stay
+    // green with no JWT denial anywhere — which is exactly how this test's
+    // title claimed a denial that did not exist. It still earns its place as
+    // the "every forbidden variable is refused" arm. The JWT-specific
+    // assertions are the two below, and they name the variable.
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'worker' })).toThrow(/must NOT be set in PROCESS_MODE=worker/);
     const workerEnv: NodeJS.ProcessEnv = {
       NODE_ENV: 'production',
