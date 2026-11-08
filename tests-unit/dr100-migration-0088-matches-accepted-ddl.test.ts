@@ -67,8 +67,82 @@ const DECLARED_SUBSTITUTIONS: readonly { readonly from: string; readonly to: str
   { from: 'p5_invariants', to: 'daftar_accounting_internal' },
 ];
 
-/** Everything after this line in the migration is the parity region. */
+/** The parity region begins after this line. */
 const PARITY_MARKER = '-- ===== PARITY REGION BEGIN — byte-for-byte the accepted DDL under the two declared substitutions =====';
+
+/**
+ * ── THE SECOND DECLARED CATEGORY: THE HARDENING SECTION ─────────────────
+ *
+ * The parity region ENDS at this line, and everything after it is a separate,
+ * declared category: `ALTER`/`REVOKE`/`GRANT` statements on objects the parity
+ * region already created, each required by a STANDING SECURITY LAW of this
+ * estate, because the accepted DDL was proved on a lane that applies it as
+ * `daftar_platform` while `npm run migrate` applies it as `daftar_migrator` —
+ * so the OWNER, the `search_path` and PostgreSQL's default `EXECUTE` for
+ * PUBLIC all come out different here.
+ *
+ * Splitting the file into two declared categories is what keeps (a) and (b)
+ * independent claims rather than one loose one:
+ *
+ *   (a) the parity region is STILL byte-for-byte the accepted DDL under the
+ *       two declared substitutions — unchanged, and not weakened by one
+ *       character to make room for the hardening;
+ *   (b) the hardening section is EXACTLY `HARDENING_STATEMENTS`, in order,
+ *       every statement carrying at least one `-- LAW:` reference that
+ *       resolves to literal text really present in the file it names.
+ *
+ * So a hardening statement nobody can name a law for cannot be here, and a
+ * statement removed from here cannot pass either: (b) is an equality, in both
+ * directions, over the statement stream AND over the law references.
+ */
+const HARDENING_MARKER = '-- ===== PARITY REGION END — everything below is the DECLARED HARDENING SECTION =====';
+
+/**
+ * Every statement the hardening section may carry, in order. The list is the
+ * law's left-hand side: it is not read from the file, so a statement added to
+ * the file and not to this list is reported, and one removed from the file is
+ * reported too. The law each one satisfies is NOT duplicated here — it is
+ * written in the migration beside the statement, where a reviewer reads it,
+ * and this law only asserts that it is there and that it resolves.
+ */
+const HARDENING_STATEMENTS: readonly string[] = [
+  // (1) The four new relations, revoked from PUBLIC (phase4-s4-gate's text law).
+  'REVOKE ALL ON TABLE public.platform_credit_adjustments FROM PUBLIC;',
+  'REVOKE ALL ON TABLE public.platform_credit_grant_remainders FROM PUBLIC;',
+  'REVOKE ALL ON TABLE public.subscription_invoices FROM PUBLIC;',
+  'REVOKE ALL ON TABLE public.subscription_charge_attempts FROM PUBLIC;',
+  // (2) The seven trigger functions the DDL left on PostgreSQL's PUBLIC default.
+  'REVOKE ALL ON FUNCTION public.pca_append_only() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.pca_chronology() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.si_immutable() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.si_credit_agrees() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.pca_credit_agrees() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.sca_no_attempt_while_unresolved() FROM PUBLIC;',
+  'REVOKE ALL ON FUNCTION public.sca_append_only_except_reconciliation() FROM PUBLIC;',
+  // (3) The two DEFERRABLE INITIALLY DEFERRED guards, elevated. Nothing else is.
+  'ALTER FUNCTION public.si_credit_agrees() SECURITY DEFINER;',
+  'ALTER FUNCTION public.pca_credit_agrees() SECURITY DEFINER;',
+  // (4) The pinned path, on all ten routines this file creates.
+  'ALTER FUNCTION public.pca_maintain_remainder() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.lock_grants_in_order(uuid, uuid, text) SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.assert_invoice_credit_agrees(uuid) SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.pca_append_only() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.pca_chronology() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.si_immutable() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.si_credit_agrees() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.pca_credit_agrees() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.sca_no_attempt_while_unresolved() SET search_path = pg_catalog, public, pg_temp;',
+  'ALTER FUNCTION public.sca_append_only_except_reconciliation() SET search_path = pg_catalog, public, pg_temp;',
+  // (5) The hand-over of the five SECURITY DEFINER routines, inside the CREATE
+  //     bracket PostgreSQL requires of the new owner, closed in this same file.
+  'GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.pca_maintain_remainder() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.lock_grants_in_order(uuid, uuid, text) OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.assert_invoice_credit_agrees(uuid) OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.si_credit_agrees() OWNER TO daftar_accounting_internal;',
+  'ALTER FUNCTION public.pca_credit_agrees() OWNER TO daftar_accounting_internal;',
+  'REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;',
+];
 
 const EXCEPTION_OBJECT = 'scratch_period_seq';
 const EXCEPTION_STATEMENT = 'CREATE SEQUENCE public.scratch_period_seq;';
@@ -165,6 +239,60 @@ function objectOf(statement: string): string {
   return code.slice(0, 80);
 }
 
+/**
+ * The parity region alone: from the parity marker to the hardening marker. A
+ * missing hardening marker is NOT treated as "no hardening" — it would silently
+ * put the hardening statements inside the parity comparison, so it throws.
+ */
+function parityRegion(migration: string): string {
+  const start = migration.indexOf(PARITY_MARKER);
+  if (start === -1) throw new Error('the parity marker is missing from the migration');
+  const end = migration.indexOf(HARDENING_MARKER);
+  if (end === -1) throw new Error('the hardening marker is missing from the migration, so the parity region has no end');
+  if (end < start) throw new Error('the hardening marker precedes the parity marker');
+  return migration.slice(start + PARITY_MARKER.length, end).replace(/^\n/, '');
+}
+
+/** One hardening statement with the law references written above it. */
+interface HardeningEntry {
+  readonly statement: string;
+  readonly laws: readonly { readonly file: string; readonly needle: string }[];
+}
+
+/**
+ * The hardening section, parsed as (law references, statement) pairs. Every
+ * statement must be a SINGLE line ending in `;` — asserted, not assumed, so
+ * that a statement wrapped over two lines is reported rather than mis-parsed —
+ * and the `-- LAW:` lines that precede it, since the last statement, are its
+ * references.
+ */
+function parseHardening(migration: string): { readonly entries: HardeningEntry[]; readonly malformed: string[] } {
+  const at = migration.indexOf(HARDENING_MARKER);
+  if (at === -1) throw new Error('the hardening marker is missing from the migration');
+  const lines = migration.slice(at + HARDENING_MARKER.length).split('\n');
+  const entries: HardeningEntry[] = [];
+  const malformed: string[] = [];
+  let laws: { file: string; needle: string }[] = [];
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const law = /^--\s*LAW:\s*(\S+)\s*::\s*(.+)$/.exec(line);
+    if (law !== null) {
+      laws.push({ file: law[1] ?? '', needle: (law[2] ?? '').trim() });
+      continue;
+    }
+    if (line.trim() === '' || line.trimStart().startsWith('--')) continue;
+    if (!line.endsWith(';')) {
+      malformed.push(`a hardening statement is not one line ending in ";": ${line.slice(0, 90)}`);
+      laws = [];
+      continue;
+    }
+    entries.push({ statement: line.trim(), laws });
+    laws = [];
+  }
+  if (laws.length > 0) malformed.push(`${laws.length} trailing -- LAW: reference(s) belong to no statement`);
+  return { entries, malformed };
+}
+
 function applySubstitutions(sql: string): string {
   let out = sql;
   for (const { from, to } of DECLARED_SUBSTITUTIONS) {
@@ -204,7 +332,7 @@ describe('DR-100 item 2 — migration 0088 carries the accepted billing DDL', ()
     const occurrences = substituted.split(EXCEPTION_STATEMENT).length - 1;
     expect(occurrences, `the declared exception statement must occur exactly once in the substituted DDL`).toBe(1);
     const expected = substituted.replace(EXCEPTION_STATEMENT, EXCEPTION_MARKER);
-    const actual = migration.slice(migration.indexOf(PARITY_MARKER) + PARITY_MARKER.length).replace(/^\n/, '');
+    const actual = parityRegion(migration);
     expect(actual).toBe(expected);
   });
 
@@ -212,7 +340,7 @@ describe('DR-100 item 2 — migration 0088 carries the accepted billing DDL', ()
     const ddl = readNormalized(DDL_PATH);
     const migration = readNormalized(MIGRATION_PATH);
     const expected = splitStatements(applySubstitutions(ddl)).filter((s) => executableText(s).trim() !== '' && !s.includes(EXCEPTION_STATEMENT));
-    const actual = splitStatements(migration.slice(migration.indexOf(PARITY_MARKER) + PARITY_MARKER.length)).filter((s) => executableText(s).trim() !== '');
+    const actual = splitStatements(parityRegion(migration)).filter((s) => executableText(s).trim() !== '');
     expect(expected.length, 'the accepted DDL produced no statements, so this comparison would be vacuous').toBeGreaterThan(20);
     const differing: string[] = [];
     for (let i = 0; i < Math.max(expected.length, actual.length); i++) {
@@ -282,5 +410,96 @@ describe('DR-100 item 2 — migration 0088 carries the accepted billing DDL', ()
     expect(header).toContain('period_ends_at');
     expect(header).toContain('invoice LINES');
     expect(header.toUpperCase()).toContain('OWNER');
+  });
+});
+
+/**
+ * DR-100 ITEM 2, SECOND CATEGORY — THE HARDENING SECTION, COUNTED AND LAWFUL.
+ *
+ * The parity law above says what the migration may NOT change. This one says
+ * what it may ADD, and bounds it: a fixed, ordered list of
+ * `ALTER`/`REVOKE`/`GRANT` statements on objects the parity region created,
+ * each carrying at least one law reference that resolves to literal text in
+ * the file it names.
+ *
+ * It is an equality in both directions, so it is red for a planted statement
+ * AND for a deleted one, and the failure names the statement either way. The
+ * law-reference half is a POSITIVE control on the naming: a fabricated
+ * reference fails because the text is not in the file it claims, which is what
+ * stops `-- LAW:` from becoming decoration.
+ */
+describe('DR-100 item 2 — the hardening section is exactly the law-commanded statements', () => {
+  it('the two categories are disjoint and ordered: one parity marker, one hardening marker, in that order', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    expect(migration.split('\n').filter((l) => l === HARDENING_MARKER)).toHaveLength(1);
+    expect(migration.indexOf(HARDENING_MARKER)).toBeGreaterThan(migration.indexOf(PARITY_MARKER));
+    // The parity region carries no law reference: every one of them is in the
+    // hardening section, so the two categories cannot blur into each other.
+    expect(parityRegion(migration).includes('-- LAW:')).toBe(false);
+    // And the section is not empty, so the equality below is not vacuous.
+    expect(HARDENING_STATEMENTS.length).toBeGreaterThan(20);
+  });
+
+  it('every statement in the hardening section is one of the counted ones, in order, and none is missing', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries, malformed } = parseHardening(migration);
+    expect(malformed, `the hardening section is not parseable statement by statement:\n${malformed.join('\n')}`).toEqual([]);
+    const actual = entries.map((e) => e.statement);
+    const differing: string[] = [];
+    for (let i = 0; i < Math.max(actual.length, HARDENING_STATEMENTS.length); i++) {
+      const e = HARDENING_STATEMENTS[i];
+      const a = actual[i];
+      if (e === undefined) differing.push(`+ a hardening statement no law counts: ${a ?? ''}`);
+      else if (a === undefined) differing.push(`- a counted hardening statement is missing: ${e}`);
+      else if (e !== a) differing.push(`~ at position ${i + 1} the counted statement is "${e}" and the file has "${a}"`);
+    }
+    expect(differing, `the hardening section is not the counted statement list:\n${differing.join('\n')}`).toEqual([]);
+    expect(actual).toHaveLength(HARDENING_STATEMENTS.length);
+  });
+
+  it('every hardening statement names at least one law, and every law reference resolves to text in the file it names', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries } = parseHardening(migration);
+    const problems: string[] = [];
+    let resolved = 0;
+    for (const entry of entries) {
+      if (entry.laws.length === 0) {
+        problems.push(`no law is named for: ${entry.statement}`);
+        continue;
+      }
+      for (const law of entry.laws) {
+        const path = join(ROOT, law.file);
+        if (!existsSync(path)) {
+          problems.push(`${entry.statement} names ${law.file}, which does not exist`);
+          continue;
+        }
+        if (!normalizeEol(readFileSync(path, 'utf8')).includes(law.needle)) {
+          problems.push(`${entry.statement} names ${law.file} :: ${law.needle}, and that text is not in that file`);
+          continue;
+        }
+        resolved += 1;
+      }
+    }
+    expect(problems, `the law references of the hardening section do not hold:\n${problems.join('\n')}`).toEqual([]);
+    // Positive control for the same probe: it RESOLVED references, so the
+    // empty problem list above is a measurement and not an empty loop.
+    expect(resolved, 'no law reference was resolved at all, so the check above proves nothing').toBeGreaterThanOrEqual(entries.length);
+    // And the probe can fail: a needle that is not in the file it names is
+    // reported, measured here rather than asserted of the real references.
+    const guardFile = 'tests/security/phase3-s8-definer-law.test.ts';
+    expect(existsSync(join(ROOT, guardFile))).toBe(true);
+    expect(normalizeEol(readFileSync(join(ROOT, guardFile), 'utf8')).includes('c3: pick((x) => x.public_exec)')).toBe(true);
+    expect(normalizeEol(readFileSync(join(ROOT, guardFile), 'utf8')).includes('c9: pick((x) => x.no_such_clause)')).toBe(false);
+  });
+
+  it('the hardening section adds no relation, column, policy, trigger or routine', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const { entries } = parseHardening(migration);
+    const forbidden = /\b(CREATE\s+(TABLE|INDEX|POLICY|TRIGGER|FUNCTION|SEQUENCE|VIEW|SCHEMA)|DROP|INSERT|UPDATE|DELETE|TRUNCATE|ADD\s+COLUMN)\b/i;
+    const offending = entries.filter((e) => forbidden.test(e.statement)).map((e) => e.statement);
+    expect(offending, `the hardening section may only ALTER/REVOKE/GRANT: ${offending.join(', ')}`).toEqual([]);
+    // Positive control: the forbidden recogniser does fire on a real DDL statement.
+    expect(forbidden.test('CREATE TABLE public.x (id uuid);')).toBe(true);
+    for (const e of entries) expect(/^(ALTER|REVOKE|GRANT)\b/.test(e.statement), e.statement).toBe(true);
   });
 });

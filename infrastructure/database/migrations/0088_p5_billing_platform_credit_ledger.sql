@@ -1237,3 +1237,207 @@ CREATE POLICY sca_business_isolation ON public.subscription_charge_attempts AS R
 REVOKE ALL ON FUNCTION public.pca_maintain_remainder() FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.lock_grants_in_order(uuid, uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.assert_invoice_credit_agrees(uuid) FROM PUBLIC;
+-- ===== PARITY REGION END — everything below is the DECLARED HARDENING SECTION =====
+--
+-- ── WHY THIS SECTION EXISTS, AND WHY IT IS NOT A SECOND DDL ──────────────
+--
+-- The accepted DDL above was PROVED on a lane that applies it AS
+-- `daftar_platform`, with that lane's own roles. `npm run migrate` applies it
+-- as `daftar_migrator`, so three facts the lane never produced come out
+-- different here: a routine's OWNER is the applier, its `search_path` is the
+-- lane's `public, public, pg_temp` with no `pg_catalog` first, and
+-- PostgreSQL's default EXECUTE for PUBLIC is still in place on every routine
+-- this file creates without a REVOKE. That is exactly what the DR-100 card
+-- warned about in writing: the step's green on `postgres:16` may not be read
+-- as production configuration, because the encoding, the collation AND THE
+-- ROLES are all the lane's.
+--
+-- So the standing security laws of this estate are right and this file was
+-- short. Every statement below is an ALTER/REVOKE/GRANT on an object the
+-- parity region already created: NO relation, NO column, NO policy, NO
+-- trigger, NO routine body and NO money arithmetic is added, changed or
+-- removed by this section, and the parity region above is still byte-for-byte
+-- the accepted DDL under the two declared substitutions.
+--
+-- EVERY statement below names the LAW that requires it, as
+-- `-- LAW: <file> :: <literal text in that file>`, and
+-- `tests-unit/dr100-migration-0088-matches-accepted-ddl.test.ts` asserts that
+-- the statements of this section are EXACTLY the ones it enumerates, that each
+-- carries at least one law reference, and that each reference resolves to text
+-- that really is in that file. A statement nobody can name a law for fails
+-- that law by name; so does a statement removed from here.
+--
+-- ── OWNER DECISION E — NAMED, NOT TAKEN, and it is why this section stops
+--    where it does ─────────────────────────────────────────────────────────
+--
+-- `tests/integration/migration-portability.test.ts` classifies every routine
+-- a post-prefix migration creates into exactly two shapes: a SECURITY DEFINER
+-- guard owned by an internal principal with the pinned path, or a SECURITY
+-- INVOKER read function that is STABLE and owned by `daftar_migrator`. The
+-- five trigger functions below that are NOT deferred guards
+-- (`pca_append_only`, `pca_chronology`, `si_immutable`,
+-- `sca_no_attempt_while_unresolved`, `sca_append_only_except_reconciliation`)
+-- fit NEITHER: a trigger function is VOLATILE, so the invoker arm's STABLE is
+-- false of it, and the definer arm would change what they can READ.
+--
+-- THE DIRECTION OF THAT ERROR IS NAMED, and it is the unsafe one, which is
+-- why this file does not take it: `pca_chronology` reads
+-- `platform_credit_adjustments` and `sca_no_attempt_while_unresolved` reads
+-- `subscription_charge_attempts`, both under FORCE ROW LEVEL SECURITY. Their
+-- PERMISSIVE `*_tenant_membership` policy admits NO principal by name, so a
+-- DEFINER running as an internal owner would see ZERO rows and its invariant
+-- would stop refusing: chronology would admit an out-of-order ledger, and the
+-- unresolved-attempt guard would admit a second collection attempt. That is
+-- FAIL OPEN on money. The house device that makes the definer shape safe is
+-- the one `0081` uses — `CREATE POLICY accounting_validator ON <relation> FOR
+-- SELECT TO daftar_accounting_internal USING (true)` plus the reads of OWNER
+-- DECISION C — and a policy is neither an ALTER nor commanded by any law
+-- named here. SO IT IS NOT WRITTEN. REFERRED TO THE OWNER together with C,
+-- and until it is decided those five keep the applier's ownership and the
+-- caller's privileges, which is the shape they were proved in.
+--
+-- ── OWNER DECISION B, UPDATED BY THE LAWS ────────────────────────────────
+--
+-- B above said this file adds no `ALTER … OWNER TO` because choosing the owner
+-- of a money invariant is an authority decision. The laws below CHOOSE IT:
+-- `daftar_accounting_internal` is the only principal any of them admits, it is
+-- the principal the DDL's own RESTRICTIVE policies name
+-- (`CURRENT_USER = 'daftar_accounting_internal'`), and it is the one declared
+-- substitution 2 already carries. B's named direction is unchanged: with an
+-- owner the PERMISSIVE policy does not admit, `assert_invoice_credit_agrees`
+-- FAILS CLOSED at `si_invoice_unreadable`, which is a refusal and still a
+-- defect, and OWNER DECISION C — the grant set — is what closes it.
+-- =====================================================================
+
+-- ── (1) THE FOUR NEW RELATIONS ARE REVOKED FROM PUBLIC ──────────────────
+-- LAW: scripts/phase4-s4-gate.ts :: is never REVOKEd from PUBLIC
+REVOKE ALL ON TABLE public.platform_credit_adjustments FROM PUBLIC;
+-- LAW: scripts/phase4-s4-gate.ts :: is never REVOKEd from PUBLIC
+REVOKE ALL ON TABLE public.platform_credit_grant_remainders FROM PUBLIC;
+-- LAW: scripts/phase4-s4-gate.ts :: is never REVOKEd from PUBLIC
+REVOKE ALL ON TABLE public.subscription_invoices FROM PUBLIC;
+-- LAW: scripts/phase4-s4-gate.ts :: is never REVOKEd from PUBLIC
+REVOKE ALL ON TABLE public.subscription_charge_attempts FROM PUBLIC;
+
+-- ── (2) NO ROUTINE OF THIS FILE IS EXECUTABLE BY PUBLIC ─────────────────
+-- The parity region already revokes the three the lane revoked. These are the
+-- seven trigger functions it left on PostgreSQL's PUBLIC default. "A trigger
+-- function cannot be called except as a trigger" is not the law's question:
+-- clause 3 is about the PRIVILEGE, and clause 4 additionally requires a
+-- trigger function to carry a materialized ACL with no grantee at all.
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.pca_append_only() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.pca_chronology() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.si_immutable() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.si_credit_agrees() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.pca_credit_agrees() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.sca_no_attempt_while_unresolved() FROM PUBLIC;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c3: pick((x) => x.public_exec)
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c4: pick((x) => x.is_trigger && (x.acl_null || (x.exec_grantees ?? []).length > 0))
+-- LAW: tests/security/phase3-s8-grant-matrix.test.ts :: out.push(`UNREVIEWED ${g}`)
+REVOKE ALL ON FUNCTION public.sca_append_only_except_reconciliation() FROM PUBLIC;
+
+-- ── (3) THE TWO DEFERRED GUARDS BECOME SECURITY DEFINER ─────────────────
+-- `si_credit_agrees_trg` and `pca_credit_agrees_trg` are the only DEFERRABLE
+-- INITIALLY DEFERRED constraint triggers this file creates, and the sweep
+-- requires a deferred guard outside the accepted prefix to be a DEFINER of a
+-- NOLOGIN internal principal with the pinned path. Both function bodies do
+-- nothing but PERFORM `public.assert_invoice_credit_agrees(…)` and
+-- `RETURN NULL` — they read no relation of their own — so the elevation
+-- changes no read and no refusal.
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+ALTER FUNCTION public.si_credit_agrees() SECURITY DEFINER;
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+ALTER FUNCTION public.pca_credit_agrees() SECURITY DEFINER;
+
+-- ── (4) THE PINNED PATH, ON EVERY ROUTINE THIS FILE CREATES ─────────────
+-- `pg_catalog` FIRST and `pg_temp` LAST, and nothing else in the array. The
+-- lane's `public, public, pg_temp` names `pg_temp` last but never names
+-- `pg_catalog`, so a `public` object carrying a catalog name would win inside
+-- an elevated routine. The value is not chosen here: it is the one literal
+-- every one of these laws spells out.
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c1: pick((x) => x.definer && JSON.stringify(x.config) !== JSON.stringify([PINNED]))
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: every SECURITY DEFINER routine lists pg_catalog before public and pg_temp last
+-- LAW: tests/integration/migration-portability.test.ts :: pinned path
+ALTER FUNCTION public.pca_maintain_remainder() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c1: pick((x) => x.definer && JSON.stringify(x.config) !== JSON.stringify([PINNED]))
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: every SECURITY DEFINER routine lists pg_catalog before public and pg_temp last
+-- LAW: tests/integration/migration-portability.test.ts :: pinned path
+ALTER FUNCTION public.lock_grants_in_order(uuid, uuid, text) SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c1: pick((x) => x.definer && JSON.stringify(x.config) !== JSON.stringify([PINNED]))
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: every SECURITY DEFINER routine lists pg_catalog before public and pg_temp last
+-- LAW: tests/integration/migration-portability.test.ts :: pinned path
+ALTER FUNCTION public.assert_invoice_credit_agrees(uuid) SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+ALTER FUNCTION public.pca_append_only() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+ALTER FUNCTION public.pca_chronology() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+ALTER FUNCTION public.si_immutable() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+ALTER FUNCTION public.si_credit_agrees() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+ALTER FUNCTION public.pca_credit_agrees() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+ALTER FUNCTION public.sca_no_attempt_while_unresolved() SET search_path = pg_catalog, public, pg_temp;
+-- LAW: tests/security/search-path-shadowing.test.ts :: routines were left unhardened by owners other than daftar_platform
+ALTER FUNCTION public.sca_append_only_except_reconciliation() SET search_path = pg_catalog, public, pg_temp;
+
+-- ── (5) NO SECURITY DEFINER ROUTINE IS THE APPLIER'S ───────────────────
+-- The five SECURITY DEFINER routines go to `daftar_accounting_internal`:
+-- NOLOGIN, NOINHERIT, NOBYPASSRLS (`bootstrap.sql`), one of the four internal
+-- principals the clause-2 set names, and the principal the DDL's own
+-- RESTRICTIVE policies already admit by name. `GRANT CREATE ON SCHEMA public`
+-- brackets the hand-over because PostgreSQL requires the NEW owner to hold
+-- CREATE on the schema, and `bootstrap.sql` grants that principal USAGE only;
+-- the bracket is closed in this same file, exactly as `0070` and `0077` close
+-- theirs. The deployer can execute it at all because `bootstrap.sql` makes
+-- `daftar_migrator` a member of this role WITH INHERIT FALSE, SET TRUE.
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: is a SECURITY DEFINER routine owned by the applier
+-- LAW: tests/integration/migration-portability.test.ts :: a definer guard is owned by an internal principal
+ALTER FUNCTION public.pca_maintain_remainder() OWNER TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: is a SECURITY DEFINER routine owned by the applier
+-- LAW: tests/integration/migration-portability.test.ts :: a definer guard is owned by an internal principal
+ALTER FUNCTION public.lock_grants_in_order(uuid, uuid, text) OWNER TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+-- LAW: tests/security/p3c-td18-definer-ownership.test.ts :: is a SECURITY DEFINER routine owned by the applier
+-- LAW: tests/integration/migration-portability.test.ts :: a definer guard is owned by an internal principal
+ALTER FUNCTION public.assert_invoice_credit_agrees(uuid) OWNER TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+ALTER FUNCTION public.si_credit_agrees() OWNER TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-set-constraints-sweep.test.ts :: a deferred guard outside the accepted prefix must still be initially deferred
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+ALTER FUNCTION public.pca_credit_agrees() OWNER TO daftar_accounting_internal;
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c2: pick((x) => x.definer && (x.owner_login || !internal.has(x.owner)))
+-- LAW: tests/security/phase3-s8-definer-law.test.ts :: c7: pick((x) => x.definer && x.owner_deployer)
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
