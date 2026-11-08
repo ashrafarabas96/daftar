@@ -105,6 +105,27 @@ export type BillingErrorCode =
    */
   | 'billing.credit_grant_overdrawn'
   | 'billing.credit_application_ids_exhausted'
+  /**
+   * `DR-97` item 2 — the AUDITED ADMINISTRATIVE WRITE-OFF. Both are about the
+   * ORDER, never about paying anything out: the write-off cancels a stranded
+   * balance where it already lives, and no money leaves this slice.
+   *
+   * `unauthorized`: the issuer the caller verified is not one this command
+   * accepts. It is deliberately NARROWER than the live holders of
+   * `billing.manage` — `platform_owner` only — because refusing a legitimate
+   * order is recoverable (the owner issues it) and permitting a non-owner to
+   * cancel a customer's money is not. Whether that narrowing is the owner's
+   * final policy is an accounting question raised for them, not settled here.
+   *
+   * `no_balance`: the target currency holds no unspent credit. A business
+   * outcome and not a payload defect — the command is well-formed, and the
+   * answer is that there is nothing to cancel. It REFUSES rather than
+   * succeeding over nothing, because a command that is silent about having
+   * had no work hides the defect that sent it (the wrong currency, the wrong
+   * business, or a balance somebody already cancelled).
+   */
+  | 'billing.credit_write_off_unauthorized'
+  | 'billing.credit_write_off_no_balance'
   // Dunning — the retry/grace schedule.
   | 'billing.dunning_policy_invalid'
   | 'billing.dunning_attempt_out_of_order'

@@ -35,6 +35,7 @@ export * from './invoice';
 export * from './invoice-states';
 export * from './credit';
 export * from './credit-application';
+export * from './credit-write-off';
 export * from './plan-change';
 export * from './dunning';
 export * from './collection';

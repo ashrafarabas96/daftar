@@ -412,6 +412,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/coverage-truth.test.ts": 9,
     "test/credit-application-currency.test.ts": 7,
     "test/credit-application.test.ts": 18,
+    "test/credit-write-off.test.ts": 26,
     "test/credit.test.ts": 24,
     "test/currency-is-canonical.test.ts": 5,
     "test/db-refusals-name-their-defence.test.ts": 7,
@@ -445,7 +446,15 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
-EXPECTED_TOTAL_CASES = 343
+# 343 -> 369 at DR-97 item 2: the census gains
+# `test/credit-write-off.test.ts` (26), the audited administrative write-off of
+# a stranded credit balance. An ADDITION only -- no row was removed and no
+# count was lowered -- and the per-file figure is the number that file's own
+# run printed, not a projection. The card's fifth criterion (the five audit
+# fields on a real row in CI) stays OPEN: `pca_consumption_invoice` in
+# migration 0088 requires every `consumption` to name an invoice and a
+# write-off has none, which is the owner's ruling to make.
+EXPECTED_TOTAL_CASES = 369
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
