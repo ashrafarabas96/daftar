@@ -5974,6 +5974,21 @@ BEGIN
   -- contemplates, after the two bodies have been compared on the same data —
   -- runs AFTER this claim and is not judged by it. What it forbids is THIS file
   -- disturbing the live law, which is the one thing this file promises.
+  --
+  -- THE ONE COUPLING IT DOES CREATE, DECLARED RATHER THAN DISCOVERED (raised by
+  -- the independent review of this change). `0084` is ABOVE
+  -- `frozenThrough = 0079`, so the manifest does not hold its bytes: a lane that
+  -- EDITS `0084`'s aging body in place — rather than appending a new migration —
+  -- changes the digest this claim requires, and `0089` would then REFUSE TO
+  -- APPLY in every environment, including a build from zero. That is a real
+  -- consequence and it is not hidden here: it is the price of pinning state
+  -- instead of text, it is recorded for the owner in
+  -- `.local-context/OWNER_QUEUE_AR.md`, and it needs the P4-S4 lane's
+  -- acknowledgement before this migration is promoted. The alternative — no
+  -- claim at all — leaves the live money reader protected by a text guard that
+  -- the review defeated FIVE times, the fifth with an identifier the file never
+  -- spells. Between a declared coupling and a defeated guard, this file takes
+  -- the coupling.
   SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8')), 'hex')
     INTO v_sha
     FROM pg_catalog.pg_proc p

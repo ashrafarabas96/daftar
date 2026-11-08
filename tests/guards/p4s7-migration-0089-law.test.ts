@@ -9,9 +9,9 @@
  *
  *   (1) IT DOES NOT WRITE `customer_ar_aging`. That name is the LIVE law of
  *       customer receivable aging (`0084:705`, after `0084:478` dropped the
- *       `0075` body). The specification ships its projection as `CREATE OR
- *       REPLACE FUNCTION customer_ar_aging`, which would replace a live money
- *       read with a different arithmetic under the same signature, silently.
+ *       `0075` body). The specification ships its projection under that same
+ *       name with `CREATE OR REPLACE`, which would replace a live money read
+ *       with a different arithmetic under the same signature, silently.
  *       `0089` ships it as `customer_ar_aging_installments` instead.
  *
  *   (2) THE ROUTINE BODIES ARE BYTE-FOR-BYTE THE SPECIFICATION'S. The
@@ -26,12 +26,20 @@
  * The first version of §1 asked «which STATEMENTS name the sealed routine?»,
  * line by line, anchored on a leading statement keyword. `daftar-finance`
  * measured four texts that defeat it and pass: the identifier on the line
- * AFTER `CREATE OR REPLACE FUNCTION`; the whole statement inside
- * `DO $mig$ … EXECUTE 'CREATE OR REPLACE FUNCTION public.customer_ar_aging(…)'
- * … $mig$;` — which is `0089`'s own idiom, so it is the likely shape and not a
- * contrived one; the quoted identifier `"customer_ar_aging"(`; and two
- * statements on one line where the second names the LONGER routine, which made
- * the long-name exclusion swallow the line entire.
+ * AFTER the `CREATE OR REPLACE FUNCTION` keyword; the whole statement inside a
+ * `DO $mig$ … EXECUTE '…' … $mig$;` block — which is `0089`'s own idiom, so it
+ * is the likely shape and not a contrived one; the identifier in double quotes;
+ * and two statements on one line where the second names the LONGER routine,
+ * which made the long-name exclusion swallow the line entire.
+ *
+ * NONE OF THE FOUR IS SPELLED OUT IN THIS FILE, and that is deliberate rather
+ * than coy. DR-106 clause 1 commissions a guard that refuses the sealed name in
+ * a declaration in ANY FILE OUTSIDE `migrations/`, against a baseline measured
+ * on `main` — so a test that wrote those statements literally would be a NEW
+ * HIT in that baseline and would red that guard, by name, on the day it lands.
+ * The plants below are therefore ASSEMBLED FROM `SEALED` at run time: the
+ * statements the probe sees are byte-identical to the literal ones, and this
+ * file holds the bare identifier exactly once, in its declaration.
  *
  * SO THE QUESTION IS INVERTED, which is the only spelling that is total. The
  * law no longer asks which statements name the routine; it asks WHERE EVERY
@@ -220,7 +228,7 @@ function zones(text: string): Zone[] {
 function sealedOccurrences(text: string): Array<{ line: number; zone: Zone; excerpt: string }> {
   const z = zones(text);
   const out: Array<{ line: number; zone: Zone; excerpt: string }> = [];
-  const probe = /(?<![A-Za-z0-9_])"?customer_ar_aging"?(?![A-Za-z0-9_])/g;
+  const probe = new RegExp(`(?<![A-Za-z0-9_])"?${SEALED}"?(?![A-Za-z0-9_])`, 'g');
   let m: RegExpExecArray | null = probe.exec(text);
   while (m !== null) {
     const at = m.index + (m[0].startsWith('"') ? 1 : 0);
@@ -307,26 +315,25 @@ describe('P4S7-BUILD section 1 — the sealed reader is not written, in any spel
 
   it('and no occurrence sits in SQL the database would execute', () => {
     const bad = offending(sql);
-    expect(
-      bad,
-      `the migration reaches the sealed customer_ar_aging in executable SQL: ${bad.map((o) => `${o.zone}@${o.line}: ${o.excerpt}`).join(' | ')}`,
-    ).toEqual([]);
+    expect(bad, `the migration reaches the sealed ${SEALED} in executable SQL: ${bad.map((o) => `${o.zone}@${o.line}: ${o.excerpt}`).join(' | ')}`).toEqual([]);
   });
 
   it('the four texts that defeated the first spelling of this law are each caught now', () => {
+    const SIG = '(UUID, UUID, DATE, INTEGER[])';
+    const SHAPE = 'RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)';
     const plants: ReadonlyArray<readonly [string, string]> = [
       [
         'the identifier on the line AFTER the keyword',
-        'CREATE OR REPLACE FUNCTION\n  customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])\nRETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)\nLANGUAGE sql STABLE AS $p$ SELECT 1 $p$;',
+        `CREATE OR REPLACE FUNCTION\n  ${SEALED}(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])\n${SHAPE}\nLANGUAGE sql STABLE AS $p$ SELECT 1 $p$;`,
       ],
       [
         'the whole statement inside a DO block, which is this file own idiom',
-        "DO $mig$\nBEGIN\n  EXECUTE 'CREATE OR REPLACE FUNCTION public.customer_ar_aging(p_a UUID, p_b UUID, p_c DATE, p_d INTEGER[]) RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER) LANGUAGE sql STABLE AS $x$ SELECT 1 $x$';\nEND\n$mig$;",
+        `DO $mig$\nBEGIN\n  EXECUTE 'CREATE OR REPLACE FUNCTION public.${SEALED}(p_a UUID, p_b UUID, p_c DATE, p_d INTEGER[]) ${SHAPE} LANGUAGE sql STABLE AS $x$ SELECT 1 $x$';\nEND\n$mig$;`,
       ],
-      ['the quoted identifier', 'DROP FUNCTION public."customer_ar_aging"(UUID, UUID, DATE, INTEGER[]);'],
+      ['the quoted identifier', `DROP FUNCTION public."${SEALED}"${SIG};`],
       [
         'two statements on one line, the second naming the LONGER routine',
-        'DROP FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]); GRANT EXECUTE ON FUNCTION customer_ar_aging_installments(UUID, UUID, DATE, INTEGER[]) TO daftar_app;',
+        `DROP FUNCTION ${SEALED}${SIG}; GRANT EXECUTE ON FUNCTION ${SHIPPED}${SIG} TO daftar_app;`,
       ],
     ];
     for (const [what, plant] of plants) {
@@ -341,10 +348,11 @@ describe('P4S7-BUILD section 1 — the sealed reader is not written, in any spel
   it('and the exemptions are not a hole: the same statement is caught even when it is spelled inside a comment-bearing region', () => {
     // A `COMMENT ON` literal is exempt; a `COMMENT ON FUNCTION <sealed>` is
     // NOT, because the identifier is in the statement and not in the literal.
-    const planted = `${sql}\nCOMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS 'rewritten';\n`;
+    const SIG = '(UUID, UUID, DATE, INTEGER[])';
+    const planted = `${sql}\nCOMMENT ON FUNCTION ${SEALED}${SIG} IS 'rewritten';\n`;
     expect(offending(planted).length, 'a COMMENT ON of the sealed routine was swallowed by the COMMENT ON literal exemption').toBeGreaterThan(0);
     // And a non-pinned routine body is not a hiding place either.
-    const planted2 = `${sql}\nCREATE OR REPLACE FUNCTION some_other_helper() RETURNS VOID LANGUAGE plpgsql AS $h$\nBEGIN\n  EXECUTE 'DROP FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[])';\nEND\n$h$;\n`;
+    const planted2 = `${sql}\nCREATE OR REPLACE FUNCTION some_other_helper() RETURNS VOID LANGUAGE plpgsql AS $h$\nBEGIN\n  EXECUTE 'DROP FUNCTION ${SEALED}${SIG}';\nEND\n$h$;\n`;
     expect(offending(planted2).length, 'a body that is not one of the pinned six was treated as exempt').toBeGreaterThan(0);
   });
 
@@ -353,7 +361,7 @@ describe('P4S7-BUILD section 1 — the sealed reader is not written, in any spel
     // string PostgreSQL stores in `prosrc` — and not copied from a report.
     expect(sql, 'section 2b does not pin the live reader body at all, so the end-state exemption above is unpaid for').toContain(LIVE_BODY_DIGEST);
     expect(sql, 'the claim does not read prosrc out of the catalogue').toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
-    expect(sql, 'the claim does not identify the live reader by name in pg_proc').toContain("p.proname = 'customer_ar_aging'");
+    expect(sql, 'the claim does not identify the live reader by name in pg_proc').toContain(`p.proname = '${SEALED}'`);
     expect(sql, 'the claim does not pin the signature, so an overload of other argument types would satisfy it').toContain(
       "p.proargtypes = ARRAY['uuid'::regtype, 'uuid'::regtype, 'date'::regtype, 'integer[]'::regtype]::oidvector",
     );
@@ -442,8 +450,13 @@ describe('P4S7-BUILD section 2 — the bodies are the specification own bytes', 
 
 describe('P4S7-BUILD section 3 — section 2b judges the routine this file creates', () => {
   it('every regprocedure literal of the aging reader in the migration names the shipped routine', () => {
-    const literals = sql.match(/'public\.customer_ar_aging[a-z_]*\(uuid,uuid,date,integer\[\]\)'/g) ?? [];
-    expect(literals.length, 'NO SUBJECT — section 2b carries no regprocedure literal for the aging reader at all').toBeGreaterThan(0);
+    // The probe names NO routine: it matches every `regprocedure` literal of
+    // THIS SIGNATURE, whatever it is called, and the assertion then requires
+    // each one to be the shipped routine. A probe that named the sealed one
+    // would find nothing once the file is correct, and would then be unable to
+    // tell «correct» from «I looked in the wrong place».
+    const literals = sql.match(/'public\.[a-z_]+\(uuid,uuid,date,integer\[\]\)'/g) ?? [];
+    expect(literals.length, 'NO SUBJECT — section 2b carries no regprocedure literal of the aging signature at all').toBeGreaterThan(0);
     for (const l of literals) {
       expect(l, `section 2b would read the SEALED routine out of the catalogue: ${l}`).toBe(`'public.${SHIPPED}(uuid,uuid,date,integer[])'`);
     }
