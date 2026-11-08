@@ -1,0 +1,131 @@
+/**
+ * Phase 8 — notification vocabulary (PREPARED / NOT PROMOTED).
+ *
+ * This package is PURE: no database, no network, no clock, no environment.
+ * Everything that touches the outside world is a port (provider, hydrator,
+ * money formatter, clock) supplied by the caller. That is what lets Phase 8 be
+ * engineered, tested and challenged before its predecessor phases seal.
+ *
+ * ONE TRUTH (master directive Part 11): notifications NEVER compute money,
+ * receivables, stock or settlement. A notification is a READ of canonical
+ * truth, rendered for a human. Every figure it shows arrives through the
+ * hydrator port as an already-authoritative value; this package only formats.
+ */
+
+/** Delivery channels Phase 8 engineers. `inapp` is terminal-local (no provider). */
+export type Channel = 'whatsapp' | 'sms' | 'email' | 'inapp';
+
+export const CHANNELS: readonly Channel[] = ['whatsapp', 'sms', 'email', 'inapp'];
+
+/** The platform's three product locales (mirrors @daftar/domain-core's Locale). */
+export type Locale = 'ar' | 'en' | 'tr';
+
+export const LOCALES: readonly Locale[] = ['ar', 'en', 'tr'];
+
+/**
+ * Consent class. The distinction is a policy fact, not a cosmetic label:
+ *  - `transactional`: a direct consequence of something the recipient did or
+ *    owes (an invoice, a receipt, an overdue instalment). Delivered unless the
+ *    recipient hard-blocked the channel.
+ *  - `operational`: internal merchant-staff signals (daily report, low stock).
+ *    Requires the staff member to keep the channel enabled; never marketing.
+ *  - `marketing`: requires EXPLICIT opt-in per channel. Silence is a refusal.
+ */
+export type ConsentClass = 'transactional' | 'operational' | 'marketing';
+
+/**
+ * Who a notification is addressed to.
+ *
+ * TL-P8-R1 / §39: the reference is a TYPED union, not a polymorphic
+ * (kind, id) pair that the type system lets you get wrong. A customer
+ * recipient has a customer id and no user id; a staff recipient the reverse.
+ * "Exactly one of these two is set" is then a fact about the type rather than
+ * a convention a caller may break, and the relational shape mirrors it with
+ * two nullable columns, a XOR check and composite ownership keys.
+ *
+ * `businessId` is part of the recipient, not context around it: a recipient
+ * that does not name its business cannot be proven to belong to this tenant.
+ * Note WHERE it sits: on `Recipient` below, and NOT on the bare `RecipientRef`,
+ * which is only the id pair. Anything deriving a tenant-scoped value from a ref
+ * must therefore be given the business as its own argument — `obligationKey`
+ * does — because the ref cannot supply it. This comment used to sit above
+ * `RecipientRef` and read as though it could.
+ */
+export type RecipientRef = { readonly kind: 'customer'; readonly customerId: string } | { readonly kind: 'user'; readonly userId: string };
+
+export interface Recipient {
+  readonly businessId: string;
+  readonly ref: RecipientRef;
+  readonly locale: Locale;
+  /** E.164, digits only with a leading '+'. Validated at the provider edge. */
+  readonly phoneE164?: string;
+  readonly email?: string;
+}
+
+/** The id inside a recipient reference, for keys and log lines. */
+export function recipientId(ref: RecipientRef): string {
+  return ref.kind === 'customer' ? ref.customerId : ref.userId;
+}
+
+/**
+ * A money value as it travels into a template: ALWAYS integer minor units as a
+ * decimal string plus its ISO 4217 code. There is no `number` amount anywhere
+ * in this package — a float amount cannot even be expressed.
+ */
+export interface MoneyRef {
+  readonly minor: string;
+  readonly currency: string;
+}
+
+/**
+ * The currencies the contract names (Mission §23's currency matrix). A money
+ * value arriving with anything else is REFUSED rather than formatted: a figure
+ * shown in a currency the platform does not operate in is a figure the
+ * recipient will misread, and the mockups' SAR is named in the directive as
+ * exactly the value that must not leak through.
+ *
+ * This is a contract fact, not an invented business policy: the set is the
+ * directive's own list. Phase 8 does not add to it and does not pick a default
+ * — a money value always carries its own currency.
+ */
+export const CONTRACT_CURRENCIES: readonly string[] = ['ILS', 'JOD', 'LBP', 'SYP', 'TRY', 'USD', 'EUR'];
+
+/** Integer minor units as a decimal string, optionally negative. No floats, ever. */
+export const MINOR_UNITS = /^-?(0|[1-9]\d*)$/;
+
+/** Template variable values. Deliberately narrow: no objects, no arrays, no any. */
+export type TemplateValue =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'money'; readonly money: MoneyRef }
+  | { readonly kind: 'date'; readonly iso: string }
+  | { readonly kind: 'int'; readonly value: number };
+
+export type TemplateVars = Readonly<Record<string, TemplateValue>>;
+
+/** Formats a canonical money value for display. Supplied by the adapter layer. */
+export interface MoneyFormatter {
+  format(money: MoneyRef, locale: Locale): string;
+}
+
+/** Formats an ISO date (yyyy-mm-dd) for display. Supplied by the adapter layer. */
+export interface DateFormatter {
+  format(iso: string, locale: Locale): string;
+}
+
+/** A rendered, channel-ready message. */
+export interface RenderedMessage {
+  readonly channel: Channel;
+  readonly locale: Locale;
+  /** Email subject / WhatsApp template name; empty for sms and inapp. */
+  readonly subject: string;
+  readonly body: string;
+  /**
+   * For template-only channels (WhatsApp outside the service window) the
+   * provider needs the template identity and its ordered parameters, not prose.
+   */
+  readonly providerTemplate?: {
+    readonly name: string;
+    readonly locale: Locale;
+    readonly parameters: readonly string[];
+  };
+}
