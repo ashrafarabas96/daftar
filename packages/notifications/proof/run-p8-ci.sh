@@ -87,6 +87,44 @@ echo "P8_CI_CLUSTER: pgdata=$PGDATA socketdir=$D port=$P superuser=p8super"
   "SELECT 'P8_CI_SERVER: ' || version() || ' lc_collate=' || (SELECT datcollate FROM pg_database WHERE datname='postgres') || ' lc_messages=' || current_setting('lc_messages')" \
   || fail "the cluster answered pg_isready and not a query as p8super"
 
+# ── The anchor for the frozen boundary ────────────────────────────────
+# The gate requires `P8_GIT_ANCHOR_DIR`: a repository OUTSIDE the tree under
+# test that contains the anchor commit, is not shallow, and DESCENDS from it.
+# Unset, the gate says "the frozen boundary has no witness outside the tree
+# under test; refusing to report a pass" and reds — so this wrapper was
+# INCOMPLETE until it set it, and nothing said so until the gate was first
+# run end to end and refused for exactly that reason.
+#
+# The repository's own git directory is that witness: the tree under test is
+# a COPY the gate makes, and every plant happens in the copy, never here. An
+# operator who has a separate checkout can still pass their own; this is a
+# default, not an override.
+#
+# It fails CLOSED and names which of the two it is: a worktree's `.git` is a
+# FILE pointing at the common directory, so the path is resolved with git
+# itself rather than assumed to be a directory. `--git-common-dir` is what a
+# worktree needs; in a plain clone it is the same `.git`.
+if [ -z "${P8_GIT_ANCHOR_DIR:-}" ]; then
+  ANCHOR=$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)     || fail "P8_GIT_ANCHOR_DIR is not set and $REPO is not a git repository, so the frozen boundary would have no witness outside the tree under test — the gate refuses to report a pass without one, and so does this wrapper rather than letting it red for a reason an operator cannot act on."
+  [ -n "$ANCHOR" ] && [ -e "$ANCHOR" ]     || fail "P8_GIT_ANCHOR_DIR is not set and git in $REPO reported no usable common git directory (it said '$ANCHOR'); an empty answer is not a path."
+  export P8_GIT_ANCHOR_DIR="$ANCHOR"
+  echo "P8_CI_ANCHOR: P8_GIT_ANCHOR_DIR defaulted to $P8_GIT_ANCHOR_DIR (the repository's own git directory; the tree under test is a copy)"
+else
+  echo "P8_CI_ANCHOR: P8_GIT_ANCHOR_DIR given by the operator: $P8_GIT_ANCHOR_DIR"
+fi
+# And the gate's three conditions are READ here, not assumed, so a checkout
+# that cannot serve as the anchor says which condition it fails before forty
+# minutes of cases run. `fetch-depth: 0` on the backend job's checkout is what
+# makes a CI run satisfy them; a depth-1 clone holds no such commit.
+ANCHOR_PIN=$(python3 -I "$HERE/p8-frozen-integrity.py" --print-pin 2>/dev/null)
+case "$ANCHOR_PIN" in
+  ????????????????????????????????????????) ;;
+  *) fail "the check did not report a forty-character anchor pin (got '$ANCHOR_PIN'), so neither it nor this wrapper has anything to require of the anchor." ;;
+esac
+git --git-dir="$P8_GIT_ANCHOR_DIR" rev-parse --verify "${ANCHOR_PIN}^{commit}" >/dev/null 2>&1   || fail "the anchor repository $P8_GIT_ANCHOR_DIR does not contain the anchor commit $ANCHOR_PIN; fetch the full history (fetch-depth 0) or pass P8_GIT_ANCHOR_DIR for a checkout that holds it."
+git --git-dir="$P8_GIT_ANCHOR_DIR" merge-base --is-ancestor "$ANCHOR_PIN" HEAD 2>/dev/null   || fail "the anchor repository $P8_GIT_ANCHOR_DIR holds $ANCHOR_PIN but HEAD does not DESCEND from it, so it is a repository that happens to hold the object and the gate would refuse it as ANCHOR LINEAGE."
+echo "P8_CI_ANCHOR_PIN: $ANCHOR_PIN present, and HEAD descends from it"
+
 # ── The gate ──────────────────────────────────────────────────────────
 # Its exit code is read from the command itself and not from the end of a
 # pipe. Its own log is the evidence the floors below are read from.
