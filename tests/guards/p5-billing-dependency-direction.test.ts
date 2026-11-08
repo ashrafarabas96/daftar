@@ -100,10 +100,7 @@ describe('DR-95 boundary 1 — the probe is awake before it is believed', () => 
 describe('DR-95 boundary 1 — nothing outside the package imports @daftar/billing', () => {
   it('no tracked file outside packages/billing carries the edge', () => {
     const offenders = importersOf('@daftar/billing');
-    expect(
-      offenders,
-      `these files import @daftar/billing, which reverses the dependency direction DR-95 fixed: ${offenders.join(', ')}`,
-    ).toEqual([]);
+    expect(offenders, `these files import @daftar/billing, which reverses the dependency direction DR-95 fixed: ${offenders.join(', ')}`).toEqual([]);
   });
 
   /**
