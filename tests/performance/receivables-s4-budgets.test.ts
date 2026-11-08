@@ -288,6 +288,38 @@ const IN_DB_DELAY_MS = Number(process.env['P4_S4_IN_DB_DELAY_MS'] ?? '0') || 0;
 const CLIENT_DELAY_MS = Number(process.env['P4_S4_CLIENT_DELAY_MS'] ?? '0') || 0;
 
 /**
+ * ── THE PROOF KNOB. DIAGNOSTIC BRANCH ONLY, NEVER MERGED ──────────────────
+ *
+ * OWNER, 2026-11-08: «prove the cause first — no remedy before a proof.»
+ *
+ * THE HYPOTHESIS UNDER TEST. The in-database instrument reads
+ * `pg_stat_statements` immediately before and immediately after the
+ * TRANSACTION span, and that span is NESTED INSIDE the HTTP window — which
+ * `P4-F over HTTP` is judged on, against a 100 ms ceiling, on the WALL CLOCK.
+ * So the instrument this card added to convert two budgets may be inflating
+ * the one budget the card deliberately left unconverted. The suspicion is not
+ * invented: when `pg_stat_statements.max` was raised to 50 000 on `8f3219b1`
+ * the instrument's own measured cost reached 386 ms per arm and this budget
+ * reached p95 444.677 ms, and that run is in this card's §5.
+ *
+ * WHAT THE KNOB DOES WHEN SET: the allocation path does not read the
+ * instrument at all. The two reads vanish from inside the HTTP window, and
+ * nothing else changes — same iterations, same ceiling, same percentile, same
+ * seeding, same pacing, same route.
+ *
+ * ITS DEFAULT IS THE EXISTING BEHAVIOUR. Unset — which is every other step of
+ * every job — it is `false` and this file behaves exactly as it does on
+ * `62be1d25`. That is what makes the two steps of the experiment differ in the
+ * instrument ALONE.
+ *
+ * AND IT CANNOT BE USED TO MANUFACTURE A PASS. With the instrument off, the
+ * converted budgets have no series to be judged on, so `assertInDatabaseWithin`
+ * REFUSES by name instead of reading a verdict from zeros — see the guard at
+ * the top of that function. A disabled instrument is a refusal, never a green.
+ */
+const NO_INDB_INSTRUMENT = (process.env['P4_S4_NO_INDB_INSTRUMENT'] ?? '') === '1';
+
+/**
  * CONTROL KNOB 3 — the same real `pg_sleep` INSIDE the database, planted in
  * the FIVE-INVOICE ARM ALONE: the NUMERATOR of `P4-AL-72`'s allocation
  * scaling ratio, and nothing else.
@@ -521,6 +553,18 @@ function assertWithin(m: Measured, thresholdMs: number, budgetId: string, tag: s
  * assertion held, so a run that executed nothing cannot satisfy a control.
  */
 function assertInDatabaseWithin(m: Measured, thresholdMs: number, budgetId: string, tag: string): Distribution {
+  // DIAGNOSTIC BRANCH GUARD. `P4_S4_NO_INDB_INSTRUMENT` exists to take the
+  // instrument OUT of the HTTP window for one measurement, and a converted
+  // budget judged while it is set would be reading a verdict out of zeros —
+  // the exact silent pass this file refuses everywhere else. So it refuses by
+  // name. The experiment's two steps pin themselves to the `P4-F over HTTP`
+  // case with `-t`, so this guard is never reached by them; it is here so that
+  // the knob cannot be misused by anything else.
+  if (NO_INDB_INSTRUMENT)
+    throw new Error(
+      `P4-S4-INSTRUMENT-DISABLED ${m.name}: P4_S4_NO_INDB_INSTRUMENT is set, so there is no in-database series and this budget has NO VERDICT. ` +
+        `A disabled instrument is a REFUSAL, never a pass.`,
+    );
   const inDb = must(m.inDatabaseMs, `${m.name}: the in-database series is absent, so this budget has no verdict to read (DR-98)`);
   expect(
     inDb.length,
@@ -976,7 +1020,11 @@ async function allocate(arm: string, shape: number, currency: 'base' | 'foreign'
   // instrument. The cost is measured — `instrumentMs` below — and printed per
   // arm, so how much of the HTTP figure is the instrument is a number a reader
   // has rather than a reassurance. Nothing is subtracted from a judged figure.
-  const clock = inDatabase;
+  // The ONE line the experiment turns off: with the knob set the allocation
+  // path holds no clock, so `readClock` returns null, no `pg_stat_statements`
+  // read happens inside the HTTP window, and `instrumentMs` stays at zero —
+  // which is itself the printed proof that it was absent.
+  const clock = NO_INDB_INSTRUMENT ? null : inDatabase;
   const readClock = async (): Promise<InDatabaseReading | null> => {
     if (clock === null) return null;
     const at = process.hrtime.bigint();
@@ -1946,6 +1994,31 @@ describe('P4-F — the customer payment allocation', () => {
         return [
           tg,
           () => {
+            // ── THE PROOF LINE (owner 2026-11-08). PRINTED, JUDGING NOTHING ──
+            //
+            // Printed BEFORE the verdict so a missed ceiling cannot take it off
+            // the log, and printed on EVERY run including the ordinary one, so
+            // the two steps of the experiment are read from the same line in
+            // the same format.
+            //
+            // `instrument=` is printed from the knob itself, so ABSENCE is a
+            // statement the tree makes rather than something a reader infers
+            // from missing output. `instrumentP50`/`instrumentP95` are the
+            // INDEPENDENT measurement of the cost: `readClock` times the two
+            // `pg_stat_statements` reads with `hrtime` and accumulates them per
+            // iteration, so this figure is not derived from the difference
+            // between the two steps — which is precisely what lets the
+            // difference be CHECKED against it. `dp` is two characters by this
+            // file's own naming convention.
+            const dp = distribution(s.httpMs, BUDGET.F_ALLOCATION_HTTP_P95);
+            console.log(
+              `P4-S4-FHTTP-PROOF-${tg} instrument=${NO_INDB_INSTRUMENT ? 'absent' : 'present'} ` +
+                `n=${dp.iterations} min=${dp.min.toFixed(3)} p50=${dp.p50.toFixed(3)} p95=${dp.p95.toFixed(3)} ` +
+                `p99=${dp.p99.toFixed(3)} max=${dp.max.toFixed(3)} ` +
+                `above${BUDGET.F_ALLOCATION_HTTP_P95}=${dp.countAboveThreshold} ceilingMs=${BUDGET.F_ALLOCATION_HTTP_P95} ` +
+                `instrumentP50=${quantile(s.instrumentMs, 0.5).toFixed(3)} instrumentP95=${quantile(s.instrumentMs, 0.95).toFixed(3)} ` +
+                `instrumentReadsPerIteration=${NO_INDB_INSTRUMENT ? 0 : 2}`,
+            );
             assertWithin(
               { name: `P4-F over HTTP, ${s.shape} invoices, ${s.currency} currency`, budgetMs: BUDGET.F_ALLOCATION_HTTP_P95, samplesMs: s.httpMs },
               BUDGET.F_ALLOCATION_HTTP_P95,

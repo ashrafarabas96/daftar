@@ -796,6 +796,113 @@ jobs:
       # the P4-S3 defect. The budgets suite runs through its own npm script,
       # the same command the slice is measured with locally, so CI and the
       # local round are not approximations of one another.
+      # ── THE EXPERIMENT (owner 2026-11-08, «prove the cause first»). ─────────
+      # DIAGNOSTIC BRANCH ONLY. THIS BRANCH IS NEVER MERGED.
+      #
+      # THE QUESTION. `P4-F over HTTP` is the one budget DR-98 deliberately left
+      # on the WALL CLOCK, ceiling 100 ms. Its figure has risen along this
+      # lane's heads and now misses: p95 117.220 with p50 77.278 and 17 of 200
+      # samples above the ceiling. The in-database instrument this card added
+      # reads `pg_stat_statements` immediately before and after the TRANSACTION
+      # span, and that span is NESTED INSIDE the HTTP window — so the instrument
+      # may be the cause.
+      #
+      # WHY TWO STEPS IN ONE JOB AND NOT TWO RUNS. Two runs differ by runner,
+      # by image warmth and by scheduling, and this lane has already measured a
+      # budget passing at night and failing by day on one fingerprint
+      # (RULE-10) and a baseline that had to be measured before a failure could
+      # be attributed (RULE-16). Here the runner, the image, the PostgreSQL
+      # service, the dataset, the checkout and the fingerprint are IDENTICAL
+      # and exactly one thing differs: whether the two reads happen inside the
+      # window. The sample count, the ceiling, the percentile estimator, the
+      # seeding and the pacing are untouched in both.
+      #
+      # WHY BEFORE THE MEASURED STEP. The measured step is EXPECTED to fail on
+      # this very arm, and a step after it would be `skipped` — which is how the
+      # two earlier controls ended up NOT_RUN twice.
+      #
+      # NEITHER STEP JUDGES, AND NEITHER CARRIES `continue-on-error` OR AN `if:`.
+      # Each runs the suite, tolerates the suite's own verdict on its own
+      # invocation line, and is then gated on EVIDENCE: the proof line must be
+      # present, must say which state the instrument was in, and the output must
+      # be non-empty. A missing proof line fails the step, because an experiment
+      # that printed nothing measured nothing (RULE-18, RULE-29).
+      #
+      # `-t 'within P4-F over HTTP'` is a literal with no regex metacharacter
+      # and, MEASURED on this tree, it matches exactly ONE `it` title in the
+      # whole test tree. The fixture still seeds and still measures both arms.
+      - name: PROOF A — P4-F over HTTP measured WITH the in-database instrument inside the window
+        run: |
+          set -e
+          log="$RUNNER_TEMP/proof-a-with-instrument.log"
+          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'within P4-F over HTTP' >"$log" 2>&1 || true
+          test -s "$log" || { echo "PROOF A produced no log at all, so nothing in it can be read as a measurement"; exit 1; }
+          grep -h 'P4-S4-FHTTP-PROOF-' "$log" >"$RUNNER_TEMP/proof-a.txt" || true
+          test -s "$RUNNER_TEMP/proof-a.txt" || { tail -160 "$log"; echo "PROOF A printed no P4-S4-FHTTP-PROOF line, so the arm never reached its measurement"; exit 1; }
+          cat "$RUNNER_TEMP/proof-a.txt"
+          # POSITIVE CONTROL: the instrument really was PRESENT in this run, said
+          # by the tree and not inferred, and its own measured cost is non-zero.
+          grep -q 'P4-S4-FHTTP-PROOF-FHTTP-FOREIGN-5 instrument=present' "$RUNNER_TEMP/proof-a.txt" || {
+            cat "$RUNNER_TEMP/proof-a.txt"
+            echo "PROOF A did not run with the instrument present, so it is not the baseline it claims to be"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+      - name: PROOF B — the same arm with the instrument taken OUT of the window, and the difference
+        run: |
+          set -e
+          log="$RUNNER_TEMP/proof-b-without-instrument.log"
+          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'within P4-F over HTTP' >"$log" 2>&1 || true
+          test -s "$log" || { echo "PROOF B produced no log at all, so nothing in it can be read as a measurement"; exit 1; }
+          grep -h 'P4-S4-FHTTP-PROOF-' "$log" >"$RUNNER_TEMP/proof-b.txt" || true
+          test -s "$RUNNER_TEMP/proof-b.txt" || { tail -160 "$log"; echo "PROOF B printed no P4-S4-FHTTP-PROOF line, so the arm never reached its measurement"; exit 1; }
+          cat "$RUNNER_TEMP/proof-b.txt"
+          # POSITIVE CONTROL FOR THE ABSENCE: the tree SAYS the instrument was
+          # absent. This is not read off missing output.
+          grep -q 'P4-S4-FHTTP-PROOF-FHTTP-FOREIGN-5 instrument=absent' "$RUNNER_TEMP/proof-b.txt" || {
+            cat "$RUNNER_TEMP/proof-b.txt"
+            echo "PROOF B did not run with the instrument absent, so the two steps did not differ in the one thing this experiment varies"; exit 1
+          }
+          test -s "$RUNNER_TEMP/proof-a.txt" || { echo "PROOF A's figures are missing, so there is nothing to difference against"; exit 1; }
+          # THE ANSWER, COMPUTED AND PRINTED, JUDGING NOTHING. Two independent
+          # numbers are compared: the median SHIFT between the two steps, and the
+          # instrument's OWN measured cost from step A. The hypothesis predicts
+          # they agree.
+          node -e '
+            const fs = require("fs");
+            const read = (p) => fs.readFileSync(p, "utf8").split("\n").filter((l) => l.includes("P4-S4-FHTTP-PROOF-"));
+            const a = read(process.argv[1]), b = read(process.argv[2]);
+            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
+            const of = (ls, tag) => ls.find((l) => l.includes("P4-S4-FHTTP-PROOF-" + tag + " "));
+            let bad = 0;
+            for (const tag of ["FHTTP-BASE-5", "FHTTP-FOREIGN-5"]) {
+              const la = of(a, tag), lb = of(b, tag);
+              if (la === undefined || lb === undefined) { console.log("MISSING a proof line for " + tag); bad += 1; continue; }
+              const keys = ["n", "min", "p50", "p95", "p99", "max"];
+              const A = {}, B = {};
+              for (const k of keys) { A[k] = num(la, k); B[k] = num(lb, k); }
+              const ceiling = num(la, "ceilingMs");
+              const aboveA = num(la, "above" + ceiling), aboveB = num(lb, "above" + ceiling);
+              const cost = num(la, "instrumentP50"), costB = num(lb, "instrumentP50");
+              const shift = A.p50 - B.p50;
+              console.log("");
+              console.log("=== " + tag + " ===");
+              console.log("WITH    instrument: n=" + A.n + " min=" + A.min + " p50=" + A.p50 + " p95=" + A.p95 + " p99=" + A.p99 + " max=" + A.max + " above" + ceiling + "=" + aboveA);
+              console.log("WITHOUT instrument: n=" + B.n + " min=" + B.min + " p50=" + B.p50 + " p95=" + B.p95 + " p99=" + B.p99 + " max=" + B.max + " above" + ceiling + "=" + aboveB);
+              console.log("median shift p50(with) - p50(without) = " + shift.toFixed(3) + " ms");
+              console.log("instrument cost measured DIRECTLY in step A (p50 of the two pg_stat_statements reads) = " + cost.toFixed(3) + " ms");
+              console.log("the same figure in step B, which must be 0 = " + costB.toFixed(3) + " ms");
+              console.log("agreement |shift - cost| = " + Math.abs(shift - cost).toFixed(3) + " ms");
+              if (A.n !== B.n) { console.log("SAMPLE COUNTS DIFFER (" + A.n + " vs " + B.n + ") — the two steps are not comparable"); bad += 1; }
+              if (costB !== 0) { console.log("step B reported a non-zero instrument cost, so the instrument was not actually out of the window"); bad += 1; }
+            }
+            console.log("");
+            console.log("This step JUDGES NOTHING. The owner reads the two numbers above: a median shift that matches the directly measured instrument cost proves the instrument is the cause; a shift much smaller than it denies the hypothesis and the cause is elsewhere.");
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$RUNNER_TEMP/proof-a.txt" "$RUNNER_TEMP/proof-b.txt"
+        env:
+          PG_PORT: '5432'
+          P4_S4_NO_INDB_INSTRUMENT: '1'
       - name: Receivables read budgets — P4-D and P4-F, measured
         run: npm run perf:phase4:s4
         env:
