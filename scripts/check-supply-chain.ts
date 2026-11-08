@@ -102,7 +102,18 @@ const REVIEWED_INSTALL_SCRIPTS: Record<string, string> = {
  * pure: no transport, no configuration, no connection. A runtime dependency
  * is how that erodes, one convenience at a time.
  */
-const PURE_WORKSPACES = ['packages/accounting', 'packages/domain-core', 'packages/inventory', 'packages/shared-contracts'];
+const PURE_WORKSPACES = [
+  'packages/accounting',
+  'packages/domain-core',
+  'packages/inventory',
+  'packages/shared-contracts',
+  // `@daftar/billing` computes credit, proration and invoice totals, so §16
+  // holds of it for the same reason it holds of `@daftar/accounting`. Its
+  // only runtime dependency is `@daftar/domain-core`, and `pg` is a
+  // devDependency of the database proof — measured before this line was
+  // written, and a planted third-party runtime dependency reds here by name.
+  'packages/billing',
+];
 
 let failures = 0;
 const fail = (check: string, detail: string): void => {
