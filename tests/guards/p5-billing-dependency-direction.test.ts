@@ -29,20 +29,28 @@
  *     the documentation of the rule it enforces.
  */
 import { describe, expect, it } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deliveredFiles } from '../helpers/delivered-files';
 
 const REPO = join(__dirname, '..', '..');
 
-/** Tracked TypeScript files, from git rather than a directory walk, so an
- *  untracked scratch copy can never make this law look dirty or clean. */
+/**
+ * The files the tree claims to consist of, through the repository's own
+ * helper: `git ls-files --cached --others --exclude-standard` in a checkout,
+ * and `DELIVERY_MANIFEST.json` in an extracted release candidate, which has
+ * no git by design (the archive-portability law in
+ * `tests/security/archive-portability.test.ts` refuses a test that calls
+ * `git` with no manifest branch, and it refused this file's first version).
+ *
+ * It is the delivered set rather than a directory walk, so an ignored build
+ * output cannot make this law look dirty, and an untracked file that carries
+ * the edge still reds it.
+ */
+const DELIVERED = deliveredFiles(REPO);
+
 function trackedTsFiles(): string[] {
-  const out = execFileSync('git', ['-C', REPO, 'ls-files', '-z', '*.ts', '*.tsx'], {
-    encoding: 'utf8',
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  return out.split('\0').filter((p) => p.length > 0);
+  return DELIVERED.filter((p) => p.endsWith('.ts') || p.endsWith('.tsx'));
 }
 
 /** Module specifiers of `import`/`export … from`, `require()` and dynamic
@@ -115,12 +123,9 @@ describe('DR-95 boundary 1 — nothing outside the package imports @daftar/billi
    * the manifests, separately from the specifiers above.
    */
   it('no workspace outside the billing lane declares it as a dependency', () => {
-    const manifests = execFileSync('git', ['-C', REPO, 'ls-files', '-z', '*/package.json', 'package.json'], {
-      encoding: 'utf8',
-      maxBuffer: 16 * 1024 * 1024,
-    })
-      .split('\0')
-      .filter((p) => p.length > 0 && !p.startsWith('packages/billing/') && !p.includes('node_modules/'));
+    const manifests = DELIVERED.filter(
+      (p) => (p === 'package.json' || p.endsWith('/package.json')) && !p.startsWith('packages/billing/') && !p.includes('node_modules/'),
+    );
     expect(manifests.length, 'no manifest was read, so this case would pass on nothing').toBeGreaterThan(3);
 
     const declaring: string[] = [];
