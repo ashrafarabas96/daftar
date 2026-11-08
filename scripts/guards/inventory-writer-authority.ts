@@ -92,8 +92,22 @@
  *   a second write statement appears — `COPY` and `MERGE` included, quoted and
  *   qualified table names included — or if `EXECUTE` or a subquery inside a
  *   `SET` value appears at all, those being writes and values no text probe
- *   can bound. Sixteen plants from three rounds of money review are kept there
- *   as negative controls, each required to fail. And note the granularity of THIS law when reading them: it is
+ *   can bound. Every text three rounds of money review and an independent
+ *   review planted is kept there as a control. THE COUNT IS STATED WITH ITS
+ *   IDENTITY AND NOT AS A REASSURING NUMBER (RULE-30) — an earlier version of
+ *   this sentence said «sixteen», which was an estimate and belonged to no
+ *   countable set, in a comment whose whole job is to certify a law. Counted
+ *   at their locations, TWENTY-FOUR texts are planted:
+ *     TWENTY MUST BE CAUGHT — six in the exempt body (a second column in one
+ *     `SET`, `SET (a, b) = (…)`, a statement not starting its line, `MERGE`, a
+ *     second write to the same table, `EXECUTE`); seven spellings of a second
+ *     definition; one bare second definition in another migration; three
+ *     spellings the body probe cannot see; one unclassified statement kind
+ *     (`DROP FUNCTION`); one other routine writing `invoices`; and the exempt
+ *     body renamed out of the exception.
+ *     FOUR MUST NOT BE — a call, a trigger binding of another routine, and
+ *     prose in a line comment twice over, because a law that refuses ordinary
+ *     text is a law nobody keeps. And note the granularity of THIS law when reading them: it is
  *   the TABLE, not the column, so an exception here is an exception on a table
  *   that carries money, and the column-level narrowing lives in the
  *   column-scoped GRANT (`0089`) and in those laws — not in rule 22.

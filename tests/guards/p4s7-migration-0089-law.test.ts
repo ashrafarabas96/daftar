@@ -650,6 +650,15 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
     const occurrence = new RegExp(String.raw`(?<![a-z0-9_])"?${name}"?\s*\(`, 'gi');
     for (const [file, text] of Object.entries(source)) {
       for (const m of text.matchAll(occurrence)) {
+        // A MENTION INSIDE A `--` COMMENT IS NOT A MENTION. The independent
+        // review measured both halves of this: `-- the FUNCTION <name>() …`
+        // was classified `unknown` and would have RED-ed the law on legitimate
+        // prose, and `-- see CREATE OR REPLACE FUNCTION <name>() above` was
+        // counted as a definition. A commented-out statement cannot execute,
+        // so skipping it is not a hole — and it is why `/* */` was already
+        // dropped from the window below.
+        const lineStart = text.lastIndexOf('\n', m.index) + 1;
+        if (text.slice(lineStart, m.index).includes('--')) continue;
         const before = text.slice(Math.max(0, m.index - 240), m.index).replace(/\/\*[\s\S]*?\*\//g, ' ');
         // Strip, in order: trailing space, an opening quote, a schema
         // qualifier (quoted or not, with space around the dot), more space.
@@ -706,6 +715,20 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
       [...new Set(mentions.map((o) => o.kind))].sort(),
       'the set of statement kinds naming this routine changed, which is a change in how it is reached',
     ).toEqual(['alter', 'binding', 'comment', 'create', 'grant', 'revoke']);
+
+    // NEGATIVE CONTROL for the `unknown` law, which the independent review
+    // found asserting silence with no plant behind it. Both directions are
+    // measured: a statement kind this law does not classify MUST surface, and
+    // ordinary prose MUST NOT — the second being a false red the review
+    // reached with a `--` comment before the window learned to skip them.
+    expect(
+      functionMentionsOf(EXEMPT, { '0099_planted.sql': `DROP FUNCTION ${EXEMPT}();` }).map((o) => o.kind),
+      'an unclassified statement kind did not surface, so the `unknown` law asserts a silence it cannot hear',
+    ).toEqual(['unknown']);
+    expect(
+      functionMentionsOf(EXEMPT, { '0099_planted.sql': `-- the routine ${EXEMPT}() and CREATE OR REPLACE FUNCTION ${EXEMPT}() are discussed here` }),
+      'prose in a line comment was counted, which would red this law on legitimate text',
+    ).toEqual([]);
   });
 
   it('POSITIVE CONTROL — the mention law sees all seven spellings a money review produced', () => {
@@ -767,7 +790,7 @@ describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was 
     ).toBe(false);
   });
 
-  it('NEGATIVE CONTROLS — the six plants a money review used, each required to fail', () => {
+  it('NEGATIVE CONTROLS — the six body plants a money review used, each required to fail', () => {
     const body = routineBody(sql, EXEMPT) as string;
     const plants: ReadonlyArray<readonly [string, string, 'writes' | 'columns' | 'execute']> = [
       [
