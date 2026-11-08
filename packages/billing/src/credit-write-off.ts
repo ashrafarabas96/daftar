@@ -88,6 +88,23 @@
  * `billing_admin` SHOULD hold this is the owner's call, not this file's, and
  * it is raised rather than decided.
  *
+ * AND THAT DIRECTION WAS ONCE TAKEN IN THE TYPE ALONE, which an independent
+ * security review falsified BY EXECUTION. The role set was declared
+ * `readonly string[]` — a compile-time shape — while the array it named was
+ * not frozen at run time and `src/index.ts` exports it from the whole
+ * package. The probe pushed `'billing_admin'` onto it and then cancelled a
+ * customer's balance with that role: `PUSH=SUCCEEDED`, then
+ * `WROTE OFF sum=1500 after=0`. The paragraph above was therefore a claim and
+ * not a guard, and the suite could not see it: the case that stood there
+ * asserted the set's INITIAL VALUE, never the impossibility of change.
+ *
+ * The set is now frozen at run time, and the control on that is ON THE
+ * JUDGMENT rather than on the shape: `test/credit-write-off.test.ts` attempts
+ * a `push`, a `length = 0` and an element assignment, and asserts after each
+ * that a `billing_admin` is still refused by the named code and the owner is
+ * still accepted. `Object.isFrozen` is reported there beside that fact and
+ * nothing is rested on it.
+ *
  * And the check here is a GATE ON A STATED AUTHORITY, not a grant of one: a
  * pure function cannot look up a role. The caller must have verified the role
  * against the live map and must pass what it verified; this module refuses
@@ -109,16 +126,44 @@ export const CREDIT_WRITE_OFF_CAPABILITY = 'billing.manage';
  * The platform roles this command accepts — a STRICT SUBSET of the live
  * holders of the capability above. See the header on why the subset, and in
  * which direction it errs.
+ *
+ * FROZEN AT RUN TIME, not merely typed `readonly`. `readonly` is erased
+ * before anything runs, and this symbol is exported from the whole package,
+ * so an un-frozen array here is an authority anyone holding the module can
+ * widen — which a review did, and then cancelled a balance with the role it
+ * had just added. Widening the set is a money decision and belongs to the
+ * owner; it is not something a caller can do by assignment.
  */
-export const CREDIT_WRITE_OFF_AUTHORIZED_ROLES: readonly string[] = ['platform_owner'];
+export const CREDIT_WRITE_OFF_AUTHORIZED_ROLES: readonly string[] = Object.freeze(['platform_owner']);
 
 /**
  * The longest reason the ledger will hold. It is the ledger column's own
  * bound (`pca_reason_present CHECK (length(reason) BETWEEN 1 AND 500)`),
  * restated so a reason that the database would reject is refused HERE, by the
  * named code, rather than at an INSERT the caller has already committed to.
+ *
+ * THAT SENTENCE IS ONLY TRUE BECAUSE OF `storableReason` BELOW. It was false
+ * when written: the guard measured the TRIMMED length while the row and the
+ * audit record carried the input untrimmed, so 500 characters followed by one
+ * space passed here and stored 501 — past the very constraint this constant
+ * restates — and a reason padded on both sides stored 504. The bound is not
+ * raised to cover that; what is stored is made to be what was measured.
  */
 const REASON_MAX_LENGTH = 500;
+
+/**
+ * The reason AS THE LEDGER WILL HOLD IT — the one string that both the guard
+ * above and the column's own CHECK measure. Trimming is the safe direction
+ * here and the direction is signed: it can only SHORTEN what is stored, so it
+ * can never carry a value past the column's bound, and the one thing it
+ * discards is leading and trailing whitespace, which is not part of anybody's
+ * stated reason. The alternative — refusing a padded reason outright — would
+ * reject legitimate orders over invisible characters, and that is the
+ * unrecoverable direction for the person who has to re-issue the order.
+ */
+function storableReason(reason: string): string {
+  return reason.trim();
+}
 
 /**
  * Who issued the order, as the CALLER VERIFIED THEM. Not a claim this module
@@ -175,6 +220,20 @@ export interface PlatformCreditWriteOffAudit {
    * total.
    */
   readonly targetGrantIds: readonly string[];
+  /**
+   * WHEN the order was issued, ISO-8601, exactly as supplied. Not one of the
+   * five, and ADDED: without it the date of the order has to be inferred from
+   * the rows it produced, and an audit record that must be reconstructed from
+   * what it audits is not an audit record. Never a machine clock.
+   */
+  readonly occurredAt: string;
+  /**
+   * WHICH ORDER produced it — the administrative order's own identifier, as
+   * supplied. Added for the same reason as the field above, and it is also
+   * the only handle by which two write-offs of one order can be recognised as
+   * one order at all.
+   */
+  readonly ref: string;
 }
 
 export interface PlatformCreditWriteOff {
@@ -223,9 +282,15 @@ export function writeOffPlatformCreditBalance(command: PlatformCreditWriteOffCom
   // `billing.credit_reason_required` already exists and already means exactly
   // this, so it is reused. A second code with the same meaning would make the
   // vocabulary say there are two rules where there is one.
-  if (typeof command.reason !== 'string' || command.reason.trim().length === 0 || command.reason.trim().length > REASON_MAX_LENGTH) {
+  //
+  // The bound is measured on the string that will BE STORED, and that same
+  // string is then the one written to every row and to the audit record. Two
+  // different strings here — one measured, one stored — is how this guard
+  // came to pass a reason the column rejects.
+  if (typeof command.reason !== 'string' || storableReason(command.reason).length === 0 || storableReason(command.reason).length > REASON_MAX_LENGTH) {
     refuse('billing.credit_reason_required', 'a credit write-off must state why the balance is being cancelled');
   }
+  const reason = storableReason(command.reason);
 
   // ── The rest of the payload ──────────────────────────────────────────
   const scope = command.scope;
@@ -311,7 +376,8 @@ export function writeOffPlatformCreditBalance(command: PlatformCreditWriteOffCom
       currency: before.currency,
       occurredAt: command.occurredAt,
       ref: command.ref,
-      reason: command.reason,
+      // The measured string, not the input one. See `storableReason`.
+      reason,
       appliesToGrantId: grant.grantId,
     });
     targetGrantIds.push(grant.grantId);
@@ -355,11 +421,14 @@ export function writeOffPlatformCreditBalance(command: PlatformCreditWriteOffCom
     rows,
     audit: {
       issuedByUserId: issuer.userId,
-      reason: command.reason,
+      // The same string the rows carry, and the same one the guard measured.
+      reason,
       amountMinor: rowSum,
       currency: before.currency,
       targetBusinessId: before.businessId,
       targetGrantIds,
+      occurredAt: command.occurredAt,
+      ref: command.ref,
     },
     balanceBeforeMinor: before.balanceMinor,
     balanceAfterMinor: after.balanceMinor,

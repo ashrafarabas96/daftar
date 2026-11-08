@@ -412,7 +412,18 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/coverage-truth.test.ts": 9,
     "test/credit-application-currency.test.ts": 7,
     "test/credit-application.test.ts": 18,
-    "test/credit-write-off.test.ts": 26,
+    # 26 -> 38 when two independent reviews' blockers were closed on the
+    # administrative write-off: twelve cases ADDED, none removed and no count
+    # lowered. One RUNS the attempt to widen the frozen authorized-role set and
+    # asserts the JUDGMENT after it (the probe had pushed `billing_admin` and
+    # cancelled a balance with it); two measure the reason AS STORED against
+    # the ledger column's own 500, with spaces on the boundary; one pins the
+    # audit record's own instant and reference; one pins the replay contract as
+    # it stands; and seven close the coverage a reviewer named -- the money cap
+    # at 10^18 and past it, colliding identities, a non-bigint amount, another
+    # business's row, a lower-case currency, and an instant ON the ledger's
+    # last.
+    "test/credit-write-off.test.ts": 38,
     "test/credit.test.ts": 24,
     "test/currency-is-canonical.test.ts": 5,
     "test/db-refusals-name-their-defence.test.ts": 7,
@@ -467,7 +478,13 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # fields on a real row in CI) stays OPEN: `pca_consumption_invoice` in
 # migration 0088 requires every `consumption` to name an invoice and a
 # write-off has none, which is the owner's ruling to make.
-EXPECTED_TOTAL_CASES = 370
+# 370 -> 382 when the two review blockers were closed on the administrative
+# write-off: the twelve cases named at that file's own row above. An ADDITION
+# only, and the figure is the one the package's own run printed on Windows
+# (`382`, of which the 24 host-condition failures in
+# `test/tool-commands-are-isolated.test.ts` and `test/repo-format-gate.test.ts`
+# are the SAME 24 as before the change), not a sum computed from the dict.
+EXPECTED_TOTAL_CASES = 382
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
