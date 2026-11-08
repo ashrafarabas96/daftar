@@ -234,4 +234,62 @@ else
 fi
 rm -f "$RESULTS"
 echo "DB_PROOF_RC=$rc"
+
+# ------------------------------------------------------------------
+# DR-100 / the role leak measured in run 42482801134 (step 37).
+#
+# `credit-ledger-bootstrap.sql` above CREATEs this lane's four
+# principals, and ROLES ARE CLUSTER-WIDE: a separate DATABASE does not
+# contain them. On the existing-server lane that cluster is the one the
+# whole `backend` job shares, so three of them (`p5owner`, `p5_app`,
+# `p5_stranger`; `p5_invariants` is NOLOGIN) stayed behind and reded the
+# SEALED roster assertions in a later step:
+#
+#   tests/integration/phase3-s8-rebuild-rehearsal.test.ts:470  (T-09)
+#   tests/security/phase3-s8-grant-matrix.test.ts              (T-04)
+#   and the third case of that roster, 7 expected against 10 read
+#
+# THOSE ASSERTIONS ARE RIGHT AND ARE NOT TOUCHED: a sealed control that
+# names the cluster's login roles is exactly the control that should red
+# when a lane leaves principals behind. The fix is this lane's cleanup.
+#
+# Scoped to the existing-server lane deliberately: the other lane runs
+# `initdb` on a throw-away cluster that is discarded whole, so a drop
+# there could only invent a red of its own.
+#
+# It runs whatever the proof's verdict was — a red lane that leaves
+# principals behind reds the next step for a reason that is not the next
+# step's — and the lane's own exit code is still the proof's.
+if [ "$P5_EXISTING_SERVER" = "1" ]; then
+  BEFORE=$(psql -tA "$ADMIN_URL" -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('p5owner','p5_app','p5_stranger','p5_invariants')" | tr -d '[:space:]')
+  echo "P5_ROLE_TEARDOWN_BEFORE: $BEFORE of the lane's 4 roles are in the shared cluster — the positive control, so the zero below is a measurement and not an empty probe (RULE-18)"
+  TDLOG="${TMPDIR:-/tmp}/p5-teardown-$$.log"
+  psql -v ON_ERROR_STOP=1 "$P5_DB_BOOTSTRAP_URL" > "$TDLOG" 2>&1 <<TEARDOWN
+DROP SCHEMA IF EXISTS p5scratch CASCADE;
+DROP SCHEMA IF EXISTS p5naive CASCADE;
+-- What was granted TO these roles in this database goes with DROP OWNED,
+-- which is why it comes before the roles themselves.
+DROP OWNED BY p5owner, p5_app, p5_invariants, p5_stranger CASCADE;
+REVOKE ALL ON DATABASE $P5_DB_NAME FROM p5owner, p5_app, p5_invariants, p5_stranger;
+DROP ROLE IF EXISTS p5_app;
+DROP ROLE IF EXISTS p5_stranger;
+DROP ROLE IF EXISTS p5_invariants;
+DROP ROLE IF EXISTS p5owner;
+TEARDOWN
+  td=$?
+  LEFT=$(psql -tA "$ADMIN_URL" -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('p5owner','p5_app','p5_stranger','p5_invariants')" | tr -d '[:space:]')
+  echo "P5_ROLE_TEARDOWN_AFTER: $LEFT (psql rc=$td)"
+  if [ -z "$BEFORE" ] || [ -z "$LEFT" ]; then
+    echo "P5_ROLE_TEARDOWN UNMEASURED: the cluster answered nothing to the role count, and an empty probe is not a zero (RULE-18)."
+    exit 1
+  fi
+  if [ "$td" != "0" ] || [ "$LEFT" != "0" ]; then
+    echo "P5_ROLE_TEARDOWN FAILED: this lane's principals are still in the shared cluster, so the sealed roster assertions in the steps after this one would red for this lane's reason. Refusing to report the proof's own verdict as this step's."
+    tail -5 "$TDLOG"
+    rm -f "$TDLOG"
+    exit 1
+  fi
+  rm -f "$TDLOG"
+fi
+
 exit $rc
