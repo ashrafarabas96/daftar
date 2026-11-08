@@ -88,10 +88,10 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 429,
+    "hits": 445,
     "planGates": 119,
-    "assertions": 31,
-    "files": 54
+    "assertions": 33,
+    "files": 55
   },
   "byPhase": {
     "cross-phase": {
@@ -106,8 +106,8 @@
     },
     "phase-4": {
       "planGates": 63,
-      "assertions": 14,
-      "mentions": 128
+      "assertions": 16,
+      "mentions": 142
     },
     "phase-3": {
       "planGates": 6,
@@ -240,6 +240,12 @@
       "planGates": 0,
       "assertions": 0,
       "mentions": 1,
+      "phase": "phase-4"
+    },
+    "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql": {
+      "planGates": 0,
+      "assertions": 2,
+      "mentions": 14,
       "phase": "phase-4"
     },
     "infrastructure/database/specifications/p4s7-installment-aging.spec.sql": {
@@ -1089,6 +1095,134 @@
       "signals": ["explain", "explain-analyze"],
       "kind": "mention",
       "text": "-- Decomposed with EXPLAIN (ANALYZE, BUFFERS, VERBOSE) on PostgreSQL 16.13 as"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 1497,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "-- missed the row; on a `Seq Scan` the probe found the row the statement had"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 1762,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "-- PRESUPPOSE. `EXPLAIN (COSTS OFF)` of the previous text -- `WHERE"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 1764,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "-- `Index Only Scan using installment_plans_one_active_per_invoice_uq`,"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 1784,
+      "phase": "phase-4",
+      "signals": ["bitmap-plan"],
+      "kind": "mention",
+      "text": "-- source of such an implication. MEASURED: `Bitmap Heap Scan on"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 2247,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "-- ordered item 1, F-2). The previous text's plan was `Index Only Scan"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 2699,
+      "phase": "phase-4",
+      "signals": ["explain", "index-only-scan"],
+      "kind": "assertion",
+      "text": "'P4-S7 (TL-P4-COORD-R38 direction (d); TL-P4-COORD-R43 F1-c and F1-c-prime). The ONLY writer of invoices.has_active_installment_plan. An ordinary AFTER ROW trigger on installment_plans — not deferred, so the column is right as soon as the statement completes and the deferred verifier has something t"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 3588,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "-- a property of one arm's plan shape."
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 4158,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "'P4-S7 (TL-P4-COORD-R38 direction (d); challenger C1.a, third round). The three refusals customer_ar_aging owes once the no-plan arm is keyed on invoices.has_active_installment_plan instead of on a NOT EXISTS through the caller''s row security. It is NOT a visibility guard and the difference is stru"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 4339,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "-- `RETURNS TABLE` SQL routine is not inlined, so no `EXPLAIN` of a"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 4436,
+      "phase": "phase-4",
+      "signals": ["plan-shape-word"],
+      "kind": "mention",
+      "text": "-- than a property of one arm's plan shape. The assertion is TOLD the three"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 4846,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "assertion",
+      "text": "'EXPLAIN (COSTS OFF) SELECT pg_catalog.count(*) FILTER (WHERE p.status = ''active'')'"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 5375,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "--     the unenforcing index and a `Seq Scan` refused nothing. Since"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 5582,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "--     planned as `Index Only Scan using"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 5679,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "v_plan := v_plan || v_line.\"QUERY PLAN\" || E'\\n';"
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 5683,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: part 9c could not read the plan of the index-independent active-plan count at all -- EXPLAIN raised % (%). The reading that decides whether a guard measuring a partial index is itself answered BY a partial index therefore did not happen, and "
+    },
+    {
+      "file": "infrastructure/database/migrations/0089_phase4_s7_installment_plans_and_aging.sql",
+      "line": 5688,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'"
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
