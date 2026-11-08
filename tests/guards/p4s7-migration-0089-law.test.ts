@@ -497,3 +497,283 @@ describe('P4S7-BUILD section 4 — the authority this file does NOT take', () =>
     expect(MIGRATION > (manifest.frozenThrough as string), 'the migration this lane adds is not above the frozen set').toBe(true);
   });
 });
+
+/**
+ * P4S7-BUILD section 5 — THE PRICE OF THE RULE-22 EXCEPTION, PAID HERE.
+ *
+ * Owner decision DR-111 (2026-11-08) adds `installment_plan_fact_sync` to
+ * `WRITER_AUTHORITY_EXCEPTIONS`. The owner's condition was that the exception
+ * be the NARROWEST POSSIBLE — one routine, one column, one statement — and
+ * that negative controls prove the law still refuses everything else.
+ *
+ * WHY THE NARROWNESS CANNOT LIVE IN THE GUARD. `WRITER_AUTHORITY_EXCEPTIONS`
+ * is a list of NAMES, and `inventory-writer-authority.ts` skips an exempt
+ * routine by name BEFORE every other check. So the guard cannot express «one
+ * column», «one statement» or «one file», and the narrowness is enforced here
+ * instead.
+ *
+ * ── WHAT A MONEY REVIEW MEASURED AGAINST THE FIRST VERSION OF THIS SECTION ──
+ *
+ * `daftar-finance` refused it with three findings, each reproduced from a
+ * PLANT rather than argued, and each is closed below:
+ *
+ *   1. THE FILE DIMENSION WAS MISSING, and it was the blocker. The exception is
+ *      keyed on the NAME, and these laws read only `0089`. A SECOND definition
+ *      of the same name in another migration — writing `supplier_credit_notes`,
+ *      `stock_movements` and `invoices.total_txn_minor`, with an impure
+ *      `DECLARE` initialiser and `EXCEPTION WHEN OTHERS` — produced
+ *      `violations = 0`, while the same body under any other name produced
+ *      three. So the grant covered a routine, and the law covered a file.
+ *   2. A CONTROL PASSED ON WRONG WORK. `SET has_active_installment_plan = v,
+ *      total_txn_minor = 0` was read as one column, because the probe captured
+ *      only the FIRST assignment after `SET`. The statement counter was
+ *      anchored at `^\s*` too, so a write not starting its line, a `MERGE` and
+ *      an `EXECUTE` all escaped it.
+ *   3. TWO CLAIMS IN THE DOCUMENTATION WERE FALSE: that these laws catch a
+ *      second column (they did not, per 2), and that a trigger body «cannot
+ *      satisfy rule 22 at all» (a body opening with `PERFORM
+ *      inventory_assertion_current(...)` would satisfy it syntactically — the
+ *      true reason is that no signed command and no installment op code exist).
+ *
+ * The probe is therefore stated once, over the WHOLE write clause and over
+ * EVERY definition in EVERY migration, and `EXECUTE` is refused outright in
+ * the exempt routine because a dynamic statement is a write no text probe can
+ * bound.
+ */
+describe('P4S7-BUILD section 5 — the rule-22 exception is as narrow as it was granted', () => {
+  const MIGRATIONS_DIR = join(ROOT, 'infrastructure', 'database', 'migrations');
+  const EXEMPT = 'installment_plan_fact_sync';
+  // `COPY` is in the vocabulary of the law this mirrors
+  // (`inventory-writer-authority.ts:179`) and was missing here, and a table name
+  // may be QUOTED or qualified by ANY schema, not only `public`. A probe whose
+  // vocabulary is narrower than the law's reports green on a write the law
+  // itself would refuse — measured by a money review on both spellings.
+  const WRITE_VERB =
+    /\b(UPDATE|INSERT\s+INTO|DELETE\s+FROM|TRUNCATE|MERGE\s+INTO|COPY)\s+(?:ONLY\s+)?(?:"?[a-z_][a-z0-9_]*"?\s*\.\s*)?"?([a-z_][a-z0-9_]*)"?/gi;
+
+  /** A body with its `--` comments removed: a comment that mentions a write is not one. */
+  const code = (body: string): string =>
+    body
+      .split('\n')
+      .filter((l) => !l.trim().startsWith('--'))
+      .join('\n');
+
+  /** Every write statement in `body`, as [verb, table]. NOT line-anchored. */
+  const writesOf = (body: string): Array<[string, string]> =>
+    [...code(body).matchAll(WRITE_VERB)].map((m) => [(m[1] ?? '').toUpperCase().replace(/\s+/g, ' '), (m[2] ?? '').toLowerCase().replace(/^public\./, '')]);
+
+  /**
+   * Every column assigned by every `SET` clause — THE WHOLE CLAUSE, to the
+   * first `WHERE`, `FROM`, `RETURNING` or `;`, and the `SET (a, b) = (...)`
+   * spelling as well. Capturing only the first assignment is how a second
+   * money column rode in beside the one the decision covers.
+   */
+  const setClauses = (body: string): string[] => [...code(body).matchAll(/\bSET\s+([\s\S]*?)(?=\bWHERE\b|\bFROM\b|\bRETURNING\b|;)/gi)].map((m) => m[1] ?? '');
+
+  const columnsSetBy = (body: string): string[] => {
+    const out: string[] = [];
+    for (const clause of setClauses(body)) {
+      for (const g of clause.matchAll(/\(([^)]*)\)\s*=/g)) for (const n of (g[1] ?? '').split(',')) out.push(n.trim().toLowerCase());
+      for (const a of clause.matchAll(/(?:^|,)\s*([a-z_][a-z0-9_]*)\s*=/gi)) out.push((a[1] ?? '').toLowerCase());
+    }
+    return [...new Set(out.filter((c) => c !== ''))];
+  };
+
+  /**
+   * Every definition of `name` across EVERY migration, with the file it is in.
+   *
+   * `files` is injectable so the negative control can RUN THIS FUNCTION on a
+   * planted set rather than hand-build the array it expects — a control that
+   * composes its own answer tests nothing, which a money review measured
+   * against the first version of it.
+   *
+   * THE SPELLING IT RECOGNISES IS THE BARE NAME ONLY, deliberately: the
+   * schema-qualified form `FUNCTION public.<name>(` is REFUSED outright by the
+   * law below rather than chased here. Chasing it would leave every other
+   * qualification (`"public".`, another schema, whitespace around the dot) to
+   * be found one at a time, and the guard this mirrors normalises to the bare
+   * name — so the two would keep disagreeing about what "the same routine" is.
+   */
+  const definitionsAcrossMigrations = (name: string, files?: Readonly<Record<string, string>>): Array<{ file: string; body: string }> => {
+    const out: Array<{ file: string; body: string }> = [];
+    const source = files ?? Object.fromEntries(migrationNames().map((f) => [f, readFileSync(join(MIGRATIONS_DIR, f), 'utf8')]));
+    for (const [f, text] of Object.entries(source)) {
+      let from = 0;
+      for (;;) {
+        const at = text.indexOf(`FUNCTION ${name}(`, from);
+        if (at === -1) break;
+        from = at + 1;
+        const body = routineBody(text.slice(Math.max(0, text.lastIndexOf('CREATE', at))), name);
+        if (body !== null) out.push({ file: f, body });
+      }
+    }
+    return out;
+  };
+
+  /** Every migration carrying a SCHEMA-QUALIFIED definition of `name`. */
+  const qualifiedDefinitionsOf = (name: string, files?: Readonly<Record<string, string>>): string[] => {
+    const probe = new RegExp(String.raw`\bFUNCTION\s+"?[a-z_][a-z0-9_]*"?\s*\.\s*"?${name}"?\s*\(`, 'i');
+    const source = files ?? Object.fromEntries(migrationNames().map((f) => [f, readFileSync(join(MIGRATIONS_DIR, f), 'utf8')]));
+    return Object.entries(source)
+      .filter(([, text]) => probe.test(text))
+      .map(([f]) => f);
+  };
+
+  it('THE FILE DIMENSION: the exempt name is defined in exactly ONE migration, and writes only invoices across all of them', () => {
+    const defs = definitionsAcrossMigrations(EXEMPT);
+    expect(defs.length, `NO SUBJECT — ${EXEMPT} has no definition in any migration`).toBeGreaterThan(0);
+    expect(
+      [...new Set(defs.map((d) => d.file))],
+      `the exempt name is defined in more than one migration, and the exception is keyed on the NAME: ${defs.map((d) => d.file).join(', ')}`,
+    ).toEqual([MIGRATION]);
+    expect(defs.length, `the exempt name has ${defs.length} definitions, and DR-111 grants one`).toBe(1);
+    const tables = [...new Set(defs.flatMap((d) => writesOf(d.body)).map(([, t]) => t))];
+    expect(tables, `across every migration the exempt routine writes ${tables.join(', ')}, and DR-111 covers invoices alone`).toEqual(['invoices']);
+    // AND THE SCHEMA-QUALIFIED SPELLING IS REFUSED OUTRIGHT, which is the
+    // blocker a money review measured: `FUNCTION public.<name>(` is a second
+    // definition the guard exempts (it normalises to the bare name) and that
+    // the law above could not see. It is refused rather than chased, because
+    // chasing leaves `"public".`, another schema and whitespace around the dot
+    // to be found one at a time.
+    const qualified = qualifiedDefinitionsOf(EXEMPT);
+    expect(qualified, `a schema-qualified definition of the exempt name is in ${qualified.join(', ')}, and this law admits the bare spelling only`).toEqual([]);
+    // POSITIVE CONTROL for that zero: the same probe, on a planted file, hits.
+    expect(
+      qualifiedDefinitionsOf(EXEMPT, { 'planted.sql': `CREATE OR REPLACE FUNCTION public.${EXEMPT}() RETURNS TRIGGER AS $x$ BEGIN RETURN NEW; END $x$;` }),
+      'the qualified-spelling probe finds nothing even when a qualified definition is planted, so its zero above is blindness',
+    ).toEqual(['planted.sql']);
+  });
+
+  it('ONE STATEMENT, ONE TABLE, ONE COLUMN — and no dynamic statement at all', () => {
+    const body = routineBody(sql, EXEMPT);
+    expect(body, `NO SUBJECT — ${EXEMPT} has no body in ${MIGRATION}`).not.toBeNull();
+    const writes = writesOf(body as string);
+    expect(writes.length, `the exempt routine writes ${writes.length} statements: ${writes.map((w) => w.join(' ')).join(' | ')}`).toBe(1);
+    expect(writes[0], 'the one write is not an UPDATE of invoices').toEqual(['UPDATE', 'invoices']);
+    expect(columnsSetBy(body as string), 'the exempt routine assigns a column DR-111 does not cover').toEqual(['has_active_installment_plan']);
+    // A dynamic statement is a write no text probe can bound, so it is refused
+    // outright rather than parsed. The positive control is that the probe sees
+    // the body at all: it finds the one static write above.
+    expect(/\bEXECUTE\b/i.test(code(body as string)), 'the exempt routine carries EXECUTE, and a dynamic write cannot be held to one column').toBe(false);
+    // A SUBQUERY INSIDE A `SET` VALUE IS REFUSED FOR THE SAME REASON, and this
+    // is a hole a money review measured: the clause is cut at the first
+    // `WHERE`/`FROM`/`RETURNING`, so an inner `FROM` ended it early and every
+    // assignment after it went unread — `SET flag = (SELECT … FROM …),
+    // total_txn_minor = 0` was read as ONE column. Rather than parse nesting,
+    // the SHAPE is refused: a value this probe cannot bound may not sit in the
+    // one statement the exception covers.
+    expect(
+      setClauses(body as string).some((c) => /\bSELECT\b/i.test(c)),
+      'the exempt routine carries a subquery in a SET value, and a clause this probe cannot bound may not carry the one column DR-111 covers',
+    ).toBe(false);
+  });
+
+  it('NEGATIVE CONTROLS — the six plants a money review used, each required to fail', () => {
+    const body = routineBody(sql, EXEMPT) as string;
+    const plants: ReadonlyArray<readonly [string, string, 'writes' | 'columns' | 'execute']> = [
+      [
+        'a second column in the SAME SET clause',
+        body.replace('SET has_active_installment_plan = v_value', 'SET has_active_installment_plan = v_value, total_txn_minor = 0'),
+        'columns',
+      ],
+      [
+        'the SET (a, b) = (...) spelling',
+        body.replace('SET has_active_installment_plan = v_value', 'SET (has_active_installment_plan, total_txn_minor) = (v_value, 0)'),
+        'columns',
+      ],
+      ['a second statement, not starting its line', `${body}\n    PERFORM 1; UPDATE public.stock_levels SET on_hand = 0 WHERE false;\n`, 'writes'],
+      ['a MERGE', `${body}\n    MERGE INTO public.stock_movements USING (SELECT 1) s ON false WHEN NOT MATCHED THEN INSERT DEFAULT VALUES;\n`, 'writes'],
+      ['a second write to the same table', `${body}\n    UPDATE public.invoices i SET status = 'void' WHERE false;\n`, 'columns'],
+      ['a dynamic statement', `${body}\n    EXECUTE format('UPDATE %I SET on_hand = 0', 'stock_levels');\n`, 'execute'],
+    ];
+    for (const [what, planted, dimension] of plants) {
+      expect(sha256(planted), `the plant (${what}) did not change the subject (RULE-27)`).not.toBe(sha256(body));
+      if (dimension === 'writes') {
+        expect(writesOf(planted).length, `NOT CAUGHT — ${what}`).toBeGreaterThan(1);
+      } else if (dimension === 'columns') {
+        const cols = columnsSetBy(planted);
+        expect(cols.length, `NOT CAUGHT — ${what} (columns read: ${cols.join(', ')})`).toBeGreaterThan(1);
+      } else {
+        expect(/\bEXECUTE\b/i.test(code(planted)), `NOT CAUGHT — ${what}`).toBe(true);
+      }
+    }
+  });
+
+  it('NEGATIVE CONTROL — a SECOND definition of the exempt name in another migration is caught', () => {
+    // This is the blocker the money review measured: the guard skips by name
+    // before every other check, so a second definition anywhere is covered by
+    // the same grant. The file law above is what refuses it, and this proves
+    // the law refuses rather than merely being written.
+    // AND IT RUNS THE REAL PROBE ON A PLANTED FILE MAP. The first version of
+    // this control hand-built the array it then asserted over, so it tested
+    // its own arithmetic and not the law — which a money review measured and
+    // refused.
+    const clean = Object.fromEntries(migrationNames().map((f) => [f, readFileSync(join(MIGRATIONS_DIR, f), 'utf8')]));
+    expect(definitionsAcrossMigrations(EXEMPT, clean).length, 'the probe does not see the real definition, so the plant below proves nothing').toBe(1);
+
+    // (a) THE BARE SPELLING, in a second migration: the file law catches it.
+    const bare = `CREATE OR REPLACE FUNCTION ${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $z$\nBEGIN\n  UPDATE public.stock_movements SET qty = 0 WHERE false;\n  RETURN NEW;\nEND\n$z$;\n`;
+    const withBare = definitionsAcrossMigrations(EXEMPT, { ...clean, '0099_elsewhere.sql': bare });
+    expect([...new Set(withBare.map((d) => d.file))].length, 'a second BARE definition in another migration was not seen').toBeGreaterThan(1);
+    const tables = [...new Set(withBare.flatMap((d) => writesOf(d.body)).map(([, t]) => t))];
+    expect(tables, `a second definition writing another truth table was not caught (tables: ${tables.join(', ')})`).not.toEqual(['invoices']);
+
+    // (b) THE QUALIFIED SPELLING, which the bare probe CANNOT see — that is
+    //     the measured blocker — and which the qualified law refuses instead.
+    const qualified = `CREATE OR REPLACE FUNCTION public.${EXEMPT}() RETURNS TRIGGER LANGUAGE plpgsql AS $q$\nBEGIN\n  UPDATE public.supplier_credit_notes SET note_no = 0 WHERE false;\n  RETURN NEW;\nEND\n$q$;\n`;
+    const planted = { ...clean, '0099_qualified.sql': qualified };
+    expect(
+      definitionsAcrossMigrations(EXEMPT, planted).length,
+      'the bare probe now sees the qualified spelling, so the law below is no longer the thing that catches it — re-read both',
+    ).toBe(1);
+    expect(qualifiedDefinitionsOf(EXEMPT, planted), 'the qualified second definition was not caught by the law that exists for it').toEqual([
+      '0099_qualified.sql',
+    ]);
+  });
+
+  it('NEGATIVE CONTROL — ANOTHER routine writing invoices is still refused by rule 22 itself', async () => {
+    const { checkInventoryWriterAuthority } = await import('../../scripts/guards/inventory-writer-authority');
+    const map: Record<string, string> = {};
+    for (const f of migrationNames()) map[join('infrastructure', 'database', 'migrations', f)] = readFileSync(join(MIGRATIONS_DIR, f), 'utf8');
+    expect(checkInventoryWriterAuthority(map).violations, 'rule 22 is not green on the clean tree, so this control measures nothing').toEqual([]);
+    const key = join('infrastructure', 'database', 'migrations', MIGRATION);
+    const intruder = `\nCREATE OR REPLACE FUNCTION p4s7_intruder_writes_the_fact() RETURNS TRIGGER\nLANGUAGE plpgsql AS $i$\nBEGIN\n  UPDATE public.invoices i SET has_active_installment_plan = true WHERE i.id = NEW.invoice_id;\n  RETURN NEW;\nEND\n$i$;\n`;
+    const violations = checkInventoryWriterAuthority({ ...map, [key]: `${map[key] ?? ''}${intruder}` }).violations;
+    // NOTE THE EXACT CLAIM: rule 22's granularity is the TABLE, not the
+    // column. What is proven is that another routine writing the `invoices`
+    // TABLE is refused — not that it is refused for touching that column.
+    expect(
+      violations.some((v) => v.includes('p4s7_intruder_writes_the_fact')),
+      `another routine writing the invoices table was NOT refused: ${violations.join(' | ') || '(no violation at all)'}`,
+    ).toBe(true);
+  });
+
+  it('NEGATIVE CONTROL — the same body outside the exception is refused, and the set shrinks by itself', async () => {
+    const guard = join(ROOT, 'scripts', 'guards', 'inventory-writer-authority.ts');
+    const text = readFileSync(guard, 'utf8');
+    expect(text, 'the exception entry DR-111 grants is not in the law').toContain(`'${EXEMPT}'`);
+    expect(text, 'the pre-existing exception was removed to make room, which DR-111 does not authorise').toContain("'warehouses_home_branch_maintain'");
+    const { checkInventoryWriterAuthority } = await import('../../scripts/guards/inventory-writer-authority');
+    const map: Record<string, string> = {};
+    for (const f of migrationNames()) map[join('infrastructure', 'database', 'migrations', f)] = readFileSync(join(MIGRATIONS_DIR, f), 'utf8');
+    const key = join('infrastructure', 'database', 'migrations', MIGRATION);
+    // Renaming, not mocking: the exception is keyed on the NAME, so a renamed
+    // but byte-identical routine is outside it — which is the state "the entry
+    // is gone" produces. Mocking the export was tried and does NOT work: the
+    // function reads the list from its own module closure, so the mock passed
+    // a control it never varied.
+    const renamed = (map[key] ?? '').replaceAll(EXEMPT, 'zz_unexempt_fact_sync');
+    expect(sha256(renamed), 'the rename did not change the subject (RULE-27)').not.toBe(sha256(map[key] ?? ''));
+    const violations = checkInventoryWriterAuthority({ ...map, [key]: renamed }).violations;
+    expect(
+      violations.some((v) => v.includes('zz_unexempt_fact_sync')),
+      `the same body outside the exception is NOT refused: ${violations.join(' | ') || '(no violation at all)'}`,
+    ).toBe(true);
+    // And the exception set audits itself: with no routine of that name on the
+    // tree, the law reports the exception as having outlived its reason.
+    expect(
+      violations.some((v) => v.includes(EXEMPT) && v.includes('writes no truth table')),
+      'the exception set did not report itself as unused when its routine was renamed away',
+    ).toBe(true);
+  });
+});
