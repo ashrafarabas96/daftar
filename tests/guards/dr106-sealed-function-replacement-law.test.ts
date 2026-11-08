@@ -137,8 +137,8 @@ describe('DR-106 §2.1 — the protected set is real, and the probe discriminate
     // THIS is the discrimination proof on the real subject: the law is not
     // green because it looks at nothing.
     expect(spec).toHaveLength(1);
-    // 4222 before the DR-106 §2.2 header; the header is 59 lines, so 4281.
-    expect(spec[0]?.line, 'the specification replaces the live aging law at this line').toBe(4281);
+    // 4222 before the DR-106 §2.2 header; the header is 95 lines, so 4318.
+    expect(spec[0]?.line, 'the specification replaces the live aging law at this line').toBe(4318);
   });
 
   it('is not fooled by the pattern written in PROSE — the specification says it twice in comments', () => {
@@ -146,13 +146,13 @@ describe('DR-106 §2.1 — the protected set is real, and the probe discriminate
     // POSITIVE CONTROL: the comment really is there, so the negative below is
     // a measurement and not an empty probe.
     // The box was at :33 before the 59-line DR-106 §2.2 header, so :92 now.
-    expect(raw.split('\n')[91], 'the comment box at :92 names the pattern').toContain('REPLACE FUNCTION');
+    expect(raw.split('\n')[128], 'the comment box at :129 names the pattern').toContain('REPLACE FUNCTION');
     const blanked = blankSqlComments(raw);
-    expect(blanked.split('\n')[91], 'and after blanking, the comment is gone').not.toContain('REPLACE FUNCTION');
+    expect(blanked.split('\n')[128], 'and after blanking, the comment is gone').not.toContain('REPLACE FUNCTION');
     // And the line numbering survives blanking, which is what lets a failure
     // name a line the reader can open.
     expect(blanked.split('\n')).toHaveLength(raw.split('\n').length);
-    expect(blanked.split('\n')[4280]).toContain('customer_ar_aging');
+    expect(blanked.split('\n')[4317]).toContain('customer_ar_aging');
   });
 });
 
@@ -186,7 +186,7 @@ describe('DR-106 §2.1 — the law', () => {
     const listed = DR106_BASELINE.find((b) => b.file === 'infrastructure/database/specifications/p4s7-installment-aging.spec.sql');
     expect(listed?.count).toBe(1);
     const doubled = tally([
-      { file: listed?.file as string, line: 4281, fn: 'customer_ar_aging' },
+      { file: listed?.file as string, line: 4318, fn: 'customer_ar_aging' },
       { file: listed?.file as string, line: 9999, fn: 'customer_ar_aging' },
     ]);
     expect(doubled.get(`${listed?.file}\u0000customer_ar_aging`)).toBe(2);
@@ -275,16 +275,69 @@ describe('DR-106 §2.1 — THE NEGATIVE CONTROL, BY A PLANTED FILE', () => {
 });
 
 describe('DR-106 §2.2 — the specification is marked as an UNAPPLIED DESIGN', () => {
-  it('says so in its first lines, names 0084 as the law, and warns what applying it does', () => {
-    const head = (readFileSync(join(ROOT, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8') as string)
+  const header = (): string =>
+    (readFileSync(join(ROOT, 'infrastructure', 'database', 'specifications', 'p4s7-installment-aging.spec.sql'), 'utf8') as string)
       .split('\n')
-      .slice(0, 40)
+      .slice(0, 95)
       .join('\n');
+
+  it('says so in its first lines, names 0084 as the law, and warns what applying it does', () => {
     // Marking rather than renaming, because BOTH renames were measured to
     // break consumers — see the module header and the PR body.
+    const head = header();
     expect(head).toContain('UNAPPLIED DESIGN');
     expect(head).toContain('NOT THE LAW');
     expect(head).toContain('0084');
     expect(head).toContain('DR-106');
+    // POSITIVE CONTROL ON THE SLICE: 95 lines is this header and not the
+    // file's own one below it, so these assertions are about the DR-106 marking
+    // and not satisfied by prose further down.
+    expect(header().split('\n')).toHaveLength(95);
+    expect(head).not.toContain('P4-S7 — INSTALLMENT AGING GRANULARITY');
+  });
+
+  it('STATES THE WIDENED SCOPE, not the superseded sealed one — the defect this case was written for', () => {
+    // THE DEFECT, MEASURED ON `ec1cb815`: this header said the guard «fails if
+    // any file … gains a replacement of a function name that a SEALED
+    // migration (<= `frozenThrough`) creates» while the guard itself had
+    // already been widened. A header written to STATE the law stated a law the
+    // owner had superseded — evidence that reads wrong, which is worse than
+    // absent evidence because the next reader believes it.
+    const head = header();
+    expect(head, 'the header must state the scope the guard actually enforces').toContain('ANY NUMBERED MIGRATION');
+    expect(head).toContain('295');
+    expect(head, 'and name the owner decision that widened it').toContain('2026-11-08');
+    // The superseded formulation must not survive anywhere in the header.
+    expect(head, 'the header still claims the sealed-only scope').not.toContain('that a SEALED migration');
+    // And it must say WHY the owner widened it: the measured money exposure.
+    expect(head).toContain('SEVENTEEN OF THEM MOVE MONEY');
+    expect(head).toContain('invoice_settlement_verify');
+    // The owner's «it stays pinned» decision, so no later reader re-opens it.
+    expect(head).toContain('STAYS');
+  });
+
+  it('bounds «not executed» as a general prohibition with ONE named exception', () => {
+    // The owner's words are «not executed on any database». A flat absolute
+    // would be FALSE BY MEASUREMENT — this file's own suites execute it in a
+    // scratch database — and a prohibition that is visibly disobeyed every
+    // test run is read as decoration. So the header states the general rule
+    // and names its single boundary, which is the prohibition, not a
+    // narrowing of it.
+    const head = header();
+    expect(head).toContain('FORBIDDEN on ANY MIGRATED DATABASE');
+    expect(head, 'development, staging and production all named').toMatch(/development, staging or production/);
+    expect(head, 'the one allowed target is named').toContain('scratch');
+    expect(head).toContain('ALLOWED, and only this');
+    // POSITIVE CONTROL that the exception is real and not a loophole invented
+    // here: the suites that build the scratch database do exist and do read
+    // this file.
+    for (const consumer of [
+      'tests/integration/phase4-s7-installment-aging-db.test.ts',
+      'tests/integration/phase4-s7-installment-aging-live.test.ts',
+      'packages/domain-core/test/phase4-s7-installment-aging.test.ts',
+    ]) {
+      expect(existsSync(join(ROOT, consumer)), `${consumer} is a real consumer of the specification`).toBe(true);
+      expect(readFileSync(join(ROOT, consumer), 'utf8'), `${consumer} really reads the specification`).toContain('p4s7-installment-aging.spec.sql');
+    }
   });
 });

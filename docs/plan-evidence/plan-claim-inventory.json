@@ -1092,7 +1092,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 1610,
+      "line": 1647,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -1100,7 +1100,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 1875,
+      "line": 1912,
       "phase": "phase-4",
       "signals": ["explain", "plan-cost"],
       "kind": "mention",
@@ -1108,7 +1108,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 1877,
+      "line": 1914,
       "phase": "phase-4",
       "signals": ["index-only-scan"],
       "kind": "mention",
@@ -1116,7 +1116,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 1897,
+      "line": 1934,
       "phase": "phase-4",
       "signals": ["bitmap-plan"],
       "kind": "mention",
@@ -1124,7 +1124,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 2360,
+      "line": 2397,
       "phase": "phase-4",
       "signals": ["index-only-scan"],
       "kind": "mention",
@@ -1132,7 +1132,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 2812,
+      "line": 2849,
       "phase": "phase-4",
       "signals": ["explain", "index-only-scan"],
       "kind": "assertion",
@@ -1140,7 +1140,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 3701,
+      "line": 3738,
       "phase": "phase-4",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1148,7 +1148,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 4271,
+      "line": 4308,
       "phase": "phase-4",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1156,7 +1156,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 4452,
+      "line": 4489,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -1164,7 +1164,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 4549,
+      "line": 4586,
       "phase": "phase-4",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1172,7 +1172,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 4959,
+      "line": 4996,
       "phase": "phase-4",
       "signals": ["explain", "plan-cost"],
       "kind": "assertion",
@@ -1180,7 +1180,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 5488,
+      "line": 5525,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -1188,7 +1188,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 5695,
+      "line": 5732,
       "phase": "phase-4",
       "signals": ["index-only-scan"],
       "kind": "mention",
@@ -1196,7 +1196,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 5792,
+      "line": 5829,
       "phase": "phase-4",
       "signals": ["query-plan-json"],
       "kind": "mention",
@@ -1204,7 +1204,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 5796,
+      "line": 5833,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -1212,7 +1212,7 @@
     },
     {
       "file": "infrastructure/database/specifications/p4s7-installment-aging.spec.sql",
-      "line": 5801,
+      "line": 5838,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",

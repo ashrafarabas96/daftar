@@ -5,6 +5,25 @@
 -- ██                                                                       ██
 -- ███████████████████████████████████████████████████████████████████████████
 --
+-- WHERE IT MAY AND MAY NOT BE EXECUTED — A GENERAL PROHIBITION WITH EXACTLY
+-- ONE NAMED EXCEPTION, SO THAT THE PROHIBITION IS OBEYABLE AND THEREFORE OBEYED:
+--
+--   * ALLOWED, and only this: a THROW-AWAY `scratch` database that this
+--     file's own suites build from the real migrations, run it against, and
+--     drop. That is the one purpose it exists for, and those suites are the
+--     reason it is neither deleted nor renamed.
+--   * FORBIDDEN on ANY MIGRATED DATABASE — development, staging or production,
+--     local or remote, yours or anyone's. There is no case in which applying
+--     this file to a database that carries the numbered migrations is correct.
+--
+-- The owner's words are «it is not executed on any database». They are written
+-- out here as the general rule plus its single named exception rather than as a
+-- flat absolute, because a flat absolute WOULD BE FALSE BY MEASUREMENT — the
+-- suites listed at the foot of this header do execute it, in `scratch` — and a
+-- prohibition that is visibly disobeyed every test run is read as decoration,
+-- which then discredits the sentences around it. Read this as the prohibition
+-- the owner gave, with its boundary named, NOT as a narrowing of it.
+--
 -- OWNER DECISION DR-106 (2026-11-07): «`0084` is the live law of receivables
 -- aging, and this specification is a design for the future, not a law.»
 --
@@ -46,9 +65,27 @@
 -- `scripts/guards/sealed-function-replacement.ts` and asserted by
 -- `tests/guards/dr106-sealed-function-replacement-law.test.ts`. It fails if any
 -- file outside `infrastructure/database/migrations/` gains a replacement of a
--- function name that a SEALED migration (<= `frozenThrough`) creates. The
--- occurrence below is pinned in that guard's measured baseline, so a NEW one
--- is red.
+-- function name that ANY NUMBERED MIGRATION creates — 295 names across all 87
+-- migration files, measured, not the sealed subset alone.
+--
+-- THAT SCOPE IS THE OWNER'S DECISION OF 2026-11-08 («yes, widen it»), appended
+-- to DR-106, AND THIS PARAGRAPH PREVIOUSLY STATED THE SUPERSEDED ONE. As first
+-- shipped the guard was hinged on «a name a SEALED migration (<= `frozenThrough`)
+-- creates», which protected 277 names from the 80 sealed migrations and left
+-- unprotected every routine first created after `0079`: EIGHTEEN names, and
+-- SEVENTEEN OF THEM MOVE MONEY — among them `customer_collect_payment`,
+-- `customer_apply_credit`, `payment_complete`, `payment_closure_verify`,
+-- `invoice_settlement_verify` (the routine that attests an invoice was
+-- settled), `customer_credit_consume` and the three
+-- `accounting_customer_*_entry_complete` posting checks. A file outside
+-- `migrations/` could have replaced any of them and the guard would have
+-- stayed green. That measured exposure is why the owner widened it.
+--
+-- The occurrence below is pinned in that guard's measured baseline — 51
+-- occurrences in 42 (file, function) pairs — so a NEW one is red and named by
+-- file, line and function. BY THE OWNER'S DECISION THIS FILE'S ENTRY STAYS
+-- PINNED: the routine is not renamed, `OR REPLACE` is not removed, and the
+-- entry is not emptied out.
 --
 -- ANY FUTURE MOVE TO INSTALMENT AGING IS A NEW NUMBERED MIGRATION, after the
 -- instalment-plan tables are built, with a `daftar-finance` review, and with

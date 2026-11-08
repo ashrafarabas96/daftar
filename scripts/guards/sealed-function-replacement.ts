@@ -5,7 +5,7 @@
  * ── THE DEFECT THIS MODULE WAS WRITTEN FOR (DR-106, owner, 2026-11-07) ────
  *
  * `infrastructure/database/specifications/p4s7-installment-aging.spec.sql`
- * carries, at `:4281`, a 551-line body under the head
+ * carries, at `:4318`, a 551-line body under the head
  *
  *   CREATE OR REPLACE FUNCTION customer_ar_aging
  *     — arguments (p_business_id UUID, p_customer_id UUID, p_as_of DATE,
@@ -75,9 +75,9 @@
  *     still scanned and a migration in a renamed directory is not silently
  *     exempted.
  *
- * (b) THE TEXT APPEARS IN PROSE. The specification's own comment box at `:92`
+ * (b) THE TEXT APPEARS IN PROSE. The specification's own comment box at `:129`
  *     reads «signature"; `CREATE OR REPLACE FUNCTION` may not change a
- *     `RETURNS`», and `:4925` names `CREATE FUNCTION` while describing this
+ *     `RETURNS`», and `:4962` names `CREATE FUNCTION` while describing this
  *     very extractor. A reader that counted those would report the pattern it
  *     forbids as an instance of itself. So SQL comments are blanked before the
  *     scan, and the pattern tolerates whitespace and newlines between every
