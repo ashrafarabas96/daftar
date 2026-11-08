@@ -1042,4 +1042,32 @@ describe('DR-108-C — the fourth declared category is exactly the owner-decided
     expect(app).toContain('does not name the one principal the decision names');
     expect(dr108cFindings(migration)).toEqual([]);
   });
+
+  /**
+   * The owner's second condition has two halves, and only the first was
+   * guarded. "RLS with tenant isolation" is pinned by the policy assertions
+   * above; "and no BYPASSRLS for any role" was TRUE but asserted NOWHERE, so
+   * nothing stopped it coming back. A condition with no law is a sentence in a
+   * document — the defect class this file exists to refuse.
+   *
+   * The count is taken with comments STRIPPED, because the migration discusses
+   * `NOBYPASSRLS` in prose on purpose: `bootstrap.sql` creates the internal
+   * principals that way, and saying so is how a reader knows the executable
+   * zero is a choice and not an oversight.
+   */
+  it('no role is handed BYPASSRLS, and the probe that says so is not blind', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const executable = migration.replace(/--.*/g, '');
+    const inExecutable = executable.match(/BYPASSRLS/g) ?? [];
+    expect(inExecutable, `the migration grants BYPASSRLS: ${inExecutable.length} executable occurrence(s)`).toEqual([]);
+
+    // POSITIVE CONTROL: the same pattern, unstripped, must hit — otherwise the
+    // zero above would also be produced by a scanner that matches nothing.
+    const inProse = migration.match(/BYPASSRLS/g) ?? [];
+    expect(inProse.length, 'the scanner finds nothing at all, so its zero above is blind').toBeGreaterThan(0);
+
+    // NEGATIVE CONTROL: a planted grant is caught, so the law can go red.
+    const planted = `${migration}\nALTER ROLE daftar_accounting_internal BYPASSRLS;\n`;
+    expect((planted.replace(/--.*/g, '').match(/BYPASSRLS/g) ?? []).length, 'a planted BYPASSRLS escapes this law').toBe(1);
+  });
 });

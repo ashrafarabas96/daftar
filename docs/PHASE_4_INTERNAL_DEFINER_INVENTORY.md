@@ -494,8 +494,14 @@ The owner's decision, in his own words — **`E` was withdrawn and replaced by
 `CREATE POLICY accounting_validator … FOR SELECT … USING (true)` statements are
 **gone from `0088`**, for two reasons written into the migration: `USING (true)`
 is PERMISSIVE and therefore unpinned `tenant_id` for that principal, and `E`
-collided with §14/law 15 — and withdrawing it does **not** clear that collision
-(`221` recorded, `231` live, `226` after the withdrawal; see item 2 below). What
+collided with §14/law 15 — and withdrawing it does **not** clear that collision.
+**The live count after this withdrawal is `231`, not `226`**: the withdrawal
+removed `E`'s four POLICIES and none of its five conversions, and CI on this very
+commit reports `expected 231 to be 221`. `226` is the *counterfactual* — what the
+catalogue would hold if those five conversions were withdrawn too, which they
+were not and must not be, because three other laws require them. (An earlier
+revision of this paragraph stated `226` as the current state; that was wrong, and
+it is corrected here rather than quietly dropped. See item 2 below.) What
 did **not** change is this table: **not one of the ten conversions was
 withdrawn**, because three other laws require them.
 
