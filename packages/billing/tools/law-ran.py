@@ -434,7 +434,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/proration-rounding-policy.test.ts": 4,
     "test/proration.test.ts": 21,
     "test/repo-format-gate.test.ts": 2,
-    "test/subscription-states.test.ts": 5,
+    "test/subscription-states.test.ts": 6,
     "test/tool-commands-are-isolated.test.ts": 36,
 }
 # 306 -> 308 at round 65: the law gains the TWO cases that RUN the exec-time
@@ -446,6 +446,19 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 308 -> 309 at round 66: the law gains the case that RUNS the flag-region
 # rule -- R61-F-1 and R61-S-2 are one rule, read by two halves, and a rule
 # inferred from two readers is a rule nobody ran.
+# 369 -> 370 at the DR-100 extractor correction: test/subscription-states.test.ts
+# goes 5 -> 6 and nothing else moves. The sixth case is the one that RUNS the
+# table scoping of the live business_entitlements.state reader. The extractor
+# named that table in its own doc comment and then scanned every migration file
+# for any state IN (...) list, so migration 0088 -- this branch's own migration,
+# and now the last one -- handed it the five INVOICE states of
+# subscription_invoices instead. A scoping rule inferred from a comparison that
+# merely passes is a rule nobody ran, so the case asserts the per-table
+# inventory itself: two entitlement CHECKs found (0007, 0021), three on other
+# tables found and REFUSED (0011 session_refresh_tokens, 0022 plan_versions,
+# 0088 subscription_invoices), and no invoice-only value in the live set. An
+# ADDITION only -- no row was removed and no count was lowered -- and 6 is the
+# number that file's own run printed.
 # 343 -> 369 at DR-97 item 2: the census gains
 # `test/credit-write-off.test.ts` (26), the audited administrative write-off of
 # a stranded credit balance. An ADDITION only -- no row was removed and no
@@ -454,7 +467,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # fields on a real row in CI) stays OPEN: `pca_consumption_invoice` in
 # migration 0088 requires every `consumption` to name an invoice and a
 # write-off has none, which is the owner's ruling to make.
-EXPECTED_TOTAL_CASES = 369
+EXPECTED_TOTAL_CASES = 370
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
