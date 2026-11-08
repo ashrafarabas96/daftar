@@ -430,12 +430,32 @@ describe('P4S7-BUILD section 5 — with an active plan the laws differ, and the 
       .map((k) => `${k}: live=${a[k] ?? '(none)'} new=${b[k] ?? '(none)'}`);
     M['s5_differences'] = differences;
     // This is the claim DR-106 clause 3 wanted measured: the two laws are NOT
-    // the same answer once a plan exists. It is reported as a list, and the
-    // list being non-empty is the finding.
+    // the same answer once a plan exists.
     expect(
       differences.length,
       'the two laws agree even with an active plan, so the new body is not installment-aware in this fixture and this section measured nothing',
     ).toBeGreaterThan(0);
+    // AND THE DISTRIBUTION IS PINNED, NOT MERELY NON-EMPTY. «A difference
+    // exists» is satisfied by a WRONG difference: swap the two instalment
+    // dates and the total is still conserved, a difference is still reported,
+    // and the test would pass on a reader that aged each instalment at the
+    // other one's date. So the exact vector is asserted. 400 000 moves from
+    // band 4 to band 1 because the instalment due 2026-06-02 is 28 days past
+    // due at the as-of date and 28 is under the first threshold of 30, while
+    // the invoice itself (2026-01-02, 179 days) stays in band 4 with the
+    // termless one.
+    expect(
+      Object.entries(b)
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([k, v]) => `${k} ${v}`),
+      'the new law distributes the schedule differently than the dates and thresholds of this fixture require',
+    ).toEqual(['1:ILS 700000/700000/2', '4:ILS 1000000/1000000/2']);
+    expect(
+      Object.entries(a)
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([k, v]) => `${k} ${v}`),
+      'the live law moved, and 0089 does not touch it',
+    ).toEqual(['1:ILS 300000/300000/1', '4:ILS 1400000/1400000/2']);
   });
 });
 
@@ -734,5 +754,23 @@ describe('P4S7-BUILD section 7 — a foreign currency, part-paid, with the clamp
     })();
     M['s7_differences'] = differences;
     expect(differences.length, 'the two laws agree bucket by bucket even with an active plan, so the FX arm measured nothing new').toBeGreaterThan(0);
+    // (4) AND THE VECTOR IS PINNED, because conservation plus «a difference
+    //     exists» is satisfied by a WRONG distribution: swapping the two
+    //     instalment dates conserves the total and still reports a
+    //     difference. These five figures are the ones the dates, the
+    //     thresholds and the clamp require, and the base pair is what the
+    //     rounded carrying levels require:
+    //       b1 = the instalment due 2026-06-02, clamped level 40 000,
+    //            F(80 000) - F(40 000) = 292 096 - 146 048 = 146 048
+    //       b4 = the first instalment's remainder above the paid figure,
+    //            40 000 - 30 001 = 9 999, and F(40 000) - F(30 001) = 36 508
+    //       the down payment contributes NOTHING and is absent entirely.
+    const vector = [...shipped]
+      .sort((x, y) => x.bucket_no - y.bucket_no)
+      .map((r) => `${r.bucket_no}:${r.currency_code} ${r.txn_minor}/${r.base_minor}/${r.invoice_count}`);
+    expect(vector, 'the FX schedule is not distributed as the dates, the thresholds and the clamp require').toEqual([
+      '1:USD 40000/146048/1',
+      '4:USD 9999/36508/1',
+    ]);
   });
 });

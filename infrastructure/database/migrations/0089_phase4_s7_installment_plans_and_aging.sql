@@ -5924,5 +5924,66 @@ BEGIN
   -- body that was reviewed does not carry (e). The tenant edges asserted
   -- immediately above are what make (e) unreachable, and they are catalogue
   -- data.
+  -- ── PART 10. THE SEALED READER IS STILL THE SEALED READER, READ FROM THE
+  --    CATALOGUE AFTER EVERYTHING THIS FILE DID ──────────────────────────────
+  --
+  -- WHY THIS IS HERE AND NOT ONLY IN A TEST. The whole point of this migration
+  -- is that it ships its projection under a NEW NAME and leaves the live law of
+  -- customer receivable aging — `0084:705` — untouched. A static guard over
+  -- this file's TEXT is the cheap way to check that, and
+  -- `tests/guards/p4s7-migration-0089-law.test.ts` does it: it classifies every
+  -- occurrence of the bare identifier and admits it only in a comment, in one
+  -- of the six pinned bodies, or in a `COMMENT ON` literal.
+  --
+  -- A MONEY REVIEW THEN DEFEATED THAT GUARD FOUR TIMES, the guard was inverted
+  -- to close all four, and the SAME REVIEW DEFEATED THE INVERSION TOO — with a
+  -- class no text analysis can close, because the identifier never appears in
+  -- the file at all:
+  --
+  --     DO $m$ BEGIN EXECUTE 'DROP FUNCTION public.customer_ar_'
+  --                          || 'aging(UUID,UUID,DATE,INTEGER[])'; END $m$;
+  --
+  -- and its siblings: a name derived from `pg_proc` at run time, or built with
+  -- `format('%I', 'customer_ar_agin' || chr(103))`. A lexer sees three string
+  -- fragments. THAT IS A STRUCTURAL LIMIT OF READING TEXT, not a bug in the
+  -- reader, and the answer is to stop reading text.
+  --
+  -- SO THIS CLAIM READS THE CATALOGUE, AND IT READS IT LAST. It runs at the end
+  -- of the end-state block, after every statement of this file has executed —
+  -- including anything a `DO` block of it executed dynamically — so what it
+  -- measures is the STATE, and no spelling, concatenation or indirection can be
+  -- absent from the state. If the live body has moved by so much as one byte,
+  -- or has been dropped and not recreated, this migration REFUSES TO FINISH and
+  -- the transaction that applies it rolls back.
+  --
+  -- THE DIGEST IS MEASURED, not copied: `9c3d304e…274ad` is
+  -- `sha256(prosrc)` of `0084:705..:739`, computed from the migration file's own
+  -- bytes between its dollar quotes, which is the same string PostgreSQL stores.
+  --
+  -- NO `regprocedure` CAST, for the reason part 9b gives in its own words: the
+  -- cast RAISES `42883` when the routine is absent, which would turn «the live
+  -- reader was dropped» — the very harm this claim exists to catch — into an
+  -- unrelated error from the middle of an assertion. Joined through `pg_proc`
+  -- and `pg_namespace` BY NAME and pinned by `proargtypes`, so an ABSENT
+  -- routine leaves `v_sha` NULL and `IS DISTINCT FROM` reports it as the harm it
+  -- is.
+  --
+  -- AND IT IS NOT A FREEZE ON THE LIVE READER FOR EVER. Migrations run once, in
+  -- order: this block executes while the tree is at `0089`, so a LATER migration
+  -- that lawfully changes `customer_ar_aging` — which is what DR-106 clause 3
+  -- contemplates, after the two bodies have been compared on the same data —
+  -- runs AFTER this claim and is not judged by it. What it forbids is THIS file
+  -- disturbing the live law, which is the one thing this file promises.
+  SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8')), 'hex')
+    INTO v_sha
+    FROM pg_catalog.pg_proc p
+    JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'customer_ar_aging'
+     AND p.proargtypes = ARRAY['uuid'::regtype, 'uuid'::regtype, 'date'::regtype, 'integer[]'::regtype]::oidvector;
+  IF v_sha IS DISTINCT FROM '9c3d304e26cdddd2c34b878ebd06459c850b8aea87c32ea2e3e4bcf18ae274ad' THEN
+    RAISE EXCEPTION 'installment.sealed_reader_disturbed: public.customer_ar_aging(uuid,uuid,date,integer[]) carries sha256(prosrc) % and this migration requires 9c3d304e26cdddd2c34b878ebd06459c850b8aea87c32ea2e3e4bcf18ae274ad, which is the body 0084:705 installed. A NULL means the routine is ABSENT under that signature — dropped, or recreated with other argument types. This file ships its projection as customer_ar_aging_installments precisely so that the live law of customer receivable aging is not touched, and this is the only instrument that can say so about the STATE rather than about this file''s text: a static reader was defeated by the identifier on the next line, by the statement inside a DO block, by a quoted identifier, by two statements on one line, and finally by an identifier assembled from fragments that never spell the name anywhere. The catalogue carries no spelling',
+      coalesce(v_sha, '(the routine is absent under this signature)') USING ERRCODE = 'P0001';
+  END IF;
+
 END
 $end$;

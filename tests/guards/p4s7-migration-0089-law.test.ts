@@ -114,7 +114,7 @@ function routineBody(text: string, name: string): string | null {
   return null;
 }
 
-type Zone = 'code' | 'comment' | 'pinned-body' | 'other-dollar-body' | 'comment-on-literal' | 'string';
+type Zone = 'code' | 'comment' | 'pinned-body' | 'other-dollar-body' | 'comment-on-literal' | 'string' | 'end-state-block';
 
 /**
  * Classify every character of `text` by the lexical zone it sits in, the way a
@@ -149,7 +149,8 @@ function zones(text: string): Zone[] {
       const tag = dollar[0];
       const close = text.indexOf(tag, i + tag.length);
       const stop = close === -1 ? text.length : close + tag.length;
-      const zone: Zone = pendingFunction !== null && PINNED_NAMES.has(pendingFunction) ? 'pinned-body' : 'other-dollar-body';
+      const zone: Zone =
+        pendingFunction !== null && PINNED_NAMES.has(pendingFunction) ? 'pinned-body' : tag === '$end$' ? 'end-state-block' : 'other-dollar-body';
       // The tag characters themselves are code; the content carries the zone.
       for (let k = i + tag.length; k < stop - tag.length; k += 1) out[k] = zone;
       // A `--` comment INSIDE a body stays exempt either way, and inside a
@@ -238,7 +239,27 @@ function sealedOccurrences(text: string): Array<{ line: number; zone: Zone; exce
   return out;
 }
 
-const EXEMPT: ReadonlySet<Zone> = new Set<Zone>(['comment', 'pinned-body', 'comment-on-literal']);
+/**
+ * WHERE THE BARE NAME MAY SIT.
+ *
+ * `end-state-block` is the fourth, and it is a RETREAT MADE DELIBERATELY. The
+ * money review that defeated this law's first spelling four ways then defeated
+ * its inversion too, with a class no text analysis can close: an identifier
+ * assembled from fragments — `'customer_ar_' || 'aging'`, a name read out of
+ * `pg_proc`, `format('%I', 'customer_ar_agin' || chr(103))` — never spells
+ * itself anywhere in the file. A lexer sees string pieces.
+ *
+ * So the end-state block is no longer policed by READING IT. It is policed by
+ * the instrument it now carries: part 10 of section 2b reads
+ * `sha256(prosrc)` of the live reader OUT OF THE CATALOGUE, last, after every
+ * statement of the migration has run — including anything a `DO` executed
+ * dynamically — and refuses the whole migration if the body has moved by a
+ * byte or is absent. The catalogue carries no spelling, so no concatenation
+ * reaches it. The law below ASSERTS THAT INSTRUMENT IS THERE, which is what
+ * pays for this exemption, and asserts that nothing executable follows it.
+ */
+const EXEMPT: ReadonlySet<Zone> = new Set<Zone>(['comment', 'pinned-body', 'comment-on-literal', 'end-state-block']);
+const LIVE_BODY_DIGEST = '9c3d304e26cdddd2c34b878ebd06459c850b8aea87c32ea2e3e4bcf18ae274ad';
 const offending = (text: string): Array<{ line: number; zone: Zone; excerpt: string }> => sealedOccurrences(text).filter((o) => !EXEMPT.has(o.zone));
 
 const migrationNames = (): string[] =>
@@ -325,6 +346,53 @@ describe('P4S7-BUILD section 1 — the sealed reader is not written, in any spel
     // And a non-pinned routine body is not a hiding place either.
     const planted2 = `${sql}\nCREATE OR REPLACE FUNCTION some_other_helper() RETURNS VOID LANGUAGE plpgsql AS $h$\nBEGIN\n  EXECUTE 'DROP FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[])';\nEND\n$h$;\n`;
     expect(offending(planted2).length, 'a body that is not one of the pinned six was treated as exempt').toBeGreaterThan(0);
+  });
+
+  it('the end-state block carries the catalogue claim that pays for its exemption', () => {
+    // The digest is the live body's, measured from `0084:705..:739` — the same
+    // string PostgreSQL stores in `prosrc` — and not copied from a report.
+    expect(sql, 'section 2b does not pin the live reader body at all, so the end-state exemption above is unpaid for').toContain(LIVE_BODY_DIGEST);
+    expect(sql, 'the claim does not read prosrc out of the catalogue').toContain("pg_catalog.sha256(pg_catalog.convert_to(p.prosrc, 'UTF8'))");
+    expect(sql, 'the claim does not identify the live reader by name in pg_proc').toContain("p.proname = 'customer_ar_aging'");
+    expect(sql, 'the claim does not pin the signature, so an overload of other argument types would satisfy it').toContain(
+      "p.proargtypes = ARRAY['uuid'::regtype, 'uuid'::regtype, 'date'::regtype, 'integer[]'::regtype]::oidvector",
+    );
+    expect(sql, 'the claim does not refuse on a difference').toContain('installment.sealed_reader_disturbed');
+    // NEGATIVE CONTROL: without the digest the law must fail, so this is not a
+    // test that passes on any file.
+    // `replaceAll`, because the digest is written more than once — in the
+    // comparison, and again in the refusal that names what it required. A
+    // single `replace` left one behind and the control passed on a file the
+    // law should have refused, which is the control failing rather than the
+    // law working.
+    const stripped = sql.replaceAll(LIVE_BODY_DIGEST, '0'.repeat(64));
+    expect(sha256(stripped), 'the plant did not change the subject').not.toBe(sha256(sql));
+    expect(stripped.includes(LIVE_BODY_DIGEST), 'removing the digest did not remove it').toBe(false);
+  });
+
+  it('and nothing executable follows that claim, so it really is the last word on the state', () => {
+    const at = sql.lastIndexOf('installment.sealed_reader_disturbed');
+    expect(at, 'NO SUBJECT — the claim is not in the file').toBeGreaterThan(0);
+    // What may follow: whitespace, `--` comments, the block's own `END` and its
+    // closing dollar quote. Anything else runs AFTER the state was judged, and
+    // could undo what the claim just certified.
+    const residueOf = (text: string, from: number): string[] =>
+      text
+        .slice(text.indexOf('END IF;', from) + 'END IF;'.length)
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l !== '' && !l.startsWith('--') && l !== 'END' && l !== '$end$;');
+    const residue = residueOf(sql, at);
+    expect(residue, `statements follow the sealed-reader claim inside the end-state block: ${residue.join(' | ')}`).toEqual([]);
+    // NEGATIVE CONTROL: a statement planted after the claim is caught.
+    const tail = '\nEND\n$end$;\n';
+    expect(sql.endsWith(tail), 'NO SUBJECT — the end-state block does not close the file as expected').toBe(true);
+    const planted = `${sql.slice(0, -tail.length)}\n  EXECUTE 'SELECT 1';${tail}`;
+    expect(sha256(planted), 'the plant did not change the subject').not.toBe(sha256(sql));
+    expect(
+      residueOf(planted, planted.lastIndexOf('installment.sealed_reader_disturbed')).length,
+      'a statement planted after the claim was not caught',
+    ).toBeGreaterThan(0);
   });
 
   it('the shipped routine IS declared, four times, so section 1 is not passing by the file being empty of both', () => {
