@@ -21,6 +21,36 @@
  *       specification as well — so a transcription that drifted is caught
  *       here and not only by a database that happens to be built.
  *
+ * ── HOW §1 IS SPELLED, AND WHY IT WAS SPELLED WRONG FIRST ─────────────────
+ *
+ * The first version of §1 asked «which STATEMENTS name the sealed routine?»,
+ * line by line, anchored on a leading statement keyword. `daftar-finance`
+ * measured four texts that defeat it and pass: the identifier on the line
+ * AFTER `CREATE OR REPLACE FUNCTION`; the whole statement inside
+ * `DO $mig$ … EXECUTE 'CREATE OR REPLACE FUNCTION public.customer_ar_aging(…)'
+ * … $mig$;` — which is `0089`'s own idiom, so it is the likely shape and not a
+ * contrived one; the quoted identifier `"customer_ar_aging"(`; and two
+ * statements on one line where the second names the LONGER routine, which made
+ * the long-name exclusion swallow the line entire.
+ *
+ * SO THE QUESTION IS INVERTED, which is the only spelling that is total. The
+ * law no longer asks which statements name the routine; it asks WHERE EVERY
+ * OCCURRENCE OF THE BARE NAME SITS, and admits exactly three places:
+ *
+ *   * inside a `--` comment — the transcribed prose discusses the live law and
+ *     must be free to;
+ *   * inside one of the SIX PINNED ROUTINE BODIES — their comments and their
+ *     `RAISE` messages mention it, and editing them would change the digest
+ *     that proves the transcription faithful, so they are untouchable;
+ *   * inside the literal of a `COMMENT ON` statement — same reason, in the
+ *     statements that carry the specification's own documentation.
+ *
+ * Anywhere else — ordinary SQL, a string inside a `DO` block, an `EXECUTE`
+ * argument, a quoted identifier — is a violation. That classification is made
+ * by walking the file as a lexer walks it, tracking line comments, single
+ * quotes and dollar quotes by tag, so no spelling of the statement escapes it
+ * and `0089`'s own `DO $end$` block is not a hiding place.
+ *
  * EVERY LAW BELOW CARRIES A POSITIVE CONTROL AND A NEGATIVE CONTROL. A law
  * that asserts an absence needs a probe that hits something else with the
  * same pattern, or its zero is blindness and not a measurement (RULE-11,
@@ -50,6 +80,7 @@ const PINNED: ReadonlyArray<readonly [string, string]> = [
   ['installment_plan_fact_assert', '61d797de3fcb5f8e7fdb687414e09a2d734de630bdd954c48995661708b122f6'],
   [SHIPPED, '54fa1e27f19047e4d1a8732108bee3bde8ff7e46b39bf41980360301d94b7fa7'],
 ];
+const PINNED_NAMES = new Set(PINNED.map(([n]) => n));
 
 const sha256 = (s: string): string => createHash('sha256').update(Buffer.from(s, 'utf8')).digest('hex');
 
@@ -83,29 +114,132 @@ function routineBody(text: string, name: string): string | null {
   return null;
 }
 
+type Zone = 'code' | 'comment' | 'pinned-body' | 'other-dollar-body' | 'comment-on-literal' | 'string';
+
 /**
- * The statements of `text` that NAME a routine — a declaration or an authority
- * change, never a mention in prose. The probe is anchored on the statement
- * keyword precisely so that a comment inside a pinned body, which may not be
- * edited without changing its digest, is not read as a declaration.
+ * Classify every character of `text` by the lexical zone it sits in, the way a
+ * lexer would: line comments, single-quoted literals (with `''` escaping),
+ * and dollar-quoted strings matched BY TAG so a nested quote of another tag
+ * does not close the outer one.
+ *
+ * Two zones are richer than a lexer's: a dollar-quoted body opened by a
+ * `CREATE [OR REPLACE] FUNCTION <pinned>(` is `pinned-body` (untouchable: its
+ * bytes are under a digest), and a single-quoted literal inside a `COMMENT ON`
+ * statement is `comment-on-literal`. Everything a `DO` block holds is
+ * `other-dollar-body` — NOT exempt — which is what closes the `EXECUTE`
+ * bypass.
  */
-function statementsNaming(text: string, routine: string): string[] {
-  const out: string[] = [];
-  const probe = new RegExp(`\\b${routine}\\s*\\(`);
-  const longer = new RegExp(`\\b${SHIPPED}\\s*\\(`);
-  const keyword = /^\s*(CREATE|DROP|ALTER|GRANT|REVOKE|COMMENT)\b/;
-  for (const line of text.split('\n')) {
-    if (!keyword.test(line)) continue;
-    if (!probe.test(line)) continue;
-    // `customer_ar_aging_installments(` also matches a probe for
-    // `customer_ar_aging(` unless the longer name is excluded, and reading a
-    // statement about the SHIPPED routine as one about the SEALED routine
-    // would be a false alarm of exactly the shape this file exists to refuse.
-    if (routine === SEALED && longer.test(line)) continue;
-    out.push(line.trim());
+function zones(text: string): Zone[] {
+  const out: Zone[] = new Array(text.length).fill('code');
+  let i = 0;
+  let pendingFunction: string | null = null;
+  let inCommentOn = false;
+  while (i < text.length) {
+    // `--` to end of line.
+    if (text.startsWith('--', i)) {
+      const end = text.indexOf('\n', i);
+      const stop = end === -1 ? text.length : end;
+      for (let k = i; k < stop; k += 1) out[k] = 'comment';
+      i = stop;
+      continue;
+    }
+    // A dollar-quoted string: `$tag$ … $tag$`.
+    const dollar = /^\$[A-Za-z_]*\$/.exec(text.slice(i, i + 64));
+    if (dollar !== null) {
+      const tag = dollar[0];
+      const close = text.indexOf(tag, i + tag.length);
+      const stop = close === -1 ? text.length : close + tag.length;
+      const zone: Zone = pendingFunction !== null && PINNED_NAMES.has(pendingFunction) ? 'pinned-body' : 'other-dollar-body';
+      // The tag characters themselves are code; the content carries the zone.
+      for (let k = i + tag.length; k < stop - tag.length; k += 1) out[k] = zone;
+      // A `--` comment INSIDE a body stays exempt either way, and inside a
+      // non-pinned body a comment is still only a comment: re-scan it.
+      for (let k = i + tag.length; k < stop - tag.length; k += 1) {
+        if (text.startsWith('--', k) && (k === 0 || text[k - 1] !== '-')) {
+          const e = text.indexOf('\n', k);
+          const s2 = e === -1 ? stop - tag.length : Math.min(e, stop - tag.length);
+          for (let m = k; m < s2; m += 1) out[m] = 'comment';
+          k = s2;
+        }
+      }
+      pendingFunction = null;
+      i = stop;
+      continue;
+    }
+    // A single-quoted literal, `''` escaping its own quote.
+    if (text[i] === "'") {
+      let k = i + 1;
+      while (k < text.length) {
+        if (text[k] === "'" && text[k + 1] === "'") {
+          k += 2;
+          continue;
+        }
+        if (text[k] === "'") break;
+        k += 1;
+      }
+      const zone: Zone = inCommentOn ? 'comment-on-literal' : 'string';
+      for (let m = i + 1; m < Math.min(k, text.length); m += 1) out[m] = zone;
+      i = Math.min(k + 1, text.length);
+      continue;
+    }
+    if (text[i] === ';') {
+      inCommentOn = false;
+      pendingFunction = null;
+      i += 1;
+      continue;
+    }
+    // `COMMENT ON …` opens a statement whose literal carries documentation.
+    if (/^COMMENT\s+ON\b/i.test(text.slice(i, i + 16))) {
+      inCommentOn = true;
+      i += 7;
+      continue;
+    }
+    // `CREATE [OR REPLACE] FUNCTION <name>(` — the name decides whether the
+    // dollar-quoted body that follows is one of the pinned six. The name may
+    // be on a LATER LINE than the keyword, which is one of the four texts that
+    // defeated the first spelling of this law.
+    const fn = /^CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:"?public"?\s*\.\s*)?"?([A-Za-z_][A-Za-z0-9_]*)"?\s*\(/i.exec(text.slice(i, i + 200));
+    if (fn !== null) {
+      pendingFunction = fn[1] ?? null;
+      i += fn[0].length;
+      continue;
+    }
+    i += 1;
   }
   return out;
 }
+
+/**
+ * Every occurrence of the BARE sealed identifier, with the zone it sits in and
+ * the line it is on. `(?!_)` keeps `customer_ar_aging_installments` out, and
+ * `(?<![A-Za-z0-9_])` keeps a longer name that merely ENDS with it out — the
+ * exclusion is on the identifier, never on the line, so two statements sharing
+ * a line are judged separately.
+ */
+function sealedOccurrences(text: string): Array<{ line: number; zone: Zone; excerpt: string }> {
+  const z = zones(text);
+  const out: Array<{ line: number; zone: Zone; excerpt: string }> = [];
+  const probe = /(?<![A-Za-z0-9_])"?customer_ar_aging"?(?![A-Za-z0-9_])/g;
+  let m: RegExpExecArray | null = probe.exec(text);
+  while (m !== null) {
+    const at = m.index + (m[0].startsWith('"') ? 1 : 0);
+    const lineStart = text.lastIndexOf('\n', m.index) + 1;
+    const lineEnd = text.indexOf('\n', m.index);
+    out.push({
+      line: text.slice(0, m.index).split('\n').length,
+      zone: z[at] ?? 'code',
+      excerpt: text
+        .slice(lineStart, lineEnd === -1 ? text.length : lineEnd)
+        .trim()
+        .slice(0, 160),
+    });
+    m = probe.exec(text);
+  }
+  return out;
+}
+
+const EXEMPT: ReadonlySet<Zone> = new Set<Zone>(['comment', 'pinned-body', 'comment-on-literal']);
+const offending = (text: string): Array<{ line: number; zone: Zone; excerpt: string }> => sealedOccurrences(text).filter((o) => !EXEMPT.has(o.zone));
 
 const migrationNames = (): string[] =>
   readdirSync(MIGRATIONS)
@@ -134,36 +268,70 @@ describe('P4S7-BUILD section 0 — there is a subject', () => {
   });
 });
 
-describe('P4S7-BUILD section 1 — the sealed reader is not written', () => {
-  it('no statement of the migration declares or re-authorises customer_ar_aging', () => {
-    const sealed = statementsNaming(sql, SEALED);
-    const shipped = statementsNaming(sql, SHIPPED);
-    // THE POSITIVE CONTROL, and it is the whole weight of the zero above: the
-    // same probe, on the same file, finds the four statements that declare and
-    // authorise the SHIPPED routine. A zero from a probe that finds nothing at
-    // all is blindness.
+describe('P4S7-BUILD section 1 — the sealed reader is not written, in any spelling', () => {
+  it('the zone classifier reads this file as a lexer would, which is the positive control for every zero below', () => {
+    const all = sealedOccurrences(sql);
+    // THE POSITIVE CONTROL, and it is the whole weight of the law. A probe
+    // that finds nothing proves nothing; this one finds the bare name many
+    // times and places each occurrence in a zone.
+    expect(all.length, 'the probe finds no occurrence of the bare sealed name at all — its verdict would be blindness, not a measurement').toBeGreaterThan(10);
+    const found = new Set(all.map((o) => o.zone));
+    // And it distinguishes zones rather than calling everything exempt: the
+    // transcribed prose, the pinned bodies and the documentation literals are
+    // each actually represented.
+    expect(found.has('comment'), 'the classifier found no occurrence in a comment, so it is not distinguishing zones').toBe(true);
+    expect(found.has('pinned-body'), 'the classifier found no occurrence inside a pinned body, so the exemption it grants is untested').toBe(true);
+    expect(found.has('comment-on-literal'), 'the classifier found no occurrence in a COMMENT ON literal, so that exemption is untested').toBe(true);
+  });
+
+  it('and no occurrence sits in SQL the database would execute', () => {
+    const bad = offending(sql);
     expect(
-      shipped.length,
-      'the probe finds no statement naming the shipped routine either, so its zero for the sealed one is blindness and not a measurement',
-    ).toBeGreaterThanOrEqual(4);
-    expect(sealed, `the migration names the sealed customer_ar_aging in a statement: ${sealed.join(' | ')}`).toEqual([]);
+      bad,
+      `the migration reaches the sealed customer_ar_aging in executable SQL: ${bad.map((o) => `${o.zone}@${o.line}: ${o.excerpt}`).join(' | ')}`,
+    ).toEqual([]);
   });
 
-  it('and the law fails on a planted replacement, with the plant proved to have arrived', () => {
-    const before = sha256(sql);
-    const planted = `${sql}\nCREATE OR REPLACE FUNCTION customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])\nRETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)\nLANGUAGE sql STABLE AS $p$ SELECT 1 $p$;\n`;
-    expect(sha256(planted), 'the plant did not change the subject, so what follows would measure the clean file (RULE-27)').not.toBe(before);
-    expect(statementsNaming(planted, SEALED).length, 'the planted CREATE OR REPLACE of the sealed reader was not caught').toBeGreaterThan(0);
-  });
-
-  it('a GRANT, a DROP or an ALTER of the sealed reader is caught too, and not only a CREATE', () => {
-    for (const plant of [
-      'DROP FUNCTION public.customer_ar_aging(UUID, UUID, DATE, INTEGER[]);',
-      'GRANT EXECUTE ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) TO daftar_worker;',
-      'ALTER FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) OWNER TO daftar_migrator;',
-    ]) {
-      expect(statementsNaming(`${sql}\n${plant}\n`, SEALED), `the plant ${plant} was not caught`).toContain(plant);
+  it('the four texts that defeated the first spelling of this law are each caught now', () => {
+    const plants: ReadonlyArray<readonly [string, string]> = [
+      [
+        'the identifier on the line AFTER the keyword',
+        'CREATE OR REPLACE FUNCTION\n  customer_ar_aging(p_business_id UUID, p_customer_id UUID, p_as_of DATE, p_bucket_days INTEGER[])\nRETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER)\nLANGUAGE sql STABLE AS $p$ SELECT 1 $p$;',
+      ],
+      [
+        'the whole statement inside a DO block, which is this file own idiom',
+        "DO $mig$\nBEGIN\n  EXECUTE 'CREATE OR REPLACE FUNCTION public.customer_ar_aging(p_a UUID, p_b UUID, p_c DATE, p_d INTEGER[]) RETURNS TABLE (bucket_no INTEGER, currency_code TEXT, txn_minor BIGINT, base_minor BIGINT, invoice_count INTEGER) LANGUAGE sql STABLE AS $x$ SELECT 1 $x$';\nEND\n$mig$;",
+      ],
+      ['the quoted identifier', 'DROP FUNCTION public."customer_ar_aging"(UUID, UUID, DATE, INTEGER[]);'],
+      [
+        'two statements on one line, the second naming the LONGER routine',
+        'DROP FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]); GRANT EXECUTE ON FUNCTION customer_ar_aging_installments(UUID, UUID, DATE, INTEGER[]) TO daftar_app;',
+      ],
+    ];
+    for (const [what, plant] of plants) {
+      const planted = `${sql}\n${plant}\n`;
+      // The plant must actually have arrived before its result is read.
+      expect(sha256(planted), `the plant (${what}) did not change the subject, so what follows would measure the clean file (RULE-27)`).not.toBe(sha256(sql));
+      const bad = offending(planted);
+      expect(bad.length, `NOT CAUGHT — ${what}`).toBeGreaterThan(0);
     }
+  });
+
+  it('and the exemptions are not a hole: the same statement is caught even when it is spelled inside a comment-bearing region', () => {
+    // A `COMMENT ON` literal is exempt; a `COMMENT ON FUNCTION <sealed>` is
+    // NOT, because the identifier is in the statement and not in the literal.
+    const planted = `${sql}\nCOMMENT ON FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[]) IS 'rewritten';\n`;
+    expect(offending(planted).length, 'a COMMENT ON of the sealed routine was swallowed by the COMMENT ON literal exemption').toBeGreaterThan(0);
+    // And a non-pinned routine body is not a hiding place either.
+    const planted2 = `${sql}\nCREATE OR REPLACE FUNCTION some_other_helper() RETURNS VOID LANGUAGE plpgsql AS $h$\nBEGIN\n  EXECUTE 'DROP FUNCTION customer_ar_aging(UUID, UUID, DATE, INTEGER[])';\nEND\n$h$;\n`;
+    expect(offending(planted2).length, 'a body that is not one of the pinned six was treated as exempt').toBeGreaterThan(0);
+  });
+
+  it('the shipped routine IS declared, four times, so section 1 is not passing by the file being empty of both', () => {
+    const declarations = sql.split('\n').filter((l) => /^\s*(CREATE|GRANT|REVOKE|COMMENT)\b/.test(l) && new RegExp(`\\b${SHIPPED}\\s*\\(`).test(l));
+    expect(declarations.length, 'the migration declares and authorises the shipped routine nowhere, so it ships no projection at all').toBeGreaterThanOrEqual(
+      4,
+    );
   });
 });
 
