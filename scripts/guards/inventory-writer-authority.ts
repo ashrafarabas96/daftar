@@ -52,9 +52,66 @@
  *   built-ins `PURE_BUILTINS`, whose volatility T-02 proves live. Anything
  *   else — a VOLATILE helper, a writer, an unknown name — is still refused.
  * - The exception set is exact: `WRITER_AUTHORITY_EXCEPTIONS` =
- *   { warehouses_home_branch_maintain }, the derived home-association
+ *   { warehouses_home_branch_maintain, installment_plan_fact_sync }, the two
+ *   TRIGGERS that maintain a DERIVED value. The first is the home-association
  *   maintainer the frozen `provision_create_business` reaches (L:1837-1839,
- *   L:2161). An exception that no longer writes a truth table is reported,
+ *   L:2161). The second (owner decision DR-111, 2026-11-08) is P4-S7's
+ *   invoice-borne fact maintainer: it writes exactly one column,
+ *   `invoices.has_active_installment_plan`, with exactly one statement.
+ *   WHY IT CANNOT COMPLY, STATED AS MEASURED AND NOT MORE: a trigger body
+ *   COULD open with `inventory_assertion_current(...)` and satisfy this law
+ *   syntactically — what does not exist is anything to satisfy it WITH. The
+ *   estate's pattern is the assertion in the signed COMMAND (`0078:508`,
+ *   `sale_commit` opens with `inventory_assertion_consume('sale.commit', …)`),
+ *   the closed op-code registry holds 24 codes and none for installments, and
+ *   P4-S7 ships no writer of `installment_plans` at all — so there is no
+ *   command to carry an assertion and no code to name in one. The only other
+ *   exception is a trigger for the same family of reason.
+ *   Removing the write instead was MEASURED and refused by the estate: with an
+ *   active plan present, setting that column false raises
+ *   `installment.plan_fact_desynchronised` from the slice's own deferred
+ *   verifier, so "no writer" is not a quiet degradation but the failure of
+ *   every plan write at COMMIT.
+ *   THIS LIST CANNOT EXPRESS THE NARROWNESS IT WAS GRANTED FOR: it holds
+ *   NAMES, and an exempt routine is skipped by name BEFORE every other check,
+ *   so neither the column, nor the statement count, nor the FILE is bounded
+ *   here. They are bounded in `tests/guards/p4s7-migration-0089-law.test.ts`
+ *   section 5. Its FILE law does not match spellings, because three rounds of
+ *   money review produced seven of them — bare, `public.`, `PUBLIC.`,
+ *   `"public" . `, another schema, a block comment between the keyword and the
+ *   name, and the whole statement inside `DO … EXECUTE '…'`, which is `0089`'s
+ *   own idiom — and each defeated a probe keyed on the previous one. It instead
+ *   COUNTS EVERY PLACE THE SYMBOL IS NAMED AS A ROUTINE, classifies each by
+ *   the statement that names it, and requires: exactly ONE `CREATE`, bare, in
+ *   `0089`; every other mention to be one of the five kinds that migration
+ *   legitimately uses (the trigger binding, `GRANT`, `REVOKE`, `COMMENT ON`,
+ *   `ALTER … OWNER TO` — six mentions in all, measured); and NOTHING
+ *   unclassified, so a new way of naming it fails loudly rather than passing.
+ *   The same section fails if any definition writes a table other than
+ *   `invoices`, if a second column is assigned anywhere in a `SET` clause, if
+ *   a second write statement appears — `COPY` and `MERGE` included, quoted and
+ *   qualified table names included — or if `EXECUTE` or a subquery inside a
+ *   `SET` value appears at all, those being writes and values no text probe
+ *   can bound. Every text three rounds of money review and an independent
+ *   review planted is kept there as a control. THE COUNT IS STATED WITH ITS
+ *   IDENTITY AND NOT AS A REASSURING NUMBER (RULE-30) — an earlier version of
+ *   this sentence said «sixteen», which was an estimate and belonged to no
+ *   countable set, in a comment whose whole job is to certify a law. Counted
+ *   at their locations, TWENTY-FOUR texts are planted:
+ *     TWENTY MUST BE CAUGHT — six in the exempt body (a second column in one
+ *     `SET`, `SET (a, b) = (…)`, a statement not starting its line, `MERGE`, a
+ *     second write to the same table, `EXECUTE`); seven spellings of a second
+ *     definition; one bare second definition in another migration; three
+ *     spellings the body probe cannot see; one unclassified statement kind
+ *     (`DROP FUNCTION`); one other routine writing `invoices`; and the exempt
+ *     body renamed out of the exception.
+ *     FOUR MUST NOT BE — a call, a trigger binding of another routine, and
+ *     prose in a line comment twice over, because a law that refuses ordinary
+ *     text is a law nobody keeps. And note the granularity of THIS law when reading them: it is
+ *   the TABLE, not the column, so an exception here is an exception on a table
+ *   that carries money, and the column-level narrowing lives in the
+ *   column-scoped GRANT (`0089`) and in those laws — not in rule 22.
+ *   An exception that no longer writes a truth table is reported,
  *   so the set cannot silently outlive its reason.
  */
 import { PHASE2_PREFIX_END } from '../phase2-prefix';
@@ -86,7 +143,7 @@ export const STOCK_WRITE_TABLES =
 export const TRUTH_TABLE_EXCLUSIONS: readonly string[] = ['inventory_assertion_keys', 'inventory_assertion_uses', 'audit_events', 'outbox_events'];
 
 /** P3-S8 (A-04): the one routine that writes a truth table without an assertion, asserted exactly. */
-export const WRITER_AUTHORITY_EXCEPTIONS: readonly string[] = ['warehouses_home_branch_maintain'];
+export const WRITER_AUTHORITY_EXCEPTIONS: readonly string[] = ['warehouses_home_branch_maintain', 'installment_plan_fact_sync'];
 
 /** P3-S8 (A-04 clause 2): the built-ins an assertion call's arguments may use; T-02 proves each is IMMUTABLE or STABLE live. */
 export const PURE_BUILTINS: readonly string[] = ['unnest', 'cardinality', 'to_char', 'lower', 'extract', 'trunc', 'generate_series', 'array_fill'];
