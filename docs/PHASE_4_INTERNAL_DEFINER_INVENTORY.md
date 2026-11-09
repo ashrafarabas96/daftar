@@ -33,11 +33,11 @@ and the failure message names the §17 condition and the ruling id.
 
 | fact | value |
 | ---- | ----- |
-| routines owned by the two internal principals | 240 |
+| routines owned by the two internal principals | 250 |
 | of those, `SECURITY DEFINER` | **231** (163 inventory, 68 accounting) |
 | of those, `INVOKER` | 19 — **out of scope**, see "T-05's scope" below |
 | definers with an `EXECUTE` grantee other than their owner (**the doors**) | **57** |
-| definers with an explicit, empty ACL and therefore no caller at all | **164** (122 trigger functions, 42 helpers) |
+| definers with an explicit, empty ACL and therefore no caller at all | **174** (130 trigger functions, 44 helpers) |
 | definers executable by `PUBLIC` | **0** |
 | definers whose `proacl` is null (default PUBLIC `EXECUTE` never revoked) | **0** |
 | definers not pinning `search_path = pg_catalog, public, pg_temp` | **0** |
@@ -294,7 +294,7 @@ the same everywhere.
 | 56 | `supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.receive_refund')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 | 57 | `supplier_update(uuid,integer,text,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 
-## Part B — the 164 sealed definers
+## Part B — the 174 sealed definers
 
 Every other `SECURITY DEFINER` routine of either principal. Each has an
 **explicit, empty ACL** — `proacl` is not null, so the default PUBLIC `EXECUTE`
@@ -505,9 +505,29 @@ it is corrected here rather than quietly dropped. See item 2 below.) What
 did **not** change is this table: **not one of the ten conversions was
 withdrawn**, because three other laws require them.
 
-`reads` and `writes` below are read from the **routine body**, the way the law
-reads them (`readsIn` is a `SELECT`, `writesIn` is an `INSERT INTO`, an `UPDATE`
-of a relation or a `DELETE FROM`, both over the comment-stripped source). The
+`reads` and `writes` below are read from the **routine body** by the law's own
+`readsIn` and `writesIn` over the comment-stripped source (`readsIn` is a
+`SELECT`; `writesIn` is an `INSERT INTO`, an `UPDATE` of a relation or a
+`DELETE FROM`).
+
+**ONE ROW DISAGREES WITH THE LAW ON PURPOSE, AND IT IS NAMED HERE RATHER THAN
+HIDDEN.** Row `166`, `lock_grants_in_order(uuid,uuid,text)`, is recorded
+`writes: no` on this page because **it writes no row** — it takes
+`SELECT … FOR UPDATE OF r`, a lock. The law's `writesIn` derives **`w`** for it,
+so the roster entry in
+`tests/security/p4s4-internal-definer-inventory.test.ts` records `rw`, and must,
+or §14 stays red. The cause is measured and belongs to the P4-S4 lane, which
+owns that law: its `writesIn` carries the `/i` flag, so the `O` of `OF` satisfies
+the `[a-z_"]` that the `UPDATE` branch requires, and a row lock reads as a write.
+Bare `FOR UPDATE` does **not** match, so the deviation is confined to the
+`OF <alias>` form. That lane has the card
+(`P4S4_WRITESIN_MATCHES_FOR_UPDATE_OF_AR.md`), its chosen remedy narrows
+`writesIn`, and it asked that **neither this cell nor that row be moved** until
+the remedy lands, because moving this page to `writes: yes` would document the
+error twice. The error direction is **widening**: the routine is classified more
+dangerous than it is, so it hides no door.
+
+The
 three guards that read **nothing** are recorded as reading nothing: they compare
 `NEW` to `OLD` and raise, so **no** policy and **no** privilege can change their
 verdict, and they are elevated for the **law** and not for the read.

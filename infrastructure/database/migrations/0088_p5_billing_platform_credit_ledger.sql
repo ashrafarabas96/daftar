@@ -1478,12 +1478,17 @@ REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
 --      in its own text is `221`. Measured: `221` before any hardening, `226`
 --      after the hardening section's FIVE `OWNER TO` conversions, `231` after
 --      this section's five. Withdrawing E takes the live count `231` → `226`,
---      NOT to `221`. So law 15 stays red BY FIVE — the hardening section's
---      conversions — and those five are REQUIRED by three other laws
---      (`phase3-s8-definer-law`, `p3c-td18-definer-ownership`,
---      `migration-portability`). Dropping them would redden three laws to green
---      one. NOT ONE CONVERSION IS WITHDRAWN HERE, and the choice between law 15
---      and those three laws is REFERRED TO THE OWNER, by those numbers.
+--      NOT to `221` — so WITHDRAWING E WOULD HAVE LEFT law 15 red BY FIVE, the
+--      hardening section's conversions, and those five are REQUIRED by three
+--      other laws (`phase3-s8-definer-law`, `p3c-td18-definer-ownership`,
+--      `migration-portability`). E's policies WERE withdrawn and its five
+--      conversions were NOT, so the live count stayed `231` and law 15 was red
+--      BY TEN, not by five: `226` is a counterfactual and was never the state.
+--      NOT ONE CONVERSION IS WITHDRAWN HERE. The choice was REFERRED TO THE
+--      OWNER by those numbers, and he CLOSED IT on 2026-11-09 — «ائذن
+--      بالصفوف» — so the ten are now recorded in that law's own roster, one row
+--      each, with this migration named on every row. Whether §14 is green is
+--      CI's to say and is not claimed here.
 --
 -- WHAT REMAINS IN THIS SECTION IS THE TEN CONVERSIONS AND NOTHING ELSE: five
 -- `SECURITY DEFINER` elevations and five `OWNER TO` hand-overs, inside the
