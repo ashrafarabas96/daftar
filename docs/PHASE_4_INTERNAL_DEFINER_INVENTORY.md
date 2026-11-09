@@ -34,7 +34,7 @@ and the failure message names the §17 condition and the ruling id.
 | fact | value |
 | ---- | ----- |
 | routines owned by the two internal principals | 240 |
-| of those, `SECURITY DEFINER` | **221** (163 inventory, 58 accounting) |
+| of those, `SECURITY DEFINER` | **231** (163 inventory, 68 accounting) |
 | of those, `INVOKER` | 19 — **out of scope**, see "T-05's scope" below |
 | definers with an `EXECUTE` grantee other than their owner (**the doors**) | **57** |
 | definers with an explicit, empty ACL and therefore no caller at all | **164** (122 trigger functions, 42 helpers) |
@@ -141,7 +141,7 @@ The three gaps this page and its law close:
    that a later phase's design grant would not redden an accepted contract.
    That leaves §17 condition 1 to a shape test: a Phase 4 migration could grant
    `daftar_app` `EXECUTE` on a cross-tenant reader and nothing would say so.
-   This page restores the equality, per signature, over all 221.
+   This page restores the equality, per signature, over all 231.
 3. **The authority proof as a property of the set** — §17 condition 2.
    `accounting-posting-authority` proves `accounting_post_entry` needs its
    assertion. Nothing said that *every* door a login credential can open needs
@@ -230,7 +230,7 @@ boundary, and that is §17 condition 1. The red proof grants one of them to
 
 Every `SECURITY DEFINER` routine of either internal principal that any
 principal other than its owner may `EXECUTE`. `DEFINER`, `search_path` and
-PUBLIC `EXECUTE` are uniform across all 221 and are asserted as set-wide
+PUBLIC `EXECUTE` are uniform across all 231 and are asserted as set-wide
 clauses by the law, so a row that drifts is red even though the column reads
 the same everywhere.
 
@@ -587,18 +587,24 @@ Part A door and needs its own row with a recorded authority proof.
    row-level security is applied **after** table privileges, so a missing
    privilege is a **refusal** (`permission denied for table …`), not a blinding
    — a safe direction, and still a defect while it stands.
-2. **The suite's own roster is not this page.** §14 compares the live catalogue
-   to `DOORS` + `SEALED` **inside**
-   `tests/security/p4s4-internal-definer-inventory.test.ts`, and that file's
-   text is **not touched by this lane**. Those two arrays do not carry these ten
-   signatures, so `live.length` exceeds `DOORS.length + SEALED.length` by ten
-   and §14 stays red **however complete this page is**. **By the numbers:** the
-   figure recorded in that file's own text is **221**; the live count is **231**;
-   withdrawing `E` takes it to **226**, **not** to 221, because the hardening
-   section's five conversions remain — and those five are required by
-   `phase3-s8-definer-law`, `p3c-td18-definer-ownership` and
-   `migration-portability`, so withdrawing them would redden three laws to green
-   one. **No conversion was withdrawn, and that trade is the owner's to make.**
+2. **The suite's own roster — RESOLVED by the owner, 2026-11-09.** §14 compares
+   the live catalogue to `DOORS` + `SEALED` **inside**
+   `tests/security/p4s4-internal-definer-inventory.test.ts`. While that file was
+   untouchable by this lane those arrays did not carry these ten signatures, so
+   `live.length` exceeded `DOORS.length + SEALED.length` by ten and §14 stayed
+   red **however complete this page was**. The owner then authorized the rows in
+   his own words — «ائذن بالصفوف» — and the ten are now recorded there, **one
+   row each, with the migration that creates each and the reason it is owned by
+   an internal principal, and with no pattern and no prefix**. The roster diff is
+   `58 0`: **fifty-eight additions and zero deletions**, no logic line and no
+   `expect` touched. **By the numbers:** that file's text recorded **221**
+   (163 inventory, 58 accounting); it now records **231** (163, 68), which is the
+   live count CI measured. The figure `226` that appears below is the
+   counterfactual of withdrawing the hardening's five conversions — those five
+   are required by `phase3-s8-definer-law`, `p3c-td18-definer-ownership` and
+   `migration-portability`, so withdrawing them would have reddened three laws to
+   green one. **No conversion was withdrawn; the owner took the other way out.**
+   **Whether §14 is now green is CI's to say and is not claimed here.**
    Naming the ten here is
    necessary — the suite also asserts that this page names every recorded
    signature — and it is **not sufficient**. **Referred to the owner and to the
