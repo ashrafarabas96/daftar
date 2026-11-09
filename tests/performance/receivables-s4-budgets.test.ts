@@ -313,59 +313,6 @@ const CLIENT_DELAY_MS = Number(process.env['P4_S4_CLIENT_DELAY_MS'] ?? '0') || 0
  */
 const IN_DB_DELAY_MS_FIVE = Number(process.env['P4_S4_IN_DB_DELAY_MS_FIVE'] ?? '0') || 0;
 
-/**
- * WHICH measured window a sample is being taken in. Knobs 4 and 5 read it and
- * nothing else does: knobs 1 and 2 are window-blind by design and stay so,
- * because their whole claim is that they reach EVERY measured window.
- *
- * It is an explicit argument and not a derivation of the series name, because a
- * control that selects its window by matching prose is a control a reworded
- * comment can silently disarm (the RULE-27 / DR-55 shape).
- */
-type MeasuredWindow = 'p4d-fat-receivable' | 'other';
-
-/**
- * CONTROL KNOB 4 - the same real `pg_sleep` INSIDE the database, planted in the
- * FAT-TAIL LIVE-AR READ ALONE: the NUMERATOR of `P4-AL-72`'s BALANCE ratio
- * (`p95(fat-tail) <= 3 x p95(median)`), and nothing else.
- *
- * It is knob 3's argument applied to the second quotient, and it exists for the
- * same reason of arithmetic: knob 1 adds the same `d` to the fat-tail window AND
- * to the median window, so `(a + d) / (b + d)` moves TOWARDS 1 and can never
- * make this verdict miss. A green balance ratio under knob 1 would be a control
- * read as holding when no control ran at all. This knob adds `d` to the
- * numerator only, which is the one shape that raises the quotient.
- *
- * It must be large enough that the quotient exceeds 3 whatever the host measured
- * for the denominator. CI sets 200 ms, and the denominator it has to beat is the
- * median read's in-database p95 - single-digit milliseconds on every attempt
- * archived so far, and necessarily below that read's wall figure.
- *
- * IT ALSO REDDENS `P4-D`'s OWN CEILING for that one arm, and that is not a
- * defect of the control: the numerator of this ratio IS a budget series, so a
- * delay planted inside it is seen by both laws. The control therefore asserts
- * the RATIO's own failure marker, which the ceiling's marker cannot stand in for.
- *
- * Inert and unset in every normal run.
- */
-const IN_DB_DELAY_MS_FAT = Number(process.env['P4_S4_IN_DB_DELAY_MS_FAT'] ?? '0') || 0;
-
-/**
- * CONTROL KNOB 5 - a `setTimeout` OUTSIDE every query, planted in the FAT-TAIL
- * LIVE-AR READ ALONE. The database accounts not one microsecond of it.
- *
- * This is the knob that proves the conversion bought something: it inflates the
- * WALL quotient's numerator and nothing the server did, so the printed wall
- * ratio MUST rise above 3 while the in-database verdict MUST STAY GREEN. Under
- * the wall-clock law this file carried until today, this knob would have been a
- * red. It is the negative control of the conversion, and the positive control on
- * its own effect is the printed wall figure moving - a run where neither moved is
- * a run where the knob did not reach the window.
- *
- * Inert and unset in every normal run.
- */
-const CLIENT_DELAY_MS_FAT = Number(process.env['P4_S4_CLIENT_DELAY_MS_FAT'] ?? '0') || 0;
-
 /** The in-database instrument the converted budgets are judged on (DR-98). */
 let inDatabase: InDatabaseClock | null = null;
 /** The `daftar_app` connection control knob 1 plants its delay on. Null unless the knob is set. */
@@ -382,24 +329,15 @@ const sleep = async (ms: number): Promise<void> => {
  *
  * `shape` is the invoice count of the window being measured, or `null` for a
  * window that has no invoice count (the `P4-D` reads, the median read and the
- * two RLS halves). Knob 3 reads it, and only it.
- *
- * `windowId` names WHICH window this is, and knobs 4 and 5 read it, and only
- * they. Knobs 1 and 2 are both shape-blind and window-blind by design and stay
- * so.
+ * two RLS halves). Knob 3 reads it, and only it: knobs 1 and 2 are
+ * shape-blind by design and stay so.
  */
-async function plantControlDelays(shape: number | null, windowId: MeasuredWindow = 'other'): Promise<void> {
+async function plantControlDelays(shape: number | null): Promise<void> {
   if (CLIENT_DELAY_MS > 0) await sleep(CLIENT_DELAY_MS);
-  // Knob 5 is a Node-side wait, so it is planted BEFORE the `delayer` guard
-  // below: it needs no database connection, and a control that quietly did not
-  // run would be read as a control that held (RULE-27, DR-55).
-  if (CLIENT_DELAY_MS_FAT > 0 && windowId === 'p4d-fat-receivable') await sleep(CLIENT_DELAY_MS_FAT);
   if (delayer === null) return;
   if (IN_DB_DELAY_MS > 0) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS / 1000]);
-  // Knob 3: the numerator of `P4-AL-72`'s ALLOCATION ratio and no other window.
+  // Knob 3: the numerator of `P4-AL-72`'s ratio and no other window.
   if (IN_DB_DELAY_MS_FIVE > 0 && shape === 5) await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS_FIVE / 1000]);
-  // Knob 4: the numerator of `P4-AL-72`'s BALANCE ratio and no other window.
-  if (IN_DB_DELAY_MS_FAT > 0 && windowId === 'p4d-fat-receivable') await delayer.query('SELECT pg_sleep($1)', [IN_DB_DELAY_MS_FAT / 1000]);
 }
 
 /**
@@ -697,9 +635,6 @@ async function measure(
   iterations = SHORT_PERCENTILE_ITERATIONS,
   before: () => Promise<unknown> = async () => undefined,
   judged: 'in-database' | 'wall-clock-only' = 'wall-clock-only',
-  // Which window these samples belong to, for knobs 4 and 5 alone. `'other'`
-  // for every window that is not the balance ratio's numerator.
-  windowId: MeasuredWindow = 'other',
 ): Promise<Measured> {
   for (let i = 0; i < WARMUP; i += 1) {
     await before();
@@ -716,18 +651,14 @@ async function measure(
     await before();
     const dbBefore = clock === null ? null : await clock.read();
     const started = process.hrtime.bigint();
-    // Inert in every normal run. KNOBS 1 AND 2 are applied to EVERY window
-    // taken through this function, including the median read and the two RLS
-    // halves, so that the host-independent ratios see the same delay on both
-    // sides and stay green: a control that broke a quotient by reaching BOTH
-    // of its arms would be a control about the quotient.
-    //
-    // The controls MEANT to reach ONE ARM of a quotient are knobs 3, 4 and 5.
-    // Knob 3 belongs to the allocation ratio and never reaches this function at
-    // all, which is what the `null` shape says. Knobs 4 and 5 belong to the
-    // BALANCE ratio, whose numerator IS measured here — so the window is passed
-    // through, and it is `'other'` for every window but that one numerator.
-    await plantControlDelays(null, windowId);
+    // Inert in every normal run. Applied to EVERY window taken through this
+    // function, including the median read and the two RLS halves, so that the
+    // host-independent ratios see the same delay on both sides and stay green:
+    // a control that broke a ratio would be a control about the ratio. The
+    // control that is MEANT to break a ratio is knob 3, which plants its delay
+    // in one arm of one quotient and never reaches this function at all —
+    // `null` here says so rather than leaving it to be inferred.
+    await plantControlDelays(null);
     await once();
     samplesMs.push(Number(process.hrtime.bigint() - started) / 1e6);
     if (clock !== null) inDatabaseMs.push(InDatabaseClock.delta(must(dbBefore, `${name}: the opening instrument reading`), await clock.read()));
@@ -1341,7 +1272,7 @@ async function buildFixture(): Promise<void> {
   // Control knob 1's connection, as `daftar_app`: the same principal the
   // budgets are about, so the planted delay is accounted exactly as the
   // product's own statements are. Null — and the knob inert — in every normal run.
-  if (IN_DB_DELAY_MS > 0 || IN_DB_DELAY_MS_FIVE > 0 || IN_DB_DELAY_MS_FAT > 0) {
+  if (IN_DB_DELAY_MS > 0 || IN_DB_DELAY_MS_FIVE > 0) {
     delayer = new Client({ connectionString: appDbUrl });
     await delayer.connect();
   }
@@ -1354,14 +1285,6 @@ async function buildFixture(): Promise<void> {
   if (CLIENT_DELAY_MS > 0)
     console.log(
       `\n[P4-S4 budgets] CONTROL 2 ARMED — a ${CLIENT_DELAY_MS} ms setTimeout is planted OUTSIDE every query, at the head of every measured window\n`,
-    );
-  if (IN_DB_DELAY_MS_FAT > 0)
-    console.log(
-      `\n[P4-S4 budgets] CONTROL 4 ARMED — a ${IN_DB_DELAY_MS_FAT} ms pg_sleep is planted INSIDE the FAT-TAIL live-AR read ONLY, on a daftar_app connection: P4-AL-72's BALANCE numerator and not its denominator\n`,
-    );
-  if (CLIENT_DELAY_MS_FAT > 0)
-    console.log(
-      `\n[P4-S4 budgets] CONTROL 5 ARMED — a ${CLIENT_DELAY_MS_FAT} ms setTimeout is planted OUTSIDE every query in the FAT-TAIL live-AR read ONLY: it must move the printed WALL ratio and must NOT move the in-database verdict\n`,
     );
 
   environment = await readPlanEvidenceEnvironment(async <R>(sql: string) => ({ rows: (await ownerPool().query(sql)).rows as R[] }));
@@ -1423,7 +1346,7 @@ async function buildFixture(): Promise<void> {
   // no gain. So each series is measured ONCE and every case below reads the
   // stored series.
   const medianCustomerId = must(dataset.medianCustomerIds[0], 'the first median customer');
-  for (const { label, path, route, tag } of readsOf(dataset.fatCustomerId, w.day)) {
+  for (const { label, path, route } of readsOf(dataset.fatCustomerId, w.day)) {
     readSeries.set(
       path,
       await measure(
@@ -1433,30 +1356,19 @@ async function buildFixture(): Promise<void> {
         SHORT_PERCENTILE_ITERATIONS,
         () => pace(route),
         // DR-98: this is a BUDGET series, so it carries the in-database verdict
-        // series as well as the wall clock.
+        // series as well as the wall clock. The median and the two RLS halves
+        // below are not budgets — they are the denominators of host-independent
+        // ratios — and stay on the wall clock on both sides of their ratio.
         'in-database',
-        // Knobs 4 and 5 are planted in the BALANCE ratio's numerator alone,
-        // which is THIS read and not the other two: `P4-AL-72`'s balance
-        // quotient is the fat-tail customer's live-AR read over the median
-        // customer's live-AR read. Selected on the stable ASCII `tag` and never
-        // on the prose label.
-        tag === 'D-RECEIVABLE' ? 'p4d-fat-receivable' : 'other',
       ),
     );
   }
-  // OWNER DECISION 2026-11-09: the balance ratio is converted, so its
-  // DENOMINATOR is read from the in-database instrument too. It is still not a
-  // budget - it carries no ceiling, and the `null` below says so - but a
-  // quotient whose two halves came from two different clocks would not be a
-  // quotient about the read's growth. The two RLS halves further down stay on
-  // the wall clock on BOTH sides of THEIR ratio, which is not converted.
   medianReceivable = await measure(
     `P4-D receivable, MEDIAN customer (${MEDIAN.invoicesEach} invoices) — the ratio's denominator`,
     null,
     () => read200(READS.receivable(medianCustomerId)),
     SHORT_PERCENTILE_ITERATIONS,
     () => pace(ROUTE.receivable),
-    'in-database',
   );
   // The RLS cost's two halves, like against like: the SAME captured
   // statements on the SAME rows, as `daftar_app` through the product's own
@@ -1615,17 +1527,11 @@ function performanceRecord(): Record<string, unknown> {
       'P4-F-HTTP': 'wallClockClientMs — deliberately not converted: its subject is the endpoint over HTTP',
       'P4-AL-72 allocation 1-to-5 scaling ratio':
         'inDatabaseExecMs on BOTH halves — numerator and denominator from the same instrument (owner decision 2026-11-07)',
-      'P4-AL-72 balance fat-tail-over-median ratio':
-        'inDatabaseExecMs on BOTH halves — numerator and denominator from the same instrument (owner decision 2026-11-09)',
-      'P4-AL-75 RLS cost ratio':
-        'wallClockClientMs on BOTH halves — NOT converted. Its two halves are statement costs taken through `statementCostMs`, not HTTP windows, so the per-request cost a fast host shrinks is not in either of them.',
     },
     controls: {
       inDatabaseDelayMs: IN_DB_DELAY_MS,
       inDatabaseDelayMsFiveInvoiceArmOnly: IN_DB_DELAY_MS_FIVE,
-      inDatabaseDelayMsFatTailReadOnly: IN_DB_DELAY_MS_FAT,
       clientSideDelayMs: CLIENT_DELAY_MS,
-      clientSideDelayMsFatTailReadOnly: CLIENT_DELAY_MS_FAT,
     },
     distributions: diagnostics.map((d) => ({ name: d.name, iterations: d.iterations, p95: d.p95, thresholdMs: d.thresholdMs, orderedMs: d.orderedMs })),
   };
@@ -1893,108 +1799,38 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     );
   });
 
-  /**
-   * THE BALANCE GROWTH LAW, CONVERTED (owner decision 2026-11-09; DR-98's
-   * second application, and the same conversion `P4-AL-72`'s allocation
-   * quotient already carries).
-   *
-   * WHY IT MOVED, MEASURED. Run 42501714040 attempt 3 on `e58d465b` failed here
-   * at `16.257 / 4.696 = 3.46x` - on the FASTEST of that run's three attempts.
-   * The D arms measured about 40% lighter than in attempts 1 and 2, and `FTXN`
-   * held its widest margin of the three. Both halves of a wall-clock quotient
-   * carry the same fixed per-request cost `c` outside the database, and
-   * `(a + c) / (b + c)` RISES towards `a / b` as `c` shrinks: a faster runner
-   * raised this quotient. That is the judged quantity moving for a reason that
-   * has nothing to do with the read's growth, which is the only thing P4-AL-72
-   * is about.
-   *
-   * WHAT IS UNCHANGED, and is not negotiable: the constant stays 3, it stays
-   * CALIBRATION-DERIVED AND TIGHTEN-ONLY (`OD-P4-14`), and it may never be
-   * raised to obtain a pass. The conversion changes WHICH CLOCK both halves are
-   * read from, and nothing else - not the constant, not the percentile, not the
-   * iteration count, not the direction of the comparison.
-   *
-   * WHAT IS GIVEN UP, kept visible rather than described: the quotient no longer
-   * sees the Node-side cost of either read. A regression that doubled the
-   * serialisation of the fat-tail response while its SQL stood still would no
-   * longer be caught HERE. It is still caught by `P4-D`'s own ceiling, whose
-   * wall-clock figure this file keeps printing, and the wall quotient is printed
-   * on EVERY run beside the verdict so the given-up quantity stays one a reader
-   * can watch move.
-   *
-   * SELF-DIAGNOSING, which is the point: an in-database quotient above 3 cannot
-   * be a host tail, because the fixed per-request cost is inside NEITHER half
-   * any more. It is real growth in what the server executes. The owner's
-   * instruction for that case is to STOP, raise nothing, and bring the numbers
-   * with an `EXPLAIN (ANALYZE, BUFFERS)` of both halves - which is why the
-   * failure message demands exactly that and offers no remedy of its own.
-   */
-  it(`RATIO BALANCE (host-independent, P4-AL-72): in-database p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x in-database p95(median)`, () => {
+  it(`RATIO (host-independent, P4-AL-72): p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median)`, () => {
     requireFixture();
     // The SAME series the ceiling case judged, and the median series taken in
     // the same run on the same host: a ratio computed from a second sample
     // would be a ratio between two populations.
     const fat = must(readSeries.get(READS.receivable(dataset.fatCustomerId)), 'the fat-tail receivable series');
     const med = must(medianReceivable, 'the median receivable series');
-    const fatDb = must(fat.inDatabaseMs, "the fat-tail read's in-database series is absent, so this ratio has no numerator (DR-98)");
-    const medDb = must(med.inDatabaseMs, "the median read's in-database series is absent, so this ratio has no denominator (DR-98)");
-    // Both halves, same instrument, same windows - and each as long as the wall
-    // series it was taken beside and as long as the declared iteration count. A
-    // quotient over fewer samples than claimed is not the claimed quotient
-    // (P4-AL-76), and this is asserted BEFORE either percentile is read so a
-    // short series can never be a quiet pass.
-    expect(fatDb.length, 'the fat-tail in-database series is not the same length as the wall series taken in the same windows').toBe(fat.samplesMs.length);
-    expect(medDb.length, 'the median in-database series is not the same length as the wall series taken in the same windows').toBe(med.samplesMs.length);
-    expect(fatDb.length, `${SHORT_PERCENTILE_ITERATIONS} iterations are declared for this quotient's numerator`).toBe(SHORT_PERCENTILE_ITERATIONS);
-    expect(medDb.length, `${SHORT_PERCENTILE_ITERATIONS} iterations are declared for this quotient's denominator`).toBe(SHORT_PERCENTILE_ITERATIONS);
-    const fatDbP95 = quantile(fatDb, 0.95);
-    const medDbP95 = quantile(medDb, 0.95);
     const fatP95 = quantile(fat.samplesMs, 0.95);
     const medP95 = quantile(med.samplesMs, 0.95);
-    // The verdict first, then the quantity this conversion stopped judging.
-    const verdictRatio = medDbP95 === 0 ? null : fatDbP95 / medDbP95;
-    const monitoredWallRatio = medP95 === 0 ? null : fatP95 / medP95;
+    const ratio = medP95 === 0 ? null : fatP95 / medP95;
     diagnose(fat, BUDGET.D_BALANCE_P95);
     diagnose(med, BUDGET.D_BALANCE_P95);
-    // PRINTED ON EVERY RUN, pass or fail - which the wall-clock law did not do.
-    // Its denominator appeared only inside the failure message, so three
-    // attempts on one commit yielded ONE readable point and the quantity could
-    // not be trended at all: a law silent on the success path carries no
-    // evidence of itself (RULE-29). Both quotients are on this line, and the
-    // marker is pure ASCII and stable because CI controls grep for it.
     console.log(
-      `P4-S4-RATIO-MONITOR-BALANCE judgedOn=inDatabaseExecMs max=${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} ` +
-        `inDbFatP95=${fatDbP95.toFixed(3)} inDbMedianP95=${medDbP95.toFixed(3)} ` +
-        `inDbRatio=${verdictRatio === null ? 'none' : verdictRatio.toFixed(3)} ` +
-        `wallFatP95=${fatP95.toFixed(3)} wallMedianP95=${medP95.toFixed(3)} ` +
-        `wallRatio=${monitoredWallRatio === null ? 'none' : monitoredWallRatio.toFixed(3)} judgedOnWall=no ` +
-        `fatOpenInvoices=${volume.fatOpenInvoices} medianOpenInvoices=${MEDIAN.invoicesEach}`,
+      `\nRATIO — P4-D fat-tail over median: ${JSON.stringify({
+        fatP95,
+        medianP95: medP95,
+        ratio,
+        max: RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max,
+        fatOpenInvoices: volume.fatOpenInvoices,
+        medianOpenInvoices: MEDIAN.invoicesEach,
+      })}\n`,
     );
-    expect(verdictRatio, 'the median read executed zero measurable milliseconds inside the database, so this ratio has no denominator').not.toBeNull();
+    expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();
     expect(
-      must(verdictRatio),
-      `P4-S4-RATIO-FAIL-BALANCE judgedOn=inDatabaseExecMs — P4-AL-72's host-independent ratio for this budget is ` +
-        `in-database p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x in-database p95(median). ` +
-        `Measured ${fatDbP95.toFixed(3)} ms over ${medDbP95.toFixed(3)} ms = ${must(verdictRatio).toFixed(2)}x ` +
-        `at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}.\n` +
-        `MONITORING ONLY, judging nothing: the wall-clock quotient is ${fatP95.toFixed(3)} / ${medP95.toFixed(3)} = ` +
-        `${monitoredWallRatio === null ? 'none' : monitoredWallRatio.toFixed(2)}x.\n` +
-        `THIS IS NOT A HOST TAIL. Both halves are the time PostgreSQL reports for executing the statements, so the fixed ` +
-        `per-request cost that a fast runner shrinks is inside NEITHER of them, and this quotient cannot be moved by the ` +
-        `runner's speed the way the wall-clock quotient was (run 42501714040 attempt 3: 3.46x on that run's FASTEST attempt). ` +
-        `A miss here is REAL GROWTH in what the server executes for the fat-tail customer. It is a FAIL to be diagnosed ` +
-        `(P4-AL-76), and the ratio may never be raised to obtain a pass (OD-P4-14, calibration-derived and tighten-only).\n` +
-        `OWNER INSTRUCTION 2026-11-09 for this exact case: STOP. Raise nothing, retry nothing, and bring these numbers ` +
-        `together with an EXPLAIN (ANALYZE, BUFFERS) of BOTH halves — the fat-tail read and the median read — before any ` +
-        `remedy is written.\n` +
-        `fat-tail IN-DATABASE series: ${JSON.stringify(distribution(fatDb, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
-        `median IN-DATABASE series:   ${JSON.stringify(distribution(medDb, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
-        `fat-tail wall series (judging nothing): ${JSON.stringify(distribution(fat.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
-        `median wall series (judging nothing):   ${JSON.stringify(distribution(med.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}`,
+      must(ratio),
+      `P4-AL-72's host-independent ratio for this budget is p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median). ` +
+        `Measured ${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}. ` +
+        `A miss here is a statement about the read's GROWTH, not about this host, and it is a FAIL to be diagnosed (P4-AL-76): ` +
+        `the ratio may never be raised to obtain a pass (OD-P4-14, tighten-only).\n` +
+        `fat-tail series: ${JSON.stringify(distribution(fat.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
+        `median series:   ${JSON.stringify(distribution(med.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}`,
     ).toBeLessThanOrEqual(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
-    // Printed only AFTER the assertion held, so a run that executed nothing
-    // cannot satisfy a control that greps for it.
-    console.log('P4-S4-RATIO-OK-BALANCE');
   });
 
   it(`RLS COST (P4-AL-75, OD-P4-14 provisional): the daftar_app figure over the schema-owner figure, <= ${RATIOS.RLS_COST.max}x`, () => {

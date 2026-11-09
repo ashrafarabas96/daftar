@@ -88,7 +88,7 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 432,
+    "hits": 430,
     "planGates": 120,
     "assertions": 31,
     "files": 54
@@ -97,7 +97,7 @@
     "cross-phase": {
       "planGates": 51,
       "assertions": 11,
-      "mentions": 121
+      "mentions": 119
     },
     "phase-2": {
       "planGates": 0,
@@ -401,7 +401,7 @@
     "tests/performance/receivables-s4-budgets.test.ts": {
       "planGates": 21,
       "assertions": 2,
-      "mentions": 14,
+      "mentions": 12,
       "phase": "cross-phase"
     },
     "tests/performance/receivables-s4-dataset.ts": {
@@ -3579,7 +3579,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 502,
+      "line": 440,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3587,7 +3587,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 537,
+      "line": 475,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3595,7 +3595,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 557,
+      "line": 495,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3604,7 +3604,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 585,
+      "line": 523,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3613,7 +3613,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 893,
+      "line": 824,
       "phase": "cross-phase",
       "signals": ["node-type"],
       "kind": "mention",
@@ -3621,7 +3621,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 895,
+      "line": 826,
       "phase": "cross-phase",
       "signals": ["index-name"],
       "kind": "mention",
@@ -3629,7 +3629,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 896,
+      "line": 827,
       "phase": "cross-phase",
       "signals": ["index-cond"],
       "kind": "mention",
@@ -3637,7 +3637,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 902,
+      "line": 833,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -3645,7 +3645,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 907,
+      "line": 838,
       "phase": "cross-phase",
       "signals": ["explain", "query-plan-json"],
       "kind": "mention",
@@ -3653,7 +3653,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 908,
+      "line": 839,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "assertion",
@@ -3661,7 +3661,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1391,
+      "line": 1314,
       "phase": "cross-phase",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3669,7 +3669,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1564,
+      "line": 1476,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3677,7 +3677,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1579,
+      "line": 1491,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3685,7 +3685,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1580,
+      "line": 1492,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3693,7 +3693,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1701,
+      "line": 1607,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3702,7 +3702,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1724,
+      "line": 1630,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3711,7 +3711,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1766,
+      "line": 1672,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3720,7 +3720,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1825,
+      "line": 1731,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3729,7 +3729,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1826,
+      "line": 1732,
       "phase": "cross-phase",
       "signals": ["node-type"],
       "kind": "assertion",
@@ -3737,7 +3737,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1827,
+      "line": 1733,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3746,7 +3746,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1829,
+      "line": 1735,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3755,7 +3755,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1840,
+      "line": 1746,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3764,7 +3764,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1890,
+      "line": 1796,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3773,41 +3773,25 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1929,
-      "phase": "cross-phase",
-      "signals": ["explain", "explain-analyze"],
-      "kind": "mention",
-      "text": "* with an `EXPLAIN (ANALYZE, BUFFERS)` of both halves - which is why the"
-    },
-    {
-      "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1973,
+      "line": 1824,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
       "via": ["ratio"],
-      "text": "expect(verdictRatio, 'the median read executed zero measurable milliseconds inside the database, so this ratio has no denominator').not.toBeNull();"
+      "text": "expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();"
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1974,
+      "line": 1825,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
-      "via": ["ratio", "monitoredWallRatio"],
+      "via": ["ratio"],
       "text": "expect("
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 1988,
-      "phase": "cross-phase",
-      "signals": ["explain", "explain-analyze"],
-      "kind": "mention",
-      "text": "`together with an EXPLAIN (ANALYZE, BUFFERS) of BOTH halves — the fat-tail read and the median read — before any ` +"
-    },
-    {
-      "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2032,
+      "line": 1868,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3816,7 +3800,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2033,
+      "line": 1869,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3825,7 +3809,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2111,
+      "line": 1947,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3834,7 +3818,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2151,
+      "line": 1987,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3843,7 +3827,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2202,
+      "line": 2038,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3852,7 +3836,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2306,
+      "line": 2142,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3861,7 +3845,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2315,
+      "line": 2151,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3870,7 +3854,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2344,
+      "line": 2180,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -3879,7 +3863,7 @@
     },
     {
       "file": "tests/performance/receivables-s4-budgets.test.ts",
-      "line": 2345,
+      "line": 2181,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "plan-gate",
