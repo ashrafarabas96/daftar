@@ -79,10 +79,23 @@ describe('B2 — the dunning window has a declared upper bound', () => {
     expectRefusal(() => decide([0, 24], MAX_DUNNING_WINDOW_HOURS + 1), 'billing.dunning_policy_invalid');
   });
 
-  it('REFUSES an offset past the bound even when the grace window is inside it', () => {
-    // `graceHours` must be at least the last offset, so this input is refused
-    // by the bound and not by that older rule: the bound is checked per value.
-    expectRefusal(() => decide([0, MAX_DUNNING_WINDOW_HOURS + 1], MAX_DUNNING_WINDOW_HOURS + 1), 'billing.dunning_policy_invalid');
+  it('REFUSES an offset past the bound even when the grace window is inside it, and the three rules keep their order', () => {
+    // CORRECTED. This case used to pass `MAX + 1` for `graceHours` as well,
+    // so it did NOT isolate the per-offset bound: the grace bound would have
+    // caught the same input. The grace window here is 25 hours — inside the
+    // bound and below the offending offset — so the only rule that can refuse
+    // it first is the per-value offset bound.
+    const offset = expectRefusal(() => decide([0, MAX_DUNNING_WINDOW_HOURS + 1], 25), 'billing.dunning_policy_invalid');
+    expect(offset.message).toContain('a retry offset may not outlast');
+
+    // The two rules that run AFTER it, each on an input of its own, asserted
+    // by MESSAGE and not only by code: these three messages are how the order
+    // is pinned. If the grace checks were moved in front of the loop, the
+    // first expectation above would carry a grace message and red here.
+    const graceBound = expectRefusal(() => decide([0, 24], MAX_DUNNING_WINDOW_HOURS + 1), 'billing.dunning_policy_invalid');
+    expect(graceBound.message).toContain('a grace window may not outlast');
+    const graceShorter = expectRefusal(() => decide([0, 72], 24), 'billing.dunning_policy_invalid');
+    expect(graceShorter.message).toContain('a grace window shorter than the last retry');
   });
 
   it('POSITIVE CONTROL: the bound itself is accepted and still formats an instant', () => {

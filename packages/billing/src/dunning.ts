@@ -218,6 +218,29 @@ function assertPolicy(policy: DunningPolicy | undefined): DunningPolicy {
     if (offset > MAX_DUNNING_WINDOW_HOURS) {
       // Per value, not on the last one alone: the offsets are only known to
       // increase, and a bound checked once is a bound on one number.
+      //
+      // DECLARED AS A LAYER, because an audit found it has no input of its
+      // own that only it refuses. This check runs FIRST in the order, and
+      // every policy it refuses is refused again by one of the two grace
+      // rules below — measured by removing this refusal on a throw-away
+      // clone (sha256 83ea80b3 -> 4e35be46 -> 83ea80b3 restored) and reading
+      // which rule fired instead:
+      //
+      //   offsets [0, MAX+1], grace 25     -> 'a grace window shorter than
+      //                                       the last retry …'
+      //   offsets [0, MAX+1], grace MAX+1  -> 'a grace window may not
+      //                                       outlast …'
+      //   offsets [0, MAX],   grace MAX    -> accepted, both with and
+      //                                       without this check
+      //
+      // So nothing is accepted here that should be refused: the redundancy is
+      // depth, not a hole. The order is NOT changed to give this check an
+      // input of its own, because reordering a money refusal in a sealed file
+      // with no measured defect is forbidden (the owner's ruling of
+      // 2026-11-09), and the check is kept because a third interval in
+      // `BILLING_INTERVALS` or a change to the grace rules could make it the
+      // only one standing. `test/dunning-window-bound.test.ts` pins all three
+      // messages so a reordering reds there rather than passing quietly.
       refuse('billing.dunning_policy_invalid', 'a retry offset may not outlast the longest supported billing cycle', { attemptNo: i + 1 });
     }
     previous = offset;

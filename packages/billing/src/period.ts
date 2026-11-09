@@ -106,10 +106,16 @@ export function billingPeriodByIndex(anchor: BillingAnchor, index: number): Inde
   const startMs = addMonthsUtc(anchorMs, months * index);
   const endMs = addMonthsUtc(anchorMs, months * (index + 1));
   if (!(endMs > startMs)) {
-    // Unreachable for the two supported intervals; stated anyway, because an
-    // empty or inverted period is the one shape every caller downstream
-    // divides by. A law nobody can reach today is still the law that holds
-    // when a third interval arrives.
+    // CORRECTED 2026-11-09: this said "unreachable for the two supported
+    // intervals", and it is reachable — measured. With the anchor at
+    // `+275760-09-01T00:00:00.000Z` and `interval: 'year'`, index 1 refuses
+    // here by name (`billing.invariant_violated`, `period_non_empty`),
+    // because `addMonthsUtc` runs past the end of the representable range and
+    // `Date.UTC` returns NaN, so `endMs > startMs` is false. That is exactly
+    // the shape this law exists for, and it is also what keeps
+    // `new Date(startMs).toISOString()` below from throwing a raw RangeError
+    // with no `billing.*` code. An empty or inverted period is the one shape
+    // every caller downstream divides by.
     refuse('billing.invariant_violated', 'a billing period must be non-empty', { invariant: 'period_non_empty', periodIndex: index });
   }
   return { index, startsAt: new Date(startMs).toISOString(), endsAt: new Date(endMs).toISOString() };
