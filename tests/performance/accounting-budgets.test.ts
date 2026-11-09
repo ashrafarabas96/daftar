@@ -312,6 +312,32 @@ function printMonitor(tag: 'A' | 'B', m: Measurement): void {
 }
 
 /**
+ * PRINTED ON EVERY RUN for the budgets this file still judges on the WALL
+ * clock, and for the same reason `printMonitor` exists for the converted two.
+ *
+ * WHY IT WAS ADDED, MEASURED. C, D, E and F printed their figures ONLY inside
+ * their `expect` message, which a passing run never emits. So run 42501714040 -
+ * three attempts on one commit - carried ZERO readable points for each of these
+ * four, and the owner's standing rule of 2026-11-09 ("convert anything whose
+ * margin is under 20%") could not be applied to them: an unreadable margin is
+ * neither above nor below a threshold. A law silent on the success path carries
+ * no evidence of itself (RULE-29), and a budget whose numbers nobody has ever
+ * read is not a budget anyone may convert either - a conversion decided without
+ * the figures would be a guess wearing a measurement's clothes.
+ *
+ * `marginPct` is printed and judges NOTHING. The verdict stays the `expect`
+ * below each call, against the same ceiling, on the same series.
+ */
+function printWallMonitor(tag: 'C' | 'D' | 'E' | 'F', m: Measurement): void {
+  const pct = m.budgetMs === 0 ? Number.NaN : ((m.budgetMs - m.p95) / m.budgetMs) * 100;
+  console.log(
+    `PERF01-WALL-MONITOR-${tag} judgedOn=wallClockClientMs budgetMs=${m.budgetMs} iterations=${m.iterations} ` +
+      `wallP50=${m.p50.toFixed(3)} wallP95=${m.p95.toFixed(3)} wallP99=${m.p99.toFixed(3)} wallMax=${m.max.toFixed(3)} ` +
+      `wallMin=${m.min.toFixed(3)} marginPct=${pct.toFixed(1)}`,
+  );
+}
+
+/**
  * WHAT THE C BUDGET'S READ ACTUALLY DID (§10, §11; f §11, §12).
  *
  * A millisecond figure says a query was slow. It does not say WHY, and the
@@ -638,6 +664,7 @@ describe('C — whole-business trial balance (§34 C)', () => {
         .set('X-Business-Id', businessId);
       expect(response.status).toBe(200);
     });
+    printWallMonitor('C', m);
     expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.C_TRIAL_BALANCE_P95);
   }, 900_000);
 });
@@ -651,6 +678,7 @@ describe('D — a 50-row general-ledger page (§34 D)', () => {
         .set('X-Business-Id', businessId);
       expect(response.status).toBe(200);
     });
+    printWallMonitor('D', m);
     expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.D_LEDGER_PAGE_P95);
   }, 900_000);
 });
@@ -664,6 +692,7 @@ describe('E — account balance as of a date (§34 E)', () => {
         .set('X-Business-Id', businessId);
       expect(response.status).toBe(200);
     });
+    printWallMonitor('E', m);
     expect(m.p95, JSON.stringify(m)).toBeLessThanOrEqual(BUDGET.E_BALANCE_AS_OF_P95);
   }, 900_000);
 });
@@ -681,7 +710,7 @@ describe('F — a full reconciliation pass (§34 F)', () => {
       const started = process.hrtime.bigint();
       const result = await reconcile(reader, clock);
       const elapsed = Number(process.hrtime.bigint() - started) / 1e6;
-      summarise('F full reconciliation', BUDGET.F_RECONCILIATION_TOTAL, [elapsed]);
+      printWallMonitor('F', summarise('F full reconciliation', BUDGET.F_RECONCILIATION_TOTAL, [elapsed]));
 
       expect(result.enumeration).toBe('complete');
       expect(result.errorCount).toBe(0);
