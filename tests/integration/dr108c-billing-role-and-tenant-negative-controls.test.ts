@@ -458,7 +458,7 @@ describe('DR-108-C control 1 — an unauthorized role is refused in every operat
              FROM pg_class c
              CROSS JOIN LATERAL aclexplode(c.relacl) a
              LEFT JOIN pg_roles g ON g.oid = a.grantee
-            WHERE c.oid = format('public.%I', $1)::regclass AND a.grantee <> c.relowner
+            WHERE c.oid = format('public.%I', $1::text)::regclass AND a.grantee <> c.relowner
             ORDER BY 1, 2`,
           [rel],
         )
@@ -496,13 +496,20 @@ describe('DR-108-C control 1 — an unauthorized role is refused in every operat
     for (const rel of RELATIONS) {
       for (const op of OPERATIONS) {
         const r = (
-          await ownerPool().query<{ y: boolean }>(`SELECT has_table_privilege($1, format('public.%I', $2)::regclass, $3) AS y`, [UNAUTHORIZED, rel, op])
+          await ownerPool().query<{ y: boolean }>(`SELECT has_table_privilege($1::name, format('public.%I', $2::text)::regclass, $3::text) AS y`, [
+            UNAUTHORIZED,
+            rel,
+            op,
+          ])
         ).rows[0];
         expect(r?.y, `${UNAUTHORIZED} on ${rel}/${op}`).toBe(false);
       }
       // Sightedness of the same probe, on the same relation, in the same run.
       const yes = (
-        await ownerPool().query<{ y: boolean }>(`SELECT has_table_privilege($1, format('public.%I', $2)::regclass, 'SELECT') AS y`, [AUTHORIZED, rel])
+        await ownerPool().query<{ y: boolean }>(`SELECT has_table_privilege($1::name, format('public.%I', $2::text)::regclass, 'SELECT') AS y`, [
+          AUTHORIZED,
+          rel,
+        ])
       ).rows[0];
       expect(yes?.y, `${AUTHORIZED} holds SELECT on ${rel}, so the false answers above are answers`).toBe(true);
     }
