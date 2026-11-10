@@ -102,6 +102,60 @@ function stepBlock(lines: readonly string[], command: string): [number, number] 
   return [start, end];
 }
 
+/**
+ * EVERY `[start, end)` STEP BLOCK WHOSE TEXT NAMES `suite`, counting an
+ * `npm run <script>` inside the block as that script's body — the same
+ * expansion `workflowNamedSuites` and `requiredJobReach` both perform.
+ *
+ * WHY THIS EXISTS, MEASURED. `stepBlock` finds ONE step by its exact one-line
+ * `run:`, and a plant whose subject is the LOSS of a suite cannot use it. The
+ * two DR-98 negative-control steps name
+ * `tests/performance/receivables-s4-budgets.test.ts` literally, inside a
+ * multi-line `run: |`, so removing the measured step alone left the required
+ * job STILL naming the suite: the planted loss never happened and the two red
+ * proofs below could not reproduce — RULE-27 exactly, a plant that matches
+ * nothing read as a passing control. Measured on this tree: THREE step blocks
+ * name that suite — the measured step through `perf:phase4:s4` (ci.yml:774),
+ * and the two controls literally (ci.yml:1078 and :1099) — and all three are
+ * inside the required `backend` job, which begins at ci.yml:182 and ends at
+ * ci.yml:1158, so this removal reaches no other job.
+ *
+ * This is a PROOF's plant and nothing else: no gate reads it, and no table,
+ * floor, derivation or percentile changes. `stepBlock` keeps all 19 of its
+ * other callers.
+ */
+function stepBlocksNaming(lines: readonly string[], suite: string): [number, number][] {
+  const scripts = (JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { scripts?: Record<string, unknown> }).scripts ?? {};
+  const blocks: [number, number][] = [];
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^ {6}- /.test(lines[i] ?? '')) continue;
+    let end = i + 1;
+    while (end < lines.length && !/^ {0,6}\S/.test(lines[end] ?? '') && !/^ {6}[-#]/.test(lines[end] ?? '')) end += 1;
+    let text = lines.slice(i, end).join('\n');
+    for (const m of text.matchAll(/\bnpm run ([A-Za-z0-9:_-]+)/g)) {
+      const body = scripts[m[1] ?? ''];
+      if (typeof body === 'string') text += `\n${body}`;
+    }
+    if (text.includes(suite)) blocks.push([i, end]);
+    i = end - 1;
+  }
+  return blocks;
+}
+
+/** The workflow with EVERY step block naming `suite` removed, and HOW MANY were removed. */
+function withoutEveryStepNaming(what: string, suite: string): { readonly text: string; readonly removed: number } {
+  let removed = 0;
+  const text = workflowWith(what, (lines) => {
+    const blocks = stepBlocksNaming(lines, suite);
+    expect(blocks.length, `no step block of ${WORKFLOW} names ${suite}, so this plant would remove nothing`).toBeGreaterThan(0);
+    removed = blocks.length;
+    let out = [...lines];
+    for (const [start, end] of [...blocks].reverse()) out = [...out.slice(0, start), ...out.slice(end)];
+    return out;
+  });
+  return { text, removed };
+}
+
 const S3_COMMAND = `npm run ${S3_SCRIPT}`;
 /** The gate's own prose-stripping, mirrored here so a proof can assert its plant survived it. */
 const stripProseForProof = (source: string): string => source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
@@ -1088,13 +1142,21 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
     // available is the reachability one.
     const row = S4_EVIDENCE_STEPS[0];
     expect(row, 'the table is empty, so this plant has no subject').toBeDefined();
+    let removed = 0;
     const dir = rootWithEvidence((d) => {
-      const stripped = workflowWith(`every step reaching ${row?.suite ?? ''} removed`, (lines) => {
-        const [start, end] = stepBlock(lines, row?.command ?? '');
-        return [...lines.slice(0, start), ...lines.slice(end)];
-      });
-      writeFileSync(join(d, WORKFLOW), stripped, 'utf8');
+      const stripped = withoutEveryStepNaming(`every step reaching ${row?.suite ?? ''} removed`, row?.suite ?? '');
+      removed = stripped.removed;
+      writeFileSync(join(d, WORKFLOW), stripped.text, 'utf8');
     });
+    // THE PLANT APPLIED, PROVEN BEFORE ITS RESULT IS READ (RULE-27, DR-55):
+    // a NON-ZERO number of step blocks was removed, and the required job no
+    // longer names the suite. Removing only the measured step left the two
+    // negative-control steps naming it, the loss never happened, and this
+    // proof reported the cross-check's silence as the cross-check's failure.
+    expect(removed, 'the plant removed no step block, so the loss it plants never happened').toBeGreaterThan(0);
+    expect(workflowNamedSuites(dir), 'the required job still names the suite, so the plant did not reproduce the loss of reachability').not.toContain(
+      row?.suite ?? '',
+    );
     const found = evidenceCoverageProblems(dir);
     expect(
       found.some((m) => m.includes(row?.suite ?? '') && m.includes(`NO step of the required \`${REQUIRED_JOB}\` job reaches it`)),
@@ -1174,7 +1236,10 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
 
   it('RP-EC-F red: a table row NO step of the required job names takes the derivation below its FLOOR and is refused', () => {
     // The workflow side of the same correction. The suite is present and
-    // still attributed to this slice; only the step that named it is gone. The
+    // still attributed to this slice; only the steps that named it are gone —
+    // EVERY one of them, because the required job names this suite from three
+    // step blocks (the measured step and DR-98's two negative controls) and
+    // removing one of three is not the loss this case plants. The
     // directory that covers it (`perf:phase2:s8` names the whole of
     // `tests/performance`) is run by no step of any job, which is exactly why
     // directory reachability is not enough for a MEASURED row — and the floor
@@ -1182,13 +1247,16 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
     // is losing a measurement.
     const row = S4_EVIDENCE_STEPS[0];
     expect(row, 'the table is empty, so this plant has no subject').toBeDefined();
+    let removed = 0;
     const dir = rootWithEvidence((d) => {
-      const stripped = workflowWith(`the step naming ${row?.suite ?? ''} removed`, (lines) => {
-        const [start, end] = stepBlock(lines, row?.command ?? '');
-        return [...lines.slice(0, start), ...lines.slice(end)];
-      });
-      writeFileSync(join(d, WORKFLOW), stripped, 'utf8');
+      const stripped = withoutEveryStepNaming(`every step naming ${row?.suite ?? ''} removed`, row?.suite ?? '');
+      removed = stripped.removed;
+      writeFileSync(join(d, WORKFLOW), stripped.text, 'utf8');
     });
+    // The plant applied, proven before its result is read: EVERY step naming
+    // the suite is gone — not only the measured one — because the required job
+    // names it from three step blocks and one removal is not the loss.
+    expect(removed, 'the plant removed no step block, so the loss it plants never happened').toBeGreaterThan(0);
     expect(workflowNamedSuites(dir), 'the required job still names the suite, so the plant did not reproduce the loss').not.toContain(row?.suite ?? '');
     const found = evidenceCoverageProblems(dir);
     expect(

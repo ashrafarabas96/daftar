@@ -2,14 +2,20 @@
   "$schema": "daftar/ci-job-conservation/1",
   "law": "tests/guards/ci-job-conservation.test.ts",
   "baseline": {
-    "rev": "a191d9da5a38e3d029a3e1c354a1d949113322e5",
+    "rev": "4c878e0f3382e11f0c2e82289a35c0103809c438",
     "job": "backend",
-    "steps": 51
+    "steps": 57
   },
-  "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-golden", "backend-neg-controls"],
+  "jobs": [
+    "backend",
+    "backend-static",
+    "backend-gates-p2",
+    "backend-golden",
+    "backend-neg-controls"
+  ],
   "totals": {
     "shared": 11,
-    "assigned": 40
+    "assigned": 46
   },
   "shared": [
     "Build contract, accounting and design-system packages",
@@ -26,9 +32,13 @@
   ],
   "assignment": {
     "API build": "backend-static",
+    "Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets": "backend",
+    "Budget negative control — a delay INSIDE the database must fail the accounting A and B budgets": "backend",
+    "Budget negative control — a delay OUTSIDE the database must NOT fail the P4-D and P4-F-TXN budgets": "backend",
+    "Budget negative control — a delay OUTSIDE the database must NOT fail the accounting A and B budgets": "backend",
     "Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail": "backend-neg-controls",
-    "Budget negative control — the accounting A and B budgets must be able to fail": "backend-neg-controls",
     "Database contract from zero (throw-away embedded server; same check as the release gate)": "backend-static",
+    "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)": "backend",
     "Format": "backend-static",
     "Golden regression suite": "backend-golden",
     "Install Chromium for the gate's real-browser matrix": "backend",
@@ -59,6 +69,8 @@
     "Plan-evidence contract": "backend",
     "Plan-evidence target measurement": "backend",
     "Process composition guard — planted-defect red proof": "backend",
+    "Ratio negative control — a delay INSIDE the database in the FIVE-invoice arm alone must fail P4-AL-72": "backend",
+    "Ratio negative control — a delay OUTSIDE the database must NOT fail P4-AL-72": "backend",
     "Receivables read budgets — P4-D and P4-F, measured": "backend",
     "Set-based AR answer equivalence — the 0083/0084 readers against the per-invoice original": "backend",
     "Static guards": "backend-static",
