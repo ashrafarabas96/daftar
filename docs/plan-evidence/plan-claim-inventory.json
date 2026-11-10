@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 430,
+    "hits": 432,
     "planGates": 120,
     "assertions": 31,
-    "files": 54
+    "files": 55
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 51,
       "assertions": 11,
-      "mentions": 119
+      "mentions": 121
     },
     "phase-2": {
       "planGates": 0,
@@ -116,6 +116,12 @@
     }
   },
   "byFile": {
+    "docs/decisions/2026-11-11-p4d-ratio-remedy-options.md": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 2,
+      "phase": "cross-phase"
+    },
     ".github/workflows/ci.yml": {
       "planGates": 0,
       "assertions": 2,
@@ -442,6 +448,22 @@
     }
   },
   "hits": [
+    {
+      "file": "docs/decisions/2026-11-11-p4d-ratio-remedy-options.md",
+      "line": 126,
+      "phase": "cross-phase",
+      "signals": ["explain", "explain-analyze", "query-plan-json"],
+      "kind": "mention",
+      "text": "`EXPLAIN (ANALYZE, BUFFERS, VERBOSE, FORMAT JSON)` on the two arms' own"
+    },
+    {
+      "file": "docs/decisions/2026-11-11-p4d-ratio-remedy-options.md",
+      "line": 131,
+      "phase": "cross-phase",
+      "signals": ["explain", "query-plan-json"],
+      "kind": "mention",
+      "text": "machinery already exists: `plansOf(path)` runs `EXPLAIN (FORMAT JSON)` through"
+    },
     {
       "file": ".github/workflows/ci.yml",
       "line": 773,
