@@ -272,6 +272,75 @@ for (const f of tsFiles(join(ROOT, 'apps/api/src/modules'))) {
   for (const mod of ['MerchantApiModule', 'PlatformApiModule', 'WorkerModule']) {
     if (!main.includes(mod)) fail('runtime-isolation', 'apps/api/src/main.ts', `entrypoint does not compose ${mod}`);
   }
+
+  // SEC-01 — the one guard that names JWT on the worker mode by itself.
+  //
+  // Why it exists: before SEC-01 the reference architecture claimed this was
+  // already enforced ("Static guard 13/14 and production-providers.test.ts
+  // keep the code honest"), and `JWT` appeared ZERO times in every guard in
+  // this file and in scripts/guards/. A denial with no witness is a denial
+  // that comes back out in the next refactor, and the document that promised
+  // it had already silenced the question once.
+  //
+  // What it checks, and why it is shaped this way: the worker denial in
+  // `config.ts` must name BOTH JWT variables AND the worker mode, and it must
+  // sit BEFORE `if (c.NODE_ENV !== 'production') return;`. A block written
+  // after that gate would still pass a production test — by the gate, not by
+  // the denial — which is the silent false positive this project has been
+  // bitten by. So the gate is located first and only the text before it is
+  // searched. `read` strips comments, so prose cannot satisfy this guard.
+  //
+  // WHAT IT DOES NOT PROVE, said plainly so nobody reads it as wider than it
+  // is. It proves that the denial is NAMED and POSITIONED, not that it DENIES:
+  // `if (false && c[n])` inside the block keeps this guard green, and only
+  // `tests-unit/sec01-worker-jwt-deny.test.ts` catches that, by calling
+  // `loadConfig`. Text is the cheap half of the witness; the behaviour is the
+  // other half, and neither replaces the other.
+  //
+  // It also PINS THE WORDING of the refusal message. `PROCESS_MODE=worker` is
+  // now a contract in three places — here and in the two tests' regexes — so
+  // rephrasing the message to something exactly equivalent turns this red.
+  // That is deliberate (the point of SEC-01 is a witness that names JWT on
+  // this mode), but it must be declared rather than discovered: change the
+  // message and all three move together.
+  const cfg = read('apps/api/src/config.ts');
+  const gateAt = cfg.indexOf("if (c.NODE_ENV !== 'production') return;");
+  if (gateAt < 0) {
+    fail(
+      'worker-jwt-denial',
+      'apps/api/src/config.ts',
+      "the production gate `if (c.NODE_ENV !== 'production') return;` was not found, so SEC-01 cannot be measured",
+    );
+  } else {
+    const beforeGate = cfg.slice(0, gateAt);
+    const NEEDED = ['JWT_SECRET', 'JWT_KEYS', 'PROCESS_MODE=worker'] as const;
+    // EVERY worker block before the gate is a candidate, not just the first.
+    // Anchoring on the first occurrence made a lawful earlier `mode ===
+    // 'worker'` block — one that denies something else entirely — shadow this
+    // one and fail three times over a denial that was present and correct.
+    // A guard whose false positive is this easy to trip is a guard someone
+    // deletes, so the question asked is the right one: does ANY block before
+    // the gate carry all three?
+    const windows: string[] = [];
+    for (let at = beforeGate.indexOf("mode === 'worker'"); at >= 0; at = beforeGate.indexOf("mode === 'worker'", at + 1)) {
+      windows.push(beforeGate.slice(at, at + 800));
+    }
+    const satisfied = windows.some((w) => NEEDED.every((n) => w.includes(n)));
+    if (!satisfied) {
+      // Name what is missing from the closest candidate, so the message says
+      // what to fix rather than only that something is wrong.
+      const best = windows.reduce((acc, w) => (NEEDED.filter((n) => w.includes(n)).length > NEEDED.filter((n) => acc.includes(n)).length ? w : acc), '');
+      for (const needed of NEEDED) {
+        if (!best.includes(needed)) {
+          fail(
+            'worker-jwt-denial',
+            'apps/api/src/config.ts',
+            `PROCESS_MODE=worker must be refused ${needed === 'PROCESS_MODE=worker' ? 'the session signing key by name' : needed} in a block BEFORE the production gate (SEC-01: the worker must not hold the key that mints access tokens)`,
+          );
+        }
+      }
+    }
+  }
 }
 
 // Rule 14 (§57): migration credentials never appear in any runtime module,
