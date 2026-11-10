@@ -19,10 +19,14 @@
  *                          drop is destructive, so it is confirmed in writing
  *   DR_DRILL_ARTIFACT_DIR  where the dump and the evidence are written
  *                          (default: var/dr-drill, created 0700)
+ *   DR_DRILL_EMPTY_SECTIONS  census sections established to be empty in
+ *                          this schema, named exactly, so their empty
+ *                          comparison is acknowledged and not read as proof
  *   DR_DRILL_RTO_SECONDS   the RTO to compare the measured restore against
  *                          (default: 14400 — the four hours of
  *                          docs/DAFTAR_BACKUP_AND_DR.md:15)
- *   DR_DRILL_ALLOW_NONEMPTY_TARGET=1  permits dropping a target that holds rows
+ *   DR_DRILL_ALLOW_NONEMPTY_TARGET   permits dropping a target that holds rows,
+ *                          and must name the measured row count itself
  *
  * Usage:
  *   node scripts/dr-drill.ts              the whole drill, both controls
@@ -40,7 +44,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 type Json = unknown;
@@ -75,6 +79,9 @@ const CENSUS_SECTIONS = [
   'constraints',
   'indexes',
   'routines',
+  'routineGrants',
+  'columnGrants',
+  'defaultAcls',
   'owners',
 ] as const;
 
@@ -84,6 +91,12 @@ const TARGET_NAME_RULE = /_(restore|drill_target)$/;
 const steps: Step[] = [];
 let failed = false;
 let incomplete = false;
+
+/** Every secret this run holds, so the scrubber can remove it even when it
+ *  appears alone, with no `password=` or URL around it. */
+const SECRETS: string[] = [];
+let artifactsToRemove: string[] = [];
+let keepSecrets = false;
 
 /**
  * Removes anything that could carry a credential: a URI with userinfo, a
@@ -100,6 +113,12 @@ function scrub(text: string): string {
   }
   const pw = process.env.PGPASSWORD;
   if (pw !== undefined && pw.length > 0) out = out.split(pw).join('<scrubbed>');
+  // The passwords taken out of the two URLs, which is what goes into the
+  // children's environment: a message may carry one of them with no `password=`
+  // and no URL around it.
+  for (const secret of SECRETS) {
+    if (secret.length > 0) out = out.split(secret).join('<scrubbed>');
+  }
   return out;
 }
 
@@ -163,13 +182,28 @@ function describe(dsn: Dsn): string {
   return `${host}:${dsn.port}/${dsn.database}`;
 }
 
+/**
+ * The last non-empty lines of a tool's message. Slicing the raw split picks up
+ * the empty tail after the trailing newline, which is how a real error
+ * ("role daftar_migrator does not exist") printed as nothing at all and a
+ * failure arrived without its reason.
+ */
+function lastLines(text: string, count: number): string {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+  return lines.length === 0 ? '(the tool said nothing)' : lines.slice(-count).join(' ');
+}
+
 function run(file: string, args: string[], env?: NodeJS.ProcessEnv): { out: string; code: number; err: string } {
   try {
     const out = execFileSync(file, args, { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, env: env ?? process.env });
     return { out, code: 0, err: '' };
   } catch (error) {
     const e = error as { status?: number; stdout?: string; stderr?: string; message?: string };
-    return { out: e.stdout ?? '', code: e.status ?? 1, err: scrub(e.stderr ?? e.message ?? '') };
+    const raw = e.stderr ?? e.message ?? '';
+    const text = raw.trim() === ''
+      ? `(the tool wrote nothing to stderr; its last output was: ${lastLines(e.stdout ?? '', 2)})`
+      : raw;
+    return { out: e.stdout ?? '', code: e.status ?? 1, err: scrub(text) };
   }
 }
 
@@ -184,7 +218,7 @@ function psql(env: NodeJS.ProcessEnv, sql: string): { out: string; code: number;
 function psqlJson(env: NodeJS.ProcessEnv, sql: string, what: string): Json {
   const result = psql(env, sql);
   if (result.code !== 0) {
-    record(`query:${what}`, 'FAIL', `psql exited ${result.code}: ${result.err.split('\n').slice(-2).join(' ')}`);
+    record(`query:${what}`, 'FAIL', `psql exited ${result.code}: ${lastLines(result.err, 2)}`);
     return null;
   }
   const text = result.out.trim();
@@ -244,11 +278,12 @@ const SQL: Record<string, string> = {
   // The accounting truth of this schema hangs on triggers, on constraints and
   // on who owns a SECURITY DEFINER routine: a restore that loses one of those
   // would otherwise read as identical.
+  // The whole definition, not the name: a trigger that comes back AFTER
+  // instead of BEFORE, or without its WHEN, carries the same name.
   triggers: `
-    SELECT coalesce(json_agg(json_build_object('table', c.relname, 'trigger', t.tgname, 'enabled', t.tgenabled, 'function', p.proname) ORDER BY c.relname, t.tgname), '[]'::json)
+    SELECT coalesce(json_agg(json_build_object('table', c.relname, 'trigger', t.tgname, 'enabled', t.tgenabled, 'type', t.tgtype, 'definition', pg_get_triggerdef(t.oid, true)) ORDER BY c.relname, t.tgname), '[]'::json)
     FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
     JOIN pg_namespace ns ON ns.oid = c.relnamespace
-    JOIN pg_proc p ON p.oid = t.tgfoid
     WHERE ns.nspname = 'public' AND NOT t.tgisinternal`,
   constraints: `
     SELECT coalesce(json_agg(json_build_object('table', c.relname, 'constraint', con.conname, 'type', con.contype, 'deferrable', con.condeferrable, 'deferred', con.condeferred, 'definition', pg_get_constraintdef(con.oid)) ORDER BY c.relname, con.conname), '[]'::json)
@@ -257,9 +292,23 @@ const SQL: Record<string, string> = {
   indexes: `
     SELECT coalesce(json_agg(json_build_object('table', tablename, 'index', indexname, 'definition', indexdef) ORDER BY tablename, indexname), '[]'::json)
     FROM pg_indexes WHERE schemaname = 'public'`,
+  // The body is compared by digest, and proconfig with it: a SECURITY DEFINER
+  // routine that comes back without its pinned search_path is the hole DR-60
+  // closes, and it would otherwise read as identical.
   routines: `
-    SELECT coalesce(json_agg(json_build_object('routine', p.proname, 'args', pg_get_function_identity_arguments(p.oid), 'owner', pg_get_userbyid(p.proowner), 'definer', p.prosecdef, 'volatility', p.provolatile) ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)), '[]'::json)
+    SELECT coalesce(json_agg(json_build_object('routine', p.proname, 'args', pg_get_function_identity_arguments(p.oid), 'owner', pg_get_userbyid(p.proowner), 'definer', p.prosecdef, 'volatility', p.provolatile, 'config', coalesce(p.proconfig::text, ''), 'bodySha', md5(coalesce(p.prosrc, ''))) ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)), '[]'::json)
     FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace WHERE ns.nspname = 'public'`,
+  // Privileges that role_table_grants does not carry: EXECUTE on a routine,
+  // a privilege granted on one column, and what a future object will inherit.
+  routineGrants: `
+    SELECT coalesce(json_agg(json_build_object('grantee', grantee, 'routine', routine_name, 'privilege', privilege_type) ORDER BY grantee, routine_name, privilege_type), '[]'::json)
+    FROM information_schema.role_routine_grants WHERE routine_schema = 'public'`,
+  columnGrants: `
+    SELECT coalesce(json_agg(json_build_object('grantee', grantee, 'table', table_name, 'column', column_name, 'privilege', privilege_type) ORDER BY grantee, table_name, column_name, privilege_type), '[]'::json)
+    FROM information_schema.role_column_grants WHERE table_schema = 'public'`,
+  defaultAcls: `
+    SELECT coalesce(json_agg(json_build_object('owner', pg_get_userbyid(d.defaclrole), 'objectType', d.defaclobjtype, 'acl', d.defaclacl::text) ORDER BY pg_get_userbyid(d.defaclrole), d.defaclobjtype, d.defaclacl::text), '[]'::json)
+    FROM pg_default_acl d JOIN pg_namespace ns ON ns.oid = d.defaclnamespace WHERE ns.nspname = 'public'`,
   owners: `
     SELECT coalesce(json_agg(json_build_object('object', c.relname, 'kind', c.relkind, 'owner', pg_get_userbyid(c.relowner)) ORDER BY c.relname, c.relkind), '[]'::json)
     FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
@@ -275,6 +324,10 @@ const SQL: Record<string, string> = {
       'forcedRlsTables', (SELECT count(*) FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
                           WHERE ns.nspname = 'public' AND c.relkind = 'r' AND c.relforcerowsecurity),
       'serverVersion', current_setting('server_version'))`,
+  // Which cluster, and which database inside it, as the server says it — not
+  // as the connection string spells it. "localhost", "127.0.0.1" and a local
+  // socket are three spellings of one cluster.
+  identity: `SELECT json_build_object('cluster', (SELECT system_identifier::text FROM pg_control_system()), 'database', current_catalog)`,
 };
 
 /** Each invariant runs only where its table exists AND holds rows: zero
@@ -320,35 +373,170 @@ function census(env: NodeJS.ProcessEnv, label: string): Census | null {
 }
 
 /**
- * The server re-renders a check constraint when it is dumped and restored:
- * `((A AND B) AND C)` comes back as `(A AND B AND C)`. The text differs, the
- * constraint does not. So the comparison is made on a parenthesis-insensitive
- * form, and the number of definitions that differ only in that rendering is
- * reported on its own line rather than hidden.
+ * A check constraint is deparsed from the stored tree on both sides, so when
+ * the two texts differ the two trees differ. Dump and restore flatten a nested
+ * chain of one boolean operator — `((A AND B) AND C)` comes back as
+ * `(A AND B AND C)` — which is the same constraint because AND is associative.
+ *
+ * Stripping every parenthesis would also equate `(A - B) * C` with
+ * `A - B * C`, and `(P AND Q) OR R` with `P AND (Q OR R)` — the second of
+ * which would let a line be both a debit and a credit. So the canonical form
+ * below removes a parenthesis ONLY where a group and its child are chains of
+ * the very same associative boolean operator, and leaves everything else as it
+ * is. The control at the end of this file is what proves it still tells those
+ * pairs apart, and it runs on every drill.
+ */
+type ExprNode = string | ExprNode[];
+
+/** Splits an expression on its parentheses, keeping quoted text atomic. */
+function parseExpr(text: string): ExprNode[] {
+  const root: ExprNode[] = [];
+  const stack: ExprNode[][] = [root];
+  let buffer = '';
+  let i = 0;
+  const flush = (): void => {
+    if (buffer.trim() !== '') stack[stack.length - 1].push(buffer.trim());
+    buffer = '';
+  };
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "'" || ch === '"') {
+      const quote = ch;
+      buffer += quote;
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === quote && text[i + 1] === quote) {
+          buffer += quote + quote;
+          i += 2;
+          continue;
+        }
+        if (text[i] === quote) {
+          buffer += quote;
+          i += 1;
+          break;
+        }
+        buffer += text[i];
+        i += 1;
+      }
+      continue;
+    }
+    if (ch === '(') {
+      flush();
+      const group: ExprNode[] = [];
+      stack[stack.length - 1].push(group);
+      stack.push(group);
+      i += 1;
+      continue;
+    }
+    if (ch === ')') {
+      flush();
+      if (stack.length > 1) stack.pop();
+      i += 1;
+      continue;
+    }
+    buffer += ch;
+    i += 1;
+  }
+  flush();
+  return root;
+}
+
+/** The boolean operators that join this group's own operands. */
+function topOperators(group: ExprNode[]): Set<string> {
+  const ops = new Set<string>();
+  for (const child of group) {
+    if (typeof child !== 'string') continue;
+    for (const match of child.toUpperCase().matchAll(/\b(AND|OR)\b/g)) ops.add(match[1]);
+  }
+  return ops;
+}
+
+function canonicalExpr(node: ExprNode): string {
+  if (typeof node === 'string') return node.replace(/\s+/g, ' ').trim();
+  const ops = topOperators(node);
+  const chain = ops.size === 1 ? [...ops][0] : '';
+  const parts = node.map((child) => {
+    if (typeof child === 'string') return canonicalExpr(child);
+    const inner = canonicalExpr(child);
+    const childOps = topOperators(child);
+    const sameChain = chain !== '' && childOps.size === 1 && [...childOps][0] === chain;
+    return sameChain ? inner : `(${inner})`;
+  });
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
+}
+
+function canonicalConstraint(definition: string): string {
+  return canonicalExpr(parseExpr(definition));
+}
+
+/** The pairs below differ in meaning. If the canonical form ever equates one
+ *  of them, every "identical" this script prints about constraints is void, so
+ *  this is measured on every run and not trusted once. */
+const CANONICAL_CONTROL: Array<[string, string, boolean]> = [
+  // Same constraint, re-parenthesised by the parser: must compare equal.
+  [
+    'CHECK (((a IS NULL) OR (((length(a) >= 3) AND (length(a) <= 254)) AND (a = btrim(a)))))',
+    'CHECK (((a IS NULL) OR ((length(a) >= 3) AND (length(a) <= 254) AND (a = btrim(a)))))',
+    true,
+  ],
+  // Arithmetic grouping: must stay different.
+  [
+    'CHECK ((total_minor = ((unit_price_minor - discount_minor) * qty)))',
+    'CHECK ((total_minor = (unit_price_minor - discount_minor * qty)))',
+    false,
+  ],
+  // AND inside OR versus OR inside AND: the second admits a line that is both
+  // a debit and a credit. Must stay different.
+  [
+    'CHECK ((((debit_minor > 0) AND (credit_minor = 0)) OR (base_amount_minor = 0)))',
+    'CHECK (((debit_minor > 0) AND ((credit_minor = 0) OR (base_amount_minor = 0))))',
+    false,
+  ],
+];
+
+function canonicalControl(): string[] {
+  const wrong: string[] = [];
+  for (const [left, right, shouldMatch] of CANONICAL_CONTROL) {
+    const equal = canonicalConstraint(left) === canonicalConstraint(right);
+    if (equal !== shouldMatch) {
+      wrong.push(shouldMatch
+        ? `a pair that differs only in parenthesisation was read as different: ${left}`
+        : `a pair that differs in meaning was read as the same: ${left} versus ${right}`);
+    }
+  }
+  return wrong;
+}
+
+/**
+ * Replaces each constraint definition with its canonical form, so the
+ * comparison is blind to the parser's re-parenthesisation of a boolean chain
+ * and to nothing else.
  */
 function normalizeCensus(c: Census): Census {
   const out: Census = { ...c };
   if (Array.isArray(c.constraints)) {
     out.constraints = (c.constraints as Array<Record<string, Json>>).map((row) => ({
       ...row,
-      definition: typeof row.definition === 'string' ? row.definition.replace(/[()\s]+/g, ' ').trim() : row.definition,
+      definition: typeof row.definition === 'string' ? canonicalConstraint(row.definition) : row.definition,
     }));
   }
   return out;
 }
 
-function renderingOnlyDiffs(before: Census, after: Census): number {
-  if (!Array.isArray(before.constraints) || !Array.isArray(after.constraints)) return 0;
+/** Constraints whose text changed while their canonical form did not: the
+ *  parser's own rendering, counted and named rather than hidden. */
+function renderingOnlyDiffs(before: Census, after: Census): string[] {
+  if (!Array.isArray(before.constraints) || !Array.isArray(after.constraints)) return [];
   const key = (row: Record<string, Json>): string => `${String(row.table)}.${String(row.constraint)}`;
   const left = new Map((before.constraints as Array<Record<string, Json>>).map((r) => [key(r), String(r.definition)]));
-  let n = 0;
+  const changed: string[] = [];
   for (const row of after.constraints as Array<Record<string, Json>>) {
     const was = left.get(key(row));
     if (was === undefined) continue;
     const now = String(row.definition);
-    if (was !== now && was.replace(/[()\s]+/g, ' ').trim() === now.replace(/[()\s]+/g, ' ').trim()) n += 1;
+    if (was !== now && canonicalConstraint(was) === canonicalConstraint(now)) changed.push(key(row));
   }
-  return n;
+  return changed;
 }
 
 function compare(before: Census, after: Census): string[] {
@@ -419,12 +607,12 @@ function recreate(dsn: Dsn, label: string): boolean {
   const admin = pgEnv(dsn, 'postgres');
   const drop = run('psql', [...PSQL_FLAGS, '--command', `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`], admin);
   if (drop.code !== 0) {
-    record(`recreate:${label}`, 'FAIL', `DROP DATABASE exited ${drop.code}: ${drop.err.split('\n').slice(-1)[0]}`);
+    record(`recreate:${label}`, 'FAIL', `DROP DATABASE exited ${drop.code}: ${lastLines(drop.err, 1)}`);
     return false;
   }
   const create = run('psql', [...PSQL_FLAGS, '--command', `CREATE DATABASE "${name}"`], admin);
   if (create.code !== 0) {
-    record(`recreate:${label}`, 'FAIL', `CREATE DATABASE exited ${create.code}: ${create.err.split('\n').slice(-1)[0]}`);
+    record(`recreate:${label}`, 'FAIL', `CREATE DATABASE exited ${create.code}: ${lastLines(create.err, 1)}`);
     return false;
   }
   return true;
@@ -436,6 +624,9 @@ function main(): void {
   const withComparatorProof = !argv.includes('--no-comparator-proof');
   const keepDump = argv.includes('--keep-dump');
   const keepTarget = argv.includes('--keep-target');
+  // Decided here, not at the end: a run that stops early must keep what it
+  // was told to keep, and delete what it was not.
+  keepSecrets = keepDump;
 
   const sourceRaw = process.env.DR_DRILL_SOURCE_URL;
   const targetRaw = process.env.DR_DRILL_TARGET_URL;
@@ -454,15 +645,13 @@ function main(): void {
 
   // 0. The target is dropped. It names itself a drill target, it is a plain
   //    identifier, it is not the source, and the drop is confirmed in writing.
+  SECRETS.push(source.password, target.password);
   let guarded = true;
   if (!DB_NAME_RULE.test(target.database) || !TARGET_NAME_RULE.test(target.database)) {
     record('guard:target-name', 'FAIL', 'the target database is dropped and recreated, so its name must be a plain identifier ending in _restore or _drill_target');
     guarded = false;
-  } else if (target.database === source.database && target.host === source.host && target.port === source.port) {
-    record('guard:target-name', 'FAIL', 'the target is the source');
-    guarded = false;
   } else {
-    record('guard:target-name', 'PASS', `the target is "${target.database}" and is not the source`);
+    record('guard:target-name', 'PASS', `the target is "${target.database}"`);
   }
   if (process.env.DR_DRILL_CONFIRM_DROP !== target.database) {
     record('guard:drop-confirmed', 'FAIL', 'DR_DRILL_CONFIRM_DROP must hold the exact name of the target database. The drop destroys whatever is in it, so it is not taken from the URL alone');
@@ -494,6 +683,32 @@ function main(): void {
     (canSeePastRls || who.forcedRlsTables === 0 ? '' : ' — this principal reads those tables as empty, so neither the census nor the dump can be trusted'));
   if (failed) return finish(artifactDir, rtoSeconds, null, source, target);
 
+  // 2b. Which cluster each side is in, asked of the servers themselves. Three
+  //     spellings of one host are one cluster, and a target that turns out to
+  //     be the source under another spelling must not be dropped.
+  const sourceIdentity = psqlJson(sourceEnv, SQL.identity, 'source.identity') as { cluster: string; database: string } | null;
+  if (sourceIdentity === null) return finish(artifactDir, rtoSeconds, null, source, target);
+  const targetProbe = psql(targetEnv, SQL.identity);
+  let targetIdentity: { cluster: string; database: string } | null = null;
+  if (targetProbe.code === 0 && targetProbe.out.trim() !== '') {
+    targetIdentity = JSON.parse(targetProbe.out.trim()) as { cluster: string; database: string };
+  } else if (!/does not exist/i.test(targetProbe.err)) {
+    record('guard:not-the-source', 'FAIL', `the target server could not be asked who it is (psql exited ${targetProbe.code}), and a drop is not issued against an unidentified database`);
+    return finish(artifactDir, rtoSeconds, null, source, target);
+  }
+  if (targetIdentity !== null && targetIdentity.cluster === sourceIdentity.cluster && targetIdentity.database === sourceIdentity.database) {
+    record('guard:not-the-source', 'FAIL',
+      `the target is the source: both answered with cluster ${sourceIdentity.cluster} and database "${sourceIdentity.database}". The two connection strings spell it differently, and the drop would have destroyed the source`);
+    return finish(artifactDir, rtoSeconds, null, source, target);
+  }
+  const sameCluster = targetIdentity === null
+    ? source.host === target.host && source.port === target.port
+    : targetIdentity.cluster === sourceIdentity.cluster;
+  record('guard:not-the-source', 'PASS',
+    targetIdentity === null
+      ? `the source is database "${sourceIdentity.database}" of cluster ${sourceIdentity.cluster}; the target does not exist yet, so it is not the source`
+      : `the source is "${sourceIdentity.database}" of cluster ${sourceIdentity.cluster} and the target is "${targetIdentity.database}" of cluster ${targetIdentity.cluster}, asked of the servers and not read off the URLs`);
+
   // 3. What the source holds, before anything is touched. An empty source
   //    proves nothing, so it is a failure.
   const before = census(sourceEnv, 'source');
@@ -507,7 +722,9 @@ function main(): void {
     `${(before.triggers as Json[] | undefined)?.length ?? 0} triggers, ` +
     `${(before.constraints as Json[] | undefined)?.length ?? 0} constraints, ` +
     `${(before.indexes as Json[] | undefined)?.length ?? 0} indexes, ` +
-    `${(before.routines as Json[] | undefined)?.length ?? 0} routines` +
+    `${(before.routines as Json[] | undefined)?.length ?? 0} routines, ` +
+    `${(before.routineGrants as Json[] | undefined)?.length ?? 0} routine grants, ` +
+    `${(before.columnGrants as Json[] | undefined)?.length ?? 0} column grants` +
     (tables.length === 0 || rowTotal === 0 ? ' — a source with no rows cannot show that a restore keeps anything' : ''));
   if (failed) return finish(artifactDir, rtoSeconds, null, source, target);
 
@@ -520,22 +737,28 @@ function main(): void {
   const dump = run('pg_dump', ['--format=custom', '--no-password', `--file=${dumpPath}`], sourceEnv);
   const dumpSeconds = (Date.now() - t0) / 1000;
   if (dump.code !== 0) {
-    record('backup:dump', 'FAIL', `pg_dump exited ${dump.code}: ${dump.err.split('\n').slice(-1)[0]}`, dumpSeconds);
+    record('backup:dump', 'FAIL', `pg_dump exited ${dump.code}: ${lastLines(dump.err, 1)}`, dumpSeconds);
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
+  artifactsToRemove.push(dumpPath);
+  chmodSync(dumpPath, 0o600);
   const bytes = statSync(dumpPath).size;
   const sha = sha256OfFile(dumpPath);
-  record('backup:dump', bytes > 0 ? 'PASS' : 'FAIL', `${bytes} bytes, sha256 ${sha.slice(0, 16)}…`, dumpSeconds);
+  record('backup:dump', bytes > 0 ? 'PASS' : 'FAIL', `${bytes} bytes, sha256 ${sha.slice(0, 16)}…, mode ${(statSync(dumpPath).mode & 0o777).toString(8)}`, dumpSeconds);
 
   // The source must not have changed while it was being dumped, or a later
   // difference cannot be told apart from a restore fault.
   const duringDump = census(sourceEnv, 'source-after-dump');
   if (duringDump === null) return finish(artifactDir, rtoSeconds, null, source, target);
   const moved = compare(before, duringDump);
-  record('source:quiescent', moved.length === 0 ? 'PASS' : 'FAIL',
-    moved.length === 0
-      ? 'the source read the same before and after the dump'
-      : `the source changed while it was dumped, so no later comparison can separate that from a restore fault: ${moved[0].slice(0, 160)}`);
+  if (moved.length > 0) {
+    // Nothing is dropped after this: the measurement is void, and the drill
+    // stops rather than carrying on with a comparison it cannot read.
+    record('source:quiescent', 'FAIL',
+      `the source changed while it was dumped, so no later comparison can separate that from a restore fault, and nothing was dropped: ${moved[0].slice(0, 160)}`);
+    return finish(artifactDir, rtoSeconds, null, source, target);
+  }
+  record('source:quiescent', 'PASS', 'the source read the same before and after the dump. This is a check on the two ends, not a shared snapshot: pg_dump --snapshot inside an exported REPEATABLE READ transaction would be the stronger form, and this drill does not do it');
 
   // Roles and their privileges live in the cluster, not in the database: a
   // database restored without them carries grants naming roles that do not
@@ -544,10 +767,15 @@ function main(): void {
   t0 = Date.now();
   const globals = run('pg_dumpall', ['--globals-only', '--no-password', `--file=${globalsPath}`], pgEnv(source, 'postgres'));
   if (globals.code === 0) {
+    // pg_dumpall writes through the umask, so the mode is set here and then
+    // read back: the claim is the measured mode, not the intended one.
+    artifactsToRemove.push(globalsPath);
+    chmodSync(globalsPath, 0o600);
+    const mode = (statSync(globalsPath).mode & 0o777).toString(8);
     const roleLines = run('grep', ['-c', '^CREATE ROLE', globalsPath]);
-    record('backup:globals', 'PASS', `the cluster's roles and privileges were written separately (${statSync(globalsPath).size} bytes, ${roleLines.out.trim() || '0'} CREATE ROLE statements, mode 0600). This file carries password hashes and is not part of the database dump`, (Date.now() - t0) / 1000);
+    record('backup:globals', mode === '600' ? 'PASS' : 'FAIL', `the cluster's roles and privileges were written separately (${statSync(globalsPath).size} bytes, ${roleLines.out.trim() || '0'} CREATE ROLE statements, mode ${mode} as read back from disk). This file carries the roles' password hashes, is not part of the database dump, and is removed on every exit path unless --keep-dump`, (Date.now() - t0) / 1000);
   } else {
-    record('backup:globals', 'FAIL', `pg_dumpall exited ${globals.code}: ${globals.err.split('\n').slice(-1)[0]}`, (Date.now() - t0) / 1000);
+    record('backup:globals', 'FAIL', `pg_dumpall exited ${globals.code}: ${lastLines(globals.err, 1)}`, (Date.now() - t0) / 1000);
   }
 
   // 5. The target, before it is dropped: a target that holds rows is not
@@ -562,7 +790,7 @@ function main(): void {
     if (/does not exist/i.test(probe.err)) {
       record('guard:target-empty', 'PASS', `the target database "${target.database}" does not exist yet, so nothing of it is destroyed`);
     } else {
-      record('guard:target-empty', 'FAIL', `the target could not be read before the drop (psql exited ${probe.code}), and a drop is not issued against a database whose contents are unknown: ${probe.err.split(/\r?\n/).slice(-1)[0]}`);
+      record('guard:target-empty', 'FAIL', `the target could not be read before the drop (psql exited ${probe.code}), and a drop is not issued against a database whose contents are unknown: ${lastLines(probe.err, 1)}`);
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
   } else {
@@ -571,11 +799,12 @@ function main(): void {
       record('guard:target-empty', 'FAIL', 'the row count of the target did not read as a number, and a drop is not issued against a database whose contents are unknown');
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
-    if (existingRows > 0 && process.env.DR_DRILL_ALLOW_NONEMPTY_TARGET !== '1') {
-      record('guard:target-empty', 'FAIL', `the target holds ${existingRows} rows. Dropping it would destroy them, so it is refused unless DR_DRILL_ALLOW_NONEMPTY_TARGET=1 says otherwise`);
+    const allowance = process.env.DR_DRILL_ALLOW_NONEMPTY_TARGET;
+    if (existingRows > 0 && allowance !== String(existingRows)) {
+      record('guard:target-empty', 'FAIL', `the target holds ${existingRows} rows. Dropping it destroys them, so it is refused unless DR_DRILL_ALLOW_NONEMPTY_TARGET names that very number — ${existingRows} — which is how an allowance stays tied to what was actually measured instead of standing open`);
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
-    record('guard:target-empty', 'PASS', existingRows === 0 ? 'the target exists and holds no rows' : `the target holds ${existingRows} rows and DR_DRILL_ALLOW_NONEMPTY_TARGET=1 allowed the drop`);
+    record('guard:target-empty', 'PASS', existingRows === 0 ? 'the target exists and holds no rows' : `the target holds ${existingRows} rows, and DR_DRILL_ALLOW_NONEMPTY_TARGET named that same number, so the drop was allowed`);
   }
 
   // 6. The restore, measured. This number is the one compared against the RTO.
@@ -584,7 +813,7 @@ function main(): void {
   const restore = run('pg_restore', ['--no-password', '--exit-on-error', '--single-transaction', `--dbname=${target.database}`, dumpPath], targetEnv);
   const restoreSeconds = (Date.now() - t0) / 1000;
   if (restore.code !== 0) {
-    record('restore', 'FAIL', `pg_restore exited ${restore.code}: ${restore.err.split('\n').slice(-2).join(' ')}`, restoreSeconds);
+    record('restore', 'FAIL', `pg_restore exited ${restore.code}: ${lastLines(restore.err, 2)}`, restoreSeconds);
     return finish(artifactDir, rtoSeconds, restoreSeconds, source, target);
   }
   record('restore', 'PASS', 'pg_restore completed in one transaction', restoreSeconds);
@@ -592,22 +821,60 @@ function main(): void {
   // 7. The comparison.
   const after = census(targetEnv, 'restored');
   if (after === null) return finish(artifactDir, rtoSeconds, restoreSeconds, source, target);
+  // The canonical form is only allowed to blur the parser's own
+  // re-parenthesisation, and that is measured here, on this run, against pairs
+  // that differ in meaning.
+  const controlFailures = canonicalControl();
+  record('control:constraint-canonicalisation', controlFailures.length === 0 ? 'PASS' : 'FAIL',
+    controlFailures.length === 0
+      ? `the canonical form equates a boolean chain with its re-parenthesised self and keeps ${CANONICAL_CONTROL.length - 1} meaning-changing pairs apart, including (A AND B) OR C against A AND (B OR C)`
+      : controlFailures.join(' | '));
+
   const rendering = renderingOnlyDiffs(before, after);
   const diffs = compare(normalizeCensus(before), normalizeCensus(after));
   record('note:constraint-rendering', 'PASS',
-    rendering === 0
+    rendering.length === 0
       ? 'no constraint came back with a different rendering'
-      : `${rendering} check constraints came back rendered differently (nested AND re-parenthesised by the server) while asserting the same thing; the comparison below is parenthesis-insensitive for that reason, and nothing else about them differs`);
+      : `${rendering.length} check constraints came back with a different text whose canonical form is unchanged — the parser flattening a chain of one boolean operator: ${rendering.slice(0, 4).join(', ')}${rendering.length > 4 ? ', …' : ''}`);
   record('compare:census', diffs.length === 0 ? 'PASS' : 'FAIL',
     diffs.length === 0 ? `identical across ${CENSUS_SECTIONS.join(', ')}` : diffs.join(' | '));
 
-  // Two sections cannot fail when one cluster holds both databases, and that
-  // is said rather than counted as evidence.
-  const sameCluster = source.host === target.host && source.port === target.port;
-  record('scope:sections-that-cannot-fail-here', 'PASS',
-    sameCluster
-      ? 'the source and the target are in one cluster, so "owners", "grants" and the roles in "policies" name the same cluster-level roles on both sides: those sections catch a cross-cluster restore, not this one. The separate globals file is what a cross-cluster restore would need, and this drill does not restore it'
-      : 'the source and the target are in different clusters, so the role-bearing sections are a real comparison here');
+  // A section that read nothing on both sides compared equal without measuring
+  // anything. It is named and the verdict becomes INCOMPLETE.
+  const empty = CENSUS_SECTIONS.filter((section) => {
+    const a = before[section];
+    const b = after[section];
+    return Array.isArray(a) && Array.isArray(b) && a.length === 0 && b.length === 0;
+  });
+  const notArrays = CENSUS_SECTIONS.filter((section) => !Array.isArray(before[section]));
+  const hollow = [...empty, ...notArrays].sort();
+  // An operator who has established that a section is legitimately empty in
+  // this schema may say so by naming those sections, and only those: an
+  // acknowledgement that does not match what was measured does not count.
+  const acknowledged = (process.env.DR_DRILL_EMPTY_SECTIONS ?? '').split(',').map((x) => x.trim()).filter((x) => x !== '').sort();
+  if (hollow.length === 0) {
+    record('scope:every-section-carried-rows', 'PASS', `all ${CENSUS_SECTIONS.length} sections held something on both sides, so each of them compared a measurement`);
+  } else if (acknowledged.length > 0 && JSON.stringify(acknowledged) === JSON.stringify(hollow)) {
+    record('scope:every-section-carried-rows', 'PASS',
+      `${CENSUS_SECTIONS.length - hollow.length} sections compared a measurement; these held nothing on either side and DR_DRILL_EMPTY_SECTIONS names exactly them, so their "identical" is acknowledged as empty rather than read as proof: ${hollow.join(', ')}`);
+  } else {
+    record('scope:every-section-carried-rows', 'SKIPPED',
+      `these sections held nothing on either side, so their "identical" measured nothing: ${hollow.join(', ')}` +
+      (acknowledged.length === 0
+        ? '. Set DR_DRILL_EMPTY_SECTIONS to exactly that list once it is established that this schema has none of them'
+        : `. DR_DRILL_EMPTY_SECTIONS names ${acknowledged.join(', ')}, which is not that list`));
+  }
+
+  // Role identity is a property of the cluster, not of the database. When one
+  // cluster holds both, those sections cannot fail, and the owner's condition
+  // on roles and privileges is therefore NOT measured by this run.
+  if (sameCluster) {
+    record('scope:roles-across-clusters', 'SKIPPED',
+      'the source and the target are in one cluster (same system identifier), so "owners" and the role names inside "grants" and "policies" refer to the same cluster-level roles on both sides and cannot differ. Losing a grant or a policy would still be caught, but a restore that lands where the roles do not exist is not tested here: that needs a second cluster and the separate globals file, which this drill writes and does not restore');
+  } else {
+    record('scope:roles-across-clusters', 'PASS',
+      'the source and the target are in different clusters, so the role-bearing sections compared something that could have differed');
+  }
 
   // 8. The financial invariants, on the restored copy, each only where its
   //    table exists and holds rows.
@@ -701,12 +968,8 @@ function main(): void {
     record('negative-control:truncated-dump', 'SKIPPED', '--no-negative-control was passed, so a broken dump was never offered to pg_restore');
   }
 
-  if (!keepDump) {
-    unlinkSync(dumpPath);
-    if (existsSync(globalsPath)) unlinkSync(globalsPath);
-    record('cleanup:artifacts', 'PASS', 'the dump and the globals file (which carries password hashes) were deleted; pass --keep-dump to keep both');
-  } else {
-    record('cleanup:artifacts', 'PASS', `--keep-dump was passed, so the dump and ${globalsPath} remain on disk. The globals file carries the cluster's password hashes: it is mode 0600 and belongs in a secret store or nowhere`);
+  if (keepDump) {
+    record('cleanup:artifacts', 'PASS', `--keep-dump was passed, so the dump and ${globalsPath} remain on disk, mode 0600. The globals file carries the cluster's password hashes: it belongs in a secret store or nowhere`);
   }
 
   // 11. The target is scratch, and by now it also holds the one row the control
@@ -720,13 +983,31 @@ function main(): void {
     record('cleanup:target', drop.code === 0 ? 'PASS' : 'FAIL',
       drop.code === 0
         ? `the restored copy was dropped: it is scratch, and the comparison control deleted a row from it`
-        : `the restored copy could not be dropped (psql exited ${drop.code}), so the next run will refuse it as a non-empty target: ${drop.err.split(/\r?\n/).slice(-1)[0]}`);
+        : `the restored copy could not be dropped (psql exited ${drop.code}), so the next run will refuse it as a non-empty target: ${lastLines(drop.err, 1)}`);
   }
 
   finish(artifactDir, rtoSeconds, restoreSeconds, source, target);
 }
 
 function finish(artifactDir: string, rtoSeconds: number, restoreSeconds: number | null, source: Dsn, target: Dsn): void {
+  // Every exit path comes through here, including the ones that failed before
+  // the restore: the globals file carries password hashes, and a drill that
+  // stopped early must not leave it behind.
+  const removed: string[] = [];
+  for (const path of keepSecrets ? [] : artifactsToRemove) {
+    try {
+      if (existsSync(path)) {
+        unlinkSync(path);
+        removed.push(path);
+      }
+    } catch (error) {
+      record('cleanup:secrets', 'FAIL', `${path} could not be deleted and it may carry a password hash: ${scrub(String(error))}`);
+    }
+  }
+  if (removed.length > 0) {
+    record('cleanup:secrets', 'PASS', `deleted on the way out: ${removed.join(', ')}`);
+  }
+
   if (restoreSeconds === null) {
     record('rto', 'FAIL', 'no restore was measured, so nothing can be compared against the RTO');
   } else {
