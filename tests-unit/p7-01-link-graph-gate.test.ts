@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { GATED_MODULE, gate, inspectReport, main, offendingGraphLines, statusOf } from '../scripts/p7-dr84-link-graph-gate';
+import { GATED_MODULE, gate, inspectReport, main, offendingGraphLines, projectPathsSeen, statusOf } from '../scripts/p7-dr84-link-graph-gate';
 
 /**
  * The parser half of DR-84's strengthened link gate.
@@ -183,6 +183,13 @@ describe('DR-84 link graph gate: the command-line contract CI depends on', () =>
 
   it('exit 2 on an unknown option, rather than ignoring it', () => {
     expect(main([`--record=${recordOpen}`, `--report=${clean}`, '--allow-offline-kernel'])).toBe(2);
+  });
+
+  it('the verdict NAMES the project dependencies it saw, so the absence is readable', () => {
+    const body = ['+--- project :relay', '|    \\--- project :offline-kernel', '+--- project :relay (*)'].join('\n');
+    expect(projectPathsSeen(report(body))).toEqual([':offline-kernel', ':relay']);
+    expect(gate(OPEN, report('+--- project :relay')).message).toContain('project dependencies seen: :relay');
+    expect(gate(OPEN, report('+--- junit:junit:4.13.2')).message).toContain('project dependencies seen: none');
   });
 
   it('the gated module is the one DR-84 is about', () => {

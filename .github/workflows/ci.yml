@@ -1571,15 +1571,25 @@ jobs:
       # still be green. That is the hole this step closes, by counting the
       # cases that the JUnit XML says actually executed, per subproject.
       #
-      # DECLARED LIMIT, so the gate is not read as more than it is: the hard
-      # assertion here is `offline-kernel > 0`, which is the anti-silence
-      # property and is unambiguous. The exact-count assertion the card asks
-      # for (equality against the static inventory, so a deleted suite turns
-      # red) is NOT yet pinned, because this host has no JDK -- `java` is not
-      # installed -- so the true executed count has never been measured
-      # anywhere. This run is what measures it; the number is pinned in the
-      # following commit, against the figure CI reports rather than a figure
-      # carried over from a static grep.
+      # DECLARED LIMIT, so the gate is not read as more than it is. This
+      # comment used to say the equality assertion was "NOT yet pinned" and
+      # that the only hard assertion was `offline-kernel > 0`. BOTH halves of
+      # that are now stale, and the second was wrong when it was written:
+      #
+      #   - there are two hard assertions below, not one: `kernel > 0` (the
+      #     anti-silence property) AND `kernel == static` (equality against
+      #     the inventory this tree declares);
+      #   - "equality against the static inventory, so a deleted suite turns
+      #     red" is RETRACTED. The inventory is counted from the same tree
+      #     being tested, so deleting a suite lowers both sides together and
+      #     the comparison stays green -- which is exactly what the comment
+      #     under the assertion says, and the two could not both be true.
+      #
+      # What the equality DOES catch is a divergence on one tree: cases that
+      # were declared and did not execute, or two counts that do not name the
+      # same identity (RULE-30). Catching a DELETED suite needs a number
+      # pinned outside the tree, and no such number is claimed here -- naming
+      # the limit rather than implying it is covered.
       - name: Unit tests actually ran (counted per subproject from JUnit XML)
         run: |
           set -euo pipefail

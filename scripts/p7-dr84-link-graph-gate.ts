@@ -135,7 +135,32 @@ export function offendingGraphLines(reportText: string, gatedModule: string = GA
   return out;
 }
 
-export type GateResult = { code: 0 | 1 | 2; status: GateStatus; lines: string[]; message: string };
+/**
+ * Every DISTINCT module path the report names as a project dependency, sorted.
+ *
+ * This is the gate's named positive control. The first CI run of the gate
+ * printed `grep -c 'project :'` = 5 on the real report and said the gated
+ * module was absent, which leaves "five of WHAT" unanswered -- and an unnamed
+ * number is how a probe gets believed without being read (RULE-30). The paths
+ * are printed instead, so the next reader sees which modules are in `:app`'s
+ * graph and does not have to take the absence on trust.
+ */
+export function projectPathsSeen(reportText: string): string[] {
+  const seen = new Set<string>();
+  for (const m of reportText.matchAll(/project\s+(:[A-Za-z0-9_.:-]+)/g)) {
+    const path = m[1];
+    if (path !== undefined) seen.add(path);
+  }
+  return [...seen].sort();
+}
+
+export type GateResult = {
+  code: 0 | 1 | 2;
+  status: GateStatus;
+  lines: string[];
+  paths: string[];
+  message: string;
+};
 
 /**
  * The whole verdict as one pure function, so the same words judge the real
@@ -145,15 +170,17 @@ export function gate(recordText: string, reportText: string, options: { subject?
   const status = statusOf(recordText);
   const verdict = inspectReport(reportText, options);
   if (!verdict.usable) {
-    return { code: 2, status, lines: [], message: `UNUSABLE REPORT — ${verdict.reason}` };
+    return { code: 2, status, lines: [], paths: [], message: `UNUSABLE REPORT — ${verdict.reason}` };
   }
   const lines = offendingGraphLines(reportText, options.gatedModule ?? GATED_MODULE);
-  const read = `${verdict.configurations} configuration(s), ${verdict.dependencyLines} dependency line(s)`;
+  const paths = projectPathsSeen(reportText);
+  const read = `${verdict.configurations} configuration(s), ${verdict.dependencyLines} dependency line(s), project dependencies seen: ${paths.length === 0 ? 'none' : paths.join(' ')}`;
   if (status === 'CLOSED') {
     return {
       code: 0,
       status,
       lines,
+      paths,
       message: `LIFTED — the record says CLOSED; the graph (${read}) is not judged. ${lines.length} line(s) name the module.`,
     };
   }
@@ -162,10 +189,11 @@ export function gate(recordText: string, reportText: string, options: { subject?
       code: 1,
       status,
       lines,
+      paths,
       message: `REFUSED — ${lines.length} line(s) put ${options.gatedModule ?? GATED_MODULE} in the resolved graph while the record is OPEN (${read}).`,
     };
   }
-  return { code: 0, status, lines, message: `PASS — read ${read}; the module is absent from the graph.` };
+  return { code: 0, status, lines, paths, message: `PASS — read ${read}; the module is absent from the graph.` };
 }
 
 function valuesOf(argv: readonly string[], name: string): string[] {
