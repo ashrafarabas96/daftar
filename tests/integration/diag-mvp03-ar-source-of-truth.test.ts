@@ -51,6 +51,14 @@ import { collectPayment, rateToR10, SYSTEM_KEYS } from '../golden-regression/pha
 import { must, systemAccountId } from '../golden-regression/phase4-s4/harness';
 
 const AR_KEY = SYSTEM_KEYS.accountsReceivable;
+const CREDIT_KEY = SYSTEM_KEYS.customerCreditLiability;
+/**
+ * R-17 refuses an instant that carries sub-second precision, and the first run
+ * of this probe lost scenario 5 to exactly that: `new Date()` carries
+ * milliseconds, so `accounting_post_manual_adjustment` refused the command
+ * before any AR law could speak — a probe defect read as a refusal (RULE-27).
+ */
+const wholeSecond = (): Date => new Date(Math.floor(Date.now() / 1000) * 1000);
 /** Relative on purpose: this file must run on Linux CI as well as on Windows. `var/` is git-ignored. */
 const OUT_DIR = 'var/mvp03-probe/out';
 
@@ -71,6 +79,15 @@ interface Snapshot {
   readonly journalUnattributedBase: string;
   /** A − B, the headline. */
   readonly deltaTotalBase: string;
+  /**
+   * The journal's 2210 balance, business-wide, as a CREDIT position (so an
+   * overpayment that owes the customer money reads positive). DR-114/ثالثًا/3
+   * extends the manual-journal prohibition to this account, and the first run
+   * of this probe did not measure it at all.
+   */
+  readonly journalCreditLiabilityBase: string;
+  /** 2210 split by the source type that wrote the line. */
+  readonly creditBySourceType: Record<string, string>;
 }
 
 /**
@@ -157,6 +174,24 @@ async function snapshot(w: SettlementWorld, label: string, customers: readonly s
     else journalByCustomer[row.customer_id] = row.signed_minor;
   }
 
+  const credit = await pool.query<{ n: string }>(
+    `SELECT coalesce(sum(l.credit_minor - l.debit_minor), 0)::text AS n
+       FROM journal_lines l JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+      WHERE l.business_id = $1 AND a.system_key = $2`,
+    [businessId, CREDIT_KEY],
+  );
+  const creditBy = await pool.query<{ source_type: string; n: string }>(
+    `SELECT e.source_type, sum(l.credit_minor - l.debit_minor)::text AS n
+       FROM journal_lines l
+       JOIN journal_entries e ON e.business_id = l.business_id AND e.id = l.journal_entry_id
+       JOIN accounts a ON a.business_id = l.business_id AND a.id = l.account_id
+      WHERE l.business_id = $1 AND a.system_key = $2
+      GROUP BY 1 ORDER BY 1`,
+    [businessId, CREDIT_KEY],
+  );
+  const creditBySourceType: Record<string, string> = {};
+  for (const row of creditBy.rows) creditBySourceType[row.source_type] = row.n;
+
   return {
     label,
     invoicesSourceBase: aTotal.toString(),
@@ -167,6 +202,8 @@ async function snapshot(w: SettlementWorld, label: string, customers: readonly s
     journalByCustomer,
     journalUnattributedBase: unattributed.toString(),
     deltaTotalBase: (aTotal - BigInt(b.n)).toString(),
+    journalCreditLiabilityBase: must(credit.rows[0], 'the journal 2210 balance').n,
+    creditBySourceType,
   };
 }
 
@@ -283,7 +320,7 @@ describe('MVP-03 §2 — invoices-derived AR versus journal-derived AR, on one l
           txnCurrency: base,
           fxRate: '1',
           fxRateSource: 'base',
-          fxRateAt: new Date(),
+          fxRateAt: wholeSecond(),
         },
         {
           account: { kind: 'system', systemKey: 'sales_revenue' },
@@ -294,7 +331,7 @@ describe('MVP-03 §2 — invoices-derived AR versus journal-derived AR, on one l
           txnCurrency: base,
           fxRate: '1',
           fxRateSource: 'base',
-          fxRateAt: new Date(),
+          fxRateAt: wholeSecond(),
         },
       ],
     };
@@ -305,6 +342,35 @@ describe('MVP-03 §2 — invoices-derived AR versus journal-derived AR, on one l
       notes.push(`scenario 5 — manual_adjustment refused: ${(e as Error).message}`);
     }
     steps.push(await snapshot(w, '5 — after a manual journal of 123456 straight onto AR', [c1, c2]));
+    control.scenariosRun += 1;
+
+    // ── scenario 6: the same manual journal, straight onto 2210 ──────────
+    // DR-114/ثالثًا/3 extends the prohibition to `customer_credit_liability`
+    // for the same reason it holds on AR, and that extension rests on what
+    // the machine permits TODAY. This arm measures it instead of assuming it.
+    const creditAmount = 65432n;
+    const creditCmd: PostCommand = {
+      ...cmd,
+      sourceId: randomUUID(),
+      description: 'mvp03 probe — merchant correction straight onto 2210',
+      lines: [
+        {
+          ...must(cmd.lines[0], 'the AR line'),
+          account: { kind: 'system', systemKey: CREDIT_KEY },
+          side: 'C',
+          baseAmountMinor: creditAmount,
+          txnAmountMinor: creditAmount,
+        },
+        { ...must(cmd.lines[1], 'the revenue line'), side: 'D', baseAmountMinor: creditAmount, txnAmountMinor: creditAmount },
+      ],
+    };
+    try {
+      const outcome = await post(creditCmd, w.shop.userId);
+      notes.push(`scenario 6 — manual_adjustment Cr 2210 ${creditAmount} posted, entry ${outcome.entryId}`);
+    } catch (e) {
+      notes.push(`scenario 6 — manual_adjustment on 2210 refused: ${(e as Error).message}`);
+    }
+    steps.push(await snapshot(w, '6 — after a manual journal of 65432 straight onto 2210', [c1, c2]));
     control.scenariosRun += 1;
 
     const last = must(steps[steps.length - 1], 'the last snapshot');
