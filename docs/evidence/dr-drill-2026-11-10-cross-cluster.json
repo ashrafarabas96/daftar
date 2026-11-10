@@ -1,12 +1,12 @@
 {
   "tool": "scripts/dr-drill.ts",
-  "at": "2026-11-10T14:39:32.717Z",
+  "at": "2026-11-10T15:03:57.390Z",
   "node": "v24.20.0",
   "platform": "linux-x64",
   "source": "/tmp:55432/daftar",
   "target": "/tmp:55433/daftar_restore",
   "rtoSeconds": 14400,
-  "restoreSeconds": 1.161,
+  "restoreSeconds": 1.199,
   "steps": [
     {
       "step": "guard:target-name",
@@ -56,8 +56,8 @@
     {
       "step": "backup:dump",
       "status": "PASS",
-      "detail": "2158047 bytes, sha256 23b5325c58e07e93…, mode 600",
-      "seconds": 2.7
+      "detail": "2158047 bytes, sha256 a612bc56c2961200…, mode 600",
+      "seconds": 0.135
     },
     {
       "step": "source:quiescent",
@@ -68,7 +68,7 @@
       "step": "backup:globals",
       "status": "PASS",
       "detail": "the cluster's roles and privileges were written separately (3890 bytes, 13 CREATE ROLE statements, mode 600 as read back from disk). This file carries the roles' password hashes, is not part of the database dump, and is removed on every exit path unless --keep-dump",
-      "seconds": 0.02
+      "seconds": 0.017
     },
     {
       "step": "guard:target-empty",
@@ -79,12 +79,12 @@
       "step": "restore",
       "status": "PASS",
       "detail": "pg_restore completed in one transaction",
-      "seconds": 1.161
+      "seconds": 1.199
     },
     {
       "step": "control:constraint-canonicalisation",
       "status": "PASS",
-      "detail": "the canonical forms kept 3 meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated 2 pairs that differ only in the parser's parenthesisation; and the ACL fold kept 3 ACLs apart — PUBLIC with SELECT, another role with INSERT, and an owner cut down to SELECT — while folding an owner-only ACL into the owner default"
+      "detail": "the canonical forms kept 3 meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated 2 pairs that differ only in the parser's parenthesisation; and the ACL fold kept 4 ACLs apart — PUBLIC with SELECT, another role with INSERT, an owner cut down to SELECT, and an empty ACL where nobody holds anything — while folding an owner-only ACL into the owner default"
     },
     {
       "step": "note:constraint-rendering",
@@ -159,7 +159,7 @@
     {
       "step": "rto",
       "status": "PASS",
-      "detail": "the restore took 1.161s against an RTO of 14400s — the time of this database on this machine, which is not the production time and is not an estimate of it"
+      "detail": "the restore took 1.199s against an RTO of 14400s — the time of this database on this machine, which is not the production time and is not an estimate of it"
     }
   ],
   "verdict": "PASS"

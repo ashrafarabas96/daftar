@@ -573,9 +573,13 @@ const FULL_PRIVILEGES: Record<string, string> = {
 
 function canonicalAcl(aclText: string, owner: string, kind: string): string {
   const marker = '(owner default)';
-  if (aclText === marker || aclText === '') return marker;
+  if (aclText === marker) return marker;
   const inner = aclText.replace(/^\{/, '').replace(/\}$/, '').trim();
-  if (inner === '') return marker;
+  // `{}` is NOT the default: it says nobody holds anything, not even the
+  // owner, while NULL says the owner holds everything. Folding the two would
+  // equate a tightened source with a widened restore — the very direction this
+  // section exists to catch.
+  if (inner === '') return aclText;
   const entries = inner.split(',').map((entry) => entry.trim().replace(/^"|"$/g, ''));
   if (entries.length !== 1) return aclText;
   const match = /^([^=]*)=([a-zA-Z*]*)\/(.*)$/.exec(entries[0] ?? '');
@@ -602,6 +606,10 @@ const ACL_CONTROL: Array<[string, string, string, boolean]> = [
   ['{drill=arwdDxt/drill,daftar_app=a/drill}', 'drill', 'r', false],
   // The owner has been reduced to SELECT: a real restriction, not a default.
   ['{drill=r/drill}', 'drill', 'r', false],
+  // An empty ACL: nobody holds anything, not even the owner. It is the
+  // opposite of the default, and a restore that came back NULL here would have
+  // widened the privileges.
+  ['{}', 'drill', 'r', false],
 ];
 
 function aclControl(): string[] {
@@ -1028,7 +1036,7 @@ function main(): void {
     'control:constraint-canonicalisation',
     controlFailures.length === 0 ? 'PASS' : 'FAIL',
     controlFailures.length === 0
-      ? `the canonical forms kept ${CANONICAL_CONTROL.filter(([, , same]) => !same).length} meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated ${CANONICAL_CONTROL.filter(([, , same]) => same).length} pairs that differ only in the parser's parenthesisation; and the ACL fold kept ${ACL_CONTROL.filter(([, , , folds]) => !folds).length} ACLs apart — PUBLIC with SELECT, another role with INSERT, and an owner cut down to SELECT — while folding an owner-only ACL into the owner default`
+      ? `the canonical forms kept ${CANONICAL_CONTROL.filter(([, , same]) => !same).length} meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated ${CANONICAL_CONTROL.filter(([, , same]) => same).length} pairs that differ only in the parser's parenthesisation; and the ACL fold kept ${ACL_CONTROL.filter(([, , , folds]) => !folds).length} ACLs apart — PUBLIC with SELECT, another role with INSERT, an owner cut down to SELECT, and an empty ACL where nobody holds anything — while folding an owner-only ACL into the owner default`
       : controlFailures.join(' | '),
   );
 
@@ -1220,6 +1228,9 @@ function main(): void {
   // 10. The negative control: a dump that is not whole must be refused.
   if (withNegative) {
     const brokenPath = join(artifactDir, 'dump-truncated.pgc');
+    // It is 60% of the dump, so it carries 60% of the data: registered before
+    // it is written, like the dump itself, in case anything below throws.
+    artifactsToRemove.push(brokenPath);
     copyPrefix(dumpPath, brokenPath, Math.max(1, Math.floor(bytes * 0.6)));
     const toc = run('pg_restore', ['--list', brokenPath]);
     const recreated = recreate(target, 'negative-control');
