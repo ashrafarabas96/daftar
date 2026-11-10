@@ -164,7 +164,7 @@ describe('CG-2 — the billing database gate is blocking', () => {
   });
 
   it('NEGATIVE CONTROL: the same checker reports it on the job that holds the step', () => {
-    const planted = CI.replace(/^(  backend:\n)/m, '$1    continue-on-error: true\n');
+    const planted = CI.replace(/^( {2}backend:\n)/m, '$1    continue-on-error: true\n');
     expect(planted, 'the job-level plant did not apply').not.toBe(CI);
     const reported = neutralisers(planted);
     expect(reported.length, 'the checker missed a job-level continue-on-error').toBeGreaterThan(0);
