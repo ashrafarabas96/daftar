@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 450,
+    "hits": 430,
     "planGates": 120,
-    "assertions": 35,
+    "assertions": 31,
     "files": 54
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 51,
-      "assertions": 15,
-      "mentions": 135
+      "assertions": 11,
+      "mentions": 119
     },
     "phase-2": {
       "planGates": 0,
@@ -118,8 +118,8 @@
   "byFile": {
     ".github/workflows/ci.yml": {
       "planGates": 0,
-      "assertions": 6,
-      "mentions": 24,
+      "assertions": 2,
+      "mentions": 8,
       "phase": "cross-phase"
     },
     ".github/workflows/phase2-s8-evidence.yml": {
@@ -442,166 +442,6 @@
     }
   },
   "hits": [
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 634,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 640,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "assertion",
-      "text": "# prove from the text that required CI executes every plan-shape claim."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 655,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# holds a plan-shape claim and is executed by no step of the required"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 724,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 727,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "assertion",
-      "text": "# against — `server_version_num`, `datcollate`, `datctype`, the locale"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 729,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "mention",
-      "text": "# one rather than a byte-order collation that answers `^@` differently."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 730,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# `A plan-shape claim made on a different server major or collation is"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 741,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# plan-shape-signalled text. It lives in a workspace, so `npm test` in"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 761,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "mention",
-      "text": "# `server_version_num`, `datcollate`, `datctype`, the locale provider and"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 764,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# plan-shape PASS in this job is recorded nowhere, which is how the P4-S3"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 634,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# and P4-B's `p95 <= 60 ms`, the two plan-shape claims P4-AL-71 states."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 640,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "assertion",
-      "text": "# prove from the text that required CI executes every plan-shape claim."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 655,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# holds a plan-shape claim and is executed by no step of the required"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 724,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# TL-P4-S3-R4. THE PLAN-EVIDENCE CONTRACT. Every plan-shape assertion the"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 727,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "assertion",
-      "text": "# against — `server_version_num`, `datcollate`, `datctype`, the locale"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 729,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "mention",
-      "text": "# one rather than a byte-order collation that answers `^@` differently."
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 730,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# `A plan-shape claim made on a different server major or collation is"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 741,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# plan-shape-signalled text. It lives in a workspace, so `npm test` in"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 761,
-      "phase": "cross-phase",
-      "signals": ["collation-dependent-range"],
-      "kind": "mention",
-      "text": "# `server_version_num`, `datcollate`, `datctype`, the locale provider and"
-    },
-    {
-      "file": ".github/workflows/ci.yml",
-      "line": 764,
-      "phase": "cross-phase",
-      "signals": ["plan-shape-word"],
-      "kind": "mention",
-      "text": "# plan-shape PASS in this job is recorded nowhere, which is how the P4-S3"
-    },
     {
       "file": ".github/workflows/ci.yml",
       "line": 634,
