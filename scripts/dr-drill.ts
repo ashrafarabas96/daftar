@@ -95,7 +95,7 @@ let incomplete = false;
 /** Every secret this run holds, so the scrubber can remove it even when it
  *  appears alone, with no `password=` or URL around it. */
 const SECRETS: string[] = [];
-let artifactsToRemove: string[] = [];
+const artifactsToRemove: string[] = [];
 let keepSecrets = false;
 
 /**
@@ -157,7 +157,9 @@ function parseDsn(raw: string, which: string): Dsn {
     };
   } catch {
     // Deliberately not including the input, nor the parser's message.
-    die(`${which} is not a connection string this drill can parse. It is read as a URL whose scheme is postgres or postgresql, of the form scheme + :// + user@host:port/dbname, with host, port, user and dbname also accepted as query parameters. Nothing of its content is printed here.`);
+    die(
+      `${which} is not a connection string this drill can parse. It is read as a URL whose scheme is postgres or postgresql, of the form scheme + :// + user@host:port/dbname, with host, port, user and dbname also accepted as query parameters. Nothing of its content is printed here.`,
+    );
   }
 }
 
@@ -189,7 +191,10 @@ function describe(dsn: Dsn): string {
  * failure arrived without its reason.
  */
 function lastLines(text: string, count: number): string {
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter((line) => line !== '');
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
   return lines.length === 0 ? '(the tool said nothing)' : lines.slice(-count).join(' ');
 }
 
@@ -200,9 +205,7 @@ function run(file: string, args: string[], env?: NodeJS.ProcessEnv): { out: stri
   } catch (error) {
     const e = error as { status?: number; stdout?: string; stderr?: string; message?: string };
     const raw = e.stderr ?? e.message ?? '';
-    const text = raw.trim() === ''
-      ? `(the tool wrote nothing to stderr; its last output was: ${lastLines(e.stdout ?? '', 2)})`
-      : raw;
+    const text = raw.trim() === '' ? `(the tool wrote nothing to stderr; its last output was: ${lastLines(e.stdout ?? '', 2)})` : raw;
     return { out: e.stdout ?? '', code: e.status ?? 1, err: scrub(text) };
   }
 }
@@ -234,7 +237,7 @@ function psqlJson(env: NodeJS.ProcessEnv, sql: string, what: string): Json {
   }
 }
 
-const SQL: Record<string, string> = {
+const SQL = {
   tables: `
     SELECT coalesce(json_agg(json_build_object('table', t, 'rows', n) ORDER BY t), '[]'::json)
     FROM (
@@ -395,7 +398,8 @@ function parseExpr(text: string): ExprNode[] {
   let buffer = '';
   let i = 0;
   const flush = (): void => {
-    if (buffer.trim() !== '') stack[stack.length - 1].push(buffer.trim());
+    const top = stack[stack.length - 1];
+    if (buffer.trim() !== '' && top !== undefined) top.push(buffer.trim());
     buffer = '';
   };
   while (i < text.length) {
@@ -423,7 +427,7 @@ function parseExpr(text: string): ExprNode[] {
     if (ch === '(') {
       flush();
       const group: ExprNode[] = [];
-      stack[stack.length - 1].push(group);
+      stack[stack.length - 1]?.push(group);
       stack.push(group);
       i += 1;
       continue;
@@ -446,7 +450,10 @@ function topOperators(group: ExprNode[]): Set<string> {
   const ops = new Set<string>();
   for (const child of group) {
     if (typeof child !== 'string') continue;
-    for (const match of child.toUpperCase().matchAll(/\b(AND|OR)\b/g)) ops.add(match[1]);
+    for (const match of child.toUpperCase().matchAll(/\b(AND|OR)\b/g)) {
+      const op = match[1];
+      if (op !== undefined) ops.add(op);
+    }
   }
   return ops;
 }
@@ -480,11 +487,7 @@ const CANONICAL_CONTROL: Array<[string, string, boolean]> = [
     true,
   ],
   // Arithmetic grouping: must stay different.
-  [
-    'CHECK ((total_minor = ((unit_price_minor - discount_minor) * qty)))',
-    'CHECK ((total_minor = (unit_price_minor - discount_minor * qty)))',
-    false,
-  ],
+  ['CHECK ((total_minor = ((unit_price_minor - discount_minor) * qty)))', 'CHECK ((total_minor = (unit_price_minor - discount_minor * qty)))', false],
   // AND inside OR versus OR inside AND: the second admits a line that is both
   // a debit and a credit. Must stay different.
   [
@@ -499,9 +502,11 @@ function canonicalControl(): string[] {
   for (const [left, right, shouldMatch] of CANONICAL_CONTROL) {
     const equal = canonicalConstraint(left) === canonicalConstraint(right);
     if (equal !== shouldMatch) {
-      wrong.push(shouldMatch
-        ? `a pair that differs only in parenthesisation was read as different: ${left}`
-        : `a pair that differs in meaning was read as the same: ${left} versus ${right}`);
+      wrong.push(
+        shouldMatch
+          ? `a pair that differs only in parenthesisation was read as different: ${left}`
+          : `a pair that differs in meaning was read as the same: ${left} versus ${right}`,
+      );
     }
   }
   return wrong;
@@ -601,7 +606,11 @@ function recreate(dsn: Dsn, label: string): boolean {
   // The name is interpolated into a statement, so it is validated first: psql
   // --command accepts several statements, and a crafted name would be one.
   if (!DB_NAME_RULE.test(name)) {
-    record(`recreate:${label}`, 'FAIL', 'the target database name is not a plain identifier, and this drill will not interpolate anything else into a DROP statement');
+    record(
+      `recreate:${label}`,
+      'FAIL',
+      'the target database name is not a plain identifier, and this drill will not interpolate anything else into a DROP statement',
+    );
     return false;
   }
   const admin = pgEnv(dsn, 'postgres');
@@ -630,7 +639,10 @@ function main(): void {
 
   const sourceRaw = process.env.DR_DRILL_SOURCE_URL;
   const targetRaw = process.env.DR_DRILL_TARGET_URL;
-  if (sourceRaw === undefined || sourceRaw.trim() === '') die('DR_DRILL_SOURCE_URL is not set. Both connection strings come from the environment; neither is read from the command line nor from any file in this repository.');
+  if (sourceRaw === undefined || sourceRaw.trim() === '')
+    die(
+      'DR_DRILL_SOURCE_URL is not set. Both connection strings come from the environment; neither is read from the command line nor from any file in this repository.',
+    );
   if (targetRaw === undefined || targetRaw.trim() === '') die('DR_DRILL_TARGET_URL is not set.');
 
   const source = parseDsn(sourceRaw.trim(), 'DR_DRILL_SOURCE_URL');
@@ -648,13 +660,21 @@ function main(): void {
   SECRETS.push(source.password, target.password);
   let guarded = true;
   if (!DB_NAME_RULE.test(target.database) || !TARGET_NAME_RULE.test(target.database)) {
-    record('guard:target-name', 'FAIL', 'the target database is dropped and recreated, so its name must be a plain identifier ending in _restore or _drill_target');
+    record(
+      'guard:target-name',
+      'FAIL',
+      'the target database is dropped and recreated, so its name must be a plain identifier ending in _restore or _drill_target',
+    );
     guarded = false;
   } else {
     record('guard:target-name', 'PASS', `the target is "${target.database}"`);
   }
   if (process.env.DR_DRILL_CONFIRM_DROP !== target.database) {
-    record('guard:drop-confirmed', 'FAIL', 'DR_DRILL_CONFIRM_DROP must hold the exact name of the target database. The drop destroys whatever is in it, so it is not taken from the URL alone');
+    record(
+      'guard:drop-confirmed',
+      'FAIL',
+      'DR_DRILL_CONFIRM_DROP must hold the exact name of the target database. The drop destroys whatever is in it, so it is not taken from the URL alone',
+    );
     guarded = false;
   } else {
     record('guard:drop-confirmed', 'PASS', 'the drop of the target was confirmed by name');
@@ -673,14 +693,21 @@ function main(): void {
   //    table as empty, and two empty censuses compare equal. So the identity
   //    is recorded, and a principal that cannot see past RLS is a failure
   //    rather than a quiet pass.
-  const who = psqlJson(sourceEnv, SQL.principal, 'source.principal') as
-    | { user: string; super: boolean; bypassrls: boolean; forcedRlsTables: number; serverVersion: string }
-    | null;
+  const who = psqlJson(sourceEnv, SQL.principal, 'source.principal') as {
+    user: string;
+    super: boolean;
+    bypassrls: boolean;
+    forcedRlsTables: number;
+    serverVersion: string;
+  } | null;
   if (who === null) return finish(artifactDir, rtoSeconds, null, source, target);
   const canSeePastRls = who.super === true || who.bypassrls === true;
-  record('source:principal', canSeePastRls || who.forcedRlsTables === 0 ? 'PASS' : 'FAIL',
+  record(
+    'source:principal',
+    canSeePastRls || who.forcedRlsTables === 0 ? 'PASS' : 'FAIL',
     `server ${who.serverVersion}, measured as "${who.user}" (super=${who.super}, bypassrls=${who.bypassrls}) against ${who.forcedRlsTables} tables under FORCE RLS` +
-    (canSeePastRls || who.forcedRlsTables === 0 ? '' : ' — this principal reads those tables as empty, so neither the census nor the dump can be trusted'));
+      (canSeePastRls || who.forcedRlsTables === 0 ? '' : ' — this principal reads those tables as empty, so neither the census nor the dump can be trusted'),
+  );
   if (failed) return finish(artifactDir, rtoSeconds, null, source, target);
 
   // 2b. Which cluster each side is in, asked of the servers themselves. Three
@@ -693,21 +720,29 @@ function main(): void {
   if (targetProbe.code === 0 && targetProbe.out.trim() !== '') {
     targetIdentity = JSON.parse(targetProbe.out.trim()) as { cluster: string; database: string };
   } else if (!/does not exist/i.test(targetProbe.err)) {
-    record('guard:not-the-source', 'FAIL', `the target server could not be asked who it is (psql exited ${targetProbe.code}), and a drop is not issued against an unidentified database`);
+    record(
+      'guard:not-the-source',
+      'FAIL',
+      `the target server could not be asked who it is (psql exited ${targetProbe.code}), and a drop is not issued against an unidentified database`,
+    );
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
   if (targetIdentity !== null && targetIdentity.cluster === sourceIdentity.cluster && targetIdentity.database === sourceIdentity.database) {
-    record('guard:not-the-source', 'FAIL',
-      `the target is the source: both answered with cluster ${sourceIdentity.cluster} and database "${sourceIdentity.database}". The two connection strings spell it differently, and the drop would have destroyed the source`);
+    record(
+      'guard:not-the-source',
+      'FAIL',
+      `the target is the source: both answered with cluster ${sourceIdentity.cluster} and database "${sourceIdentity.database}". The two connection strings spell it differently, and the drop would have destroyed the source`,
+    );
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
-  const sameCluster = targetIdentity === null
-    ? source.host === target.host && source.port === target.port
-    : targetIdentity.cluster === sourceIdentity.cluster;
-  record('guard:not-the-source', 'PASS',
+  const sameCluster = targetIdentity === null ? source.host === target.host && source.port === target.port : targetIdentity.cluster === sourceIdentity.cluster;
+  record(
+    'guard:not-the-source',
+    'PASS',
     targetIdentity === null
       ? `the source is database "${sourceIdentity.database}" of cluster ${sourceIdentity.cluster}; the target does not exist yet, so it is not the source`
-      : `the source is "${sourceIdentity.database}" of cluster ${sourceIdentity.cluster} and the target is "${targetIdentity.database}" of cluster ${targetIdentity.cluster}, asked of the servers and not read off the URLs`);
+      : `the source is "${sourceIdentity.database}" of cluster ${sourceIdentity.cluster} and the target is "${targetIdentity.database}" of cluster ${targetIdentity.cluster}, asked of the servers and not read off the URLs`,
+  );
 
   // 3. What the source holds, before anything is touched. An empty source
   //    proves nothing, so it is a failure.
@@ -715,17 +750,20 @@ function main(): void {
   if (before === null) return finish(artifactDir, rtoSeconds, null, source, target);
   const tables = Array.isArray(before.tables) ? (before.tables as Array<{ table: string; rows: number }>) : [];
   const rowTotal = tables.reduce((a, t) => a + Number(t.rows), 0);
-  record('census:source', tables.length > 0 && rowTotal > 0 ? 'PASS' : 'FAIL',
+  record(
+    'census:source',
+    tables.length > 0 && rowTotal > 0 ? 'PASS' : 'FAIL',
     `${tables.length} tables, ${rowTotal} rows, ` +
-    `${(before.policies as Json[] | undefined)?.length ?? 0} RLS policies, ` +
-    `${(before.grants as Json[] | undefined)?.length ?? 0} grants, ` +
-    `${(before.triggers as Json[] | undefined)?.length ?? 0} triggers, ` +
-    `${(before.constraints as Json[] | undefined)?.length ?? 0} constraints, ` +
-    `${(before.indexes as Json[] | undefined)?.length ?? 0} indexes, ` +
-    `${(before.routines as Json[] | undefined)?.length ?? 0} routines, ` +
-    `${(before.routineGrants as Json[] | undefined)?.length ?? 0} routine grants, ` +
-    `${(before.columnGrants as Json[] | undefined)?.length ?? 0} column grants` +
-    (tables.length === 0 || rowTotal === 0 ? ' — a source with no rows cannot show that a restore keeps anything' : ''));
+      `${(before.policies as Json[] | undefined)?.length ?? 0} RLS policies, ` +
+      `${(before.grants as Json[] | undefined)?.length ?? 0} grants, ` +
+      `${(before.triggers as Json[] | undefined)?.length ?? 0} triggers, ` +
+      `${(before.constraints as Json[] | undefined)?.length ?? 0} constraints, ` +
+      `${(before.indexes as Json[] | undefined)?.length ?? 0} indexes, ` +
+      `${(before.routines as Json[] | undefined)?.length ?? 0} routines, ` +
+      `${(before.routineGrants as Json[] | undefined)?.length ?? 0} routine grants, ` +
+      `${(before.columnGrants as Json[] | undefined)?.length ?? 0} column grants` +
+      (tables.length === 0 || rowTotal === 0 ? ' — a source with no rows cannot show that a restore keeps anything' : ''),
+  );
   if (failed) return finish(artifactDir, rtoSeconds, null, source, target);
 
   // 4. The dump. Custom format: pg_restore can read its table of contents, and
@@ -744,7 +782,12 @@ function main(): void {
   chmodSync(dumpPath, 0o600);
   const bytes = statSync(dumpPath).size;
   const sha = sha256OfFile(dumpPath);
-  record('backup:dump', bytes > 0 ? 'PASS' : 'FAIL', `${bytes} bytes, sha256 ${sha.slice(0, 16)}…, mode ${(statSync(dumpPath).mode & 0o777).toString(8)}`, dumpSeconds);
+  record(
+    'backup:dump',
+    bytes > 0 ? 'PASS' : 'FAIL',
+    `${bytes} bytes, sha256 ${sha.slice(0, 16)}…, mode ${(statSync(dumpPath).mode & 0o777).toString(8)}`,
+    dumpSeconds,
+  );
 
   // The source must not have changed while it was being dumped, or a later
   // difference cannot be told apart from a restore fault.
@@ -754,11 +797,18 @@ function main(): void {
   if (moved.length > 0) {
     // Nothing is dropped after this: the measurement is void, and the drill
     // stops rather than carrying on with a comparison it cannot read.
-    record('source:quiescent', 'FAIL',
-      `the source changed while it was dumped, so no later comparison can separate that from a restore fault, and nothing was dropped: ${moved[0].slice(0, 160)}`);
+    record(
+      'source:quiescent',
+      'FAIL',
+      `the source changed while it was dumped, so no later comparison can separate that from a restore fault, and nothing was dropped: ${lastLines(moved[0] ?? '', 1).slice(0, 160)}`,
+    );
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
-  record('source:quiescent', 'PASS', 'the source read the same before and after the dump. This is a check on the two ends, not a shared snapshot: pg_dump --snapshot inside an exported REPEATABLE READ transaction would be the stronger form, and this drill does not do it');
+  record(
+    'source:quiescent',
+    'PASS',
+    'the source read the same before and after the dump. This is a check on the two ends, not a shared snapshot: pg_dump --snapshot inside an exported REPEATABLE READ transaction would be the stronger form, and this drill does not do it',
+  );
 
   // Roles and their privileges live in the cluster, not in the database: a
   // database restored without them carries grants naming roles that do not
@@ -773,7 +823,12 @@ function main(): void {
     chmodSync(globalsPath, 0o600);
     const mode = (statSync(globalsPath).mode & 0o777).toString(8);
     const roleLines = run('grep', ['-c', '^CREATE ROLE', globalsPath]);
-    record('backup:globals', mode === '600' ? 'PASS' : 'FAIL', `the cluster's roles and privileges were written separately (${statSync(globalsPath).size} bytes, ${roleLines.out.trim() || '0'} CREATE ROLE statements, mode ${mode} as read back from disk). This file carries the roles' password hashes, is not part of the database dump, and is removed on every exit path unless --keep-dump`, (Date.now() - t0) / 1000);
+    record(
+      'backup:globals',
+      mode === '600' ? 'PASS' : 'FAIL',
+      `the cluster's roles and privileges were written separately (${statSync(globalsPath).size} bytes, ${roleLines.out.trim() || '0'} CREATE ROLE statements, mode ${mode} as read back from disk). This file carries the roles' password hashes, is not part of the database dump, and is removed on every exit path unless --keep-dump`,
+      (Date.now() - t0) / 1000,
+    );
   } else {
     record('backup:globals', 'FAIL', `pg_dumpall exited ${globals.code}: ${lastLines(globals.err, 1)}`, (Date.now() - t0) / 1000);
   }
@@ -790,21 +845,39 @@ function main(): void {
     if (/does not exist/i.test(probe.err)) {
       record('guard:target-empty', 'PASS', `the target database "${target.database}" does not exist yet, so nothing of it is destroyed`);
     } else {
-      record('guard:target-empty', 'FAIL', `the target could not be read before the drop (psql exited ${probe.code}), and a drop is not issued against a database whose contents are unknown: ${lastLines(probe.err, 1)}`);
+      record(
+        'guard:target-empty',
+        'FAIL',
+        `the target could not be read before the drop (psql exited ${probe.code}), and a drop is not issued against a database whose contents are unknown: ${lastLines(probe.err, 1)}`,
+      );
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
   } else {
     existingRows = Number(probe.out.trim());
     if (!Number.isFinite(existingRows)) {
-      record('guard:target-empty', 'FAIL', 'the row count of the target did not read as a number, and a drop is not issued against a database whose contents are unknown');
+      record(
+        'guard:target-empty',
+        'FAIL',
+        'the row count of the target did not read as a number, and a drop is not issued against a database whose contents are unknown',
+      );
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
     const allowance = process.env.DR_DRILL_ALLOW_NONEMPTY_TARGET;
     if (existingRows > 0 && allowance !== String(existingRows)) {
-      record('guard:target-empty', 'FAIL', `the target holds ${existingRows} rows. Dropping it destroys them, so it is refused unless DR_DRILL_ALLOW_NONEMPTY_TARGET names that very number — ${existingRows} — which is how an allowance stays tied to what was actually measured instead of standing open`);
+      record(
+        'guard:target-empty',
+        'FAIL',
+        `the target holds ${existingRows} rows. Dropping it destroys them, so it is refused unless DR_DRILL_ALLOW_NONEMPTY_TARGET names that very number — ${existingRows} — which is how an allowance stays tied to what was actually measured instead of standing open`,
+      );
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
-    record('guard:target-empty', 'PASS', existingRows === 0 ? 'the target exists and holds no rows' : `the target holds ${existingRows} rows, and DR_DRILL_ALLOW_NONEMPTY_TARGET named that same number, so the drop was allowed`);
+    record(
+      'guard:target-empty',
+      'PASS',
+      existingRows === 0
+        ? 'the target exists and holds no rows'
+        : `the target holds ${existingRows} rows, and DR_DRILL_ALLOW_NONEMPTY_TARGET named that same number, so the drop was allowed`,
+    );
   }
 
   // 6. The restore, measured. This number is the one compared against the RTO.
@@ -825,19 +898,24 @@ function main(): void {
   // re-parenthesisation, and that is measured here, on this run, against pairs
   // that differ in meaning.
   const controlFailures = canonicalControl();
-  record('control:constraint-canonicalisation', controlFailures.length === 0 ? 'PASS' : 'FAIL',
+  record(
+    'control:constraint-canonicalisation',
+    controlFailures.length === 0 ? 'PASS' : 'FAIL',
     controlFailures.length === 0
       ? `the canonical form equates a boolean chain with its re-parenthesised self and keeps ${CANONICAL_CONTROL.length - 1} meaning-changing pairs apart, including (A AND B) OR C against A AND (B OR C)`
-      : controlFailures.join(' | '));
+      : controlFailures.join(' | '),
+  );
 
   const rendering = renderingOnlyDiffs(before, after);
   const diffs = compare(normalizeCensus(before), normalizeCensus(after));
-  record('note:constraint-rendering', 'PASS',
+  record(
+    'note:constraint-rendering',
+    'PASS',
     rendering.length === 0
       ? 'no constraint came back with a different rendering'
-      : `${rendering.length} check constraints came back with a different text whose canonical form is unchanged — the parser flattening a chain of one boolean operator: ${rendering.slice(0, 4).join(', ')}${rendering.length > 4 ? ', …' : ''}`);
-  record('compare:census', diffs.length === 0 ? 'PASS' : 'FAIL',
-    diffs.length === 0 ? `identical across ${CENSUS_SECTIONS.join(', ')}` : diffs.join(' | '));
+      : `${rendering.length} check constraints came back with a different text whose canonical form is unchanged — the parser flattening a chain of one boolean operator: ${rendering.slice(0, 4).join(', ')}${rendering.length > 4 ? ', …' : ''}`,
+  );
+  record('compare:census', diffs.length === 0 ? 'PASS' : 'FAIL', diffs.length === 0 ? `identical across ${CENSUS_SECTIONS.join(', ')}` : diffs.join(' | '));
 
   // A section that read nothing on both sides compared equal without measuring
   // anything. It is named and the verdict becomes INCOMPLETE.
@@ -851,43 +929,71 @@ function main(): void {
   // An operator who has established that a section is legitimately empty in
   // this schema may say so by naming those sections, and only those: an
   // acknowledgement that does not match what was measured does not count.
-  const acknowledged = (process.env.DR_DRILL_EMPTY_SECTIONS ?? '').split(',').map((x) => x.trim()).filter((x) => x !== '').sort();
+  const acknowledged = (process.env.DR_DRILL_EMPTY_SECTIONS ?? '')
+    .split(',')
+    .map((x) => x.trim())
+    .filter((x) => x !== '')
+    .sort();
   if (hollow.length === 0) {
-    record('scope:every-section-carried-rows', 'PASS', `all ${CENSUS_SECTIONS.length} sections held something on both sides, so each of them compared a measurement`);
+    record(
+      'scope:every-section-carried-rows',
+      'PASS',
+      `all ${CENSUS_SECTIONS.length} sections held something on both sides, so each of them compared a measurement`,
+    );
   } else if (acknowledged.length > 0 && JSON.stringify(acknowledged) === JSON.stringify(hollow)) {
-    record('scope:every-section-carried-rows', 'PASS',
-      `${CENSUS_SECTIONS.length - hollow.length} sections compared a measurement; these held nothing on either side and DR_DRILL_EMPTY_SECTIONS names exactly them, so their "identical" is acknowledged as empty rather than read as proof: ${hollow.join(', ')}`);
+    record(
+      'scope:every-section-carried-rows',
+      'PASS',
+      `${CENSUS_SECTIONS.length - hollow.length} sections compared a measurement; these held nothing on either side and DR_DRILL_EMPTY_SECTIONS names exactly them, so their "identical" is acknowledged as empty rather than read as proof: ${hollow.join(', ')}`,
+    );
   } else {
-    record('scope:every-section-carried-rows', 'SKIPPED',
+    record(
+      'scope:every-section-carried-rows',
+      'SKIPPED',
       `these sections held nothing on either side, so their "identical" measured nothing: ${hollow.join(', ')}` +
-      (acknowledged.length === 0
-        ? '. Set DR_DRILL_EMPTY_SECTIONS to exactly that list once it is established that this schema has none of them'
-        : `. DR_DRILL_EMPTY_SECTIONS names ${acknowledged.join(', ')}, which is not that list`));
+        (acknowledged.length === 0
+          ? '. Set DR_DRILL_EMPTY_SECTIONS to exactly that list once it is established that this schema has none of them'
+          : `. DR_DRILL_EMPTY_SECTIONS names ${acknowledged.join(', ')}, which is not that list`),
+    );
   }
 
   // Role identity is a property of the cluster, not of the database. When one
   // cluster holds both, those sections cannot fail, and the owner's condition
   // on roles and privileges is therefore NOT measured by this run.
   if (sameCluster) {
-    record('scope:roles-across-clusters', 'SKIPPED',
-      'the source and the target are in one cluster (same system identifier), so "owners" and the role names inside "grants" and "policies" refer to the same cluster-level roles on both sides and cannot differ. Losing a grant or a policy would still be caught, but a restore that lands where the roles do not exist is not tested here: that needs a second cluster and the separate globals file, which this drill writes and does not restore');
+    record(
+      'scope:roles-across-clusters',
+      'SKIPPED',
+      'the source and the target are in one cluster (same system identifier), so "owners" and the role names inside "grants" and "policies" refer to the same cluster-level roles on both sides and cannot differ. Losing a grant or a policy would still be caught, but a restore that lands where the roles do not exist is not tested here: that needs a second cluster and the separate globals file, which this drill writes and does not restore',
+    );
   } else {
-    record('scope:roles-across-clusters', 'PASS',
-      'the source and the target are in different clusters, so the role-bearing sections compared something that could have differed');
+    record(
+      'scope:roles-across-clusters',
+      'PASS',
+      'the source and the target are in different clusters, so the role-bearing sections compared something that could have differed',
+    );
   }
 
   // 8. The financial invariants, on the restored copy, each only where its
   //    table exists and holds rows.
   for (const inv of INVARIANTS) {
-    const rows = psqlJson(targetEnv, `SELECT CASE WHEN to_regclass('public.${inv.table}') IS NULL THEN '-1'::json
-      ELSE (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', '${inv.table}'), false, true, '')))[1]::text::json END`, `restored.rows.${inv.table}`);
+    const rows = psqlJson(
+      targetEnv,
+      `SELECT CASE WHEN to_regclass('public.${inv.table}') IS NULL THEN '-1'::json
+      ELSE (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', '${inv.table}'), false, true, '')))[1]::text::json END`,
+      `restored.rows.${inv.table}`,
+    );
     const n = rows === null ? -1 : Number(rows);
     if (n < 0) {
       record(`invariant:${inv.id}`, 'SKIPPED', `public.${inv.table} is not in the restored database`);
       continue;
     }
     if (n === 0) {
-      record(`invariant:${inv.id}`, 'SKIPPED', `public.${inv.table} is empty in the restored database, and zero violations in an empty table is not a measurement`);
+      record(
+        `invariant:${inv.id}`,
+        'SKIPPED',
+        `public.${inv.table} is empty in the restored database, and zero violations in an empty table is not a measurement`,
+      );
       continue;
     }
     const bad = psql(targetEnv, inv.sql);
@@ -896,8 +1002,11 @@ function main(): void {
       continue;
     }
     const violations = bad.out.trim();
-    record(`invariant:${inv.id}`, violations === '0' ? 'PASS' : 'FAIL',
-      violations === '0' ? `zero violating rows out of ${n}` : `${violations} violating rows out of ${n}`);
+    record(
+      `invariant:${inv.id}`,
+      violations === '0' ? 'PASS' : 'FAIL',
+      violations === '0' ? `zero violating rows out of ${n}` : `${violations} violating rows out of ${n}`,
+    );
   }
 
   // 9. The control on the comparison itself: a comparison that cannot fail is
@@ -905,40 +1014,66 @@ function main(): void {
   //    this very database.
   const perturbed = JSON.parse(JSON.stringify(before)) as Census;
   const perturbedTables = perturbed.tables as Array<{ table: string; rows: number }>;
-  perturbedTables[0].rows = Number(perturbedTables[0].rows) + 1;
+  const firstTable = perturbedTables[0];
+  if (firstTable === undefined) {
+    record('control:comparison-arithmetic', 'FAIL', 'the source census carried no table, so the comparison was never tested against a difference');
+    return finish(artifactDir, rtoSeconds, restoreSeconds, source, target);
+  }
+  firstTable.rows = Number(firstTable.rows) + 1;
   const arithmetic = compare(before, perturbed);
-  record('control:comparison-arithmetic', arithmetic.length > 0 ? 'PASS' : 'FAIL',
+  record(
+    'control:comparison-arithmetic',
+    arithmetic.length > 0 ? 'PASS' : 'FAIL',
     arithmetic.length > 0
-      ? `moving the row count of ${perturbedTables[0].table} by one was reported`
-      : 'moving a row count by one went unreported — every comparison above is worthless');
+      ? `moving the row count of ${firstTable.table} by one was reported`
+      : 'moving a row count by one went unreported — every comparison above is worthless',
+  );
 
   if (withComparatorProof) {
-    const listed = psql(targetEnv, `SELECT c.relname FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    const listed = psql(
+      targetEnv,
+      `SELECT c.relname FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
        WHERE ns.nspname = 'public' AND c.relkind = 'r'
          AND (xpath('/row/c/text()', query_to_xml(format('SELECT count(*) AS c FROM public.%I', c.relname), false, true, '')))[1]::text::bigint > 0
-       ORDER BY c.relname`);
+       ORDER BY c.relname`,
+    );
     if (listed.code !== 0) {
       record('control:comparison-on-database', 'FAIL', `the non-empty tables of the restored copy could not be listed (psql exited ${listed.code})`);
     } else {
-      const candidates = listed.out.split(/\r?\n/).map((x) => x.trim()).filter((x) => DB_NAME_RULE.test(x));
+      const candidates = listed.out
+        .split(/\r?\n/)
+        .map((x) => x.trim())
+        .filter((x) => DB_NAME_RULE.test(x));
       let mutatedTable = '';
       const refused: Array<{ table: string; reason: string }> = [];
       for (const table of candidates) {
         // Through format(%I) server-side, so the name is quoted by the server.
-        const del = psql(targetEnv, `DO $$ BEGIN EXECUTE format('DELETE FROM public.%I WHERE ctid IN (SELECT ctid FROM public.%I LIMIT 1)', '${table}', '${table}'); END $$`);
-        if (del.code === 0) { mutatedTable = table; break; }
-        refused.push({ table, reason: (del.err.match(/ERROR:\s*([^\n]{0,80})/) ?? ['', 'unknown'])[1] });
+        const del = psql(
+          targetEnv,
+          `DO $$ BEGIN EXECUTE format('DELETE FROM public.%I WHERE ctid IN (SELECT ctid FROM public.%I LIMIT 1)', '${table}', '${table}'); END $$`,
+        );
+        if (del.code === 0) {
+          mutatedTable = table;
+          break;
+        }
+        refused.push({ table, reason: del.err.match(/ERROR:\s*([^\n]{0,80})/)?.[1] ?? 'unknown' });
       }
       if (mutatedTable === '') {
-        record('control:comparison-on-database', 'FAIL',
-          `no row could be deleted from the restored copy (${candidates.length} non-empty tables; the first refusals were ${JSON.stringify(refused.slice(0, 3))}), so the census was never tested against a real difference`);
+        record(
+          'control:comparison-on-database',
+          'FAIL',
+          `no row could be deleted from the restored copy (${candidates.length} non-empty tables; the first refusals were ${JSON.stringify(refused.slice(0, 3))}), so the census was never tested against a real difference`,
+        );
       } else {
         const mutatedCensus = census(targetEnv, 'mutated');
         const seen = mutatedCensus === null ? ['the mutated copy could not be read'] : compare(normalizeCensus(before), normalizeCensus(mutatedCensus));
-        record('control:comparison-on-database', seen.length > 0 ? 'PASS' : 'FAIL',
+        record(
+          'control:comparison-on-database',
+          seen.length > 0 ? 'PASS' : 'FAIL',
           seen.length > 0
             ? `one row deleted from public.${mutatedTable} was detected. ${refused.length} earlier tables refused the delete, each with its reason: ${JSON.stringify(refused.slice(0, 3))}`
-            : `one row deleted from public.${mutatedTable} went unnoticed — every comparison above is worthless`);
+            : `one row deleted from public.${mutatedTable} went unnoticed — every comparison above is worthless`,
+        );
       }
     }
   } else {
@@ -954,36 +1089,55 @@ function main(): void {
     const attempt = recreated
       ? run('pg_restore', ['--no-password', '--exit-on-error', '--single-transaction', `--dbname=${target.database}`, brokenPath], targetEnv)
       : { out: '', code: -1, err: 'the control database could not be recreated' };
-    record('negative-control:truncated-dump', recreated && attempt.code !== 0 ? 'PASS' : 'FAIL',
+    record(
+      'negative-control:truncated-dump',
+      recreated && attempt.code !== 0 ? 'PASS' : 'FAIL',
       !recreated
         ? 'the control database could not be recreated, so a broken dump was never offered to pg_restore'
         : attempt.code !== 0
           ? `a dump truncated to 60% was refused (pg_restore exited ${attempt.code}; its table of contents ${toc.code === 0 ? 'still listed' : 'failed to list'})`
-          : 'a truncated dump restored without error — this drill cannot tell a whole backup from a broken one');
+          : 'a truncated dump restored without error — this drill cannot tell a whole backup from a broken one',
+    );
     const brokenSha = sha256OfFile(brokenPath);
-    record('negative-control:checksum', brokenSha !== sha ? 'PASS' : 'FAIL',
-      brokenSha !== sha ? 'the altered file does not match the recorded sha256' : 'the altered file matched the recorded sha256, so the checksum proves nothing');
+    record(
+      'negative-control:checksum',
+      brokenSha !== sha ? 'PASS' : 'FAIL',
+      brokenSha !== sha
+        ? 'the altered file does not match the recorded sha256'
+        : 'the altered file matched the recorded sha256, so the checksum proves nothing',
+    );
     unlinkSync(brokenPath);
   } else {
     record('negative-control:truncated-dump', 'SKIPPED', '--no-negative-control was passed, so a broken dump was never offered to pg_restore');
   }
 
   if (keepDump) {
-    record('cleanup:artifacts', 'PASS', `--keep-dump was passed, so the dump and ${globalsPath} remain on disk, mode 0600. The globals file carries the cluster's password hashes: it belongs in a secret store or nowhere`);
+    record(
+      'cleanup:artifacts',
+      'PASS',
+      `--keep-dump was passed, so the dump and ${globalsPath} remain on disk, mode 0600. The globals file carries the cluster's password hashes: it belongs in a secret store or nowhere`,
+    );
   }
 
   // 11. The target is scratch, and by now it also holds the one row the control
   //      deleted, so it is dropped unless it is wanted for inspection. This is
   //      also what lets the next run start without being asked to allow a drop.
   if (keepTarget) {
-    record('cleanup:target', 'PASS', `--keep-target was passed, so "${target.database}" is left as it is — with the one row the comparison control deleted still missing, which is why it is not a copy to trust`);
+    record(
+      'cleanup:target',
+      'PASS',
+      `--keep-target was passed, so "${target.database}" is left as it is — with the one row the comparison control deleted still missing, which is why it is not a copy to trust`,
+    );
   } else {
     const name = target.database;
     const drop = run('psql', [...PSQL_FLAGS, '--command', `DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`], pgEnv(target, 'postgres'));
-    record('cleanup:target', drop.code === 0 ? 'PASS' : 'FAIL',
+    record(
+      'cleanup:target',
+      drop.code === 0 ? 'PASS' : 'FAIL',
       drop.code === 0
         ? `the restored copy was dropped: it is scratch, and the comparison control deleted a row from it`
-        : `the restored copy could not be dropped (psql exited ${drop.code}), so the next run will refuse it as a non-empty target: ${lastLines(drop.err, 1)}`);
+        : `the restored copy could not be dropped (psql exited ${drop.code}), so the next run will refuse it as a non-empty target: ${lastLines(drop.err, 1)}`,
+    );
   }
 
   finish(artifactDir, rtoSeconds, restoreSeconds, source, target);
@@ -1011,8 +1165,11 @@ function finish(artifactDir: string, rtoSeconds: number, restoreSeconds: number 
   if (restoreSeconds === null) {
     record('rto', 'FAIL', 'no restore was measured, so nothing can be compared against the RTO');
   } else {
-    record('rto', restoreSeconds <= rtoSeconds ? 'PASS' : 'FAIL',
-      `the restore took ${restoreSeconds.toFixed(3)}s against an RTO of ${rtoSeconds}s — the time of this database on this machine, which is not the production time and is not an estimate of it`);
+    record(
+      'rto',
+      restoreSeconds <= rtoSeconds ? 'PASS' : 'FAIL',
+      `the restore took ${restoreSeconds.toFixed(3)}s against an RTO of ${rtoSeconds}s — the time of this database on this machine, which is not the production time and is not an estimate of it`,
+    );
   }
 
   const verdict = failed ? 'FAIL' : incomplete ? 'INCOMPLETE' : 'PASS';
@@ -1039,7 +1196,9 @@ function finish(artifactDir: string, rtoSeconds: number, restoreSeconds: number 
   }
 
   const counts = steps.reduce((acc: Record<string, number>, s) => ({ ...acc, [s.status]: (acc[s.status] ?? 0) + 1 }), {});
-  process.stdout.write(`verdict ${failed ? 'FAIL' : incomplete ? 'INCOMPLETE' : 'PASS'} — ${counts.PASS ?? 0} passed, ${counts.FAIL ?? 0} failed, ${counts.SKIPPED ?? 0} skipped\n`);
+  process.stdout.write(
+    `verdict ${failed ? 'FAIL' : incomplete ? 'INCOMPLETE' : 'PASS'} — ${counts.PASS ?? 0} passed, ${counts.FAIL ?? 0} failed, ${counts.SKIPPED ?? 0} skipped\n`,
+  );
   process.exit(failed ? 1 : incomplete ? 3 : 0);
 }
 
