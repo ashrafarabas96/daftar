@@ -83,6 +83,7 @@ const CENSUS_SECTIONS = [
   'columnGrants',
   'defaultAcls',
   'owners',
+  'views',
 ] as const;
 
 const DB_NAME_RULE = /^[a-z_][a-z0-9_]{0,62}$/;
@@ -195,7 +196,14 @@ function lastLines(text: string, count: number): string {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line !== '');
-  return lines.length === 0 ? '(the tool said nothing)' : lines.slice(-count).join(' ');
+  if (lines.length === 0) return '(the tool said nothing)';
+  // The reason is on the ERROR line; psql and pg_dump then add DETAIL, HINT or
+  // "Query was: …". Taking the tail alone kept the hint and lost the cause, so
+  // the cause comes first and the tail follows it.
+  const cause = lines.filter((line) => /^(?:pg_\w+: )?error[: ]/i.test(line) || /^ERROR:/.test(line));
+  if (cause.length === 0) return lines.slice(-count).join(' ');
+  const tail = lines.slice(-count).filter((line) => !cause.includes(line));
+  return [...cause.slice(0, count), ...tail].slice(0, count + 1).join(' ');
 }
 
 function run(file: string, args: string[], env?: NodeJS.ProcessEnv): { out: string; code: number; err: string } {
@@ -261,9 +269,16 @@ const SQL = {
     ) s`,
   // No filter on the grantee: filtering by the connecting role would read a
   // different set on each side and hide a real difference (or invent one).
+  // Read from relacl, not from information_schema.role_table_grants: that view
+  // shows only grants to roles the caller belongs to and DROPS everything
+  // granted to PUBLIC. This schema's security is built on taking PUBLIC away
+  // (REVOKE ALL ... FROM PUBLIC in 0042 and 0046), so a restore that handed
+  // PUBLIC its default privileges back would have read as identical.
+  // A NULL relacl means "the owner's default", which is itself a fact.
   grants: `
-    SELECT coalesce(json_agg(json_build_object('grantee', grantee, 'table', table_name, 'privilege', privilege_type) ORDER BY grantee, table_name, privilege_type), '[]'::json)
-    FROM information_schema.role_table_grants WHERE table_schema = 'public'`,
+    SELECT coalesce(json_agg(json_build_object('table', c.relname, 'kind', c.relkind, 'owner', pg_get_userbyid(c.relowner), 'acl', coalesce(c.relacl::text, '(owner default)')) ORDER BY c.relname), '[]'::json)
+    FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'S')`,
   policies: `
     SELECT coalesce(json_agg(json_build_object('table', tablename, 'policy', policyname, 'cmd', cmd, 'permissive', permissive, 'roles', roles::text, 'using', coalesce(qual, ''), 'check', coalesce(with_check, '')) ORDER BY tablename, policyname), '[]'::json)
     FROM pg_policies WHERE schemaname = 'public'`,
@@ -303,12 +318,17 @@ const SQL = {
     FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace WHERE ns.nspname = 'public'`,
   // Privileges that role_table_grants does not carry: EXECUTE on a routine,
   // a privilege granted on one column, and what a future object will inherit.
+  // proacl, for the same reason: EXECUTE on a function is granted to PUBLIC by
+  // default, and a SECURITY DEFINER routine that comes back without its REVOKE
+  // is exactly the hole DR-60 closes.
   routineGrants: `
-    SELECT coalesce(json_agg(json_build_object('grantee', grantee, 'routine', routine_name, 'privilege', privilege_type) ORDER BY grantee, routine_name, privilege_type), '[]'::json)
-    FROM information_schema.role_routine_grants WHERE routine_schema = 'public'`,
+    SELECT coalesce(json_agg(json_build_object('routine', p.proname, 'args', pg_get_function_identity_arguments(p.oid), 'acl', coalesce(p.proacl::text, '(public execute by default)')) ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)), '[]'::json)
+    FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace WHERE ns.nspname = 'public'`,
   columnGrants: `
-    SELECT coalesce(json_agg(json_build_object('grantee', grantee, 'table', table_name, 'column', column_name, 'privilege', privilege_type) ORDER BY grantee, table_name, column_name, privilege_type), '[]'::json)
-    FROM information_schema.role_column_grants WHERE table_schema = 'public'`,
+    SELECT coalesce(json_agg(json_build_object('table', c.relname, 'column', a.attname, 'acl', a.attacl::text) ORDER BY c.relname, a.attname), '[]'::json)
+    FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+    JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    WHERE ns.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL`,
   defaultAcls: `
     SELECT coalesce(json_agg(json_build_object('owner', pg_get_userbyid(d.defaclrole), 'objectType', d.defaclobjtype, 'acl', d.defaclacl::text) ORDER BY pg_get_userbyid(d.defaclrole), d.defaclobjtype, d.defaclacl::text), '[]'::json)
     FROM pg_default_acl d JOIN pg_namespace ns ON ns.oid = d.defaclnamespace WHERE ns.nspname = 'public'`,
@@ -316,6 +336,12 @@ const SQL = {
     SELECT coalesce(json_agg(json_build_object('object', c.relname, 'kind', c.relkind, 'owner', pg_get_userbyid(c.relowner)) ORDER BY c.relname, c.relkind), '[]'::json)
     FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
     WHERE ns.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'S')`,
+  // A view's body, not only its name: a view that comes back selecting
+  // something else keeps both.
+  views: `
+    SELECT coalesce(json_agg(json_build_object('view', c.relname, 'kind', c.relkind, 'definition', pg_get_viewdef(c.oid, true)) ORDER BY c.relname), '[]'::json)
+    FROM pg_class c JOIN pg_namespace ns ON ns.oid = c.relnamespace
+    WHERE ns.nspname = 'public' AND c.relkind IN ('v', 'm')`,
   // Who is measuring, and may they see past row-level security. Under FORCE
   // RLS a principal without bypass reads every table as empty, and an empty
   // census compares equal to an empty census.
@@ -461,7 +487,11 @@ function topOperators(group: ExprNode[]): Set<string> {
 function canonicalExpr(node: ExprNode): string {
   if (typeof node === 'string') return node.replace(/\s+/g, ' ').trim();
   const ops = topOperators(node);
-  const chain = ops.size === 1 ? [...ops][0] : '';
+  // A NOT anywhere in this group stops the flattening: `NOT (a AND b) AND c`
+  // and `NOT a AND b AND c` are different constraints, and dropping that
+  // parenthesis would equate them — measured, not supposed.
+  const negated = node.some((child) => typeof child === 'string' && /\bNOT\b/i.test(child));
+  const chain = ops.size === 1 && !negated ? [...ops][0] : '';
   const parts = node.map((child) => {
     if (typeof child === 'string') return canonicalExpr(child);
     const inner = canonicalExpr(child);
@@ -495,6 +525,16 @@ const CANONICAL_CONTROL: Array<[string, string, boolean]> = [
     'CHECK (((debit_minor > 0) AND ((credit_minor = 0) OR (base_amount_minor = 0))))',
     false,
   ],
+  // A negated chain: with debit=false, credit=false and base=true the first is
+  // true and the second is false. An earlier version of this canonical form
+  // equated them, which is why the pair is here and not in a comment.
+  [
+    'CHECK ((NOT ((debit_minor > 0) AND (credit_minor > 0)) AND (base_amount_minor = 0)))',
+    'CHECK ((NOT (debit_minor > 0) AND (credit_minor > 0) AND (base_amount_minor = 0)))',
+    false,
+  ],
+  // A string literal carrying the word AND must not be read as an operator.
+  ["CHECK (((note = 'cash AND credit') AND ((a > 0) AND (b > 0))))", "CHECK (((note = 'cash AND credit') AND (a > 0) AND (b > 0)))", true],
 ];
 
 function canonicalControl(): string[] {
@@ -513,6 +553,73 @@ function canonicalControl(): string[] {
 }
 
 /**
+ * An ACL that grants everything to the owner and nothing to anybody else says
+ * the same thing as no ACL at all: PostgreSQL stores NULL for that state and
+ * writes it out explicitly once a grant has been made and taken back. The
+ * restored copy therefore comes back with `(owner default)` where the source
+ * held `{owner=arwdDxt/owner}` — the same privileges, a different spelling.
+ *
+ * Only that one shape is folded. An ACL that names anybody else, or that gives
+ * the owner less than the full set, is left exactly as it is: those are the
+ * differences this section exists to catch, and `REVOKE ... FROM PUBLIC` is
+ * how this schema's security is written.
+ */
+const FULL_PRIVILEGES: Record<string, string> = {
+  r: 'arwdDxt', // table
+  v: 'arwdDxt', // view
+  m: 'arwdDxt', // materialised view
+  S: 'rwU', // sequence
+};
+
+function canonicalAcl(aclText: string, owner: string, kind: string): string {
+  const marker = '(owner default)';
+  if (aclText === marker || aclText === '') return marker;
+  const inner = aclText.replace(/^\{/, '').replace(/\}$/, '').trim();
+  if (inner === '') return marker;
+  const entries = inner.split(',').map((entry) => entry.trim().replace(/^"|"$/g, ''));
+  if (entries.length !== 1) return aclText;
+  const match = /^([^=]*)=([a-zA-Z*]*)\/(.*)$/.exec(entries[0] ?? '');
+  if (match === null) return aclText;
+  const [, grantee, privileges, grantor] = match;
+  if (grantee !== owner || grantor !== owner) return aclText;
+  const full = FULL_PRIVILEGES[kind];
+  if (full === undefined) return aclText;
+  const held = new Set((privileges ?? '').replace(/\*/g, '').split(''));
+  const wanted = new Set(full.split(''));
+  if (held.size !== wanted.size) return aclText;
+  for (const privilege of wanted) if (!held.has(privilege)) return aclText;
+  return marker;
+}
+
+/** Pairs that must stay apart, measured on every run for the same reason as
+ *  the constraint control: a fold that cannot tell them apart is not a fold. */
+const ACL_CONTROL: Array<[string, string, string, boolean]> = [
+  // Owner holds everything, nobody else is named: the same as no ACL.
+  ['{drill=arwdDxt/drill}', 'drill', 'r', true],
+  // PUBLIC gets SELECT: this is the difference the section exists for.
+  ['{drill=arwdDxt/drill,=r/drill}', 'drill', 'r', false],
+  // Another role gets INSERT.
+  ['{drill=arwdDxt/drill,daftar_app=a/drill}', 'drill', 'r', false],
+  // The owner has been reduced to SELECT: a real restriction, not a default.
+  ['{drill=r/drill}', 'drill', 'r', false],
+];
+
+function aclControl(): string[] {
+  const wrong: string[] = [];
+  for (const [acl, owner, kind, foldsToDefault] of ACL_CONTROL) {
+    const folded = canonicalAcl(acl, owner, kind) === '(owner default)';
+    if (folded !== foldsToDefault) {
+      wrong.push(
+        foldsToDefault
+          ? `an owner-only ACL was not read as the owner default: ${acl}`
+          : `an ACL that grants to somebody else, or less than everything to the owner, was folded into the owner default: ${acl}`,
+      );
+    }
+  }
+  return wrong;
+}
+
+/**
  * Replaces each constraint definition with its canonical form, so the
  * comparison is blind to the parser's re-parenthesisation of a boolean chain
  * and to nothing else.
@@ -523,6 +630,12 @@ function normalizeCensus(c: Census): Census {
     out.constraints = (c.constraints as Array<Record<string, Json>>).map((row) => ({
       ...row,
       definition: typeof row.definition === 'string' ? canonicalConstraint(row.definition) : row.definition,
+    }));
+  }
+  if (Array.isArray(c.grants)) {
+    out.grants = (c.grants as Array<Record<string, Json>>).map((row) => ({
+      ...row,
+      acl: typeof row.acl === 'string' && typeof row.owner === 'string' ? canonicalAcl(row.acl, row.owner, String(row.kind ?? 'r')) : row.acl,
     }));
   }
   return out;
@@ -735,7 +848,10 @@ function main(): void {
     );
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
-  const sameCluster = targetIdentity === null ? source.host === target.host && source.port === target.port : targetIdentity.cluster === sourceIdentity.cluster;
+  // Decided from the servers alone. When the target does not exist yet there is
+  // nothing to ask, so the question is asked again once it has been created —
+  // never answered by comparing how the two URLs spell the host.
+  let sameCluster: boolean | null = targetIdentity === null ? null : targetIdentity.cluster === sourceIdentity.cluster;
   record(
     'guard:not-the-source',
     'PASS',
@@ -771,6 +887,9 @@ function main(): void {
   mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
   const dumpPath = join(artifactDir, `dump-${source.database}.pgc`);
   const globalsPath = join(artifactDir, 'globals.sql');
+  // Registered before the tool runs: a pg_dump or pg_dumpall that fails after
+  // writing part of its output still leaves a file to delete.
+  artifactsToRemove.push(dumpPath, globalsPath);
   let t0 = Date.now();
   const dump = run('pg_dump', ['--format=custom', '--no-password', `--file=${dumpPath}`], sourceEnv);
   const dumpSeconds = (Date.now() - t0) / 1000;
@@ -778,7 +897,6 @@ function main(): void {
     record('backup:dump', 'FAIL', `pg_dump exited ${dump.code}: ${lastLines(dump.err, 1)}`, dumpSeconds);
     return finish(artifactDir, rtoSeconds, null, source, target);
   }
-  artifactsToRemove.push(dumpPath);
   chmodSync(dumpPath, 0o600);
   const bytes = statSync(dumpPath).size;
   const sha = sha256OfFile(dumpPath);
@@ -819,7 +937,6 @@ function main(): void {
   if (globals.code === 0) {
     // pg_dumpall writes through the umask, so the mode is set here and then
     // read back: the claim is the measured mode, not the intended one.
-    artifactsToRemove.push(globalsPath);
     chmodSync(globalsPath, 0o600);
     const mode = (statSync(globalsPath).mode & 0o777).toString(8);
     const roleLines = run('grep', ['-c', '^CREATE ROLE', globalsPath]);
@@ -882,6 +999,15 @@ function main(): void {
 
   // 6. The restore, measured. This number is the one compared against the RTO.
   if (!recreate(target, 'restore-target')) return finish(artifactDir, rtoSeconds, null, source, target);
+  if (sameCluster === null) {
+    const freshIdentity = psqlJson(targetEnv, SQL.identity, 'target.identity') as { cluster: string; database: string } | null;
+    if (freshIdentity === null) return finish(artifactDir, rtoSeconds, null, source, target);
+    sameCluster = freshIdentity.cluster === sourceIdentity.cluster;
+    if (sameCluster && freshIdentity.database === sourceIdentity.database) {
+      record('guard:not-the-source', 'FAIL', 'the freshly created target turned out to be the source; nothing further was done to it');
+      return finish(artifactDir, rtoSeconds, null, source, target);
+    }
+  }
   t0 = Date.now();
   const restore = run('pg_restore', ['--no-password', '--exit-on-error', '--single-transaction', `--dbname=${target.database}`, dumpPath], targetEnv);
   const restoreSeconds = (Date.now() - t0) / 1000;
@@ -897,12 +1023,12 @@ function main(): void {
   // The canonical form is only allowed to blur the parser's own
   // re-parenthesisation, and that is measured here, on this run, against pairs
   // that differ in meaning.
-  const controlFailures = canonicalControl();
+  const controlFailures = [...canonicalControl(), ...aclControl()];
   record(
     'control:constraint-canonicalisation',
     controlFailures.length === 0 ? 'PASS' : 'FAIL',
     controlFailures.length === 0
-      ? `the canonical form equates a boolean chain with its re-parenthesised self and keeps ${CANONICAL_CONTROL.length - 1} meaning-changing pairs apart, including (A AND B) OR C against A AND (B OR C)`
+      ? `the canonical forms kept ${CANONICAL_CONTROL.filter(([, , same]) => !same).length} meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated ${CANONICAL_CONTROL.filter(([, , same]) => same).length} pairs that differ only in the parser's parenthesisation; and the ACL fold kept ${ACL_CONTROL.filter(([, , , folds]) => !folds).length} ACLs apart — PUBLIC with SELECT, another role with INSERT, and an owner cut down to SELECT — while folding an owner-only ACL into the owner default`
       : controlFailures.join(' | '),
   );
 
@@ -925,32 +1051,43 @@ function main(): void {
     return Array.isArray(a) && Array.isArray(b) && a.length === 0 && b.length === 0;
   });
   const notArrays = CENSUS_SECTIONS.filter((section) => !Array.isArray(before[section]));
-  const hollow = [...empty, ...notArrays].sort();
-  // An operator who has established that a section is legitimately empty in
-  // this schema may say so by naming those sections, and only those: an
-  // acknowledgement that does not match what was measured does not count.
+  // Two different things, kept apart: a section that is an empty list on both
+  // sides (the schema may simply have none of that object), and a section that
+  // is not a list at all because the thing it reads is absent — the migration
+  // ledger, which this schema does not create. Only the first can be
+  // acknowledged; the second is never a pass, because nothing was read.
+  const emptyLists = empty.slice().sort();
+  const unread = notArrays.slice().sort();
   const acknowledged = (process.env.DR_DRILL_EMPTY_SECTIONS ?? '')
     .split(',')
     .map((x) => x.trim())
     .filter((x) => x !== '')
     .sort();
-  if (hollow.length === 0) {
+  const measured = CENSUS_SECTIONS.length - emptyLists.length - unread.length;
+  if (unread.length > 0) {
     record(
-      'scope:every-section-carried-rows',
+      'scope:sections-that-measured-something',
+      'SKIPPED',
+      `${measured} of ${CENSUS_SECTIONS.length} sections compared a measurement. These read nothing at all, so their "identical" is not a comparison and cannot be acknowledged away: ${unread.join(', ')}` +
+        (emptyLists.length > 0 ? `. And these were empty lists on both sides: ${emptyLists.join(', ')}` : ''),
+    );
+  } else if (emptyLists.length === 0) {
+    record(
+      'scope:sections-that-measured-something',
       'PASS',
       `all ${CENSUS_SECTIONS.length} sections held something on both sides, so each of them compared a measurement`,
     );
-  } else if (acknowledged.length > 0 && JSON.stringify(acknowledged) === JSON.stringify(hollow)) {
+  } else if (acknowledged.length > 0 && JSON.stringify(acknowledged) === JSON.stringify(emptyLists)) {
     record(
-      'scope:every-section-carried-rows',
+      'scope:sections-that-measured-something',
       'PASS',
-      `${CENSUS_SECTIONS.length - hollow.length} sections compared a measurement; these held nothing on either side and DR_DRILL_EMPTY_SECTIONS names exactly them, so their "identical" is acknowledged as empty rather than read as proof: ${hollow.join(', ')}`,
+      `${measured} of ${CENSUS_SECTIONS.length} sections compared a measurement; these were empty lists on both sides and DR_DRILL_EMPTY_SECTIONS names exactly them, so their emptiness is acknowledged rather than read as proof: ${emptyLists.join(', ')}`,
     );
   } else {
     record(
-      'scope:every-section-carried-rows',
+      'scope:sections-that-measured-something',
       'SKIPPED',
-      `these sections held nothing on either side, so their "identical" measured nothing: ${hollow.join(', ')}` +
+      `these were empty lists on both sides, so their "identical" measured nothing: ${emptyLists.join(', ')}` +
         (acknowledged.length === 0
           ? '. Set DR_DRILL_EMPTY_SECTIONS to exactly that list once it is established that this schema has none of them'
           : `. DR_DRILL_EMPTY_SECTIONS names ${acknowledged.join(', ')}, which is not that list`),
@@ -1204,4 +1341,23 @@ function finish(artifactDir: string, rtoSeconds: number, restoreSeconds: number 
 
 if (!existsSync('package.json')) die('run this from the repository root');
 
-main();
+// finish() calls process.exit, so the normal paths never reach the catch. What
+// does reach it is a throw from anywhere else — a JSON body that is not JSON, a
+// file that cannot be read — and that path must still delete the dump and the
+// globals file, which carry data and password hashes.
+try {
+  main();
+} catch (error) {
+  process.stderr.write(`the drill stopped on an unexpected error: ${scrub(String(error))}\n`);
+  for (const path of keepSecrets ? [] : artifactsToRemove) {
+    try {
+      if (existsSync(path)) {
+        unlinkSync(path);
+        process.stderr.write(`deleted on the way out: ${path}\n`);
+      }
+    } catch {
+      process.stderr.write(`could not delete ${path}, which may carry a password hash\n`);
+    }
+  }
+  process.exit(1);
+}

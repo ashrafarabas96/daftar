@@ -1,0 +1,166 @@
+{
+  "tool": "scripts/dr-drill.ts",
+  "at": "2026-11-10T14:39:32.717Z",
+  "node": "v24.20.0",
+  "platform": "linux-x64",
+  "source": "/tmp:55432/daftar",
+  "target": "/tmp:55433/daftar_restore",
+  "rtoSeconds": 14400,
+  "restoreSeconds": 1.161,
+  "steps": [
+    {
+      "step": "guard:target-name",
+      "status": "PASS",
+      "detail": "the target is \"daftar_restore\""
+    },
+    {
+      "step": "guard:drop-confirmed",
+      "status": "PASS",
+      "detail": "the drop of the target was confirmed by name"
+    },
+    {
+      "step": "tool:pg_dump",
+      "status": "PASS",
+      "detail": "pg_dump (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
+    },
+    {
+      "step": "tool:pg_restore",
+      "status": "PASS",
+      "detail": "pg_restore (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
+    },
+    {
+      "step": "tool:psql",
+      "status": "PASS",
+      "detail": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
+    },
+    {
+      "step": "tool:pg_dumpall",
+      "status": "PASS",
+      "detail": "pg_dumpall (PostgreSQL) 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1)"
+    },
+    {
+      "step": "source:principal",
+      "status": "PASS",
+      "detail": "server 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1), measured as \"drill\" (super=true, bypassrls=true) against 93 tables under FORCE RLS"
+    },
+    {
+      "step": "guard:not-the-source",
+      "status": "PASS",
+      "detail": "the source is database \"daftar\" of cluster 7706536532177609331; the target does not exist yet, so it is not the source"
+    },
+    {
+      "step": "census:source",
+      "status": "PASS",
+      "detail": "124 tables, 400 rows, 400 RLS policies, 125 grants, 185 triggers, 1151 constraints, 283 indexes, 565 routines, 565 routine grants, 194 column grants"
+    },
+    {
+      "step": "backup:dump",
+      "status": "PASS",
+      "detail": "2158047 bytes, sha256 23b5325c58e07e93…, mode 600",
+      "seconds": 2.7
+    },
+    {
+      "step": "source:quiescent",
+      "status": "PASS",
+      "detail": "the source read the same before and after the dump. This is a check on the two ends, not a shared snapshot: pg_dump --snapshot inside an exported REPEATABLE READ transaction would be the stronger form, and this drill does not do it"
+    },
+    {
+      "step": "backup:globals",
+      "status": "PASS",
+      "detail": "the cluster's roles and privileges were written separately (3890 bytes, 13 CREATE ROLE statements, mode 600 as read back from disk). This file carries the roles' password hashes, is not part of the database dump, and is removed on every exit path unless --keep-dump",
+      "seconds": 0.02
+    },
+    {
+      "step": "guard:target-empty",
+      "status": "PASS",
+      "detail": "the target database \"daftar_restore\" does not exist yet, so nothing of it is destroyed"
+    },
+    {
+      "step": "restore",
+      "status": "PASS",
+      "detail": "pg_restore completed in one transaction",
+      "seconds": 1.161
+    },
+    {
+      "step": "control:constraint-canonicalisation",
+      "status": "PASS",
+      "detail": "the canonical forms kept 3 meaning-changing pairs apart — among them (A AND B) OR C against A AND (B OR C), and NOT (A AND B) AND C against NOT A AND B AND C — and equated 2 pairs that differ only in the parser's parenthesisation; and the ACL fold kept 3 ACLs apart — PUBLIC with SELECT, another role with INSERT, and an owner cut down to SELECT — while folding an owner-only ACL into the owner default"
+    },
+    {
+      "step": "note:constraint-rendering",
+      "status": "PASS",
+      "detail": "32 check constraints came back with a different text whose canonical form is unchanged — the parser flattening a chain of one boolean operator: customer_contacts.customer_contacts_email_check, customer_contacts.customer_contacts_name_check, customer_contacts.customer_contacts_notes_check, customer_contacts.customer_contacts_phone_check, …"
+    },
+    {
+      "step": "compare:census",
+      "status": "PASS",
+      "detail": "identical across tables, money, grants, policies, rlsFlags, migrations, triggers, constraints, indexes, routines, routineGrants, columnGrants, defaultAcls, owners, views"
+    },
+    {
+      "step": "scope:sections-that-measured-something",
+      "status": "PASS",
+      "detail": "14 of 15 sections compared a measurement; these were empty lists on both sides and DR_DRILL_EMPTY_SECTIONS names exactly them, so their emptiness is acknowledged rather than read as proof: defaultAcls"
+    },
+    {
+      "step": "scope:roles-across-clusters",
+      "status": "PASS",
+      "detail": "the source and the target are in different clusters, so the role-bearing sections compared something that could have differed"
+    },
+    {
+      "step": "invariant:INV-ACC-01 (debits equal credits, per entry)",
+      "status": "PASS",
+      "detail": "zero violating rows out of 2"
+    },
+    {
+      "step": "invariant:INV-ACC-01b (no line is both a debit and a credit)",
+      "status": "PASS",
+      "detail": "zero violating rows out of 2"
+    },
+    {
+      "step": "invariant:no journal line without its entry",
+      "status": "PASS",
+      "detail": "zero violating rows out of 2"
+    },
+    {
+      "step": "invariant:every journal entry is bound to one source identity",
+      "status": "PASS",
+      "detail": "zero violating rows out of 1"
+    },
+    {
+      "step": "control:comparison-arithmetic",
+      "status": "PASS",
+      "detail": "moving the row count of accounting_assertion_keys by one was reported"
+    },
+    {
+      "step": "control:comparison-on-database",
+      "status": "PASS",
+      "detail": "one row deleted from public.accounting_operation_kinds was detected. 1 earlier tables refused the delete, each with its reason: [{\"table\":\"accounting_manual_adjustments\",\"reason\":\"accounting.source_immutable: a posted manual adjustment cannot be delete (busine\"}]"
+    },
+    {
+      "step": "negative-control:truncated-dump",
+      "status": "PASS",
+      "detail": "a dump truncated to 60% was refused (pg_restore exited 1; its table of contents failed to list)"
+    },
+    {
+      "step": "negative-control:checksum",
+      "status": "PASS",
+      "detail": "the altered file does not match the recorded sha256"
+    },
+    {
+      "step": "cleanup:target",
+      "status": "PASS",
+      "detail": "the restored copy was dropped: it is scratch, and the comparison control deleted a row from it"
+    },
+    {
+      "step": "cleanup:secrets",
+      "status": "PASS",
+      "detail": "deleted on the way out: /home/laptop/dr-drill/artifacts/dump-daftar.pgc, /home/laptop/dr-drill/artifacts/globals.sql"
+    },
+    {
+      "step": "rto",
+      "status": "PASS",
+      "detail": "the restore took 1.161s against an RTO of 14400s — the time of this database on this machine, which is not the production time and is not an estimate of it"
+    }
+  ],
+  "verdict": "PASS"
+}
