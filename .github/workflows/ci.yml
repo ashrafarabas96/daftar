@@ -1636,6 +1636,146 @@ jobs:
           fi
           echo "ok: the executed count equals the declared inventory ($kernel == $static)"
 
+      # DR-84 LINK GATE, JUDGED ON GRADLE'S OWN RESOLVED GRAPH.
+      #
+      # `tests-unit/p7-01-capture-digest-gate.test.ts` refuses the dependency
+      # by reading one build file's lines, and the independent review of the P7
+      # seal file found that too narrow: `project(path = ":offline-kernel")`,
+      # `projects.offlineKernel`, the same call wrapped over several lines, and
+      # a dependency exported through SOME OTHER module all reach the kernel
+      # without that file ever spelling it. The set of spellings is open, so a
+      # text gate cannot close it. Gradle's resolved report can: every one of
+      # them collapses to `project :offline-kernel` at whatever depth the graph
+      # puts it, and that is what this step reads.
+      #
+      # The text gate is kept, not replaced. Two independent gates on one law
+      # is the arrangement that survives one of them being wrong.
+      #
+      # Node 24 is set up here only to RUN the gate: the file is erasable
+      # TypeScript, Node 24 strips the types natively, so this needs no
+      # `npm ci` in a job that has none. The version is asserted rather than
+      # assumed, because an older Node would fail to parse the gate and a
+      # job that cannot run its gate must say so.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: DR-84 link gate - the app does not resolve the offline kernel
+        run: |
+          set -euo pipefail
+          node -v
+          case "$(node -v)" in
+            v24.*) ;;
+            *) echo "FAIL: this gate needs Node 24 (native type stripping)"; exit 1 ;;
+          esac
+          cd apps/android
+          ./gradlew :app:dependencies --no-daemon > "$RUNNER_TEMP/app-deps.txt"
+          # The log carries the measurement, not only an exit code (RULE-29):
+          # how much report there was, and how many project dependencies of ANY
+          # name it holds.
+          wc -l < "$RUNNER_TEMP/app-deps.txt"
+          { grep -c 'project :' "$RUNNER_TEMP/app-deps.txt" || true; }
+          cd "$GITHUB_WORKSPACE"
+          node scripts/p7-dr84-link-graph-gate.ts \
+            --record=docs/decisions/2026-11-04-dr84-capture-digest-gate.md \
+            --report="$RUNNER_TEMP/app-deps.txt" \
+            --expect=debugRuntimeClasspath \
+            --expect=androidx.core:core-ktx
+      # THE CONTROLS, ONE PER SPELLING (RULE-27). A gate whose refusal has
+      # never been seen is a gate nobody has measured: the plant is proved to
+      # bite before its silence is read as absence. Each form is planted on a
+      # COPY of apps/android outside the repository, Gradle resolves it there,
+      # and this same gate must exit non-zero on the report. A plant that
+      # Gradle refuses to configure is INCONCLUSIVE, which is red here and not
+      # a quietly skipped case.
+      - name: DR-84 link gate - planted negative controls, one per spelling
+        run: |
+          set -euo pipefail
+          GATE="$GITHUB_WORKSPACE/scripts/p7-dr84-link-graph-gate.ts"
+          RECORD="$GITHUB_WORKSPACE/docs/decisions/2026-11-04-dr84-capture-digest-gate.md"
+          plant () {
+            form=$1
+            W="$RUNNER_TEMP/p7-plant-$form"
+            rm -rf "$W"
+            cp -R "$GITHUB_WORKSPACE/apps/android" "$W"
+            rm -rf "$W/app/build" "$W/offline-kernel/build" "$W/.gradle" "$W/build"
+            case "$form" in
+              direct)
+                printf '\ndependencies { implementation(project(":offline-kernel")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              pathnamed)
+                printf '\ndependencies { implementation(project(path = ":offline-kernel")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              multiline)
+                {
+                  echo ''
+                  echo 'dependencies {'
+                  echo '    implementation('
+                  echo '        project('
+                  echo '            ":offline-kernel"'
+                  echo '        )'
+                  echo '    )'
+                  echo '}'
+                } >> "$W/app/build.gradle.kts"
+                ;;
+              typesafe)
+                # Appended, not prepended: Gradle requires `pluginManagement {}`
+                # to be the first block in a settings file, so a line put above
+                # it would fail configuration for a reason that has nothing to
+                # do with this gate.
+                printf '\nenableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")\n' \
+                  >> "$W/settings.gradle.kts"
+                printf '\ndependencies { implementation(projects.offlineKernel) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              transitive)
+                # The case no build-file text gate can ever see: `:app` names
+                # `:relay`, and `:relay` exports the kernel.
+                mkdir -p "$W/relay"
+                {
+                  echo 'plugins {'
+                  echo '    id("com.android.library")'
+                  echo '    id("org.jetbrains.kotlin.android")'
+                  echo '}'
+                  echo 'android {'
+                  echo '    namespace = "app.daftar.relay"'
+                  echo '    compileSdk = 35'
+                  echo '    defaultConfig { minSdk = 26 }'
+                  echo '    compileOptions {'
+                  echo '        sourceCompatibility = JavaVersion.VERSION_17'
+                  echo '        targetCompatibility = JavaVersion.VERSION_17'
+                  echo '    }'
+                  echo '}'
+                  echo 'dependencies { api(project(":offline-kernel")) }'
+                } > "$W/relay/build.gradle.kts"
+                printf '\ninclude(":relay")\n' >> "$W/settings.gradle.kts"
+                printf '\ndependencies { implementation(project(":relay")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              *)
+                echo "FAIL: unknown planted form '$form'"; exit 1 ;;
+            esac
+            out="$RUNNER_TEMP/plant-$form.txt"
+            if ! (cd "$W" && ./gradlew :app:dependencies --no-daemon > "$out" 2>&1); then
+              echo "CONTROL INCONCLUSIVE: Gradle refused the planted '$form' build."
+              echo "  A control whose plant never configured proves nothing, so this"
+              echo "  is red and not a skipped case."
+              tail -40 "$out" || true
+              exit 1
+            fi
+            if node "$GATE" --record="$RECORD" --report="$out" --expect=debugRuntimeClasspath; then
+              echo "CONTROL FAILED: the gate PASSED a graph that carries the kernel"
+              echo "                through the '$form' spelling."
+              exit 1
+            fi
+            echo "control ok: the gate refused the planted '$form'"
+          }
+          for form in direct pathnamed multiline typesafe transitive; do
+            plant "$form"
+          done
+          echo "DR84-LINK-GRAPH CONTROLS: 5 of 5 planted spellings were refused"
+
   # -------------------------------------------------------------------------
   # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
   #     build (`node server.mts`, CSP enforced), the built merchant API and a fresh
