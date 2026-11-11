@@ -38,6 +38,11 @@ name: PERF01 image probe (diagnosis)
 
 on:
   pull_request:
+  # Added so the planted control below can be run WITHOUT opening a pull
+  # request: a PR on this branch also starts `DAFTAR CI`, whose `backend` job
+  # costs hours and dies at Chromium on 26.04 anyway. A dispatch runs this
+  # workflow and nothing else.
+  workflow_dispatch:
 
 env:
   NODE_VERSION: '24.12.x'
@@ -125,3 +130,101 @@ jobs:
           echo "early measurement done $(date -u +%H:%M:%SZ)"
         env:
           PG_PORT: '5432'
+
+  # POSITIVE CONTROL for the job above, and the reason it exists: that job
+  # reported `over=0/200` three times, and a zero is only evidence once the
+  # instrument is shown to be able to report something else ON THIS IMAGE
+  # (RULE-3, RULE-11). Everything about the measurement is identical; the one
+  # difference is `PERF01_NEGATIVE_CONTROL_MS=200`, the knob this tree already
+  # uses for exactly this purpose at `ci.yml:879`, planted INSIDE the measured
+  # window (`accounting-budgets.test.ts:434` and `:463`). On this tree the
+  # verdict is the wall clock -- there is no `judgedOn: 'inDatabaseExecMs'`
+  # here, that arrived with #48 on `main` -- so a 200 ms plant against a 15 ms
+  # ceiling MUST turn the suite red.
+  #
+  # The control's own assertion is inverted ON PURPOSE: this job FAILS if the
+  # suite stays green, because a plant that changes nothing means the
+  # instrument was blind and the three zeros above are worth nothing. No
+  # budget, iteration count, warm-up or timeout is touched, and there is no
+  # `retry`, no `continue-on-error` and no `if: always()`.
+  perf01-planted-control-on-2604:
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Report the image this control is taken on
+        run: |
+          set -euo pipefail
+          echo "CONTROL image: ${ImageOS:-unknown} / ${ImageVersion:-unknown}"
+          echo "CONTROL kernel: $(uname -r)"
+          echo "CONTROL cpus: $(nproc)"
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: CONTROL - the same suite with a 200 ms plant MUST go red
+        run: |
+          set -u
+          echo "planted control starting $(date -u +%H:%M:%SZ)"
+          if node_modules/.bin/vitest run tests/performance/accounting-budgets.test.ts; then
+            echo "CONTROL FAILED: the suite stayed GREEN with a 200 ms plant inside the"
+            echo "measured window, so the instrument does not see what it measures and the"
+            echo "zeros reported by the probe job are not evidence."
+            PLANT_SEEN=no
+          else
+            echo "CONTROL OK: the plant turned the suite RED, so the instrument reports"
+            echo "what it measures on this image."
+            PLANT_SEEN=yes
+          fi
+          node -e "
+            const fs = require('fs');
+            const f = './release/phase2-s8-performance-tier1.json';
+            if (!fs.existsSync(f)) { console.log('CONTROL: NO EVIDENCE FILE AT ' + f); process.exit(0); }
+            const ev = JSON.parse(fs.readFileSync(f, 'utf8'));
+            for (const m of ev.measurements) {
+              const over = m.samplesMs.filter((v) => v > m.budgetMs).length;
+              console.log('PLANTED ' + m.name + ': n=' + m.iterations + ' budget=' + m.budgetMs +
+                ' p50=' + m.p50.toFixed(3) + ' p95=' + m.p95.toFixed(3) +
+                ' p99=' + m.p99.toFixed(3) + ' max=' + m.max.toFixed(3) +
+                ' over=' + over + '/' + m.iterations);
+            }
+          "
+          echo "planted control done $(date -u +%H:%M:%SZ)"
+          if [ "$PLANT_SEEN" = "yes" ]; then exit 0; else exit 1; fi
+        env:
+          PG_PORT: '5432'
+          PERF01_NEGATIVE_CONTROL_MS: '200'
