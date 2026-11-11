@@ -9,6 +9,18 @@
 # finding, so this workflow takes three more on 26.04 to answer one question:
 # is the absence of the tail on 26.04 stable?
 #
+# ANSWERED, 2026-11-12, and the question itself was wrong. Three runs
+# (41778312909, 41778621629, 41778918494), all green, gave A: over=0/200 every
+# time, but max = 11.744 / 5.342 / 5.785 ms. 11.744 is more than twice the
+# 4.479 above, so the tail is NOT absent on 26.04 -- it is there and it
+# varies. What three runs do establish is that it stays UNDER the 15 ms
+# budget, against 5/200 over and max 43.743 on 24.04. "NO tail at all" above
+# is a claim about ONE sample and must not be read as a finding.
+# Still unmeasured, and this workflow cannot measure it: the LATE position on
+# 26.04, because Playwright has no Chromium build for 26.04 and the real job
+# dies before reaching it. The numbers, and what would close it:
+# `.local-context/cards/DIAGPERF01_LATE_POINT_ON_2604_UNMEASURED_AR.md`.
+#
 # Why it is a separate workflow and not a step in `ci.yml`: the `backend` job
 # installs Chromium at step 34 for the gate's real-browser matrix, and
 # Playwright has no Chromium build for 26.04, so the job dies there — AFTER
