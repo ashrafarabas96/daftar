@@ -19,8 +19,8 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | --- | --- | --- | --- |
 | DB / migrations | 26 | 26 | 0 |
 | Domain / packages | 45 | 4 | 6 |
-| API | 68 | 14 | 2 |
-| Web | 90 | 13 | 31 |
+| API | 68 | 14 | 1 |
+| Web | 90 | 13 | 30 |
 | Security / gates | 35 | 33 | 4 |
 | CI / release | 16 | 7 | 3 |
 | Other production files | 1 | 0 | 0 |
@@ -112,7 +112,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 
 | Path | Slice | Purpose | First checkpoint | Security | Protected by |
 | --- | --- | --- | --- | --- | --- |
-| `apps/api/package.json` | P3-S1 | The API workspace manifest; Phase 3 adds the `@daftar/inventory` dependency. | 61b89d6 (S1 closure) | standard | none found by reference |
+| `apps/api/package.json` | P3-S1 | The API workspace manifest; Phase 3 adds the `@daftar/inventory` dependency. | 61b89d6 (S1 closure) | standard | 1: guards/p5-billing-dependency-direction |
 | `apps/api/src/app/app.module.ts` | P3-S1 (+S3, S4, S5, S6, S7, corrective) | SINGLE-PROCESS composition (PROCESS_MODE=all): merchant + platform + worker in one Nest application. | 61b89d6 (S1 closure) | standard | 4: integration/inventory-config, integration/process-composition, integration/sale-s2-error-contract, security/phase4-route-surface |
 | `apps/api/src/app/merchant-api.module.ts` | P3-S1 (+S3, S4, S5, S6, S7, corrective) | MERCHANT PROCESS (Directive §16). | 61b89d6 (S1 closure) | standard | 5: integration/inventory-config, integration/process-composition, integration/runtime-isolation, integration/sale-s2-error-contract (+1) |
 | `apps/api/src/app/platform-api.module.ts` | corrective | PLATFORM PROCESS (Directive §17). | not yet (corrective candidate) | standard | 3: integration/inventory-config, integration/process-composition, integration/runtime-isolation |
@@ -196,7 +196,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `apps/admin/src/lib/client.ts` | corrective | Admin browser client: in-memory access token, BFF refresh, platform API only. | not yet (corrective candidate) | standard | 1: security/p3c-bff-admin-session-retry |
 | `apps/admin/tsconfig.json` | corrective | the admin console gets the same production entry as the web app | not yet (corrective candidate) | standard | none found by reference |
 | `apps/web/next.config.mjs` | P3-S7 | The merchant web's Next.js configuration. | a0aee73 (S7 freeze) | standard | none found by reference |
-| `apps/web/package.json` | P3-S7 (+corrective) | The merchant web workspace manifest: its dependencies and its test script. | a0aee73 (S7 freeze) | standard | none found by reference |
+| `apps/web/package.json` | P3-S7 (+corrective) | The merchant web workspace manifest: its dependencies and its test script. | a0aee73 (S7 freeze) | standard | 1: guards/p5-billing-dependency-direction |
 | `apps/web/public/favicon.svg` | P3-S7 | The merchant web's favicon. | a0aee73 (S7 freeze) | standard | none found by reference |
 | `apps/web/server.mts` | corrective | Append `peer` to `X-Forwarded-For` and stamp the edge token, in place. | not yet (corrective candidate) | standard | 6: web/bff-client-address, web/bff-upstream, integration/p3c-bff-client-ip, integration/p3c-bff-route-throttle (+2) |
 | `apps/web/src/app/[locale]/AppHeader.tsx` | P3-S7 (+corrective) | App header with the BUSINESS SWITCHER (Directive §62 "Business switch"): every business the user is a member of, from /me/businesses; switching changes the X-Business-Id context a… | a0aee73 (S7 freeze) | standard | 1: integration/static-guards-s7 |
