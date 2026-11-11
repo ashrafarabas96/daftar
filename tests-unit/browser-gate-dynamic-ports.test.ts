@@ -251,6 +251,52 @@ describe('the browser gate takes its ports from the operating system', () => {
     expect(() => portsFromEnv()).toThrow(/BROWSER_API_PORT is not a port/);
   });
 
+  /**
+   * THE WIRING, because a reservation nothing uses is a reservation.
+   *
+   * Every assertion above is about `reservePorts()` in isolation. If the gate
+   * went back to calling `portsFromEnv()` and binding those numbers directly,
+   * all of them would still pass and the defect would be back — the suite
+   * would be measuring a function the product no longer calls. These are
+   * source-text laws, so each one carries a positive control that the probe
+   * read the file it thinks it read.
+   */
+  describe('the gate actually uses the reservation', () => {
+    const read = (file: string): string => readFileSync(join(__dirname, '..', 'tests', 'browser', file), 'utf8');
+
+    it('gate.ts takes a reservation and hands it to startStack', () => {
+      const gate = read('gate.ts');
+      expect(gate, 'the probe is not reading gate.ts').toContain('async function main()');
+      expect(gate, 'the gate no longer reserves its ports').toContain('await reservePorts()');
+      expect(gate, 'startStack is not being given the reservation, so nothing is held past allocation').toMatch(/startStack\(\s*reservation\s*,/);
+      expect(gate, 'the gate is binding the raw environment ports again, which is the defect').not.toContain('portsFromEnv()');
+    });
+
+    it('stack.ts frees each role in its own place, not all at once up front', () => {
+      const stack = read('stack.ts');
+      expect(stack, 'the probe is not reading stack.ts').toContain('export async function startStack');
+      for (const role of ROLES) {
+        expect(stack, `stack.ts never releases the ${role} reservation, so its server cannot bind`).toContain(`reservation.release('${role}')`);
+      }
+      // Order is the point: a release must come BEFORE the bind it is for.
+      const pgRelease = stack.indexOf("reservation.release('pg')");
+      const pgStart = stack.indexOf('await pg.initialise()');
+      const apiRelease = stack.indexOf("reservation.release('api')");
+      const apiGuard = stack.indexOf("assertPortFree(ports.api");
+      const webRelease = stack.indexOf("reservation.release('web')");
+      const webGuard = stack.indexOf("assertPortFree(ports.web");
+      for (const [name, before, after] of [
+        ['pg', pgRelease, pgStart],
+        ['api', apiRelease, apiGuard],
+        ['web', webRelease, webGuard],
+      ] as const) {
+        expect(before, `the ${name} anchors were not both found`).toBeGreaterThan(-1);
+        expect(after, `the ${name} anchors were not both found`).toBeGreaterThan(-1);
+        expect(before, `the ${name} port is released after its server binds, which is too late`).toBeLessThan(after);
+      }
+    });
+  });
+
   it('leaves no prose claiming the ports are fixed', () => {
     const stack = readFileSync(join(__dirname, '..', 'tests', 'browser', 'stack.ts'), 'utf8');
     // Positive control: the probe is reading the right file.
