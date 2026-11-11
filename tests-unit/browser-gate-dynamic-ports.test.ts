@@ -200,6 +200,46 @@ describe('the browser gate takes its ports from the operating system', () => {
     }
   });
 
+  /**
+   * THE FAILURE THE RUNNER ACTUALLY SAW, AND IT IS NOT ONLY ABOUT TWO RUNS.
+   *
+   * `scripts/phase3-corrective-gate.ts` runs the browser gate TWICE in one
+   * job, back to back: first the red-proof arm (`--plant=all`, which is
+   * REQUIRED to exit non-zero), then the real matrix arm. With three numbers
+   * written in the source both arms asked for the same ports, so if the first
+   * arm's servers outlive its own failure path by even a moment, the second
+   * arm cannot bind — one job, no second run needed. That is the shape of
+   * `port 56246 is already in use` in run 43073393847's step 40.
+   *
+   * So: a first allocation that is NEVER released — a leaked stack — must not
+   * stop the next one from getting ports it can bind. This is the law that
+   * makes the gate's own two arms independent of each other.
+   */
+  it('gives the next allocation usable ports even when the previous one leaked everything', async () => {
+    clearEnv();
+    const leaked = await reservePorts(); // never released: it stands for the arm that died holding its ports
+    try {
+      const next = await reservePorts();
+      try {
+        const overlap = ROLES.filter((role) => ROLES.some((other) => next.ports[role] === leaked.ports[other]));
+        expect(overlap, `the next allocation reused a leaked port: ${JSON.stringify({ leaked: leaked.ports, next: next.ports })}`).toEqual([]);
+        // And they are not merely different numbers: they are bindable, which
+        // is what the second arm needs and what the old constants denied it.
+        for (const role of ROLES) {
+          await next.release(role);
+          expect(await bindable(next.ports[role]), `the second allocation's ${role} port is not bindable`).toBe(true);
+        }
+        // The leaked ones are still held, so the probe above is not answering
+        // "true" to everything.
+        for (const role of ROLES) expect(await bindable(leaked.ports[role]), `the leaked ${role} port should still be held`).toBe(false);
+      } finally {
+        await next.releaseAll();
+      }
+    } finally {
+      await leaked.releaseAll();
+    }
+  });
+
   it('asks the operating system when nothing is pinned, rather than naming a number', () => {
     clearEnv();
     expect(portsFromEnv(), `an unset port must mean "the OS picks", not a constant two runs can both claim`).toEqual({ pg: 0, api: 0, web: 0 });
