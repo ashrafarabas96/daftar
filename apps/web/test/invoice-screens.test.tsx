@@ -118,13 +118,40 @@ describe('the invoice list', () => {
     }
   });
 
-  it('shows no due date at all: no live invoice can carry one, and a cancelled row carrying one reads as money still owed', () => {
-    for (const locale of LOCALES) {
-      const shown = text(render(INVOICE_VIEWS, 'InvoiceListView', ALL, locale));
-      expect(shown, locale).not.toContain(CATALOGS[locale]['invoices.list.due'] ?? '\u0000never');
-    }
-    // And the key itself is gone from the catalogues, so it cannot creep back in.
+  it('reads no due date at all, so a cancelled row cannot claim money is still owed', () => {
+    // This assertion used to compare the render against a catalogue key that no
+    // longer exists, falling back to a string nothing contains — it could not
+    // fail, and every fixture has `dueDate: null` anyway, so no render could
+    // have exercised the branch either. The honest probe is the SOURCE: the view
+    // must not read the field at all, which is what makes the cancelled row safe
+    // whatever a fixture carries.
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceListView.tsx'), 'utf8'));
+    expect(source).not.toContain('dueDate');
+    // Positive control: the probe does see the fields the row DOES read, so
+    // "not found" is a measurement and not an empty input.
+    for (const read of ['documentNumber', 'issueDate', 'totalTxnMinor', 'status']) expect(source, read).toContain(read);
+    // And the key it would have needed is gone from all three catalogues.
     for (const locale of LOCALES) expect(CATALOGS[locale]['invoices.list.due'], locale).toBeUndefined();
+  });
+
+  it('shows the rows in the order the server gave them, and claims no other order', () => {
+    // The server orders ASCENDING by (issue_date, id) and takes no ordering
+    // parameter (`invoice-reads.ts:155`, `selling.schemas.ts:235-249`), so the
+    // view must pass the page through untouched. A view that sorted would
+    // reorder twenty arbitrary rows out of hundreds and read as "newest".
+    const fixture = INVOICE_VIEWS[0]?.fixtures.find((f) => f.name === ALL)?.props as { invoices: readonly { documentNumber: string }[] };
+    const given = fixture.invoices.map((i) => i.documentNumber);
+    const shown = text(r);
+    const positions = given.map((n) => shown.indexOf(n));
+    expect(
+      positions.every((p) => p >= 0),
+      `every document number reaches the markup: ${given.join(', ')}`,
+    ).toBe(true);
+    expect(positions, 'the rows appear in the order the server gave them').toEqual([...positions].sort((a, b) => a - b));
+    // And the view does not sort: the source names no comparator.
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceListView.tsx'), 'utf8'));
+    expect(source).not.toContain('.sort(');
+    expect(source).not.toContain('.reverse(');
   });
 
   it('shows the total as the server stated it, in the invoice’s own currency', () => {
@@ -156,18 +183,41 @@ describe('the invoice list', () => {
     }
   });
 
-  it('says nothing about collection, in each locale’s own words', () => {
+  it('says nothing about collection, in each locale’s own words — the LOADED words included', () => {
     // P4-AL-24: settlement is derived per invoice and absent from a list answer,
     // so no label here may imply it. Checked in the words a reader of THAT
     // language would recognise — an English word list proves nothing about ar.
+    //
+    // The first version of this list left out the words that actually carry the
+    // claim. `Open` / `مفتوحة` / `Açık` on an INVOICE is read as "not paid yet",
+    // and because they were absent the test stayed green on labels that made
+    // exactly the claim it was written to forbid. They are the first entries now.
     const COLLECTION_WORDS: Record<Locale, readonly string[]> = {
-      en: ['paid', 'unpaid', 'collected', 'outstanding', 'remaining', 'due', 'overdue', 'settled'],
-      ar: ['مدفوع', 'مسدد', 'مسدَّد', 'محصَّل', 'محصل', 'متبقي', 'المتبقي', 'تستحق', 'متأخر'],
-      tr: ['ödendi', 'ödenmedi', 'tahsil', 'kalan', 'vadesi', 'gecikmiş'],
+      en: ['open', 'paid', 'unpaid', 'collected', 'outstanding', 'remaining', 'due', 'overdue', 'settled', 'balance', 'owing'],
+      ar: ['مفتوح', 'مدفوع', 'مسدد', 'مسدَّد', 'محصَّل', 'محصل', 'متبقي', 'المتبقي', 'تستحق', 'متأخر', 'رصيد', 'دين'],
+      tr: ['açık', 'ödendi', 'ödenmedi', 'tahsil', 'kalan', 'vadesi', 'gecikmiş', 'bakiye', 'borç'],
     };
     for (const locale of LOCALES) {
       const shown = text(render(INVOICE_VIEWS, 'InvoiceListView', ALL, locale)).toLowerCase();
       for (const word of COLLECTION_WORDS[locale]) expect(shown, `${locale}: ${word}`).not.toContain(word.toLowerCase());
+    }
+  });
+
+  it('the collection-word probe can actually fail: it fires on the labels this screen used to ship', () => {
+    // A denylist is only worth its weight if something would trip it, and the
+    // thing that would is what this screen said yesterday. Without this control
+    // a future edit could quietly empty the list above and nothing would notice.
+    const RETIRED = { en: 'Open', ar: 'مفتوحة', tr: 'Açık' } as const;
+    const DENIED = {
+      en: ['open', 'paid'],
+      ar: ['مفتوح', 'مدفوع'],
+      tr: ['açık', 'ödendi'],
+    } as const;
+    for (const locale of LOCALES) {
+      const tripped = DENIED[locale].some((w) => RETIRED[locale].toLowerCase().includes(w.toLowerCase()));
+      expect(tripped, `${locale}: "${RETIRED[locale]}" must trip the denylist`).toBe(true);
+      // And the retired label is genuinely gone from the shipped catalogue.
+      expect(Object.values(onlyNewKeys(CATALOGS[locale])), locale).not.toContain(RETIRED[locale]);
     }
   });
 
@@ -200,11 +250,18 @@ describe('the invoice list', () => {
     expect(buttons(empty)).toContain(en['invoices.list.sellSomething']);
   });
 
-  it('renders a refusal from the catalogue, never the server’s own sentence, and no empty state beside it', () => {
-    const refused = render(INVOICE_VIEWS, 'InvoiceListView', 'the server refused the read');
+  it('renders a refused "show more" from the catalogue, never the server’s own sentence, and keeps the rows', () => {
+    // A refused FIRST read never reaches this view: the page shows `ScreenState`
+    // for `denied`/`failed`. The reachable refusal is the one on "show more",
+    // and it must not take the rows away with it.
+    const refused = render(INVOICE_VIEWS, 'InvoiceListView', 'show more was refused, with the rows still on screen');
     expect(text(refused)).toContain(en['common.noPermission']);
     expect(text(refused)).not.toContain('FORBIDDEN');
     expect(text(refused)).not.toContain(en['invoices.list.empty']);
+    // The rows survive the refusal.
+    expect(text(refused)).toContain('INV-2026-000002');
+    // And "show more" is gone, because the server gave no further cursor.
+    expect(buttons(refused)).not.toContain(en['common.loadMore']);
   });
 
   it('noComputedMoney: no figure appears that is a sum of two the server stated', () => {

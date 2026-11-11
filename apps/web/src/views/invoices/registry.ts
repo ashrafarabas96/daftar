@@ -28,7 +28,7 @@
  * Card: `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
  */
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
-import type { InvoiceSummaryDto } from '@/lib/phase4-ar-api';
+import type { InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
 import { InvoiceListView, type InvoiceListViewProps } from './InvoiceListView';
 
 const noop = (): void => undefined;
@@ -107,6 +107,11 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'one invoice, no further page': list({ invoices: [OPEN_INVOICE], hasMore: false }),
     loading: list({ invoices: null, hasMore: false }),
     'no invoices at all': list({ invoices: [], hasMore: false }),
-    'the server refused the read': list({ invoices: [], hasMore: false, errorKey: 'common.noPermission' }),
+    // The state the PAGE can actually reach: a refused "show more" keeps the
+    // rows already on screen and puts the refusal above them. A refused FIRST
+    // read never renders this view at all — `page.tsx` shows `ScreenState` for
+    // `denied`/`failed` — so an empty list beside a refusal was a fixture of a
+    // state the product cannot produce, and a test over it proved nothing.
+    'show more was refused, with the rows still on screen': list({ hasMore: false, errorKey: 'common.noPermission' }),
   }),
 ];

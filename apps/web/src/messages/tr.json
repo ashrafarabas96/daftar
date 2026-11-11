@@ -919,7 +919,7 @@
   "invoices.list.empty": "Henüz fatura yok",
   "invoices.list.sellSomething": "Satış yap",
   "invoices.list.issued": "Düzenlenme: {date}",
-  "invoices.status.draft": "Taslak",
-  "invoices.status.open": "Açık",
+  "invoices.status.draft": "Henüz kesilmedi",
+  "invoices.status.open": "Kesildi",
   "invoices.status.void": "İptal edildi"
 }

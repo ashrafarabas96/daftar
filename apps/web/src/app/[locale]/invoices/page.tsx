@@ -3,7 +3,7 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { makeT, type Locale } from '@/lib/i18n';
 import { refusalKey } from '@/lib/phase3-errors';
-import { listInvoices, type InvoiceSummaryDto } from '@/lib/phase4-ar-api';
+import { listInvoices, type InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
 import { InvoiceListView } from '@/views/invoices/InvoiceListView';
 import { ScreenState } from '@/views/stock/parts';
 import { PageShell } from '../AppHeader';

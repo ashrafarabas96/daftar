@@ -919,7 +919,7 @@
   "invoices.list.empty": "لا توجد فواتير بعد",
   "invoices.list.sellSomething": "أنشئ عملية بيع",
   "invoices.list.issued": "صدرت في {date}",
-  "invoices.status.draft": "مسودة",
-  "invoices.status.open": "مفتوحة",
+  "invoices.status.draft": "لم تُصدر بعد",
+  "invoices.status.open": "صادرة",
   "invoices.status.void": "ملغاة"
 }

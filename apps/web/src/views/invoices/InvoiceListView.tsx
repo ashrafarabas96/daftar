@@ -1,11 +1,28 @@
 /**
- * Invoices (MVP-02): the documents the business has issued, newest first, from
- * `GET /v1/invoices`.
+ * Invoices (MVP-02): the documents the business has issued, from
+ * `GET /v1/invoices`, **in the order the server gives them — OLDEST FIRST**.
+ *
+ * That order is not a choice this view makes and not one it can change.
+ * `invoice-reads.ts:155` is `ORDER BY i.issue_date, i.id` with a keyset cursor
+ * that walks FORWARD (`(issue_date, id) > …`), and `InvoiceListQuerySchema`
+ * (`selling.schemas.ts:235-249`) accepts no ordering parameter at all — measured,
+ * with a positive control that `ORDER BY … DESC` does exist elsewhere in the API,
+ * so the ascending order here is a reading and not a blind spot.
+ *
+ * **The consequence is the merchant's, so it is reported rather than hidden:**
+ * the first page is the business's OLDEST twenty invoices, so today's sale is
+ * pages away, and inside one day the order falls to `id` — a v4 UUID, which is
+ * arbitrary. Sorting the page here would be worse than the problem: it would
+ * order twenty arbitrary rows out of hundreds and read as "newest" while being
+ * nothing of the kind. The fix belongs to the read route, and the card is
+ * `.local-context/cards/L8_INVOICE_LIST_ORDER_IS_OLDEST_FIRST_AR.md`.
  *
  * A row shows the document number, the day it was issued, the total the server
  * stated and where the document stands. It says NOTHING about collection:
  * `status` is lifecycle only (P4-AL-24) and a list answer carries no settlement,
- * so "paid" would be an invention.
+ * so "paid" would be an invention. The status labels name ISSUANCE for that
+ * reason: "Open" is the word a shopkeeper reads as "not paid yet", and this
+ * screen holds no figure that could support or refute it.
  *
  * ── THREE THINGS THIS ROW DELIBERATELY DOES NOT DO ───────────────────────
  *
@@ -31,7 +48,7 @@
  * and no name in any case.
  */
 import { Badge, Button, EmptyState, List, Spinner } from '@daftar/design-system';
-import type { InvoiceSummaryDto } from '@/lib/phase4-ar-api';
+import type { InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
 import { rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { CivilDate, Code, Money } from '@/views/common/primitives';
 import { Notice, STACK, ScreenTitle } from '@/views/stock/parts';
