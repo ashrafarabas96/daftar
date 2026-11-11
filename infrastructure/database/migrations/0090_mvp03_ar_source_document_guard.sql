@@ -137,4 +137,26 @@ CREATE CONSTRAINT TRIGGER journal_lines_ar_control_source_document
   FOR EACH ROW
   EXECUTE FUNCTION accounting_ar_control_line_source_document();
 
+-- The ownership transfer needs the schema's CREATE privilege FOR THE NEW
+-- OWNER: `ALTER FUNCTION … OWNER TO` is refused otherwise, and the role does
+-- not hold it standing — `0045` revokes it after its own transfers. So the
+-- grant is opened for this one statement and closed again immediately, which
+-- is this estate's own convention and not an invention here: `0069`, `0071`,
+-- `0077` and `0081` each bracket their transfers exactly this way, eight
+-- grant/revoke pairs in four migrations, two of them for this very role
+-- (`0069:223`/`:257`, `0071:209`/`:344`, `0077:1280`/`:1698`,
+-- `0081:1388`/`:1742`).
+--
+-- WHY IT WAS MISSING AND WHY GREEN CI DID NOT SAY SO, measured: the workflow
+-- applies migrations as `postgres` (`ci.yml`), and a superuser skips the
+-- privilege check entirely — so this statement passes there and would be
+-- REFUSED under the documented deployment authority `daftar_migrator`, which
+-- `bootstrap.sql` creates NOSUPERUSER. A migration that only a superuser can
+-- apply is not a migration this project can deploy. Caught by
+-- `daftar-finance`; the local tree cannot prove it, because proving it needs a
+-- database applied as that role, and this machine has none.
+GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
+
 ALTER FUNCTION accounting_ar_control_line_source_document() OWNER TO daftar_accounting_internal;
+
+REVOKE CREATE ON SCHEMA public FROM daftar_accounting_internal;
