@@ -32,14 +32,17 @@
  *     the earlier wording ("not words") as wider than what is measured. The
  *     error it can produce is a FALSE RED on a file that documents the edge,
  *     never a false green on a file that crosses it.
- *   - It matches the package by specifier AND by path, so a relative import
- *     that reaches the same source (`../../packages/billing/src/*`) is the
- *     same edge and is reported. Measured zero today; the check is here so it
- *     stays zero.
+ *   - It matches the package by specifier AND by resolved path: a relative
+ *     import is resolved against the importing file's own directory first, so
+ *     a sibling package's `../../billing/src/*` and an outside caller's
+ *     `../../packages/billing/src/*` both reach `packages/billing/` and both
+ *     are reported. A confirmation review of 2026-11-11 measured the
+ *     unresolved form missing the sibling spelling, which is the likeliest
+ *     one. Measured zero today; the check is here so it stays zero.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { deliveredFiles } from '../helpers/delivered-files';
 
 const REPO = join(__dirname, '..', '..');
@@ -86,15 +89,28 @@ function importSpecifiers(source: string): string[] {
 
 const SELF = 'tests/guards/p5-billing-dependency-direction.test.ts';
 
+/**
+ * Resolve each specifier that is relative against the importing file's own
+ * directory, and leave every bare one alone. Without this, `packages/billing/`
+ * matches a specifier written from outside `packages/`
+ * (`../../packages/billing/src/*`) and misses the likeliest spelling of all —
+ * a sibling package writing `../../billing/src/*`, which carries no
+ * `packages/` segment (measured 2026-11-11).
+ */
+function resolveSpecs(file: string, specs: readonly string[]): string[] {
+  const dir = posix.dirname(file.split('\\').join('/'));
+  return specs.map((s) => (s.startsWith('.') ? posix.normalize(posix.join(dir, s)) : s));
+}
+
 /** Every tracked file outside the billing package, with its specifiers. */
 const OUTSIDE: ReadonlyArray<readonly [string, readonly string[]]> = trackedTsFiles()
   .filter((p) => !p.startsWith('packages/billing/'))
   .filter((p) => p !== SELF)
-  .map((p) => [p, importSpecifiers(readFileSync(join(REPO, p), 'utf8'))] as const);
+  .map((p) => [p, resolveSpecs(p, importSpecifiers(readFileSync(join(REPO, p), 'utf8')))] as const);
 
 function importersOf(pkg: string): string[] {
-  // `@daftar/billing` and `…/packages/billing/…` are the same source read two
-  // ways, so the path spelling counts as the same edge.
+  // `@daftar/billing` and any path that reaches `packages/billing/` are the
+  // same source read two ways, so both spellings count as the same edge.
   const dir = `packages/${pkg.replace('@daftar/', '')}/`;
   return OUTSIDE.filter(([, specs]) => specs.some((s) => s === pkg || s.startsWith(`${pkg}/`) || s.includes(dir))).map(([p]) => p);
 }
@@ -119,6 +135,30 @@ describe('DR-95 boundary 1 — the probe is awake before it is believed', () => 
   it('finds importers of a package that IS imported, so a zero is a measurement', () => {
     const importers = importersOf('@daftar/accounting');
     expect(importers.length, 'the extractor found no importer of @daftar/accounting').toBeGreaterThan(0);
+  });
+});
+
+describe('DR-95 boundary 1 — a relative spelling is the same edge', () => {
+  /**
+   * MEASURED on 2026-11-11, in a confirmation review: matching the literal
+   * `packages/billing/` catches a specifier written from outside `packages/`
+   * (`../../packages/billing/src/*`) and MISSES the likeliest spelling of
+   * all — a sibling package writing `../../billing/src/*`, which carries no
+   * `packages/` segment. The specifiers are therefore resolved against the
+   * importing file's own directory before they are matched.
+   */
+  it('resolves a sibling-package relative import to the package it reaches', () => {
+    const resolved = resolveSpecs('packages/accounting/src/platform-credit.ts', [
+      '../../billing/src/credit',
+      '../../packages/billing/src/credit',
+      './local-helper',
+      '@daftar/billing',
+      'vitest',
+    ]);
+    expect(resolved.filter((s) => s.includes('packages/billing/')).length, 'a relative edge went unresolved').toBe(2);
+    expect(resolved, 'a bare package specifier must survive untouched').toContain('@daftar/billing');
+    expect(resolved, 'a bare dependency must survive untouched').toContain('vitest');
+    expect(resolved, 'a same-directory import must stay inside its own package').toContain('packages/accounting/src/local-helper');
   });
 });
 
