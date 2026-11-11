@@ -192,3 +192,10 @@ jobs:
           test "$got" -eq 7 || { cat "$out"; echo "only $got of the seven readings were recorded"; exit 1; }
           echo "===== THE SEVEN READINGS ====="
           cat "$out"
+        env:
+          # PG_PORT=5432 makes the harness reuse the `postgres` service above
+          # instead of starting an embedded cluster, exactly as every perf step
+          # of ci.yml's backend job does -- and the embedded one would have no
+          # pg_stat_statements preloaded, so the in-database figure would be
+          # unmeasurable rather than merely different.
+          PG_PORT: '5432'
