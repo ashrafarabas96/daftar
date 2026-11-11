@@ -113,10 +113,17 @@ describe('the reconciler environment refuses every other process secret (§7, §
       PROCESS_MODE: mode,
       PORT: '0',
       RECONCILER_DATABASE_URL: reconcilerDbUrl,
-      JWT_SECRET: JWT,
     };
     if (mode === 'worker') base['WORKER_DATABASE_URL'] = workerDbUrl;
-    else base['APP_DATABASE_URL'] = appDbUrl;
+    else {
+      base['APP_DATABASE_URL'] = appDbUrl;
+      // SEC-01: the session key used to be set for all three arms. It is now
+      // refused to the worker in every environment, so leaving it there made
+      // the worker arm fail for TWO reasons at once — and since `zod`
+      // aggregates issues, the assertion below went on passing while no
+      // longer isolating the claim it names. One arm, one reason.
+      base['JWT_SECRET'] = JWT;
+    }
     expect(() => loadConfig(base)).toThrow(/RECONCILER_DATABASE_URL/);
   });
 

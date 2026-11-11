@@ -25,6 +25,46 @@ RDS PostgreSQL 16+ (Multi-AZ) · ElastiCache Redis (limiter) · S3 private bucke
 
 Secrets live in AWS Secrets Manager; each ECS task definition injects only its row. Static guard 13/14 and `production-providers.test.ts` keep the code honest.
 
+**What enforces the worker's `JWT` row, exactly (SEC-01).** Until SEC-01 this
+table's last column said the worker must not have JWT and nothing in the code
+said so: the worker's forbidden list in `loadConfig` named nine variables and
+neither `JWT_SECRET` nor `JWT_KEYS`; `JWT` appeared zero times in every static
+guard; and the one test whose title claims the denial asserted a general
+pattern that another variable already satisfied, on an environment that never
+carried a JWT variable. The row was a wish. It is now enforced, and by name:
+
+- `apps/api/src/config.ts` refuses `JWT_SECRET` and `JWT_KEYS` for
+  `PROCESS_MODE=worker` **in every environment**, in a block placed before the
+  `NODE_ENV !== 'production'` gate — because a laptop and a staging box are
+  where the habit is formed.
+- `scripts/static-guards.ts` (`worker-jwt-denial`) fails if that block stops
+  naming either variable, or moves after the gate.
+- `tests-unit/sec01-worker-jwt-deny.test.ts` proves the refusal in and out of
+  production, with negative controls for a correct worker, for `merchant-api`,
+  for `PROCESS_MODE=all` and for the reconciler.
+
+**And this whole table is prose, not measurement.** That is worth stating
+precisely, because it is the one thing the enforcement above cannot reach. The
+tracked tree holds **no deployment artefact of any kind**: of 1331 tracked
+files, zero Dockerfiles, zero compose files, zero Terraform, zero ECS task
+definitions, zero Helm or Kubernetes manifests, zero platform configuration
+(Fly, Render, Railway, Vercel, Netlify, Procfile, systemd) and zero `.env` or
+`.env.example`. Measured with a positive control on the same listing, so the
+zero is a measurement and not an empty probe. Every tracked place that sets
+`PROCESS_MODE=worker` is either `config.ts` itself, a guard, a test, or this
+document — and **not one of them passes `JWT_SECRET` or `JWT_KEYS` to a worker
+environment**, which is why the refusal above lands green rather than breaking
+the suite.
+
+**So nothing in this repository can tell you what a deployed worker actually
+receives.** Consequently, if any worker is running anywhere — production, a
+staging box, a trial environment — then **before this enforcement is merged**
+the two variables must be removed from that worker's configuration and its
+start-up confirmed, and only then does the refusal land. The refusal fails
+start-up in *every* environment, not only production, so a worker that carries
+the key today stops tomorrow. That ordering is a pre-launch gate, recorded as
+item 6 of §4 in `docs/DAFTAR_RELEASE_GATES.md`.
+
 ## 3. Database
 
 - One RDS instance, one database, six roles created by `infrastructure/database/bootstrap.sql` (run once by the DBA job with generated passwords).

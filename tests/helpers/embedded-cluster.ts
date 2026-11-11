@@ -21,6 +21,18 @@ export const PG_PORT = Number(process.env['PG_PORT'] ?? 55432);
 export const PG_USER = 'postgres';
 export const PG_PASSWORD = 'postgres';
 
+/**
+ * Opt-in: start the cluster this helper launches with `pg_stat_statements`
+ * preloaded, which the in-database PERF01 budgets (tests/helpers/in-database-time.ts)
+ * read. It is a command-line flag of the postmaster, so it applies only to a
+ * cluster started HERE: a server that is already listening (CI's `postgres`
+ * service, a cluster another run left up) is reused as it is, and the budgets
+ * then fail with a named error if it lacks the library. It is off by default
+ * because every suite that starts a cluster goes through this file, and the
+ * contrib library is only known to ship in the Windows embedded package.
+ */
+const PRELOAD_STAT_STATEMENTS = process.env['PG_PRELOAD_STAT_STATEMENTS'] === '1';
+
 /** The fixture credentials of a throwaway local cluster. Never a deployment's. */
 export const APP_DB_PASSWORD = 'test_app_password_123';
 export const PLATFORM_DB_PASSWORD = 'test_platform_password_123';
@@ -122,6 +134,7 @@ export async function startOrReuse(): Promise<void> {
       password: PG_PASSWORD,
       port: PG_PORT,
       persistent: true,
+      postgresFlags: PRELOAD_STAT_STATEMENTS ? ['-c', 'shared_preload_libraries=pg_stat_statements', '-c', 'pg_stat_statements.track=top'] : [],
     });
     if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
       await pg.initialise();
