@@ -921,5 +921,22 @@
   "invoices.list.issued": "Düzenlenme: {date}",
   "invoices.status.draft": "Henüz kesilmedi",
   "invoices.status.open": "Kesildi",
-  "invoices.status.void": "İptal edildi"
+  "invoices.status.void": "İptal edildi",
+  "invoices.detail.title": "Fatura",
+  "invoices.detail.status": "Durum",
+  "invoices.detail.issueDate": "Kesim tarihi",
+  "invoices.detail.cancelledOn": "İptal tarihi",
+  "invoices.detail.notes": "Notlar",
+  "invoices.detail.items": "Ürünler",
+  "invoices.detail.itemLine": "{qty} × {price}",
+  "invoices.detail.subtotal": "İndirim öncesi",
+  "invoices.detail.discount": "İndirim",
+  "invoices.detail.total": "Toplam",
+  "invoices.settlement.title": "Tahsilat",
+  "invoices.settlement.state": "Tahsilat durumu",
+  "invoices.settlement.collected": "Tahsil edilen",
+  "invoices.settlement.remaining": "Tahsil edilecek",
+  "invoices.settlement.unpaid": "Tahsil edilmedi",
+  "invoices.settlement.partial": "Kısmen tahsil edildi",
+  "invoices.settlement.paid": "Tamamen tahsil edildi"
 }

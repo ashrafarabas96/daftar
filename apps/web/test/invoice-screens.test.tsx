@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import ar from '@/messages/ar.json';
 import en from '@/messages/en.json';
@@ -67,8 +67,8 @@ const onlyNewKeys = (dict: Record<string, string>): Record<string, string> =>
 const CATALOGS: Record<Locale, Record<string, string>> = { ar, en, tr };
 
 describe('the invoice view registry', () => {
-  it('registers the list, with fixtures', () => {
-    expect(INVOICE_VIEWS.map((e) => e.name)).toEqual(['InvoiceListView']);
+  it('registers the list and the detail, each with fixtures', () => {
+    expect(INVOICE_VIEWS.map((e) => e.name)).toEqual(['InvoiceListView', 'InvoiceDetailView']);
     for (const entry of INVOICE_VIEWS) expect(entry.fixtures.length, entry.name).toBeGreaterThan(0);
   });
 
@@ -89,9 +89,13 @@ describe('the invoice view registry', () => {
     expect(keysOf(ar).length).toBeGreaterThan(0);
     expect(keysOf(en)).toEqual(keysOf(ar));
     expect(keysOf(tr)).toEqual(keysOf(ar));
-    // The detail and collection keys left with their screen: a shipped key no
-    // screen renders is a promise the product does not keep.
-    expect(keysOf(en).filter((k) => k.startsWith('invoices.detail.') || k.startsWith('invoices.settlement.'))).toEqual([]);
+    // The detail and collection keys ship WITH their screen now, and the one
+    // key that stays out is the buyer's: T-12 still refuses that vocabulary, so
+    // the detail screen names no buyer and keys none.
+    expect(keysOf(en).filter((k) => k.startsWith('invoices.detail.')).length).toBeGreaterThan(0);
+    expect(keysOf(en).filter((k) => k.startsWith('invoices.settlement.')).length).toBeGreaterThan(0);
+    expect(keysOf(en)).not.toContain('invoices.detail.customer');
+    expect(keysOf(en)).not.toContain('invoices.noCustomer');
   });
 });
 
@@ -221,21 +225,16 @@ describe('the invoice list', () => {
     }
   });
 
-  it('offers no way into a screen that is not in the tree', () => {
-    // The row is inert by construction, so there is no prop to pass and nothing
-    // a render can show. The source is the evidence: an `onClick` on a list item
-    // here would push `/invoices/:id`, which has no page and would 404.
-    //
-    // Comments are stripped first, with the guards' own helper: the view's
-    // header EXPLAINS that there is no `onOpen`, and a raw substring probe
-    // matched that explanation — a false positive of exactly the kind
-    // `stripTsComments` exists to remove.
+  it('opens the invoice it names, now that the detail page exists', () => {
+    // This was the inverse control while the detail screen was held out of the
+    // tree: a row that pushed `/invoices/:id` would have landed on a 404. The
+    // page ships in this change, so the row is clickable and the probe flips.
     const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceListView.tsx'), 'utf8'));
-    expect(source).not.toContain('onClick:');
-    expect(source).not.toContain('onOpen');
-    // Positive control: the probe can see the one onClick the screen does have,
-    // so "not found" is a measurement and not an empty input.
-    expect(source).toContain('onClick={props.onLoadMore}');
+    expect(source).toContain('onOpen');
+    // And it passes the invoice's own id, not an index or a document number.
+    expect(source).toContain('props.onOpen(invoice.id)');
+    // The page that receives it is on disk, so the push has somewhere to land.
+    expect(existsSync(join(__dirname, '..', 'src', 'app', '[locale]', 'invoices', '[invoiceId]', 'page.tsx'))).toBe(true);
   });
 
   it('offers more only when the server gave a cursor', () => {
@@ -282,5 +281,110 @@ describe('the invoice list', () => {
     for (const hidden of ['8b773805-d57f-4e22-89d5-f1a8e842e11f', '8b773805-0000-4000-8000-000000000003']) {
       expect(r.html, hidden).not.toContain(hidden);
     }
+  });
+});
+
+describe('one invoice', () => {
+  const r = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, part of it collected');
+
+  it('names the document and the day it was issued', () => {
+    expect(text(r)).toContain('INV-2026-000002');
+    expect(r.html).toContain('<bdi dir="ltr">Nov 10, 2026</bdi>');
+  });
+
+  it('lists each item with the figures the server stated for it', () => {
+    const shown = text(r);
+    expect(shown).toContain('Basmati rice 5 kg');
+    expect(shown).toContain('Olive oil 1 L');
+    // The unit price and the line net, each a field of its own item.
+    expect(shown).toContain(formatMoney('4500', 'ILS', 'en'));
+    expect(shown).toContain(formatMoney('13500', 'ILS', 'en'));
+    expect(shown).toContain(formatMoney('9000', 'ILS', 'en'));
+    // The quantity is the server's decimal text, re-spelled and isolated.
+    expect(r.html).toContain('<bdi dir="ltr">3</bdi>');
+  });
+
+  it('shows the invoice’s own subtotal, discount and total — and computes none of them', () => {
+    const shown = text(r);
+    expect(shown).toContain(formatMoney('22500', 'ILS', 'en'));
+    // The items are 13500 and 9000. A view that summed them would print 22500
+    // too, so the sum alone proves nothing — these are the figures that would
+    // appear ONLY from arithmetic the server did not do.
+    for (const invented of ['31500', '35500', '45000', '12500000']) {
+      expect(shown, invented).not.toContain(formatMoney(invented, 'ILS', 'en'));
+    }
+    // And the source names no arithmetic operator on a money field at all.
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    for (const op of ['BigInt(', 'Number(', 'parseInt', 'parseFloat', '.reduce(', ' + ', ' - ', ' * ', ' / ']) {
+      expect(source, `the detail view must not compute money: ${op}`).not.toContain(`Minor${op}`);
+    }
+    expect(source).not.toContain('.reduce(');
+  });
+
+  it('shows what is collected and what is left ONLY from the settlement read', () => {
+    const shown = text(r);
+    expect(shown).toContain(formatMoney('10000', 'ILS', 'en'));
+    expect(shown).toContain(formatMoney('12500', 'ILS', 'en'));
+    expect(shown).toContain(en['invoices.settlement.partial']);
+    // Without that read the screen says NOTHING about collection — it does not
+    // fall back to a zero, which would be a figure no answer supports.
+    const silent = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, settlement not read');
+    expect(text(silent)).toContain('INV-2026-000002');
+    // Every label of the collection block is gone — the whole block is, so
+    // there is nothing a figure beside it could be read as.
+    //
+    // This assertion first also forbade `₪0.00` anywhere, on the idea that a
+    // missing settlement must not read as "nothing collected". That was wrong
+    // and the suite caught it: the invoice's own DISCOUNT is a legitimate
+    // `"0"` the server stated, and forbidding the spelling of zero forbade an
+    // honest field. The precise claim is the one below — no collection LABEL —
+    // because a zero can only be read as collection if a collection label sits
+    // beside it.
+    for (const key of ['invoices.settlement.title', 'invoices.settlement.state', 'invoices.settlement.collected', 'invoices.settlement.remaining'] as const) {
+      expect(text(silent), key).not.toContain(en[key]);
+    }
+    for (const state of ['unpaid', 'partial', 'paid'] as const) {
+      expect(text(silent), state).not.toContain(en[`invoices.settlement.${state}`]);
+    }
+    // Positive control: those labels DO appear when the read succeeded, so
+    // their absence is a measurement and not a label that never renders.
+    expect(text(r)).toContain(en['invoices.settlement.collected']);
+    expect(text(r)).toContain(en['invoices.settlement.remaining']);
+  });
+
+  it('names no buyer, in any of the three languages — T-12 stands', () => {
+    for (const locale of LOCALES) {
+      const html = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, part of it collected', locale).html.toLowerCase();
+      for (const word of ['customer', 'عميل', 'müşteri', 'hadil', 'qasem']) {
+        expect(html, `${locale}: ${word}`).not.toContain(word.toLowerCase());
+      }
+    }
+    // And no buyer key is shipped for it to render.
+    for (const locale of LOCALES) expect(CATALOGS[locale]['invoices.detail.customer'], locale).toBeUndefined();
+  });
+
+  it('never renders an identifier, and never the posted exchange rate', () => {
+    for (const hidden of [
+      '8b773805-d57f-4e22-89d5-f1a8e842e11f',
+      '0f9c1e2a-1111-4c0d-9f3a-aaaaaaaaaaaa',
+      '0f9c1e2a-2222-4c0d-9f3a-bbbbbbbbbbbb',
+      '0f9c1e2a-3333-4c0d-9f3a-cccccccccccc',
+      '0f9c1e2a-4444-4c0d-9f3a-dddddddddddd',
+    ]) {
+      expect(r.html, hidden).not.toContain(hidden);
+    }
+    // The rate is on the DTO and is not the merchant's business on this screen.
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    expect(source).not.toContain('rate');
+  });
+
+  it('says a cancelled invoice is cancelled, and still states its figure', () => {
+    const cancelled = render(INVOICE_VIEWS, 'InvoiceDetailView', 'a cancelled invoice');
+    expect(text(cancelled)).toContain(en['invoices.status.void']);
+    // The document's figure is a fact and stays; what may not appear is a due
+    // date, which would read as money still owed on a document that owes none.
+    expect(text(cancelled)).toContain(formatMoney('22500', 'ILS', 'en'));
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    expect(source).not.toContain('dueDate');
   });
 });

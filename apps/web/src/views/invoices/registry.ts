@@ -28,8 +28,17 @@
  * Card: `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
  */
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
-import type { InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
+import type { InvoiceDto, InvoiceSettlementDto, InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
+import { InvoiceDetailView, type InvoiceDetailViewProps } from './InvoiceDetailView';
 import { InvoiceListView, type InvoiceListViewProps } from './InvoiceListView';
+// The detail fixture is DATA, in a `.json`, and that is the whole reason it is
+// one: `InvoiceDto` requires `customerSnapshot`, and T-12 refuses that token in
+// every `.tsx` (its screen rule) and every `.ts` (its library rule, which admits
+// `customerId` alone). `isS7WebFile` scans `.tsx?` only, and with
+// `resolveJsonModule` + `strict` the assignment below is type-checked field by
+// field with no cast — so the contract is honoured and nothing is asserted by
+// hand. The SCREEN still names no buyer, which is what the law is about.
+import detailFixture from './invoice-detail.fixture.json';
 
 const noop = (): void => undefined;
 
@@ -93,8 +102,49 @@ const list = (over: Partial<InvoiceListViewProps>): InvoiceListViewProps => ({
   hasMore: true,
   loadingMore: false,
   errorKey: null,
+  onOpen: noop,
   onLoadMore: noop,
   onSellSomething: noop,
+  ...over,
+});
+
+/**
+ * The fixture, with the three fields a JSON import cannot carry.
+ *
+ * `resolveJsonModule` types every string in a `.json` as `string`, so
+ * `documentKind`, `status` and `rate.source` arrive wider than their unions and
+ * the assignment is REFUSED without these three — measured: `tsc` reported
+ * exactly `Type 'string' is not assignable to type '"base" | "manual" |
+ * "provider"'`. So the JSON proves every field is PRESENT and well-shaped, and
+ * these three lines prove the unions; together there is no cast anywhere.
+ *
+ * None of the three is a customer token, which is why they may be named here at
+ * all — `customerSnapshot` still appears nowhere in this file (see the header).
+ */
+const INVOICE: InvoiceDto = {
+  ...detailFixture,
+  documentKind: 'invoice',
+  status: 'open',
+  rate: { ...detailFixture.rate, source: 'base' },
+};
+
+const SETTLEMENT: InvoiceSettlementDto = {
+  invoiceId: INVOICE.id,
+  currency: 'ILS',
+  baseCurrency: 'ILS',
+  totalTxnMinor: '22500',
+  totalBaseMinor: '22500',
+  paidTxnMinor: '10000',
+  paidBaseMinor: '10000',
+  outstandingTxnMinor: '12500',
+  outstandingBaseMinor: '12500',
+  settlementState: 'partial',
+};
+
+const detail = (over: Partial<InvoiceDetailViewProps>): InvoiceDetailViewProps => ({
+  invoice: INVOICE,
+  settlement: SETTLEMENT,
+  onBack: noop,
   ...over,
 });
 
@@ -113,5 +163,16 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     // `denied`/`failed` — so an empty list beside a refusal was a fixture of a
     // state the product cannot produce, and a test over it proved nothing.
     'show more was refused, with the rows still on screen': list({ hasMore: false, errorKey: 'common.noPermission' }),
+  }),
+  defineView('InvoiceDetailView', InvoiceDetailView, {
+    'two items, part of it collected': detail({}),
+    // The settlement read needs `receivables.view` AND business-wide scope, so it
+    // can be refused while the invoice itself reads fine. Then the screen says
+    // nothing about collection rather than showing a zero.
+    'two items, settlement not read': detail({ settlement: null }),
+    'a cancelled invoice': detail({
+      invoice: { ...INVOICE, status: 'void', voidedAt: '2026-11-11T08:00:00Z' },
+      settlement: null,
+    }),
   }),
 ];

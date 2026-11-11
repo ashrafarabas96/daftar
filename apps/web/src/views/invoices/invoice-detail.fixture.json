@@ -1,0 +1,58 @@
+{
+  "id": "8b773805-d57f-4e22-89d5-f1a8e842e11f",
+  "customerId": null,
+  "customerSnapshot": null,
+  "documentKind": "invoice",
+  "documentNumber": "INV-2026-000002",
+  "numberSeq": "2",
+  "issueDate": "2026-11-10",
+  "dueDate": null,
+  "currency": "ILS",
+  "status": "open",
+  "totalTxnMinor": "22500",
+  "totalBaseMinor": "22500",
+  "createdAt": "2026-11-10T09:30:00Z",
+  "saleId": "0f9c1e2a-1111-4c0d-9f3a-aaaaaaaaaaaa",
+  "branchId": "0f9c1e2a-2222-4c0d-9f3a-bbbbbbbbbbbb",
+  "notes": "Deliver after 5 pm",
+  "subtotalTxnMinor": "22500",
+  "discountTxnMinor": "0",
+  "taxMinor": "0",
+  "rate": {
+    "rateId": "0f9c1e2a-3333-4c0d-9f3a-cccccccccccc",
+    "rate": "1",
+    "source": "base",
+    "at": "2026-11-10T09:30:00Z"
+  },
+  "voidedAt": null,
+  "items": [
+    {
+      "itemId": "0f9c1e2a-4444-4c0d-9f3a-dddddddddddd",
+      "lineNo": 1,
+      "productId": "0f9c1e2a-5555-4c0d-9f3a-eeeeeeeeeeee",
+      "variantId": null,
+      "nameSnapshot": "Basmati rice 5 kg",
+      "quantity": "3",
+      "unitPriceTxnMinor": "4500",
+      "grossTxnMinor": "13500",
+      "discountTxnMinor": "0",
+      "netTxnMinor": "13500",
+      "taxMinor": "0",
+      "baseShareMinor": "13500"
+    },
+    {
+      "itemId": "0f9c1e2a-4444-4c0d-9f3a-ffffffffffff",
+      "lineNo": 2,
+      "productId": "0f9c1e2a-5555-4c0d-9f3a-111111111111",
+      "variantId": null,
+      "nameSnapshot": "Olive oil 1 L",
+      "quantity": "2",
+      "unitPriceTxnMinor": "4500",
+      "grossTxnMinor": "9000",
+      "discountTxnMinor": "0",
+      "netTxnMinor": "9000",
+      "taxMinor": "0",
+      "baseShareMinor": "9000"
+    }
+  ]
+}

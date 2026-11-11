@@ -921,5 +921,22 @@
   "invoices.list.issued": "صدرت في {date}",
   "invoices.status.draft": "لم تُصدر بعد",
   "invoices.status.open": "صادرة",
-  "invoices.status.void": "ملغاة"
+  "invoices.status.void": "ملغاة",
+  "invoices.detail.title": "فاتورة",
+  "invoices.detail.status": "الحالة",
+  "invoices.detail.issueDate": "تاريخ الإصدار",
+  "invoices.detail.cancelledOn": "أُلغيت في",
+  "invoices.detail.notes": "ملاحظات",
+  "invoices.detail.items": "المنتجات",
+  "invoices.detail.itemLine": "{qty} × {price}",
+  "invoices.detail.subtotal": "المجموع قبل الخصم",
+  "invoices.detail.discount": "الخصم",
+  "invoices.detail.total": "الإجمالي",
+  "invoices.settlement.title": "التحصيل",
+  "invoices.settlement.state": "حالة التحصيل",
+  "invoices.settlement.collected": "المبلغ المحصَّل",
+  "invoices.settlement.remaining": "المتبقي للتحصيل",
+  "invoices.settlement.unpaid": "غير محصَّلة",
+  "invoices.settlement.partial": "محصَّلة جزئيًا",
+  "invoices.settlement.paid": "محصَّلة بالكامل"
 }
