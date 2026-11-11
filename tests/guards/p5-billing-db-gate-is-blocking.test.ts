@@ -269,6 +269,53 @@ function neutralisers(source: string): string[] {
   return found;
 }
 
+/**
+ * CG-2b — THE GATE'S FLOOR MUST NOT BE LOWERED SILENTLY.
+ *
+ * The gate's own script asserts a floor (`DB_PROOF_CASES … floor=131`) and
+ * exits non-zero below it, which is what makes `NOT_RUN` and `0 of 0 passed`
+ * fail rather than read green. But the floor is a DEFAULT:
+ * `P5_MIN_CASES=${P5_MIN_CASES:-131}`. Anything that sets `P5_MIN_CASES` in
+ * the workflow lowers the floor without touching the script, and the gate
+ * still runs, still passes, and proves less than it claims.
+ *
+ * A floor is a LIMIT, and lowering a limit is the owner's decision
+ * (DR-41/DR-74 in kind), never a lane's. So this reads two files as TEXT and
+ * reports, with no editing of either:
+ *   - the script's default floor, refused when it is below the declared 131;
+ *   - the proof's verdict still being the script's exit code (`exit $rc`);
+ *   - `P5_MIN_CASES` set anywhere in `ci.yml`, which overrides that default.
+ */
+const PROOF_SH = join(REPO, 'packages', 'billing', 'test', 'db', 'run-db-proof.sh');
+const PROOF = readFileSync(PROOF_SH, 'utf8');
+
+/** The floor this law holds the lane to; the lane's own declared count. */
+const DECLARED_FLOOR = 131;
+
+/** The default floor in the script's text, or null when it cannot be read. */
+function defaultFloor(script: string): number | null {
+  const m = /P5_MIN_CASES=\$\{P5_MIN_CASES:-(\d+)\}/.exec(script);
+  return m ? Number(m[1]) : null;
+}
+
+/** Every way the floor or the verdict is given away, named with where. */
+function floorGivenAway(script: string, ci: string): string[] {
+  const found: string[] = [];
+  const floor = defaultFloor(script);
+  if (floor === null) {
+    found.push('the script no longer carries a readable `P5_MIN_CASES` default, so no floor can be asserted');
+  } else if (floor < DECLARED_FLOOR) {
+    found.push(`script: the default floor is ${floor}, below the declared ${DECLARED_FLOOR}`);
+  }
+  if (!/\nexit \$rc\s*$/.test(script.trimEnd() + '\n')) {
+    found.push("script: it no longer ends by exiting the proof's own code (`exit $rc`)");
+  }
+  for (const line of ci.split('\n')) {
+    if (/P5_MIN_CASES/.test(line)) found.push(`ci.yml: ${line.trim()}`);
+  }
+  return found;
+}
+
 describe('CG-2 — the billing database gate is blocking', () => {
   it('POSITIVE CONTROL: the step is found, in a named job, running the script by name', () => {
     const at = locate(CI);
@@ -410,5 +457,42 @@ describe('CG-2 — the billing database gate is blocking', () => {
     const body = scripts['test:db:billing'];
     expect(body, 'package.json no longer defines test:db:billing, so the gate runs nothing').toBeTruthy();
     expect(body as string).toContain('packages/billing/test/db');
+  });
+});
+
+describe('CG-2b — the gate`s floor is not lowered behind the gate', () => {
+  it('POSITIVE CONTROL: the floor is readable in the script, and it is the declared one', () => {
+    expect(PROOF.length, 'the gate script was read as empty, so nothing below is a measurement').toBeGreaterThan(1000);
+    expect(PROOF, 'the script does not name the floor variable at all').toContain('P5_MIN_CASES');
+    expect(defaultFloor(PROOF), 'the default floor could not be read from the script`s text').toBe(DECLARED_FLOOR);
+  });
+
+  it('the floor stands and the verdict is still the proof`s: nothing lowers it', () => {
+    expect(floorGivenAway(PROOF, CI), `the gate proves less than it claims: ${floorGivenAway(PROOF, CI).join(' | ')}`).toEqual([]);
+  });
+
+  it('NEGATIVE CONTROL: a lowered default floor is reported', () => {
+    const planted = PROOF.replace('P5_MIN_CASES=${P5_MIN_CASES:-131}', 'P5_MIN_CASES=${P5_MIN_CASES:-0}');
+    expect(planted, 'the floor plant did not apply, so this control proves nothing').not.toBe(PROOF);
+    const reported = floorGivenAway(planted, CI);
+    expect(reported.length, 'a floor of 0 was read as the declared floor').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('below the declared');
+  });
+
+  it('NEGATIVE CONTROL: `P5_MIN_CASES` set in the workflow is reported', () => {
+    const planted = CI.replace(`        run: ${GATE_RUN}`, ['        env:', '          P5_MIN_CASES: 1', `        run: ${GATE_RUN}`].join('\n'));
+    expect(planted, 'the env plant did not apply').not.toBe(CI);
+    const reported = floorGivenAway(PROOF, planted);
+    expect(reported.length, 'an override of the floor in ci.yml was not reported').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('ci.yml:');
+  });
+
+  it('NEGATIVE CONTROL: a script that stops exiting the proof`s code is reported', () => {
+    const planted = `${PROOF.trimEnd().slice(0, PROOF.trimEnd().lastIndexOf('exit $rc'))}exit 0\n`;
+    expect(planted, 'the verdict plant did not apply').not.toBe(PROOF);
+    expect(planted.trimEnd().endsWith('exit 0'), 'the plant did not end with the swallowed verdict').toBe(true);
+    const reported = floorGivenAway(planted, CI);
+    expect(reported.length, 'a script that always exits 0 was read as blocking').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain("exiting the proof's own code");
   });
 });
