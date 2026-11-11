@@ -4,11 +4,21 @@
  * `packages/billing/test/db/run-db-proof.sh` prints its own floor
  * (`DB_PROOF_CASES … floor=131`) and exits non-zero below it, so the gate
  * protects against a SHRINKING suite. It does not protect against the gate
- * being switched off: one line — `continue-on-error: true` on the step, or on
- * the job that holds it — turns a red database proof into a green run with
- * none of its cases enforced. The floor guards the count, not the gate's
- * standing, and an external review of the P5 seal file asked for the second
- * half (the owner's relay of 2026-11-10).
+ * being switched off. The floor guards the count, not the gate's standing,
+ * and an external review of the P5 seal file asked for the second half (the
+ * owner's relay of 2026-11-10).
+ *
+ * THREE ways turn a red database proof into a green run, and the law reports
+ * all three, each with its own negative control below:
+ *   - `continue-on-error` (not `false`) on the step or on its job;
+ *   - a condition (`if:`) on the step or on its job — `if: false` never runs
+ *     the gate at all;
+ *   - the command swallowing its own exit code (`|| true`, `|| :`,
+ *     `|| exit 0`, `set +e`, a trailing `; true`) — no YAML key to find.
+ * The first version of this law read `continue-on-error` ALONE while its own
+ * prose claimed the whole class. A narrow review of 2026-11-11 said so, and
+ * the two missing limbs were MEASURED red before they were closed, so this
+ * list is what the checker does, not what it intends.
  *
  * This law reads `.github/workflows/ci.yml` as TEXT and does not edit it:
  * `ci.yml` is shared property across lanes, so a law that only reads it
@@ -36,6 +46,22 @@ const GATE_RUN = 'npm run test:db:billing';
 
 /** Keys that stop a failure from failing the run, on a step or on a job. */
 const NEUTRALISING = /^\s*continue-on-error\s*:\s*(.+?)\s*$/;
+
+/**
+ * A condition on the step or on its job. `if: false` never runs the gate at
+ * all and the run still reads green, so a condition is as neutralising as
+ * `continue-on-error` and is reported the same way. The repository's own
+ * `required-ci-chain-composition` law rejects both keys together, and this
+ * one was measured as the cheaper hole before it was closed: with `if: false`
+ * planted the checker reported nothing.
+ */
+const GUARDING_IF = /^\s*if\s*:\s*(.+?)\s*$/;
+
+/**
+ * Ways the command swallows its own exit code, with no YAML key to find:
+ * `|| true`, `|| :`, `|| exit 0`, `set +e`, or a trailing `; true`.
+ */
+const SWALLOWED_EXIT = /\|\|\s*(?:true|:|exit\s+0)|set\s+\+e|;\s*true\s*$/;
 
 interface Located {
   /** 0-based index of the `- name:` line that opens the step. */
@@ -124,10 +150,13 @@ function neutralisers(source: string): string[] {
   for (const line of at.step) {
     const m = NEUTRALISING.exec(line);
     if (m && m[1] !== 'false') found.push(`step: ${line.trim()}`);
+    if (GUARDING_IF.test(line)) found.push(`step: ${line.trim()}`);
+    if (line.includes(GATE_RUN) && SWALLOWED_EXIT.test(line)) found.push(`step: ${line.trim()}`);
   }
   for (const line of at.jobHeader) {
     const m = NEUTRALISING.exec(line);
     if (m && m[1] !== 'false') found.push(`job ${at.job}: ${line.trim()}`);
+    if (GUARDING_IF.test(line)) found.push(`job ${at.job}: ${line.trim()}`);
   }
   return found;
 }
@@ -147,7 +176,7 @@ describe('CG-2 — the billing database gate is blocking', () => {
     expect(found.jobHeader.join('\n'), 'the job header does not carry runs-on').toContain('runs-on:');
   });
 
-  it('the step carries no key that stops its failure from failing the run', () => {
+  it('the gate can still fail the run: no neutralising key, no condition, no swallowed exit', () => {
     expect(neutralisers(CI), `these keys neutralise the billing DB gate: ${neutralisers(CI).join(' | ')}`).toEqual([]);
   });
 
@@ -169,6 +198,29 @@ describe('CG-2 — the billing database gate is blocking', () => {
     const reported = neutralisers(planted);
     expect(reported.length, 'the checker missed a job-level continue-on-error').toBeGreaterThan(0);
     expect(reported.join(' | ')).toContain('job backend:');
+  });
+
+  it('NEGATIVE CONTROL: a guarding `if:` on the step is reported too', () => {
+    // `if: false` never runs the step at all, and the job still reads green:
+    // the same outcome as `continue-on-error`, by a different key. The law
+    // claims the gate CAN FAIL THE RUN, so every way of taking that away is
+    // its business (the repository's own `required-ci-chain-composition`
+    // rejects `continue-on-error` and `if:` together).
+    const planted = CI.replace(`        run: ${GATE_RUN}`, `        if: false\n        run: ${GATE_RUN}`);
+    expect(planted, 'the `if:` plant did not apply, so this control proves nothing').not.toBe(CI);
+    const reported = neutralisers(planted);
+    expect(reported.length, 'the checker missed an `if:` on the gate step').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('step:');
+  });
+
+  it('NEGATIVE CONTROL: swallowing the exit code inside the command is reported too', () => {
+    // `|| true` leaves the step green whatever the proof printed, without a
+    // single YAML key to find.
+    const planted = CI.replace(`        run: ${GATE_RUN}`, `        run: ${GATE_RUN} || true`);
+    expect(planted, 'the `|| true` plant did not apply, so this control proves nothing').not.toBe(CI);
+    const reported = neutralisers(planted);
+    expect(reported.length, 'the checker missed a swallowed exit code in the gate command').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('step:');
   });
 
   it('the script the gate names still exists and still hands the runner the suite directory', () => {
