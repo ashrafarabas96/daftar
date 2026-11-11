@@ -515,3 +515,42 @@ export interface CustomerOpenInvoicesDto {
   items: CustomerOpenInvoiceDto[];
   nextCursor: string | null;
 }
+
+/** One statement row: a sales document, a payment, a credit, or a credit application. */
+export interface CustomerStatementEntryDto {
+  entryKind: 'invoice' | 'payment' | 'credit' | 'credit_application';
+  entryId: string;
+  /** Civil date `YYYY-MM-DD` of the event. */
+  entryDate: string;
+  /** The invoice's own number; for an application, the number of the invoice it was applied to. */
+  documentNumber: string | null;
+  /** A related record: the invoice of an application, the origin payment of a credit. */
+  relatedId: string | null;
+  currency: string;
+  /** Stored amounts. A debit and a credit are separate statements, never one signed figure. */
+  debitTxnMinor: string | null;
+  creditTxnMinor: string | null;
+  /** The row's own stored amount in its currency (a held credit carries this and neither side). */
+  amountTxnMinor: string;
+  amountBaseMinor: string;
+  reference: string | null;
+}
+
+/** The authoritative figure, straight from the reader of record -- one entry per currency, never summed here. */
+export interface CustomerStatementOutstandingDto {
+  currency: string | null;
+  txnMinor: string | null;
+  baseMinor: string;
+}
+
+/**
+ * `GET /v1/customers/:customerId/statement` -- requires `receivables.view`.
+ * There is deliberately NO per-row running balance: `outstanding` is the only
+ * balance and it is `customer_ar_outstanding(...)`'s own answer.
+ */
+export interface CustomerStatementDto {
+  customerId: string;
+  items: CustomerStatementEntryDto[];
+  outstanding: CustomerStatementOutstandingDto[];
+  nextCursor: string | null;
+}
