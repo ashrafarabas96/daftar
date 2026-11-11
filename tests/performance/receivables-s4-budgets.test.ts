@@ -1175,7 +1175,7 @@ async function postedEntries(paymentId: string): Promise<{ readonly entries: num
  * whose expected size is derived from whatever happened to execute is not a
  * census. The audit names every missing case, so a mismatch is never a riddle.
  */
-const DECLARED_CASES = 18;
+const DECLARED_CASES = 19;
 
 /** The P4-D read series this file declares: three fat-tail HTTP reads + median + the two RLS halves. */
 const DECLARED_READ_SERIES = 3;
