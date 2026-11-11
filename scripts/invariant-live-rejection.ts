@@ -248,7 +248,40 @@ if (!/_(probe|drill_target|restore)$|^invariant_probe$/.test(targetDb)) {
   die(`the target "${targetDb}" is not named as a throwaway; it must end in _probe, _drill_target or _restore`);
 }
 
-const cases = loadCases(casePath);
+/**
+ * The two cases that prove this tool can fail. They are not in the committed
+ * case file, because that file has to run green, and a file carrying a case
+ * that must come back FAIL would be read as a broken suite. They run under
+ * --self-check, where their FAIL is the pass.
+ */
+const INVERSE_CONTROLS: Case[] = [
+  {
+    id: 'HARNESS-CONTROL-ITSELF-REFUSED',
+    label: 'a case whose accept-control is itself refused must NOT pass',
+    mechanism: 'a table that does not exist, named by both the plant and the control',
+    plant: 'INSERT INTO probe_self_absent (x) VALUES (-1)',
+    expect: 'reject',
+    control: ['INSERT INTO probe_self_absent (x) VALUES (1)'],
+    controlEnds: 'commit',
+    deferred: false,
+    notes: 'Expected FAIL: the plant is refused for the wrong reason and the control cannot show otherwise.',
+  },
+  {
+    id: 'HARNESS-GAP-CLAIMED-ON-A-GUARD',
+    label: 'a gap claimed where a CHECK exists must NOT pass',
+    mechanism: 'a scratch table WITH a CHECK, declared as if nothing guarded it',
+    setup: ['CREATE TABLE IF NOT EXISTS probe_self_guarded (x integer CHECK (x > 0))'],
+    plant: 'INSERT INTO probe_self_guarded (x) VALUES (-1)',
+    expect: 'accept',
+    control: ['CREATE TABLE IF NOT EXISTS probe_self_guarded (x integer CHECK (x > 0))', 'INSERT INTO probe_self_guarded (x) VALUES (1)'],
+    controlEnds: 'commit',
+    deferred: false,
+    notes: 'Expected FAIL: the row was refused, so the gap does not exist and must not be reported.',
+  },
+];
+
+const selfCheck = process.argv.includes('--self-check');
+const cases = selfCheck ? loadCases(join('docs', 'invariants', 'harness-self-controls.json')) : loadCases(casePath);
 const outcomes: Outcome[] = [];
 
 // The copy. CREATE DATABASE ... TEMPLATE refuses while another session is
@@ -262,7 +295,7 @@ if (copy.code !== 0) die(`the copy of "${sourceDb}" could not be made: ${readFai
 const identity = psql(targetDb, `SELECT system_identifier::text || ' ' || current_catalog FROM pg_control_system()`);
 const migrations = psql(targetDb, `SELECT count(*)::text FROM schema_migrations`);
 
-for (const c of cases) {
+for (const c of [...cases, ...(selfCheck ? INVERSE_CONTROLS : [])]) {
   const planted = attempt(targetDb, [...(c.setup ?? []), c.plant]);
   const plantFailure = readFailure(planted.err);
   const plantOutcome = planted.code === 0 ? 'accepted' : 'rejected';
@@ -307,14 +340,27 @@ if (!keepTarget) {
   }
 }
 
-const passed = outcomes.filter((o) => o.status === 'PASS').length;
-const failed = outcomes.filter((o) => o.status === 'FAIL').length;
-const notRun = cases.length - outcomes.length;
+const inverseIds = new Set(INVERSE_CONTROLS.map((c) => c.id));
+const ordinary = outcomes.filter((o) => !inverseIds.has(o.id));
+const inverse = outcomes.filter((o) => inverseIds.has(o.id));
+const passed = ordinary.filter((o) => o.status === 'PASS').length;
+const failed = ordinary.filter((o) => o.status === 'FAIL').length;
+const notRun = cases.length - ordinary.length;
+// Under --self-check the two inverse controls must come back FAIL: that is
+// what proves this tool can fail at all. An inverse control that passed would
+// mean the reader accepts a refused control, or a gap where a guard stands.
+const inverseWrong = inverse.filter((o) => o.status !== 'FAIL');
+const verdict = failed === 0 && notRun === 0 && inverseWrong.length === 0 && (!selfCheck || inverse.length === INVERSE_CONTROLS.length) ? 'PASS' : 'FAIL';
 
-for (const o of outcomes) {
+for (const o of ordinary) {
   process.stdout.write(`${o.status.padEnd(7)} ${o.id} — ${o.label}\n`);
   process.stdout.write(`        ${o.detail}${o.sqlstate === '' ? '' : ` [SQLSTATE ${o.sqlstate}]`}\n`);
   if (o.message !== '') process.stdout.write(`        refusal: ${o.message}\n`);
+}
+for (const o of inverse) {
+  const right = o.status === 'FAIL';
+  process.stdout.write(`${(right ? 'PASS' : 'FAIL').padEnd(7)} ${o.id} — ${o.label}\n`);
+  process.stdout.write(`        it came back ${o.status}, where FAIL is what proves the reader can refuse: ${o.detail}\n`);
 }
 
 mkdirSync(evidenceDir, { recursive: true, mode: 0o700 });
@@ -335,8 +381,10 @@ writeFileSync(
       passed,
       failed,
       notRun,
+      selfCheck,
+      inverseControls: inverse.map((o) => ({ id: o.id, status: o.status, required: 'FAIL' })),
       outcomes,
-      verdict: failed === 0 && notRun === 0 ? 'PASS' : 'FAIL',
+      verdict,
     },
     null,
     2,
@@ -345,5 +393,8 @@ writeFileSync(
 );
 
 process.stdout.write(`\nevidence ${evidencePath}\n`);
-process.stdout.write(`verdict ${failed === 0 && notRun === 0 ? 'PASS' : 'FAIL'} — ${passed} passed, ${failed} failed, ${notRun} not run of ${cases.length}\n`);
-process.exit(failed === 0 && notRun === 0 ? 0 : 1);
+if (selfCheck) {
+  process.stdout.write(`self-check — ${inverse.length} inverse controls, ${inverse.length - inverseWrong.length} of them FAILED as required\n`);
+}
+process.stdout.write(`verdict ${verdict} — ${passed} passed, ${failed} failed, ${notRun} not run of ${cases.length}\n`);
+process.exit(verdict === 'PASS' ? 0 : 1);

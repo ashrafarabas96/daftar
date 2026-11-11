@@ -1,6 +1,6 @@
 {
   "tool": "scripts/invariant-live-rejection.ts",
-  "at": "2026-11-11T22:17:44.781Z",
+  "at": "2026-11-11T22:28:13.491Z",
   "node": "v24.20.0",
   "platform": "linux-x64",
   "cluster": "7706536532177609331 invariant_probe",
@@ -11,6 +11,8 @@
   "passed": 16,
   "failed": 0,
   "notRun": 0,
+  "selfCheck": false,
+  "inverseControls": [],
   "outcomes": [
     {
       "id": "INV-INV-11-value-only",
