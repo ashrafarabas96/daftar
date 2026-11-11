@@ -310,20 +310,34 @@ describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GO
 });
 
 /**
- * MOVED — `GOLD-87` (chargeback, RULES §5.2ب) is now posted through a REAL
- * SALES DOCUMENT and is asserted, unchanged, in
- * `tests/golden-regression/phase4-s4/13-engine-shapes-on-sales-documents.golden.test.ts`.
+ * `GOLD-87` — the move to a real sales document was WITHDRAWN by the owner
+ * (`DR-115` addendum, 2026-11-11), so it is the EIGHTH refusal arm here.
  *
- * Its carrier is the reversal of a real `customer_payment_allocation` taken
- * through a card method whose posting account is `card_clearing`
- * (`DR-115`/1). Its `Shape` literal and the `expected()` that reads it did not
- * change by a letter — both are imported from `./engine-shapes`, which is how
- * that is proved rather than claimed. It is the ONE of the eight whose shape a
- * real document reproduces column for column, `line_no` included.
+ * Measured reason, not a preference: its only legitimate carrier on this head
+ * is the reversal of a real `customer_payment_allocation`, and that reversal
+ * touches the journal ALONE — the `payment_allocations` row stands, and
+ * `invoice_outstanding` sums the allocation tables and not the journal
+ * (`0084:624-640`). So the statement would say "paid in full" while the AR
+ * control account carries the amount as a debit: EXACTLY the divergence
+ * migration `0090` was written to prevent. `daftar-finance` caught it.
  *
- * Nothing was deleted and the count did not fall: one assertion left this file
- * and one arrived there, and the seven above are still asserted here.
+ * Its sentence and its `Shape` literal are kept here untouched, and the card
+ * `.local-context/cards/MVP03_GOLDENS_AWAITING_VOID_AND_REFUND_AR.md` carries
+ * it with the other seven: it returns as a real golden when the void/refund
+ * scope is built and a chargeback has a sales document of its own.
  */
+describe('golden: engine shapes — chargeback (RULES §5.2ب, GOLD-87)', () => {
+  it('reverses the CASH ORIGIN, not into a customer credit: the money left the business — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
+      id: 'GOLD-87',
+      title: 'card chargeback on an allocated payment',
+      lines: [
+        { account: 'accounts_receivable', side: 'D', base: 300 },
+        { account: 'card_clearing', side: 'C', base: 300 },
+      ],
+    });
+  });
+});
 
 describe('golden: engine shapes — tri-currency settlement (RULES §6)', () => {
   it('base ILS, invoice USD, payment EUR: 1480 in, 1440 of AR released, 40 realized gain — REFUSED while no sales document produces it', async () => {
