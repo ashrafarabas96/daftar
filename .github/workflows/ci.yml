@@ -1297,7 +1297,8 @@ jobs:
           # — the words are there and the ADJACENCY is not. That is RULE-20's
           # class: a pattern that cannot see escape sequences reports absence
           # where there is content. Stripping them changes no assertion; the
-          # tally below still demands exactly `1 passed | 17 skipped`.
+          # tally below still demands exactly one case passed and every
+          # other declared case skipped (the count derived, see 3 below).
           plain="$RUNNER_TEMP/negative-control-al72-client-side.plain.log"
           sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" >"$plain"
           # POSITIVE CONTROL on the stripper itself: an empty or unwritten copy
@@ -1319,18 +1320,33 @@ jobs:
             echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio by its own marker — that verdict still listens to something outside PostgreSQL"; exit 1
           fi
           # 3. THE EXIT CODE AGREES WITH THE MARKERS, by name on both branches.
+          #    AND THE CENSUS ARITHMETIC IS DERIVED FROM THE FILE'S OWN
+          #    DECLARATION, not written here as a literal. Measured: this
+          #    step died on run 42966370741 (step 57) because the file had
+          #    gained a nineteenth case and this script still demanded
+          #    `17 of 18` and `1 passed | 17 skipped` — a stale literal
+          #    reporting a defect that did not exist, while the ratio itself
+          #    held (`P4-S4-RATIO-OK-AL72` printed, no FAIL marker). The
+          #    demand is unchanged in strength: exactly one case passed and
+          #    every other declared case skipped.
+          declared=$(grep -oE 'const DECLARED_CASES = [0-9]+' tests/performance/receivables-s4-budgets.test.ts | grep -oE '[0-9]+' | head -1)
+          case "$declared" in
+            ''|*[!0-9]*) echo "the test file's DECLARED_CASES could not be read, so the census arithmetic below would be unmeasured"; exit 1 ;;
+          esac
+          test "$declared" -ge 2 || { echo "DECLARED_CASES read as $declared, which cannot leave one case passed and the rest skipped"; exit 1; }
+          skipped=$((declared - 1))
           if [ "$rc" -eq 0 ]; then
             if grep -q 'declared cases did not run to a verdict' "$log"; then
               echo "the run exited 0 while the census reported unrun cases — the exit code and the audit disagree"; exit 1
             fi
           else
-            grep -q '17 of 18 declared cases did not run to a verdict' "$log" || {
+            grep -q "$skipped of $declared declared cases did not run to a verdict" "$log" || {
               tail -160 "$log"
               echo "the run exited $rc for something OTHER than the -t census of this file, and an unexplained red cannot be read as this control holding"; exit 1
             }
-            grep -qE 'Tests[[:space:]]+1 passed \| 17 skipped' "$plain" || {
+            grep -qE "Tests[[:space:]]+1 passed \| $skipped skipped" "$plain" || {
               tail -160 "$plain"
-              echo "the run exited $rc and its own tally is not '1 passed | 17 skipped', so more than the census failed"; exit 1
+              echo "the run exited $rc and its own tally is not '1 passed | $skipped skipped', so more than the census failed"; exit 1
             }
           fi
           # AND THE VERDICT IS PRINTED FROM THE LOG, not asserted in prose.
