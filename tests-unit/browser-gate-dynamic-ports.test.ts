@@ -282,9 +282,9 @@ describe('the browser gate takes its ports from the operating system', () => {
       const pgRelease = stack.indexOf("reservation.release('pg')");
       const pgStart = stack.indexOf('await pg.initialise()');
       const apiRelease = stack.indexOf("reservation.release('api')");
-      const apiGuard = stack.indexOf("assertPortFree(ports.api");
+      const apiGuard = stack.indexOf('assertPortFree(ports.api');
       const webRelease = stack.indexOf("reservation.release('web')");
-      const webGuard = stack.indexOf("assertPortFree(ports.web");
+      const webGuard = stack.indexOf('assertPortFree(ports.web');
       for (const [name, before, after] of [
         ['pg', pgRelease, pgStart],
         ['api', apiRelease, apiGuard],
