@@ -2656,7 +2656,7 @@
     },
     {
       "file": "tests/performance/accounting-dataset.ts",
-      "line": 444,
+      "line": 461,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2664,7 +2664,7 @@
     },
     {
       "file": "tests/performance/accounting-dataset.ts",
-      "line": 475,
+      "line": 492,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2672,7 +2672,7 @@
     },
     {
       "file": "tests/performance/accounting-dataset.ts",
-      "line": 489,
+      "line": 506,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2680,7 +2680,7 @@
     },
     {
       "file": "tests/performance/accounting-dataset.ts",
-      "line": 490,
+      "line": 507,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2688,7 +2688,7 @@
     },
     {
       "file": "tests/performance/accounting-dataset.ts",
-      "line": 498,
+      "line": 515,
       "phase": "cross-phase",
       "signals": ["row-estimate"],
       "kind": "mention",

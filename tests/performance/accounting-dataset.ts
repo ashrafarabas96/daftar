@@ -391,17 +391,30 @@ export async function generateDataset(pool: Pool, targets: readonly DatasetTarge
           LIMIT $2`,
         [target.businessId, spec.accountCount, GUARDED_SYSTEM_KEYS],
       );
-      // EXACTLY the asked-for number, or refuse. Before the exclusion above,
-      // a short result was impossible: `0040` raises `accounting.chart_incomplete`
-      // unless all 21 system accounts exist, so `LIMIT 20` could not come back
-      // with 19. The exclusion replaced that structural guarantee with an
-      // operational one — two rows inserted here — and an operational guarantee
-      // that nothing checks is not a guarantee: a pre-existing row at code
-      // `1900` or `2900` would make `ON CONFLICT DO NOTHING` keep it, the
-      // select would return 19, and `accountIndex % accountIds.length` at the
-      // line planner would QUIETLY fold index 19 onto account 0 — doubling one
-      // account's weight and breaking the very "the shape does not change"
-      // claim this change rests on. Caught by `daftar-finance`.
+      // EXACTLY the asked-for number, or refuse — because the consequence of a
+      // short set is SILENT: `accountIndex` is drawn from `spec.accountCount`
+      // and the line planner folds it with `% accountIds.length`, so one
+      // account would quietly carry two indexes' traffic and the "the shape
+      // does not change" claim would be false without anything going red.
+      //
+      // AND THE CORRECT REASON IT CAN HAPPEN, measured after `daftar-reviewer`
+      // showed my first one was arithmetically wrong: a pre-existing row at
+      // code `1900` or `2900` does NOT shorten the set — it carries no guarded
+      // `system_key`, so the select picks it up and the count stays 20. The
+      // real path to a short set is the GUARD WIDENING: the day `0090` (or its
+      // successor) watches a third or fourth system key, the exclusion removes
+      // more than the two accounts added here and 19 is what comes back.
+      // Before the exclusion that was impossible — `0040` raises
+      // `accounting.chart_incomplete` unless all 21 system accounts exist — so
+      // the exclusion is what made a short set reachable at all, and this line
+      // is what keeps it loud.
+      //
+      // WHAT THIS DOES NOT PIN, said where it is enforced: a COUNT, not an
+      // identity. A later row with a code below `6200` on a measured business
+      // would keep the count at 20 and shift which account every index names.
+      // The twenty codes are derived in this change's own record, not asserted
+      // here, because a code list frozen in this generator would refuse a
+      // legitimate chart addition for every dataset it produces.
       if (accountRows.length !== spec.accountCount)
         throw new Error(
           `business ${target.businessId} offers ${accountRows.length} postable accounts, not the ${spec.accountCount} this dataset's shape is defined by: a short set would be folded by the index modulo instead of refused`,
@@ -438,9 +451,13 @@ export async function generateDataset(pool: Pool, targets: readonly DatasetTarge
  * This list used to be `journal_entries` and `journal_lines` alone, which is
  * the pair the dataset fills, and that was a measurement defect rather than an
  * omission of tidiness. `accounts` is read by the trial balance on every run,
- * it is never written by the generator, and one business's chart is around
- * twenty rows: far below `autovacuum_analyze_threshold`, so autovacuum never
- * comes for it either. The table therefore went into the measurement with NO
+ * one business's chart is twenty-three rows — the twenty-one the chart seeds
+ * plus the two ordinary accounts this generator inserts, which is the ONLY
+ * writing it does to that table — far below `autovacuum_analyze_threshold`, so
+ * autovacuum never comes for it either. (It read "never written by the
+ * generator" and "around twenty rows" until this change made both inexact;
+ * `daftar-reviewer` caught that I had declared the same drift in
+ * `accounting-budgets.test.ts` and not here.) The table therefore went into the measurement with NO
  * statistics at all — `relpages = 0`, `reltuples = -1`, `last_analyze` null —
  * and the planner fell back to a default estimate that the row-level security
  * expression then collapsed to a single row.
