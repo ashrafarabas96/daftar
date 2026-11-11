@@ -142,12 +142,23 @@ DECLARE
   v_intent   TEXT;
   v_stored   TEXT;
   v_replay   BOOLEAN;
+-- The assignment below is the FIRST statement of the body, over ALL of this
+-- routine's own arguments: the id, then the eight words of each of the four
+-- text groups. 33 fields, which is `INVENTORY_PAYLOAD_FIELDS['customer.create']`
+-- (`packages/inventory/src/payload.ts:699`) exactly — one uuid plus
+-- `CUSTOMER_TEXT`. Nothing is read, locked or written before it.
+--
+-- THIS PROSE SITS ABOVE `BEGIN` AND NOT BELOW IT, AND THAT IS LOAD-BEARING.
+-- §4 claim (3) reads the body's first statement as
+-- `btrim(split_part(substr(prosrc, position(E'\nBEGIN\n' IN prosrc) + 7), ';', 1))`
+-- — the `0064:1612` idiom — which takes the RAW text after `BEGIN` and does
+-- not strip comments. A comment between `BEGIN` and the assignment therefore
+-- makes the routine's own end-state claim fail, which is exactly what it did:
+-- `customer_create does not consume its own customer kind as its first
+-- statement` on CI run 43117037383, step `Fresh database migrate
+-- (0000 -> latest)`. `supplier_create` (`0064:341`) puts the assignment on the
+-- line immediately after `BEGIN` for the same reason.
 BEGIN
-  -- The FIRST statement, over ALL of this routine's own arguments: the id,
-  -- then the eight words of each of the four text groups. 33 fields, which
-  -- is `INVENTORY_PAYLOAD_FIELDS['customer.create']`
-  -- (`packages/inventory/src/payload.ts:699`) exactly — one uuid plus
-  -- `CUSTOMER_TEXT`. Nothing is read, locked or written before it.
   v_actor := inventory_assertion_consume('customer.create', inventory_claimed_payload_digest('customer.create',
     ARRAY['uuid'] || array_fill('integer'::text, ARRAY[32]),
     ARRAY[p_customer_id::text] || inventory_reason_words(p_name) || inventory_reason_words(p_phone)
