@@ -1088,6 +1088,7 @@ const DOORS: readonly Door[] = [
  */
 const SEALED: readonly (readonly [string, Owner, 'trigger' | 'helper', 'r' | 'w' | 'rw' | '-'])[] = [
   ['accounting_actor(text[])', 'accounting', 'helper', 'rw'],
+  ['accounting_ar_control_line_source_document()', 'accounting', 'trigger', 'r'],
   ['accounting_assert_entry_valid(uuid,uuid)', 'accounting', 'helper', 'r'],
   ['accounting_control_actor(text[])', 'accounting', 'helper', 'rw'],
   ['accounting_customer_credit_application_entry_complete()', 'accounting', 'trigger', 'r'],
