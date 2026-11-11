@@ -1070,4 +1070,42 @@ describe('DR-108-C — the fourth declared category is exactly the owner-decided
     const planted = `${migration}\nALTER ROLE daftar_accounting_internal BYPASSRLS;\n`;
     expect((planted.replace(/--.*/g, '').match(/BYPASSRLS/g) ?? []).length, 'a planted BYPASSRLS escapes this law').toBe(1);
   });
+
+  /**
+   * Decision C, condition 1 ("least privilege"), had the same shape of hole the
+   * BYPASSRLS case above had: the column-scoped grant was WRITTEN but nothing
+   * refused a table-wide one replacing it. A bare `GRANT UPDATE ON TABLE` hands
+   * the accounting role every column, `tenant_id` among them.
+   *
+   * The second half records WHY the `WITH CHECK` of pcgr_accounting_tenant_update
+   * is reached by no granted principal: measured here, no statement in this
+   * migration writes `tenant_id`. The day one does, this law goes red and the
+   * claim stops being prose — that unreachable half then needs a behavioural
+   * control against a real database, not a static one.
+   */
+  it('the UPDATE grant stays column-scoped, and no statement writes tenant_id', () => {
+    const migration = readNormalized(MIGRATION_PATH);
+    const executable = migration.replace(/--.*/g, '');
+
+    const COLUMN_SCOPED =
+      /GRANT UPDATE \(remaining_minor\) ON TABLE public\.platform_credit_grant_remainders TO daftar_accounting_internal;/g;
+    const BARE_UPDATE = /GRANT[^;]*\bUPDATE\b(?!\s*\()[^;]*ON TABLE/g;
+    const WRITES_TENANT = /\bSET\s+tenant_id\b/g;
+
+    expect((executable.match(COLUMN_SCOPED) ?? []).length, 'the one column-scoped UPDATE grant is gone or changed').toBe(1);
+
+    const bare = executable.match(BARE_UPDATE) ?? [];
+    expect(bare, `an UPDATE grant with no column list: ${bare.join(' | ')}`).toEqual([]);
+    expect(executable.match(WRITES_TENANT) ?? [], 'a statement now writes tenant_id, so the WITH CHECK half is live and needs a behavioural control').toEqual([]);
+
+    // POSITIVE CONTROL: the tenant_id scanner does hit reads, so its zero above
+    // is a measurement and not an empty-input artefact (RULE-11).
+    expect((executable.match(/\btenant_id\s*=/g) ?? []).length, 'the tenant_id scanner matches nothing at all, so its zero is blind').toBeGreaterThan(0);
+
+    // NEGATIVE CONTROLS: each half goes red when its condition is broken.
+    const plantedGrant = `${executable}\nGRANT UPDATE ON TABLE public.platform_credit_grant_remainders TO daftar_accounting_internal;\n`;
+    expect((plantedGrant.match(BARE_UPDATE) ?? []).length, 'a planted table-wide UPDATE grant escapes this law').toBe(1);
+    const plantedWrite = `${executable}\nUPDATE public.platform_credit_grant_remainders SET tenant_id = NULL;\n`;
+    expect((plantedWrite.match(WRITES_TENANT) ?? []).length, 'a planted tenant_id write escapes this law').toBe(1);
+  });
 });
