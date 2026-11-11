@@ -151,6 +151,55 @@ describe('the browser gate takes its ports from the operating system', () => {
     }
   });
 
+  /**
+   * THE CONTROL OVER THE DEFECT ITSELF, not over the detector.
+   *
+   * The test above says two concurrent allocations get six different ports.
+   * On its own that proves nothing: a machine with a wide ephemeral range
+   * would hand out six different ports even if the code asked for the same
+   * one twice, and the suite would read green while the defect stood. So this
+   * is the other half — two runs that ask for the SAME port, which is exactly
+   * what the three written-down constants did, and the second one must be
+   * refused. If this ever passes without an EADDRINUSE, the machine stopped
+   * being able to collide and the test above has lost its meaning.
+   */
+  it('still collides when two runs ask for one port — so the test above is measuring the fix, not the machine', async () => {
+    clearEnv();
+    const one = await holdSomePort();
+    const sharedPort = one.port;
+    await one.close();
+    for (const name of ENV_NAMES) process.env[name] = String(sharedPort);
+
+    const first = await reservePorts();
+    try {
+      expect(first.ports, 'a pinned port must come back as itself').toEqual({ pg: sharedPort, api: sharedPort, web: sharedPort });
+      // The first run's own server takes it, as `startStack` would.
+      const server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        server.listen({ port: sharedPort, host: '0.0.0.0', exclusive: true }, () => resolve());
+      });
+      try {
+        // The second run asks for the same pinned port and cannot have it.
+        const second = await reservePorts();
+        try {
+          expect(second.ports.web).toBe(sharedPort);
+          expect(
+            await bindable(second.ports.web),
+            `two runs pinned to port ${sharedPort} both got it — this machine can no longer reproduce the collision, ` +
+              `so the disjointness test above proves nothing and must be re-measured before it is trusted`,
+          ).toBe(false);
+        } finally {
+          await second.releaseAll();
+        }
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
+    } finally {
+      await first.releaseAll();
+    }
+  });
+
   it('asks the operating system when nothing is pinned, rather than naming a number', () => {
     clearEnv();
     expect(portsFromEnv(), `an unset port must mean "the OS picks", not a constant two runs can both claim`).toEqual({ pg: 0, api: 0, web: 0 });
