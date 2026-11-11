@@ -56,6 +56,15 @@ const ENTRIES = 4_000;
 const ACCOUNTS_USED = 21;
 
 /**
+ * The control accounts `0090_mvp03_ar_source_document_guard.sql` guards: a
+ * `journal_lines` row on one of these belongs to a sales document, or the
+ * database refuses it (`DR-114`/ثالثًا/2). Read off the migration itself —
+ * `a.system_key IN ('accounts_receivable', 'customer_credit_liability')`
+ * (`0090:98`) — and not from a reading of its prose.
+ */
+const GUARDED_SYSTEM_KEYS = ['accounts_receivable', 'customer_credit_liability'];
+
+/**
  * One entry in every SPARSE_EVERY posts to the sparse account.
  *
  * The number is chosen to sit clearly OUTSIDE the region where the two plans
@@ -126,11 +135,42 @@ beforeAll(async () => {
   tenantId = must((await ownerPool().query<{ tenant_id: string }>(`SELECT tenant_id FROM businesses WHERE id = $1`, [businessId])).rows[0]).tenant_id;
   today = await todayIn(ownerPool(), 'Asia/Hebron');
 
+  // ── The guarded control accounts leave this fixture (owner's decision
+  // 2026-11-11, recorded in `DR-115`), and two ORDINARY accounts of the same
+  // nature take their place.
+  //
+  // WHY. This fixture seeds its journal BY HAND, in bulk, as the schema owner,
+  // and `0090` refuses a hand-written line on `accounts_receivable` or on
+  // `customer_credit_liability` because debt no sales document raised stands
+  // behind no customer's name. The guard is right and the SEED is what
+  // offends it, so the seed obeys the rule like any other writer rather than
+  // the rule making room for the seed.
+  //
+  // AND NOTHING ELSE MOVES. The chart holds exactly 21 system accounts
+  // (`0040_accounting_chart.sql`), and this fixture uses all of them, so
+  // dropping two without replacing them would change the shape the planner
+  // sees. The two below carry NO `system_key` — a merchant's own accounts,
+  // which the chart supports by design (`accounts.system_key` is NULL for
+  // custom accounts) — and each matches the nature of what it replaces:
+  // asset for asset (1100 → 1900), liability for liability (2210 → 2900).
+  // `ACCOUNTS_USED` stays 21, `ENTRIES` and the line count are untouched, and
+  // the two accounts this measurement is ABOUT — dense cash 1000 and sparse
+  // bank 1010 — are not among the two that moved.
+  await ownerPool().query(
+    `INSERT INTO accounts (tenant_id, business_id, code, name, type)
+     VALUES ($1, $2, '1900', 'Perf ordinary asset', 'asset'),
+            ($1, $2, '2900', 'Perf ordinary liability', 'liability')`,
+    [tenantId, businessId],
+  );
+
   const accounts = (
-    await ownerPool().query<{ id: string; code: string }>(`SELECT id, code FROM accounts WHERE business_id = $1 ORDER BY code LIMIT $2`, [
-      businessId,
-      ACCOUNTS_USED,
-    ])
+    await ownerPool().query<{ id: string; code: string }>(
+      `SELECT id, code FROM accounts
+        WHERE business_id = $1 AND (system_key IS NULL OR system_key <> ALL($3::text[]))
+        ORDER BY code
+        LIMIT $2`,
+      [businessId, ACCOUNTS_USED, GUARDED_SYSTEM_KEYS],
+    )
   ).rows;
   cashId = must(accounts.find((a) => a.code === '1000')).id;
   const others = accounts.filter((a) => a.id !== cashId);
