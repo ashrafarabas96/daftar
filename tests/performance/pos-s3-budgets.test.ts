@@ -226,6 +226,21 @@ const STABLE_WARMUP = 20;
  */
 const NEGATIVE_CONTROL_MS = Number(process.env['POS_PERF_NEGATIVE_CONTROL_MS'] ?? '0') || 0;
 
+/**
+ * DR-98's control knob for P4-B, and the mirror image of the one above.
+ *
+ * `POS_PERF_NEGATIVE_CONTROL_MS` plants a delay OUTSIDE the database, in the
+ * client, between the two clock reads. P4-B is now judged on the time
+ * PostgreSQL spent EXECUTING, so that delay must NOT be able to fail it — and
+ * something must still be able to, or the new verdict would be a ceiling
+ * nothing can breach. This knob is that something: milliseconds slept INSIDE
+ * the database, on a `daftar_app` connection, inside every measured window.
+ *
+ * 200 and not 50 in CI: a control has to exceed the ceiling it is meant to
+ * break, and P4-B's ceiling is 60 ms.
+ */
+const IN_DB_DELAY_MS = Number(process.env['POS_PERF_IN_DB_DELAY_MS'] ?? '0') || 0;
+
 /** Rows inserted per statement while seeding. */
 const BATCH = 500;
 
@@ -1033,6 +1048,7 @@ describe('P4-B — server-side cart recomputation', () => {
      * any single window that `pg_stat_statements` forgot an entry inside.
      */
     const inDatabase = await InDatabaseClock.open('daftar');
+    const delayer = IN_DB_DELAY_MS > 0 ? await appClient() : null;
     const calibratedMs = await inDatabase.calibrate(49, async () => {
       // AS `daftar_app`, NOT THROUGH `ownerPool()`, AND THE CONTROL PROVED WHY.
       // The clock's probe is the superuser and it excludes its OWN role from
@@ -1056,6 +1072,8 @@ describe('P4-B — server-side cart recomputation', () => {
     try {
       for (let i = 0; i < RUNS; i += 1) {
         const dbBefore = await inDatabase.read();
+        // INSIDE the window, so the figure the verdict reads contains it.
+        if (delayer !== null) await delayer.query(`SELECT pg_sleep(${IN_DB_DELAY_MS / 1000})`);
         const run = await recompute(i % 2 === 0 ? '1' : '2', true);
         inDbSamples.push(InDatabaseClock.delta(dbBefore, await inDatabase.read()));
         // The figure is about TWENTY lines on every single sample, not on average.
@@ -1063,6 +1081,7 @@ describe('P4-B — server-side cart recomputation', () => {
         samples.push(run.ms);
       }
     } finally {
+      await delayer?.end();
       await inDatabase.close();
     }
     expect(inDbSamples, 'a sample was timed on the wall clock and not on the database clock').toHaveLength(samples.length);
@@ -1085,7 +1104,7 @@ describe('P4-B — server-side cart recomputation', () => {
     const inDbSorted = [...inDbSamples].sort((a, b) => a - b);
     const dbRank = (q: number): number => must(inDbSorted[Math.min(inDbSorted.length - 1, Math.ceil(q * inDbSorted.length) - 1)]);
     const inDatabaseMeasured = {
-      judgedOn: false as const,
+      judgedOn: 'inDatabaseExecMs' as const,
       instrument: inDatabase.settings,
       calibratedMs: Math.round(calibratedMs * 1000) / 1000,
       iterations: inDbSorted.length,
@@ -1100,8 +1119,16 @@ describe('P4-B — server-side cart recomputation', () => {
     console.info('[P4-B] in-database', JSON.stringify({ measured: inDatabaseMeasured }));
     // ONE GREPPABLE LINE, so a reading can be taken off a job log without
     // parsing JSON out of a reporter's own formatting.
+    // THE WALL CLOCK KEEPS BEING MEASURED AND PRINTED, AND JUDGES NOTHING.
+    // It is the series that showed the tail in the first place, so losing it
+    // would hide the very thing this change is about.
     console.info(
-      `P4-B-TWO-CLOCKS judgedOn=wallClockClientMs budgetMs=${BUDGET.B_POS_CART_P95} iterations=${measured.iterations} ` +
+      `PERF01-WALL-MONITOR-P4B judgedOn=wallClockClientMs budgetMs=${BUDGET.B_POS_CART_P95} iterations=${measured.iterations} ` +
+        `p50=${measured.p50.toFixed(3)} p95=${measured.p95.toFixed(3)} p99=${measured.p99.toFixed(3)} max=${measured.max.toFixed(3)} ` +
+        `aboveCeiling=${measured.samplesMs.filter((x) => x > BUDGET.B_POS_CART_P95).length} judges=nothing`,
+    );
+    console.info(
+      `P4-B-TWO-CLOCKS judgedOn=inDatabaseExecMs budgetMs=${BUDGET.B_POS_CART_P95} iterations=${measured.iterations} ` +
         `wallP50=${measured.p50.toFixed(3)} wallP95=${measured.p95.toFixed(3)} wallP99=${measured.p99.toFixed(3)} wallMax=${measured.max.toFixed(3)} ` +
         `inDbP50=${inDatabaseMeasured.p50.toFixed(3)} inDbP95=${inDatabaseMeasured.p95.toFixed(3)} inDbP99=${inDatabaseMeasured.p99.toFixed(3)} ` +
         `inDbMax=${inDatabaseMeasured.max.toFixed(3)} inDbMin=${inDatabaseMeasured.min.toFixed(3)} calibratedMs=${inDatabaseMeasured.calibratedMs} ` +
@@ -1109,9 +1136,38 @@ describe('P4-B — server-side cart recomputation', () => {
         `inDbAboveCeiling=${inDatabaseMeasured.samplesMs.filter((x) => x > BUDGET.B_POS_CART_P95).length}`,
     );
 
+    /**
+     * THE VERDICT IS THE DATABASE'S OWN CLOCK NOW, AGAINST THE SAME 60 ms.
+     *
+     * DR-98's pattern, as #48 applied it to PERF01's A and B and to P4-D and
+     * P4-F in-transaction, and by the owner's decision of 2026-11-11 item 3 —
+     * which allowed it only on the measured condition that the tail is OUTSIDE
+     * the database and the in-database figure is under the ceiling. It is:
+     * six readings on 00859fb8 (run 43032156887, job 130561679339) gave an
+     * in-database p95 between 0.946 and 1.335 ms with a max of 1.426, against
+     * the 60 that stands, while the failing run on main read a WALL p95 of
+     * 174.488 with a p50 of 10.764 (run 42942970952 attempt 2, step 40).
+     *
+     * THE CEILING DOES NOT MOVE: 60 ms, the same number, written in the same
+     * place. Nothing is skipped, retried, or dropped, and the wall series is
+     * still measured and printed above. What changes is which clock answers
+     * the question the budget asks -- what the database costs a recomputation
+     * -- and the two controls in ci.yml require this verdict to go red on a
+     * delay planted inside the database and to stay green on one planted
+     * outside it.
+     */
     expect(
-      measured.p95,
-      `PERF01-BUDGET-P4B ${measured.name}: p95 ${measured.p95.toFixed(1)} ms against P4-B's ${BUDGET.B_POS_CART_P95} ms`,
+      must(inDatabaseMeasured.p95),
+      `PERF01-BUDGET-P4B ${JSON.stringify({
+        name: measured.name,
+        judgedOn: 'inDatabaseExecMs',
+        budgetMs: BUDGET.B_POS_CART_P95,
+        inDatabaseExecMs: { p50: inDatabaseMeasured.p50, p95: inDatabaseMeasured.p95, p99: inDatabaseMeasured.p99, max: inDatabaseMeasured.max },
+        wallClockClientMs: { p50: measured.p50, p95: measured.p95, p99: measured.p99, max: measured.max },
+        iterations: inDatabaseMeasured.iterations,
+        calibratedMs: inDatabaseMeasured.calibratedMs,
+        inDatabaseSamplesMs: inDatabaseMeasured.samplesMs,
+      })}`,
     ).toBeLessThanOrEqual(BUDGET.B_POS_CART_P95);
   });
 });
