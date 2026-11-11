@@ -16,6 +16,7 @@ const NAV = [
   // the POS pages enforce `pos.sell` themselves and show `common.noPermission`
   // without trying a command.
   { key: 'pos', path: 'pos' },
+  { key: 'invoices', path: 'invoices' },
   { key: 'catalog', path: 'catalog' },
   // P3-S7 (A-11): shown only to a member holding the matching view permission.
   { key: 'stock', path: 'stock', requires: 'inventory.view' },

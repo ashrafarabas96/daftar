@@ -913,5 +913,13 @@
   "error.invoice_settlement.settlement_inconsistent": "Tarafımızda bir sorun oluştu ve hiçbir şey kaydedilmedi. Lütfen yeniden deneyin ve sorun sürerse bize bildirin.",
   "error.customer_payment.arithmetic_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "error.customer_payment.registry_incomplete": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
-  "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."
+  "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin.",
+  "nav.invoices": "Faturalar",
+  "invoices.list.title": "Faturalar",
+  "invoices.list.empty": "Henüz fatura yok",
+  "invoices.list.sellSomething": "Satış yap",
+  "invoices.list.issued": "Düzenlenme: {date}",
+  "invoices.status.draft": "Taslak",
+  "invoices.status.open": "Açık",
+  "invoices.status.void": "İptal edildi"
 }
