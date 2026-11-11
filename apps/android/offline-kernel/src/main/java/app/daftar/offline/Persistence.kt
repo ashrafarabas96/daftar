@@ -299,9 +299,20 @@ class EncryptedQueueStore(
         //
         // The gate is process-wide, not per instance: two `EncryptedQueueStore`
         // objects over one database are the same disk, and an instance lock
-        // would serialise the wrong thing. It is held across the whole
-        // transaction, so it also orders the other write points against this
-        // one when they share a store.
+        // would serialise the wrong thing.
+        //
+        // AND IT COVERS THIS WRITE POINT ONLY, measured: `WRITE_GATE` appears
+        // at one site in this file. `markReleased`, `recordSendAttempt`,
+        // `recordOutcome`, `recordProcessDeath` and `purge` do NOT take it, so
+        // they are still read-modify-writes resting on an isolation level
+        // `Transactional` does not promise -- `recordSendAttempt` most
+        // visibly, where two callers can both read `attempts = n` and both
+        // write `n + 1`, losing an attempt from the very counter the backoff
+        // table reads. That is card P7-LINK-01B, raised and not fixed here:
+        // widening the gate to every write point changes the kernel's
+        // concurrency shape well beyond one key's freeze, and this card's law
+        // is the freeze. Nothing in this comment should be read as ordering
+        // those points against this one; it does not.
         // And it is held INLINE, not in a helper. `ATOMIC_WRITE_POINTS` is
         // checked by equality against the functions that contain `begin()`, so
         // factoring this read-modify-write into a private helper would empty

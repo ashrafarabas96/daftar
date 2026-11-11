@@ -189,8 +189,29 @@ class CaptureRaceSameKeyTest {
         if (!file.isFile) {
             fail("the subject was not readable, so this check measured nothing: ${file.absolutePath}")
         }
-        val persistence = file.readText()
-        assertTrue(persistence.length > 1_000, "the subject read back empty or truncated")
+        val raw = file.readText()
+        assertTrue(raw.length > 1_000, "the subject read back empty or truncated")
+
+        // CODE ONLY, NOT PROSE. This file explains its own concurrency at
+        // length, so a sweep over the raw text would be satisfied by a comment
+        // that merely says "synchronized" -- the lock could be deleted and the
+        // sentence left behind, and this case would stay green. Line comments
+        // and block comments are stripped first, and the control below proves
+        // the stripping really happened.
+        val persistence = raw
+            .replace(Regex("""/\*.*?\*/""", RegexOption.DOT_MATCHES_ALL), "")
+            .lines()
+            .joinToString("\n") { it.substringBefore("//") }
+        assertTrue(
+            persistence.length in 1_000 until raw.length,
+            "the comment stripper removed nothing (or everything), so this sweep is reading " +
+                "prose or reading an empty string: ${persistence.length} of ${raw.length}",
+        )
+        assertTrue(
+            !persistence.contains("Card P7-LINK-01, measured before this lock existed"),
+            "a sentence that exists only in a comment survived the stripper",
+        )
+
         val mentionsSerialisation = listOf(
             "SERIALIZABLE",
             "serializable",

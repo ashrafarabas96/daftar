@@ -72,9 +72,18 @@ object StockConflict {
 
     /**
      * The view for a stock refusal, or `null` when the code is not one -- so a
-     * caller cannot read this object as an explanation for everything. The
-     * surface asks here first and falls back to [Recovery.explain]; a `null`
-     * means "not mine", never "no problem".
+     * caller cannot read this object as an explanation for everything. A
+     * `null` means "not mine", never "no problem".
+     *
+     * NO SURFACE READS THIS YET, and that is measured, not an oversight:
+     * nothing outside this module's own tests references [StockConflict], and
+     * `ci.yml`'s DR-84 link gate deliberately keeps `:app` from resolving
+     * `:offline-kernel`, so no till could reach it even if it tried. The
+     * intended caller asks here first and falls back to [Recovery.explain];
+     * wiring it is card 5 of this lane, and until that lands DR-130's second
+     * part -- the conflict is SHOWN to the merchant -- is not delivered. What
+     * is delivered is the reading itself, with the sentence and the step the
+     * merchant needs, so card 5 has something true to display.
      */
     fun explain(errorCode: String?): StockView? =
         if (isStockRefusal(errorCode)) {

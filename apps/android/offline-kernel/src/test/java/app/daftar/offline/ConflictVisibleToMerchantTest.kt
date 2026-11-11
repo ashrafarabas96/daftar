@@ -168,10 +168,16 @@ class ConflictVisibleToMerchantTest {
         // the current bytes" -- the evidence spent rather than kept.
         //
         // So the pinned file still falls to its catch-all for this code, and
-        // that is RECORDED here rather than hidden: the surface asks
-        // `StockConflict` first and falls back to `Recovery.explain`. Whether
-        // the arms should eventually move INTO `Recovery` is the owner's call on
-        // that pin, and this case is what will fail if anyone takes it quietly.
+        // that is RECORDED here rather than hidden. The INTENDED surface asks
+        // `StockConflict` first and falls back to `Recovery.explain`; no such
+        // surface exists yet -- `ci.yml`'s DR-84 link gate keeps `:app` from
+        // resolving this module at all -- so DR-130's "shown to the merchant"
+        // is card 5 of this lane and is NOT closed by this suite. What this
+        // suite closes is the reading: the sentence and the step exist and are
+        // correct, and the generic one is proven to be what the pinned file
+        // still gives. Whether the arms should eventually move INTO `Recovery`
+        // is the owner's call on that pin, and this case is what will fail if
+        // anyone takes it quietly.
         val fallback = Recovery.explain(INSUFFICIENT_STOCK)
         assertEquals(
             MerchantMessage.DEVICE_SOFTWARE_PROBLEM,

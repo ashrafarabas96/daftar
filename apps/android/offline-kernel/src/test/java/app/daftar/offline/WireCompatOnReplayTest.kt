@@ -25,18 +25,26 @@ import kotlin.test.fail
  *   - `:app` has one (`data/ApiClient.kt`) but it does not depend on
  *     `:offline-kernel`, and it MINTS ITS OWN KEY at send time -- which is the
  *     exact inverse of `KEY_MINTED_AT_CAPTURE`;
- *   - `SyncEnvelope.intentSha256` is a field with no producer on this side,
- *     which is correct under DR-84 only if the value is CARRIED, never
- *     recomputed -- and nothing states that today.
+ *   - `SyncEnvelope.intentSha256` is a field with NO producer on this side,
+ *     and it must stay that way: its own KDoc says "it is never filled from a
+ *     row's local integrity digest", and `QueueDigest.kt` says of that digest
+ *     "it is not the server's proof of intent and it is never compared with
+ *     one". An earlier draft of this suite filled the slot from
+ *     `row.payloadDigest` and asserted the result -- a value of one kind put
+ *     into a slot of another, and then pinned. That is corrected here rather
+ *     than quietly dropped, and case 4 is the guard that stops it returning.
  *
  * WHAT THIS SUITE ASSERTS:
- *   1. a sender seam exists in the kernel, fed from a stored row;
- *   2. the replay carries the row's own key, byte-for-byte payload, and the
- *      carried digest -- never a freshly minted key and never a recomputed one;
- *   3. and, as DR-84's other half, that the kernel does not grow an intent
- *      encoder behind the owner's deferral.
- *
- * Case 1 is red today; cases 2 and 3 pin the law the seam must arrive under.
+ *   1. a sender seam exists in the kernel, fed from a stored row, and it is a
+ *      seam a sender can actually be held to -- not merely a name that
+ *      resolves;
+ *   2. the replay carries the row's own key and byte-for-byte payload, built
+ *      from the row and from nothing else -- never a freshly minted key and
+ *      never a re-serialised body;
+ *   3. as DR-84's other half, the kernel does not grow an intent encoder
+ *      behind the owner's deferral;
+ *   4. and the seam carries no intent digest at all, so the local digest
+ *      cannot reach a wire field that forbids it.
  */
 class WireCompatOnReplayTest {
 
@@ -93,6 +101,28 @@ class WireCompatOnReplayTest {
                     "Expected one of: " + candidates.joinToString(", "),
             )
         }
+
+        // A NAME THAT RESOLVES IS NOT A SEAM. An empty interface would satisfy
+        // the search above, so the shape is measured: the seam must declare a
+        // send that takes the attempt type and answers the kernel's own result
+        // type. A sender cannot be held to anything less.
+        val seam = Class.forName(found.first())
+        val sends = seam.methods.filter { it.name == "send" }
+        assertTrue(
+            sends.isNotEmpty(),
+            "${seam.name} declares no send, so it is a name rather than a seam",
+        )
+        val usable = sends.any { m ->
+            m.parameterTypes.size == 1 &&
+                m.parameterTypes[0] == Outgoing::class.java &&
+                AttemptResult::class.java.isAssignableFrom(m.returnType)
+        }
+        assertTrue(
+            usable,
+            "the seam's send does not take one Outgoing and answer an AttemptResult, so the " +
+                "envelope a sender transmits is not the one built from the row: " +
+                sends.joinToString(", ") { it.toString() },
+        )
     }
 
     @Test
@@ -119,18 +149,75 @@ class WireCompatOnReplayTest {
             "the row's digest must be the digest of those same bytes",
         )
 
-        // The envelope that goes out must be built FROM the row. A sender that
-        // mints a key, or recomputes the carried digest, breaks the server's
+        // The attempt that goes out must be built FROM the row. A sender that
+        // mints a key, or re-serialises the body, breaks the server's
         // idempotency and DR-84's division of authority at once.
-        val envelope = SyncEnvelope(
-            idempotencyKey = row.idempotencyKey,
-            envelopeVersion = Compatibility.current(),
-            payloadSchemaVersion = row.schemaVersion,
-            intentSha256 = row.payloadDigest,
-            payload = mapOf("body" to String(bytes)),
+        val outgoing = Outgoing.fromRow(row, bytes)
+        assertEquals(key, outgoing.idempotencyKey, "the attempt must carry the row's key")
+        assertTrue(
+            outgoing.body.contentEquals(payload),
+            "the attempt must carry the stored bytes, not a re-serialisation of them",
         )
-        assertEquals(key, envelope.idempotencyKey)
-        assertEquals(row.payloadDigest, envelope.intentSha256)
+        assertEquals(row.schemaVersion, outgoing.payloadSchemaVersion)
+
+        // THE NEGATIVE CONTROL on the same seam: bytes that do not hash to the
+        // row's digest must be refused, not sent. Without this the check above
+        // would pass for a sender fed a row and somebody else's payload.
+        val tampered = "{\"b\":\"1\",\n\"a\":\"3 \"}".toByteArray()
+        assertTrue(!tampered.contentEquals(payload), "the control's own premise failed")
+        var refused = false
+        try {
+            Outgoing.fromRow(row, tampered)
+        } catch (expected: PayloadRefused) {
+            refused = true
+        }
+        assertTrue(
+            refused,
+            "the seam built an attempt out of a row and bytes that are not its own",
+        )
+    }
+
+    @Test
+    fun the_seam_carries_no_intent_digest_for_a_wire_field_that_forbids_one() {
+        // DR-84, and the correction this case exists to hold. `SyncEnvelope`
+        // requires a non-blank `intentSha256`, and its own KDoc forbids filling
+        // it from a row's local integrity digest -- which is exactly what
+        // `QueueDigest.of(bytes)`, and therefore `StoredRow.payloadDigest`, is.
+        // So on this side the slot has NO producer, and the way to keep it that
+        // way is for the seam to carry no such value at all.
+        val forbidden = listOf("intentSha256", "intentDigest", "intent")
+        val carried = Outgoing::class.java.methods
+            .filter { it.parameterTypes.isEmpty() && it.name.startsWith("get") }
+            .map { it.name.removePrefix("get").replaceFirstChar { c -> c.lowercaseChar() } }
+
+        // POSITIVE CONTROL FIRST: a probe that sees nothing proves nothing
+        // about what is absent (RULE-3). These are the fields the seam does
+        // carry, so the probe is demonstrably reading the right type.
+        for (expected in listOf("idempotencyKey", "body", "payloadSchemaVersion")) {
+            assertTrue(
+                carried.contains(expected),
+                "positive control failed: the probe did not even see $expected on Outgoing, " +
+                    "so its silence about an intent digest measures nothing. Saw: $carried",
+            )
+        }
+
+        val offenders = carried.filter { name -> forbidden.any { name.equals(it, true) } }
+        assertEquals(
+            emptyList(),
+            offenders,
+            "the sender seam carries an intent digest ($offenders). SyncEnvelope's own KDoc " +
+                "says that field is never filled from a row's local integrity digest, and the " +
+                "device computes no canonical intent while P7-INVPL-KOTLIN is deferred",
+        )
+
+        // And the prohibition is stated where an implementor reads it, not only
+        // here: the seam's own source must name the deferral.
+        val sender = kernelSource("Sender.kt")
+        assertTrue(
+            sender.contains("P7-INVPL-KOTLIN"),
+            "Sender.kt does not name the deferred card, so the next writer learns the rule " +
+                "from a test failure rather than from the seam",
+        )
     }
 
     @Test
@@ -146,6 +233,19 @@ class WireCompatOnReplayTest {
                 "so its silence about an intent encoder proves nothing",
         )
         val intentMarkers = listOf("invpl/1\"", "canonicalStream", "canonicalIntent", "INVPL_DOMAIN")
+
+        // THE PROBE'S OWN CONTROL, and it is not the readability check above:
+        // that one proves the FILES arrive, this one proves the PREDICATE
+        // fires. A marker list that matched nothing -- a typo, a renamed
+        // constant -- would give the same empty answer as a clean kernel, and
+        // the two must not be indistinguishable (RULE-3, RULE-27).
+        val plant = "internal const val INVPL_DOMAIN = \"invpl/1\"\nfun canonicalStream() = 0\n"
+        assertTrue(
+            intentMarkers.any { plant.contains(it) },
+            "the marker probe does not fire on a planted encoder, so its silence about the " +
+                "kernel is not a measurement",
+        )
+
         val names = listOf("QueueDigest.kt", "SyncEnvelope.kt", "Persistence.kt", "Queue.kt")
         val offenders = names.filter { file ->
             val text = kernelSource(file)
