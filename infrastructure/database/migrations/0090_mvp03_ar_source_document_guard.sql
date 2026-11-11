@@ -138,23 +138,36 @@ CREATE CONSTRAINT TRIGGER journal_lines_ar_control_source_document
   EXECUTE FUNCTION accounting_ar_control_line_source_document();
 
 -- The ownership transfer needs the schema's CREATE privilege FOR THE NEW
--- OWNER: `ALTER FUNCTION … OWNER TO` is refused otherwise, and the role does
--- not hold it standing — `0045` revokes it after its own transfers. So the
--- grant is opened for this one statement and closed again immediately, which
--- is this estate's own convention and not an invention here: `0069`, `0071`,
--- `0077` and `0081` each bracket their transfers exactly this way, eight
--- grant/revoke pairs in four migrations, two of them for this very role
--- (`0069:223`/`:257`, `0071:209`/`:344`, `0077:1280`/`:1698`,
--- `0081:1388`/`:1742`).
+-- OWNER: `ALTER FUNCTION … OWNER TO` is refused without it, and the role holds
+-- none standing — `bootstrap.sql:198` grants `daftar_accounting_internal`
+-- schema USAGE only, by name and on purpose. So the grant is opened for this
+-- one statement and closed again immediately, which is this estate's own
+-- convention and not an invention here: measured over
+-- `infrastructure/database/migrations/`, 56 executable
+-- GRANT/REVOKE CREATE-on-public pairs in 34 migrations precede this one, 23 of
+-- them for this very role (`0040:263`/`:471`, `0069:223`/`:257`,
+-- `0081:1388`/`:1742`), and no file in that set grants without revoking.
 --
--- WHY IT WAS MISSING AND WHY GREEN CI DID NOT SAY SO, measured: the workflow
--- applies migrations as `postgres` (`ci.yml`), and a superuser skips the
--- privilege check entirely — so this statement passes there and would be
--- REFUSED under the documented deployment authority `daftar_migrator`, which
--- `bootstrap.sql` creates NOSUPERUSER. A migration that only a superuser can
--- apply is not a migration this project can deploy. Caught by
--- `daftar-finance`; the local tree cannot prove it, because proving it needs a
--- database applied as that role, and this machine has none.
+-- A CORRECTION TO WHAT THIS FILE SAID BEFORE, measured: it claimed the
+-- statement would be REFUSED under the deployment authority `daftar_migrator`
+-- and that a superuser CI run hid that. It would not. The project's own runner
+-- lends CREATE on `public` to every `OWNER TO daftar_*` target of a file for
+-- the length of that file's transaction and takes it back inside the same
+-- transaction (`apps/api/src/infra/migrate.ts:64-68` and `:106-111`, which
+-- calls a file that revokes it itself "the intended overlap"). And the tail is
+-- applied as that NOSUPERUSER role by a suite, not only as `postgres`:
+-- `tests/integration/migration-portability.test.ts:841` with the role proved
+-- `rolsuper:false` at `:234` — step #26 «Integration + security tests» was
+-- `success` both before this bracket (`43028057105` on `d97ef0d6`) and after
+-- it (`43053033501` on `9c587078`).
+--
+-- So this bracket is not a repair of a refusal. It is what the estate's every
+-- other handover does, and it is the defence for an apply that does not go
+-- through `migrate.ts` — a direct `psql` run, where nothing lends the
+-- privilege. The `REVOKE` is the file's last statement, which keeps
+-- `migration-portability.test.ts:1558` true: the role holds no CREATE once the
+-- file has run. The wording this replaces was mine and was not measured;
+-- `daftar-reviewer` caught it in the narrow confirming round.
 GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 
 ALTER FUNCTION accounting_ar_control_line_source_document() OWNER TO daftar_accounting_internal;
