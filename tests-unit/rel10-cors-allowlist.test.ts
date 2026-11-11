@@ -161,4 +161,25 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     expect(main).toContain('parseCorsOrigins(config.CORS_ORIGINS)');
     expect(main).not.toContain('CORS_ORIGINS.split(');
   });
+
+  it('the allowlist does not also hand out credentials', () => {
+    // The allowlist decides WHICH origins may call. `credentials` decides
+    // whether the browser attaches cookies and `Authorization` to those calls
+    // and lets the page read the response. Turning it on makes every origin on
+    // the list a session-bearing caller, and this API authenticates with a
+    // bearer token the front end holds — it needs no cookie from a browser to
+    // be sent automatically.
+    //
+    // It is `false` in the bootstrap and nothing held it there, so a later
+    // edit could flip it in one word with no test going red. Measured as red
+    // before this law: with `credentials: true` in `main.ts` this assertion
+    // fails and the rest of the suite stays green, which is exactly the hole
+    // it closes.
+    const main = readFileSync(join(resolve(__dirname, '..'), 'apps/api/src/main.ts'), 'utf8');
+    // Positive control first: the probe is reading a bootstrap that configures
+    // CORS at all, so a passing assertion below cannot be a missing file.
+    expect(main).toContain('app.enableCors(');
+    expect(main).toContain('credentials: false');
+    expect(main).not.toContain('credentials: true');
+  });
 });
