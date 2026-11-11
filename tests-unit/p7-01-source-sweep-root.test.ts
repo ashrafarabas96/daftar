@@ -6,12 +6,19 @@ import { describe, expect, it } from 'vitest';
  * P7-01 — the suites that read the kernel as TEXT must be pointed at the
  * promoted source, and this lane can say so without a JVM.
  *
- * Five Kotlin suites defend laws a type system cannot observe: no defaulted
+ * Kotlin suites defend laws a type system cannot observe: no defaulted
  * `EffectClass`, no fallback to `BENIGN`, no refusal code that no sweep can
- * see, no fenced absence inferred from a status. Each reads its root from the
- * system property `p7.src`, falling back to `prep/phase7/kotlin/src` — the path
- * the kernel lived at before P7-01 promoted it, and a path this repository does
- * not have.
+ * see, no fenced absence inferred from a status, and — added by the link cards
+ * — no unstated isolation behind a frozen key and no `invpl/1` intent encoder
+ * growing on the device. Each reads its root from the system property
+ * `p7.src`, falling back to `prep/phase7/kotlin/src` — the path the kernel
+ * lived at before P7-01 promoted it, and a path this repository does not have.
+ *
+ * The roster below is SEVEN, measured, not five: the promotion's five plus
+ * `CaptureRaceSameKeyTest` (card P7-LINK-01) and `WireCompatOnReplayTest`
+ * (card P7-LINK-03). It is listed by name on purpose — a sweep that loses its
+ * subject to a rename must fail here, in a lane that needs no JVM, and a
+ * roster that grew must be read and named rather than silently recounted.
  *
  * Nothing set the property, so on the first run that ever executed them (run
  * 41749455670, android job 126310932907) all nine of their cases failed, with
@@ -43,11 +50,24 @@ describe('P7-01: the source-sweeping suites are given a root that exists', () =>
    * The positive control, and it must come first: if no suite read the
    * property, everything below would pass by being vacuous.
    */
-  it('five suites read the kernel text from the p7.src property', () => {
-    const testDir = join(MODULE, 'src', 'test', 'java', 'app', 'daftar', 'offline');
+  it('every suite that reads the kernel text reads it from the p7.src property', () => {
+    // The whole of `src/test`, recursively, NOT `src/test/java` alone: the
+    // Robolectric suites live at `src/test/robolectric/java` (see the module's
+    // `srcDir`, and the reason it is there), and a scan rooted at `java` would
+    // be blind to a sweep added beside them.
+    const testDir = join(MODULE, 'src', 'test');
     const readers = kotlinFiles(testDir).filter((f) => readFileSync(f, 'utf8').includes('"p7.src"'));
-    const names = readers.map((f) => f.slice(f.lastIndexOf('\\') + 1).replace(/^.*\//, '')).sort();
-    expect(names).toEqual(['CommandEffectsTest.kt', 'CrashSafetyTest.kt', 'QueueModelCheckTest.kt', 'RecoveryTest.kt', 'ReentryAndRetentionTest.kt']);
+    const names = readers.map((f) => f.split(/[\\/]/).pop()).sort();
+    expect(names.length).toBeGreaterThan(0);
+    expect(names).toEqual([
+      'CaptureRaceSameKeyTest.kt',
+      'CommandEffectsTest.kt',
+      'CrashSafetyTest.kt',
+      'QueueModelCheckTest.kt',
+      'RecoveryTest.kt',
+      'ReentryAndRetentionTest.kt',
+      'WireCompatOnReplayTest.kt',
+    ]);
   });
 
   it('the build file passes that property to every test task', () => {
