@@ -61,6 +61,18 @@ type Case = {
    * refused. A case with no control cannot pass.
    */
   control: string[];
+  /**
+   * How the control's transaction ends. 'commit' is the default and the
+   * stronger claim: the sibling row is still accepted when every deferred
+   * guard has had its say. 'rollback' is for a mechanism that refuses AT the
+   * statement, where the control only has to show that the statement itself is
+   * accepted — a sibling stock movement, for instance, cannot be committed on
+   * its own because the deferred binding foreign keys would refuse it at
+   * COMMIT, and reading that refusal as "the control failed" would hide the
+   * measurement instead of guarding it. Which ending was used is recorded in
+   * the outcome, so the weaker claim is never read as the stronger one.
+   */
+  controlEnds?: 'commit' | 'rollback';
   /** Does the refusal arrive at COMMIT rather than at the statement? */
   deferred: boolean;
   /** Anything the reader needs that the fields above do not carry. */
@@ -78,6 +90,7 @@ type Outcome = {
   sqlstate: string;
   message: string;
   controlOutcome: 'accepted' | 'rejected' | 'unmeasured';
+  controlEnds: 'commit' | 'rollback';
   controlMessage: string;
   detail: string;
 };
@@ -185,6 +198,15 @@ function loadCases(path: string): Case[] {
       die(`${where} has no accept-control, and a refusal without one measures nothing`);
     }
     if (typeof c.deferred !== 'boolean') die(`${where} must say whether its refusal is deferred`);
+    if (c.controlEnds !== undefined && c.controlEnds !== 'commit' && c.controlEnds !== 'rollback') {
+      die(`${where} has a controlEnds that is neither 'commit' nor 'rollback'`);
+    }
+    if (c.controlEnds === 'rollback' && c.deferred) {
+      // A deferred refusal is only visible at COMMIT, so a control that never
+      // commits could not show that the sibling survives the guard it is meant
+      // to pass. Allowing it would buy a green with a weaker measurement.
+      die(`${where} is deferred, so its control must commit: a control that rolls back cannot pass a COMMIT-time guard`);
+    }
     cases.push({
       id: c.id,
       label: c.label,
@@ -194,6 +216,7 @@ function loadCases(path: string): Case[] {
       expect: c.expect,
       expectText: typeof c.expectText === 'string' ? c.expectText : '',
       control: c.control as string[],
+      controlEnds: c.controlEnds ?? 'commit',
       deferred: c.deferred,
       notes: typeof c.notes === 'string' ? c.notes : '',
     });
@@ -201,10 +224,14 @@ function loadCases(path: string): Case[] {
   return cases;
 }
 
-/** One transaction: the statements, then COMMIT. Rejection may arrive there. */
-function attempt(database: string, statements: string[]): { code: number; err: string } {
+/**
+ * One transaction: the statements, then COMMIT or ROLLBACK. A plant always
+ * commits, because a deferred constraint trigger refuses there and nowhere
+ * earlier; a control may roll back, and which it did is reported.
+ */
+function attempt(database: string, statements: string[], ends: 'commit' | 'rollback' = 'commit'): { code: number; err: string } {
   const body = statements.map((s) => (s.trim().endsWith(';') ? s.trim() : `${s.trim()};`)).join('\n');
-  const result = psql(database, `BEGIN;\n${body}\nCOMMIT;`);
+  const result = psql(database, `BEGIN;\n${body}\n${ends === 'commit' ? 'COMMIT' : 'ROLLBACK'};`);
   return { code: result.code, err: result.err };
 }
 
@@ -240,7 +267,8 @@ for (const c of cases) {
   const plantFailure = readFailure(planted.err);
   const plantOutcome = planted.code === 0 ? 'accepted' : 'rejected';
 
-  const controlled = attempt(targetDb, c.control);
+  const controlEnds = c.controlEnds ?? 'commit';
+  const controlled = attempt(targetDb, c.control, controlEnds);
   const controlFailure = readFailure(controlled.err);
   const controlOutcome = controlled.code === 0 ? 'accepted' : 'rejected';
 
@@ -263,11 +291,12 @@ for (const c of cases) {
     expect: c.expect,
     status: reasons.length === 0 ? 'PASS' : 'FAIL',
     plantOutcome,
+    controlEnds,
     sqlstate: plantFailure.sqlstate,
     message: plantFailure.message,
     controlOutcome,
     controlMessage: controlFailure.message,
-    detail: reasons.length === 0 ? `the plant was ${plantOutcome} and the control was accepted` : reasons.join('; '),
+    detail: reasons.length === 0 ? `the plant was ${plantOutcome} and the control was accepted (control ended in ${controlEnds})` : reasons.join('; '),
   });
 }
 
