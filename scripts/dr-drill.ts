@@ -30,6 +30,13 @@
  *
  * Usage:
  *   node scripts/dr-drill.ts              the whole drill, both controls
+ *
+ * The backup is a pair — the database dump and the cluster's globals — and
+ * neither half alone is a backup: the pair is refused when either is missing
+ * or empty, and the roles the globals file declares must already exist in the
+ * target cluster before the restore is attempted (REC-01). Applying that file
+ * is the operator's step, because it carries the roles' password hashes. Both
+ * refusals are proved on planted input in every run and are not behind a flag.
  *   node scripts/dr-drill.ts --keep-dump
  *   node scripts/dr-drill.ts --keep-target
  *   node scripts/dr-drill.ts --no-negative-control   verdict INCOMPLETE, exit 3
@@ -43,8 +50,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 
 type Json = unknown;
@@ -218,6 +225,47 @@ function run(file: string, args: string[], env?: NodeJS.ProcessEnv): { out: stri
   }
 }
 
+// A globals file declares the cluster's roles; the database dump names them in
+// its ownership and in its grants. The two are one backup, and the restore side
+// needs the names, so they are read from the file rather than assumed:
+// pg_dumpall quotes a role name only when it has to.
+const CREATE_ROLE_LINE = /^CREATE ROLE (?:"([^"]+)"|([A-Za-z_][A-Za-z0-9_$]*))/gm;
+
+function globalRoleNames(globalsText: string): string[] {
+  const names = new Set<string>();
+  for (const match of globalsText.matchAll(CREATE_ROLE_LINE)) {
+    const name = match[1] ?? match[2];
+    if (name !== undefined) names.add(name);
+  }
+  return [...names].sort();
+}
+
+/** The names in `declared` that `present` does not carry, in the declared order. */
+function rolesMissingFrom(declared: readonly string[], present: readonly string[]): string[] {
+  const have = new Set(present);
+  return declared.filter((role) => !have.has(role));
+}
+
+/**
+ * What is wrong with a backup pair, named. An empty list means the pair is
+ * whole: both files are there, neither is empty, and the globals file declares
+ * at least one role. Half a backup is not a backup.
+ */
+function backupPairProblems(dump: string, globals: string): string[] {
+  const problems: string[] = [];
+  for (const [what, path] of [
+    ['the database dump', dump],
+    ["the cluster's globals", globals],
+  ] as const) {
+    if (!existsSync(path)) problems.push(`${what} is not at ${path}`);
+    else if (statSync(path).size === 0) problems.push(`${what} is empty at ${path}`);
+  }
+  if (problems.length === 0 && globalRoleNames(readFileSync(globals, 'utf8')).length === 0) {
+    problems.push(`${globals} declares no role, so it cannot carry the cluster's roles`);
+  }
+  return problems;
+}
+
 const PSQL_FLAGS = ['--no-psqlrc', '--no-password', '--set=ON_ERROR_STOP=1'];
 
 function psql(env: NodeJS.ProcessEnv, sql: string): { out: string; code: number; err: string } {
@@ -357,6 +405,9 @@ const SQL = {
   // as the connection string spells it. "localhost", "127.0.0.1" and a local
   // socket are three spellings of one cluster.
   identity: `SELECT json_build_object('cluster', (SELECT system_identifier::text FROM pg_control_system()), 'database', current_catalog)`,
+  // Role identity is cluster-level, so this is asked of the target cluster and
+  // not of the restored database: the question is which roles exist there.
+  rolesPresent: `SELECT json_build_object('roles', coalesce(json_agg(rolname ORDER BY rolname), '[]'::json)) FROM pg_roles`,
 };
 
 /** Each invariant runs only where its table exists AND holds rows: zero
@@ -940,6 +991,7 @@ function main(): void {
   // database restored without them carries grants naming roles that do not
   // exist. The file holds password hashes, so it is 0600 and is removed with
   // the dump unless it is explicitly kept.
+  let declaredRoles: string[] = [];
   t0 = Date.now();
   const globals = run('pg_dumpall', ['--globals-only', '--no-password', `--file=${globalsPath}`], pgEnv(source, 'postgres'));
   if (globals.code === 0) {
@@ -957,6 +1009,41 @@ function main(): void {
   } else {
     record('backup:globals', 'FAIL', `pg_dumpall exited ${globals.code}: ${lastLines(globals.err, 1)}`, (Date.now() - t0) / 1000);
   }
+
+  // The two files are one backup (REC-01). A dump restored where the roles do
+  // not exist stops halfway, so the pair is measured here and the restore side
+  // is handed the names. This is the half a script can own; applying a file
+  // that carries password hashes stays the operator's step.
+  const pairProblems = backupPairProblems(dumpPath, globalsPath);
+  if (pairProblems.length > 0) {
+    record('guard:backup-pair', 'FAIL', `the backup is not whole, so nothing is restored from it: ${pairProblems.join('; ')}`);
+    return finish(artifactDir, rtoSeconds, null, source, target);
+  }
+  declaredRoles = globalRoleNames(readFileSync(globalsPath, 'utf8'));
+  record(
+    'guard:backup-pair',
+    'PASS',
+    `the backup is a pair and both halves are whole: the dump (${statSync(dumpPath).size} bytes) and the globals (${statSync(globalsPath).size} bytes, declaring ${declaredRoles.length} roles: ${declaredRoles.join(', ')}). A restore is refused unless both are present and neither is empty`,
+  );
+  // The refusal is proved on this run, on planted paths, and the plant is read
+  // back from disk before its verdict is: a checker that cannot fail is not a
+  // guard (DR-55).
+  const plantedAbsentPath = join(artifactDir, 'pair-control-absent.sql');
+  if (existsSync(plantedAbsentPath)) unlinkSync(plantedAbsentPath);
+  const plantedEmptyPath = join(artifactDir, 'pair-control-empty.sql');
+  writeFileSync(plantedEmptyPath, '', { mode: 0o600 });
+  artifactsToRemove.push(plantedEmptyPath);
+  const absentProblems = backupPairProblems(dumpPath, plantedAbsentPath);
+  const emptyProblems = backupPairProblems(dumpPath, plantedEmptyPath);
+  const plantReadsEmpty = !existsSync(plantedAbsentPath) && statSync(plantedEmptyPath).size === 0;
+  record(
+    'control:backup-pair-can-fail',
+    plantReadsEmpty && absentProblems.length === 1 && emptyProblems.length === 1 ? 'PASS' : 'FAIL',
+    plantReadsEmpty
+      ? `an absent globals file was refused (${absentProblems.join('; ') || 'nothing was reported'}), a globals file planted at 0 bytes was refused (${emptyProblems.join('; ') || 'nothing was reported'}), and the real pair reported nothing`
+      : 'the plants did not read back as absent and 0 bytes on disk, so their refusal would have measured nothing',
+  );
+  if (existsSync(plantedEmptyPath)) unlinkSync(plantedEmptyPath);
 
   // 5. The target, before it is dropped: a target that holds rows is not
   //    dropped unless that was allowed in writing. A target that does not
@@ -1016,6 +1103,32 @@ function main(): void {
       return finish(artifactDir, rtoSeconds, null, source, target);
     }
   }
+  // Which roles the dump is about to name. pg_restore --exit-on-error stops at
+  // the first grant naming an absent role, mid-restore and with no list; the
+  // drill asks first and names every missing role at once.
+  const rolesHere = psqlJson(targetEnv, SQL.rolesPresent, 'target.roles') as { roles: string[] } | null;
+  if (rolesHere === null) return finish(artifactDir, rtoSeconds, null, source, target);
+  const missingRoles = rolesMissingFrom(declaredRoles, rolesHere.roles);
+  const plantedRole = `daftar_absent_${randomUUID().slice(0, 8)}`;
+  const controlMissing = rolesMissingFrom([...declaredRoles, plantedRole], rolesHere.roles);
+  record(
+    'control:target-roles-can-fail',
+    controlMissing.length === missingRoles.length + 1 && controlMissing.includes(plantedRole) ? 'PASS' : 'FAIL',
+    `a role name this cluster does not carry — ${plantedRole} — was reported missing, and the ${declaredRoles.length} declared roles were measured against the ${rolesHere.roles.length} roles the target cluster holds`,
+  );
+  if (missingRoles.length > 0) {
+    record(
+      'guard:target-roles',
+      'FAIL',
+      `the target cluster carries ${declaredRoles.length - missingRoles.length} of the ${declaredRoles.length} roles the backup declares, and not these ${missingRoles.length}: ${missingRoles.join(', ')}. The restore is not attempted. Apply the globals file to the target cluster first — psql -v ON_ERROR_STOP=1 -d postgres -f ${globalsPath} — which is the operator's step because that file carries the roles' password hashes`,
+    );
+    return finish(artifactDir, rtoSeconds, null, source, target);
+  }
+  record(
+    'guard:target-roles',
+    'PASS',
+    `all ${declaredRoles.length} roles the backup declares exist in the target cluster, so the restore is not asked to name a role that is absent. They were put there by the operator's own step, not by this drill: the globals file carries password hashes`,
+  );
   t0 = Date.now();
   const restore = run('pg_restore', ['--no-password', '--exit-on-error', '--single-transaction', `--dbname=${target.database}`, dumpPath], targetEnv);
   const restoreSeconds = (Date.now() - t0) / 1000;
