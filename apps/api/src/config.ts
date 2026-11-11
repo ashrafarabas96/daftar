@@ -94,11 +94,41 @@ function productionCorsOriginProblem(origin: string): string | null {
   if (parsed.protocol !== 'https:') {
     return `${origin} is not https: a production browser origin is served over TLS, and an http origin in the allowlist invites the downgrade it would accept`;
   }
-  const host = parsed.hostname.toLowerCase();
-  if (host === 'localhost' || host.endsWith('.localhost') || host === '127.0.0.1' || host === '[::1]' || host === '::1') {
-    return `${origin} is a loopback origin: production names the real web origins it serves`;
+  if (isLocalHost(parsed.hostname)) {
+    return `${origin} is a loopback or all-interfaces origin: production names the real web origins it serves`;
   }
   return null;
+}
+
+/**
+ * Does `hostname` — as the URL parser normalised it — name only this machine?
+ *
+ * REL-10 review, finding 3. The first form of this check listed four spellings
+ * (`localhost`, `*.localhost`, `127.0.0.1`, `::1`) and so READ as "no loopback
+ * in production" while MEANING "not those four". Measured as passing before
+ * this: `https://127.0.0.2` (the rest of 127.0.0.0/8), `https://0.0.0.0` and
+ * `https://[::]` (every interface, which includes the loopback one), and
+ * `https://[::ffff:7f00:1]`. A rule that reads wider than it acts is the kind
+ * that gets trusted for what it says.
+ *
+ * It matches the PARSED host, not the operator's text, because the parser folds
+ * the short and numeric spellings first (measured: `https://127.1` and
+ * `https://2130706433` both normalise to `127.0.0.1`, and
+ * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
+ * the IPv6 forms, whose `hostname` keeps the brackets.
+ */
+function isLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  // The whole loopback block, not only its first address.
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  // Not loopback, but "every interface on this machine" — never an origin a
+  // merchant's browser can send.
+  if (host === '0.0.0.0' || host === '::') return true;
+  if (host === '::1') return true;
+  // IPv4-mapped loopback, in the hex form the parser produces.
+  if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)) return true;
+  return false;
 }
 
 const EnvSchema = z

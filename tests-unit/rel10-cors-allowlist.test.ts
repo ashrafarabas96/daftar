@@ -71,6 +71,7 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
 };
 
 const GOOD = 'https://app.example.com';
+const DEV_DEFAULT = 'http://localhost:3001';
 const CORS = /CORS_ORIGINS:/;
 
 describe('REL-10: production will not start without an explicit browser allowlist', () => {
@@ -85,6 +86,13 @@ describe('REL-10: production will not start without an explicit browser allowlis
     // The requirement as the owner stated it: the list missing is a refusal to
     // boot, not a silent fallback to the development default.
     expect(() => loadConfig(MERCHANT_PROD)).toThrow(CORS);
+    // And it must refuse FOR THAT REASON. `/CORS_ORIGINS:/` alone is matched by
+    // the https and the loopback refusals too, so without pinning this sentence
+    // the whole "still the development default" branch could be deleted and
+    // this suite would stay green — the one branch the requirement names by
+    // name would be the one nothing holds. (REL-10 review, finding 2.)
+    expect(() => loadConfig(MERCHANT_PROD)).toThrow(/still the development default/);
+    expect(() => loadConfig({ ...MERCHANT_PROD, CORS_ORIGINS: DEV_DEFAULT })).toThrow(/still the development default/);
   });
 
   it.each([
@@ -93,6 +101,14 @@ describe('REL-10: production will not start without an explicit browser allowlis
     ['a loopback address', 'https://127.0.0.1:3001'],
     ['localhost over https', 'https://localhost:3001'],
     ['one good origin and one loopback', `${GOOD},http://localhost:3001`],
+    // REL-10 review, finding 3: the first form of the rule named four
+    // spellings and read as "no loopback". These are the spellings it missed.
+    ['another address inside 127.0.0.0/8', 'https://127.0.0.2'],
+    ['a short-form loopback the parser expands', 'https://127.1'],
+    ['the all-interfaces address', 'https://0.0.0.0'],
+    ['the IPv6 loopback', 'https://[::1]'],
+    ['IPv4-mapped loopback, as the parser writes it', 'https://[::ffff:7f00:1]'],
+    ['the IPv6 all-interfaces address', 'https://[::]'],
   ])('DENY: production refuses %s', (_why, value) => {
     expect(() => loadConfig({ ...MERCHANT_PROD, CORS_ORIGINS: value })).toThrow(CORS);
   });
