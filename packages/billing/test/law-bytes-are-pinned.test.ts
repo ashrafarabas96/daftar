@@ -118,8 +118,38 @@ const LAW_FILES = [
   'tools/seal-check-run.py',
 ];
 
+/**
+ * The files whose bytes do not match the pin, each named with the digest it has
+ * and the digest the pin records. The pin, the file list and the READER of
+ * bytes are PARAMETERS, so a planted table and in-memory bytes go through the
+ * same comparison the live case uses and nothing is ever written to disk.
+ */
+function movedFiles(table: Readonly<Record<string, string>>, files: readonly string[], bytesOf: (relative: string) => Uint8Array | string): string[] {
+  const moved: string[] = [];
+  for (const relative of files) {
+    const digest = createHash('sha256').update(bytesOf(relative)).digest('hex');
+    if (digest !== table[relative]) moved.push(`${relative}: ${digest} is not the pinned ${table[relative] ?? '<no row>'}`);
+  }
+  return moved;
+}
+
 describe('the law is written in bytes that something outside it pins', () => {
   it('refuses by name when any file the law lives in has moved', () => {
+    // NEGATIVE CONTROLS, run first and in memory, through the same comparison
+    // the live read below uses: a pin whose digest is wrong is refused BY NAME,
+    // and so is a file with no row at all. A comparison that returned nothing
+    // would otherwise pass the live read for every possible tree.
+    const SHA_OF_A = 'ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb';
+    const planted = (relative: string): string => (relative === 'a.ts' ? 'a' : 'b');
+    expect(movedFiles({ 'a.ts': '0'.repeat(64) }, ['a.ts'], planted)).toStrictEqual([`a.ts: ${SHA_OF_A} is not the pinned ${'0'.repeat(64)}`]);
+    expect(movedFiles({}, ['a.ts'], planted)).toStrictEqual([`a.ts: ${SHA_OF_A} is not the pinned <no row>`]);
+    // NO FALSE RED: a file whose digest IS pinned is not reported, a row for a
+    // file outside the list is not this comparison's business (the SET check
+    // owns that), and a one-byte change to a pinned file IS reported.
+    expect(movedFiles({ 'a.ts': SHA_OF_A }, ['a.ts'], planted)).toStrictEqual([]);
+    expect(movedFiles({ 'a.ts': SHA_OF_A, 'z.ts': '0'.repeat(64) }, ['a.ts'], planted)).toStrictEqual([]);
+    expect(movedFiles({ 'a.ts': SHA_OF_A }, ['a.ts'], () => 'A')).toHaveLength(1);
+
     const pinned = JSON.parse(readFileSync(PIN, 'utf8')) as { pinned?: Record<string, string> };
     const table = pinned.pinned ?? {};
 
@@ -130,13 +160,7 @@ describe('the law is written in bytes that something outside it pins', () => {
 
     // Then the bytes, each file named in its own refusal so a reader is told
     // WHICH file moved rather than that something did.
-    const moved: string[] = [];
-    for (const relative of LAW_FILES) {
-      const digest = createHash('sha256')
-        .update(readFileSync(join(ROOT, relative)))
-        .digest('hex');
-      if (digest !== table[relative]) moved.push(`${relative}: ${digest} is not the pinned ${table[relative] ?? '<no row>'}`);
-    }
+    const moved = movedFiles(table, LAW_FILES, (relative) => readFileSync(join(ROOT, relative)));
     expect(
       moved,
       `${LAW_BYTES_MOVED}: a file the law is written in does not match its external pin. If the change is intended, update tools/law-bytes.json in the SAME commit and say why in the message — that digest line is the record that the edit was meant`,
