@@ -98,6 +98,7 @@ import { asMember, must, onboardS3Business, registerActor, type HttpActor, type 
 import { INTERNAL, addWarehouse, setScope } from '../helpers/stock-ledger';
 import { readAs } from '../helpers/merchant-reads';
 import { InDatabaseClock } from '../helpers/in-database-time';
+import { appClient } from '../helpers/accounting-posting';
 import { ThrottlerStorage } from '@nestjs/throttler';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 
@@ -1033,7 +1034,20 @@ describe('P4-B — server-side cart recomputation', () => {
      */
     const inDatabase = await InDatabaseClock.open('daftar');
     const calibratedMs = await inDatabase.calibrate(49, async () => {
-      await ownerPool().query('SELECT pg_sleep(0.05)');
+      // AS `daftar_app`, NOT THROUGH `ownerPool()`, AND THE CONTROL PROVED WHY.
+      // The clock's probe is the superuser and it excludes its OWN role from
+      // the sum, so a sleep run through `ownerPool()` -- the same superuser --
+      // is excluded too: run 43031596143, job 130559749531, reading 1 threw
+      // `PERF01-INSTRUMENT-BLIND ... accounted as 0.000 ms`. That is the
+      // calibration doing its job, and it is also the shape the measurement
+      // needs: what P4-B times is HTTP work the API does as `daftar_app`, so
+      // the control must speak as `daftar_app` as well.
+      const c = await appClient();
+      try {
+        await c.query('SELECT pg_sleep(0.05)');
+      } finally {
+        await c.end();
+      }
     });
 
     for (let i = 0; i < WARMUP; i += 1) await recompute(i % 2 === 0 ? '1' : '2');
