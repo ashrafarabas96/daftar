@@ -59,6 +59,43 @@ function importedModules(source: string): string[] {
 
 const ALL_IMPORTS = SOURCES.flatMap(([, s]) => importedModules(s));
 
+/** What `src/` may never import: the merchant's authority, or a driver. */
+const FORBIDDEN_IMPORTS = ['@daftar/accounting', 'pg', '@nestjs/common', '@nestjs/core', '@daftar/shared-contracts'] as const;
+
+/** The specifiers of `imports` that are neither relative nor allowed here. */
+function crossings(imports: readonly string[]): string[] {
+  return imports.filter((spec) => !spec.startsWith('./') || FORBIDDEN_IMPORTS.includes(spec as (typeof FORBIDDEN_IMPORTS)[number]));
+}
+
+/**
+ * The posting vocabulary, read over BLANKED source so prose that explains the
+ * rule does not red the rule. Named here so a PLANTED module can go through
+ * the same checker: until 2026-11-12 this file carried positive controls and
+ * no planted violation, so nothing had seen it say no (§5).
+ */
+const POSTING_WORDS = [
+  'journal',
+  'journalEntry',
+  'journal_entries',
+  'postEntry',
+  'doubleEntry',
+  'debit',
+  'credit_note',
+  'trialBalance',
+  'chartOfAccounts',
+] as const;
+
+function postingOffences(sources: ReadonlyArray<readonly [string, string]>): string[] {
+  const offences: string[] = [];
+  for (const [file, source] of sources) {
+    const code = blankOut(source).toLowerCase();
+    for (const w of POSTING_WORDS) {
+      if (code.includes(w.toLowerCase())) offences.push(`${file}: ${w}`);
+    }
+  }
+  return offences;
+}
+
 describe('§16 — this package imports nothing that can post to a merchant journal', () => {
   it('finds imports at all (the extraction is not vacuous)', () => {
     expect(ALL_IMPORTS.length).toBeGreaterThan(10);
@@ -77,8 +114,7 @@ describe('§16 — this package imports nothing that can post to a merchant jour
   });
 
   it('imports neither the merchant posting engine nor a database client', () => {
-    const forbidden = ['@daftar/accounting', 'pg', '@nestjs/common', '@nestjs/core', '@daftar/shared-contracts'];
-    for (const f of forbidden) {
+    for (const f of FORBIDDEN_IMPORTS) {
       expect(ALL_IMPORTS, `src/ imports ${f}`).not.toContain(f);
     }
   });
@@ -92,8 +128,6 @@ describe('§16 — no posting vocabulary appears in this package code', () => {
    * what a journal is" — and a raw-text law would red on the documentation of
    * the rule it enforces.
    */
-  const POSTING_WORDS = ['journal', 'journalEntry', 'journal_entries', 'postEntry', 'doubleEntry', 'debit', 'credit_note', 'trialBalance', 'chartOfAccounts'];
-
   it('the words ARE present in prose, so the blanking is doing the work', () => {
     const raw = SOURCES.map(([, s]) => s)
       .join('\n')
@@ -103,14 +137,7 @@ describe('§16 — no posting vocabulary appears in this package code', () => {
   });
 
   it('and none of them appears in code', () => {
-    const offences: string[] = [];
-    for (const [file, source] of SOURCES) {
-      const code = blankOut(source).toLowerCase();
-      for (const w of POSTING_WORDS) {
-        if (code.includes(w.toLowerCase())) offences.push(`${file}: ${w}`);
-      }
-    }
-    expect(offences, 'posting vocabulary reached the code of a package that must not post').toEqual([]);
+    expect(postingOffences(SOURCES), 'posting vocabulary reached the code of a package that must not post').toEqual([]);
   });
 });
 
@@ -187,5 +214,47 @@ describe('§17 / TL-P5-R2 — platform SaaS tax stays unsupported', () => {
     for (const w of ['taxRate', 'vatRate', 'rateBasisPoints', 'jurisdiction']) {
       expect(code, `${w} appears in invoice.ts; TL-P5-R2 forbids a guessed tax policy`).not.toContain(w);
     }
+  });
+});
+
+describe('§16 — the boundary says no to a planted crossing (the negative controls)', () => {
+  // Every plant below is a STRING. Nothing is written into `src/`, so there
+  // is nothing to restore and DR-09 is untouched.
+
+  it('NEGATIVE CONTROL: an import of the merchant posting engine is reported', () => {
+    const planted = "import { postEntry } from '@daftar/accounting';\nexport const post = postEntry;\n";
+    const specs = importedModules(planted);
+    expect(specs, 'the extractor read nothing out of the plant, so this control proves nothing').toContain('@daftar/accounting');
+    expect(crossings(specs), 'the checker missed an import of the merchant authority').toEqual(['@daftar/accounting']);
+  });
+
+  it('NEGATIVE CONTROL: a database driver import is reported too', () => {
+    const planted = "import { Client } from 'pg';\nexport const c = Client;\n";
+    expect(importedModules(planted), 'the driver plant did not parse').toContain('pg');
+    expect(crossings(importedModules(planted)), 'the checker missed a database client').toEqual(['pg']);
+  });
+
+  it('NEGATIVE CONTROL: posting vocabulary in CODE is reported, with its file', () => {
+    const planted: ReadonlyArray<readonly [string, string]> = [['planted.ts', 'export const x = (journalEntry: number): number => journalEntry + 1;\n']];
+    const reported = postingOffences(planted);
+    expect(reported.length, 'the checker missed posting vocabulary in code').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('planted.ts');
+  });
+
+  it('NO FALSE RED: the same word in prose or in a string literal is not reported', () => {
+    // This is what the blanking buys, and the direction the law must not
+    // fail in: `index.ts` explains that it posts nothing, and a raw-text law
+    // would red on the documentation of the rule it enforces.
+    const planted: ReadonlyArray<readonly [string, string]> = [
+      ['prose.ts', '// this module writes no journalEntry and knows no chartOfAccounts\nexport const n = 1;\n'],
+      ['literal.ts', "export const label = 'journalEntry';\n"],
+    ];
+    expect(postingOffences(planted), 'a comment or a string literal was read as code').toEqual([]);
+  });
+
+  it('NO FALSE RED: a relative import of this package`s own module is not a crossing', () => {
+    const specs = importedModules("import { money } from './types';\nexport const m = money;\n");
+    expect(specs, 'the relative plant did not parse').toContain('./types');
+    expect(crossings(specs), 'an own-module import was reported as a crossing').toEqual([]);
   });
 });
