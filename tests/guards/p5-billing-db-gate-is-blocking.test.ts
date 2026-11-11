@@ -64,8 +64,53 @@ function plantOnGateJobStepsKey(source: string, replacement: string): string | n
 /** The script the gate runs, as `ci.yml` must spell it. */
 const GATE_RUN = 'npm run test:db:billing';
 
-/** Keys that stop a failure from failing the run, on a step or on a job. */
-const NEUTRALISING = /^\s*continue-on-error\s*:\s*(.+?)\s*$/;
+/**
+ * A mapping key on a line, with whatever value follows it on that SAME line.
+ * The value may be empty: YAML lets the value sit on the following lines, and
+ * `keyAt` below reads that form too. The class keeps `-` so `continue-on-error`
+ * is one name, and a step's `- name:` marker does not match (the `-` is
+ * followed by a word, not by `:`).
+ */
+const KEY_LINE = /^\s*([A-Za-z0-9_-]+)\s*:\s*(.*?)\s*$/;
+
+/**
+ * The key at line `i` of a block, with its value — inline when there is one,
+ * otherwise FOLDED from the following lines indented deeper than the key.
+ *
+ * MEASURED red on 2026-11-11 (carded as `P5_CG2_MULTILINE_KEY_VALUE_AR`): the
+ * two regexes this replaced required the value on the key's own line, so
+ * `if:` with `false` beneath it — valid YAML, evaluated by GitHub exactly
+ * like `if: false` — was read as a clean file. That is a false GREEN on a law
+ * that asserts an absence, the one direction it must never fail in.
+ */
+function keyAt(block: readonly string[], i: number): { name: string; value: string } | null {
+  const m = KEY_LINE.exec(block[i] as string);
+  if (!m) return null;
+  const name = m[1] as string;
+  const inline = m[2] as string;
+  if (inline.length > 0) return { name, value: inline };
+  const key = block[i] as string;
+  const keyIndent = key.length - key.trimStart().length;
+  const folded: string[] = [];
+  for (let j = i + 1; j < block.length; j++) {
+    const line = block[j] as string;
+    if (line.trim().length === 0) continue;
+    if (line.length - line.trimStart().length <= keyIndent) break;
+    folded.push(line.trim());
+  }
+  return { name, value: folded.join(' ') };
+}
+
+/**
+ * Whether a `continue-on-error` value neutralises the gate. Only the literal
+ * `false` does not. A value carrying a trailing comment (`true # why`) is
+ * reported as it was before this reader, which is a CONSERVATIVE red on
+ * `false # why`: a named red on shared property is a review round, a false
+ * green is a lost gate.
+ */
+function neutralisingValue(value: string): boolean {
+  return value !== 'false';
+}
 
 /**
  * A condition on the step or on its job. `if: false` never runs the gate at
@@ -75,7 +120,7 @@ const NEUTRALISING = /^\s*continue-on-error\s*:\s*(.+?)\s*$/;
  * one was measured as the cheaper hole before it was closed: with `if: false`
  * planted the checker reported nothing.
  */
-const GUARDING_IF = /^\s*if\s*:\s*(.+?)\s*$/;
+const GUARDING_IF_KEY = 'if';
 
 /**
  * Ways the command swallows its own exit code, with no YAML key to find:
@@ -211,15 +256,15 @@ function neutralisers(source: string): string[] {
     return [`the job header could not be bounded at the \`steps:\` key of job ${at.job}`];
   }
   for (const [i, line] of at.step.entries()) {
-    const m = NEUTRALISING.exec(line);
-    if (m && m[1] !== 'false') found.push(`step: ${line.trim()}`);
-    if (GUARDING_IF.test(line)) found.push(`step: ${line.trim()}`);
+    const key = keyAt(at.step, i);
+    if (key?.name === 'continue-on-error' && neutralisingValue(key.value)) found.push(`step: ${line.trim()}`);
+    if (key?.name === GUARDING_IF_KEY) found.push(`step: ${line.trim()}`);
     if (RUN_KEY.test(line) && SWALLOWED_EXIT.test(runBlock(at.step, i))) found.push(`step: ${line.trim()}`);
   }
-  for (const line of at.jobHeader) {
-    const m = NEUTRALISING.exec(line);
-    if (m && m[1] !== 'false') found.push(`job ${at.job}: ${line.trim()}`);
-    if (GUARDING_IF.test(line)) found.push(`job ${at.job}: ${line.trim()}`);
+  for (const [i, line] of at.jobHeader.entries()) {
+    const key = keyAt(at.jobHeader, i);
+    if (key?.name === 'continue-on-error' && neutralisingValue(key.value)) found.push(`job ${at.job}: ${line.trim()}`);
+    if (key?.name === GUARDING_IF_KEY) found.push(`job ${at.job}: ${line.trim()}`);
   }
   return found;
 }
@@ -327,6 +372,37 @@ describe('CG-2 — the billing database gate is blocking', () => {
     const reported = neutralisers(planted);
     expect(reported.length, 'the checker missed a swallowed exit code in the gate command').toBeGreaterThan(0);
     expect(reported.join(' | ')).toContain('step:');
+  });
+
+  it('NEGATIVE CONTROL: a key whose value sits on the NEXT line is reported too (step)', () => {
+    // MEASURED red on 2026-11-11 in the third narrow review, carded as
+    // `P5_CG2_MULTILINE_KEY_VALUE_AR` and deferred by the owner: both key
+    // regexes required a value on the key's OWN line, so this spelling —
+    // valid YAML, and evaluated by GitHub exactly like `if: false` — was
+    // read as a clean file. A false GREEN on a law that claims an absence.
+    const planted = CI.replace(`        run: ${GATE_RUN}`, ['        if:', '          false', `        run: ${GATE_RUN}`].join('\n'));
+    expect(planted, 'the folded `if:` plant did not apply, so this control proves nothing').not.toBe(CI);
+    const reported = neutralisers(planted);
+    expect(reported.length, 'the checker missed an `if:` whose value is on the next line').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('step:');
+  });
+
+  it('NEGATIVE CONTROL: a folded `continue-on-error` on the JOB is reported too', () => {
+    // The same spelling at job level, where `jobHeader` is read line by line.
+    const planted = CI.replace(/^( {2}backend:\n)/m, '$1    continue-on-error:\n      true\n');
+    expect(planted, 'the folded job-level plant did not apply').not.toBe(CI);
+    const reported = neutralisers(planted);
+    expect(reported.length, 'the checker missed a folded job-level continue-on-error').toBeGreaterThan(0);
+    expect(reported.join(' | ')).toContain('job backend:');
+  });
+
+  it('NO FALSE RED: a folded `continue-on-error: false` is still not a neutraliser', () => {
+    // The value `false` is the one value that does NOT neutralise, and the
+    // folded reader must keep that distinction or it turns a correct
+    // workflow red (the conservative direction is still a defect here).
+    const planted = CI.replace(`        run: ${GATE_RUN}`, ['        continue-on-error:', '          false', `        run: ${GATE_RUN}`].join('\n'));
+    expect(planted, 'the folded `false` plant did not apply').not.toBe(CI);
+    expect(neutralisers(planted), 'a folded `continue-on-error: false` was reported as neutralising').toEqual([]);
   });
 
   it('the script the gate names still exists and still hands the runner the suite directory', () => {
