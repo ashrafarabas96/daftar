@@ -156,6 +156,15 @@ beforeAll(async () => {
   // `ACCOUNTS_USED` stays 21, `ENTRIES` and the line count are untouched, and
   // the two accounts this measurement is ABOUT — dense cash 1000 and sparse
   // bank 1010 — are not among the two that moved.
+  //
+  // ONE THING DOES MOVE, and it is named here rather than left for a reader
+  // to find: the guarded accounts stay in the chart, they just carry no
+  // lines, so the business now holds 23 accounts and the whole-business trial
+  // balance below groups 23 rows instead of 21 — two of them with NULL sums.
+  // That read's claim is `rows > 0` and the property asserted about it is
+  // that nobody added an index for a query that reads everything, so neither
+  // moves; but "nothing else changes" is true of the SEEDED SET, not of the
+  // `accounts` relation that read scans. Measured, not assumed.
   await ownerPool().query(
     `INSERT INTO accounts (tenant_id, business_id, code, name, type)
      VALUES ($1, $2, '1900', 'Perf ordinary asset', 'asset'),

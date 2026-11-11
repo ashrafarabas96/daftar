@@ -2728,7 +2728,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 243,
+      "line": 252,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze"],
       "kind": "mention",
@@ -2736,7 +2736,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 312,
+      "line": 321,
       "phase": "cross-phase",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2745,7 +2745,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 313,
+      "line": 322,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
@@ -2754,7 +2754,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 323,
+      "line": 332,
       "phase": "cross-phase",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2763,25 +2763,25 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 324,
+      "line": 333,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
       "via": ["plan", "text"],
       "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
-    },
-    {
-      "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 344,
-      "phase": "cross-phase",
-      "signals": ["seq-scan"],
-      "kind": "plan-gate",
-      "via": ["plan", "scans"],
-      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
       "line": 353,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 362,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
