@@ -313,27 +313,40 @@ const EnvSchema = z
     // would be refused for the incidental reason that the DEFAULT is loopback,
     // with a message about TLS, and the operator's actual mistake (they never
     // set the variable) would be left to be inferred. So that case is named.
-    // Only a process that SERVES HTTP has a browser allowlist. `worker` and
-    // `reconciler` create an application context with no HTTP server
+    // Only a process that SERVES HTTP has a browser allowlist: the worker and
+    // the reconciler create an application context with no HTTP server
     // (`main.ts`), so `enableCors` is never called for them and demanding
     // origins of them would be a requirement with no subject — the same
-    // reasoning the reconciler and worker blocks above already apply to their
-    // own credentials.
-    if (mode === 'worker' || mode === 'reconciler') {
-      // Nothing to require. The all-environment checks above still apply: a
-      // malformed value is malformed wherever it is set.
-    } else if (c.CORS_ORIGINS === DEV_CORS_ORIGINS) {
-      fail(
-        'CORS_ORIGINS',
-        `production requires an explicit browser allowlist: CORS_ORIGINS is still the development default ${JSON.stringify(DEV_CORS_ORIGINS)} (comma-separated https origins, e.g. https://app.example.com)`,
-      );
-    } else {
-      for (const origin of parseCorsOrigins(c.CORS_ORIGINS)) {
-        // Already reported by the all-environment pass above; `new URL` inside
-        // the production check would throw on it rather than explain it.
-        if (corsOriginProblem(origin) !== null) continue;
-        const problem = productionCorsOriginProblem(origin);
-        if (problem !== null) fail('CORS_ORIGINS', problem);
+    // reasoning the blocks above already apply to those modes' credentials.
+    //
+    // The condition NAMES THE HTTP MODES rather than excluding the other two,
+    // and that is not a stylistic choice. `scripts/phase2-s8-gate.ts` holds a
+    // structural law (§8, `s8-process`) that refuses this file if the text
+    // `mode === 'reconciler'` appears anywhere AFTER the production gate
+    // above: it is how that law detects a reconciler secret refusal that has
+    // been made production-only. Written the other way, this CORS requirement
+    // — which refuses no secret and says nothing about the reconciler — turns
+    // that law red. Measured: `npm run gate:phase2:s8` EXIT 1 with
+    // `FAIL [s8-process] config.ts refuses the other processes' secrets only
+    // in production`, and EXIT 0 as written here. The positive form is also
+    // the more honest one: the subject of the rule is a process that serves
+    // browsers, so the rule should say so.
+    const servesBrowsers = mode === 'merchant-api' || mode === 'platform-api' || mode === 'all';
+    if (servesBrowsers) {
+      if (c.CORS_ORIGINS === DEV_CORS_ORIGINS) {
+        fail(
+          'CORS_ORIGINS',
+          `production requires an explicit browser allowlist: CORS_ORIGINS is still the development default ${JSON.stringify(DEV_CORS_ORIGINS)} (comma-separated https origins, e.g. https://app.example.com)`,
+        );
+      } else {
+        for (const origin of parseCorsOrigins(c.CORS_ORIGINS)) {
+          // Already reported by the all-environment pass above; `new URL`
+          // inside the production check would throw on it rather than explain
+          // it.
+          if (corsOriginProblem(origin) !== null) continue;
+          const problem = productionCorsOriginProblem(origin);
+          if (problem !== null) fail('CORS_ORIGINS', problem);
+        }
       }
     }
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
