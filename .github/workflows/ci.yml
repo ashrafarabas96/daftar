@@ -1688,6 +1688,7 @@ jobs:
           node scripts/p7-dr84-link-graph-gate.ts \
             --record=docs/decisions/2026-11-04-dr84-capture-digest-gate.md \
             --report="$RUNNER_TEMP/app-deps.txt" \
+            --settings=apps/android/settings.gradle.kts \
             --expect=debugRuntimeClasspath \
             --expect=androidx.core:core-ktx
       # THE CONTROLS, ONE PER SPELLING (RULE-27). A gate whose refusal has
@@ -1774,12 +1775,29 @@ jobs:
               tail -40 "$out" || true
               exit 1
             fi
-            if node "$GATE" --record="$RECORD" --report="$out" --expect=debugRuntimeClasspath; then
+            # The code must be 1 (REFUSED) and nothing else. `if ! node ...` would
+            # also accept 2 (UNUSABLE), which is the code for "the probe did not
+            # work" -- so a plant whose report never resolved would have printed
+            # `control ok` and proved nothing. An independent review named this on
+            # 576b32fb: the control asserted non-zero, while the claim it is quoted
+            # for is refusal (RULE-27).
+            set +e
+            node "$GATE" --record="$RECORD" --report="$out" \
+              --settings="$W/settings.gradle.kts" --expect=debugRuntimeClasspath
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
               echo "CONTROL FAILED: the gate PASSED a graph that carries the kernel"
               echo "                through the '$form' spelling."
               exit 1
             fi
-            echo "control ok: the gate refused the planted '$form'"
+            if [ "$code" -ne 1 ]; then
+              echo "CONTROL INCONCLUSIVE: the gate exited $code, not 1 (REFUSED), on"
+              echo "  the planted '$form'. A report the gate could not read does not"
+              echo "  demonstrate refusal, so this is red and not a passing control."
+              exit 1
+            fi
+            echo "control ok: the gate refused the planted '$form' with exit 1"
           }
           for form in direct pathnamed multiline typesafe transitive; do
             plant "$form"

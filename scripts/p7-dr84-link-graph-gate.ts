@@ -154,6 +154,47 @@ export function projectPathsSeen(reportText: string): string[] {
   return [...seen].sort();
 }
 
+/**
+ * Every project path this build DECLARES, read from `settings.gradle.kts`.
+ *
+ * WHY THE GATE NEEDS THIS. An independent review defeated the first version of
+ * this gate on 576b32fb without touching a single line of `app/build.gradle.kts`:
+ * move the module instead of the dependency --
+ *
+ *   include(":modules:offline-kernel")
+ *   project(":modules:offline-kernel").projectDir = file("offline-kernel")
+ *
+ * -- and Gradle prints `project :modules:offline-kernel`, which is not the path
+ * this gate refuses. Every file stays where it is, the `@Test` count step stays
+ * green (it reads the DIRECTORY, not the project path), and both the graph gate
+ * and the older text gate go quiet at once. The silence would have read as a
+ * pass, which is the failure this project keeps paying for (RULE-3, RULE-11).
+ *
+ * So the gated path is no longer trusted to exist: it must be a path the build
+ * includes, and if it is not, the report is UNUSABLE rather than clean. Renaming
+ * the module now turns the gate RED instead of switching it off.
+ *
+ * Gradle accepts `include(":a")`, `include(":a", ":b")`, single quotes, and the
+ * parenthesis-free Groovy-ish form, so all of those are read; a commented-out
+ * line is not a declaration and is dropped first.
+ */
+export function includedProjectPaths(settingsText: string): string[] {
+  const live = settingsText
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .split('\n')
+    .map((l) => l.replace(/\/\/.*$/, ''))
+    .join('\n');
+  const seen = new Set<string>();
+  for (const m of live.matchAll(/\binclude\s*\(?([^)\n]*)\)?/g)) {
+    const args = m[1] ?? '';
+    for (const q of args.matchAll(/["'](:[A-Za-z0-9_.:-]+)["']/g)) {
+      const path = q[1];
+      if (path !== undefined) seen.add(path);
+    }
+  }
+  return [...seen].sort();
+}
+
 export type GateResult = {
   code: 0 | 1 | 2;
   status: GateStatus;
@@ -166,14 +207,38 @@ export type GateResult = {
  * The whole verdict as one pure function, so the same words judge the real
  * report and every planted control.
  */
-export function gate(recordText: string, reportText: string, options: { subject?: string; expect?: readonly string[]; gatedModule?: string } = {}): GateResult {
+export function gate(
+  recordText: string,
+  reportText: string,
+  options: { subject?: string; expect?: readonly string[]; gatedModule?: string; settingsText?: string } = {},
+): GateResult {
   const status = statusOf(recordText);
+  const gatedModule = options.gatedModule ?? GATED_MODULE;
   const verdict = inspectReport(reportText, options);
   if (!verdict.usable) {
     return { code: 2, status, lines: [], paths: [], message: `UNUSABLE REPORT — ${verdict.reason}` };
   }
-  const lines = offendingGraphLines(reportText, options.gatedModule ?? GATED_MODULE);
+  const lines = offendingGraphLines(reportText, gatedModule);
   const paths = projectPathsSeen(reportText);
+  // The subject must exist before its absence means anything, and this check is
+  // ahead of the CLOSED branch on purpose: a renamed module is an UNREAD probe,
+  // and `CLOSED` lifts a judgement, not the duty to have made one.
+  if (options.settingsText !== undefined) {
+    const declared = includedProjectPaths(options.settingsText);
+    if (!declared.includes(gatedModule)) {
+      return {
+        code: 2,
+        status,
+        lines,
+        paths,
+        message:
+          `UNUSABLE REPORT — the gated module ${gatedModule} is not a path this build declares. ` +
+          `settings includes: ${declared.length === 0 ? 'nothing' : declared.join(' ')}; ` +
+          `the graph names: ${paths.length === 0 ? 'no project' : paths.join(' ')}. ` +
+          `A renamed or moved module would make this gate silent, and silence is not absence.`,
+      };
+    }
+  }
   const read = `${verdict.configurations} configuration(s), ${verdict.dependencyLines} dependency line(s), project dependencies seen: ${paths.length === 0 ? 'none' : paths.join(' ')}`;
   if (status === 'CLOSED') {
     return {
@@ -201,7 +266,7 @@ function valuesOf(argv: readonly string[], name: string): string[] {
 }
 
 export function main(argv: readonly string[]): number {
-  const known = ['record', 'report', 'expect', 'subject', 'module'];
+  const known = ['record', 'report', 'expect', 'subject', 'module', 'settings'];
   const unknown = argv.filter((a) => !known.some((k) => a.startsWith(`--${k}=`)));
   if (unknown.length > 0) {
     console.error(`DR84-LINK-GRAPH: UNUSABLE — unknown option(s) ${unknown.join(' ')}`);
@@ -228,6 +293,16 @@ export function main(argv: readonly string[]): number {
     console.error(`DR84-LINK-GRAPH: UNUSABLE — cannot read the record: ${(e as Error).message}`);
     return 2;
   }
+  const settingsPath = valuesOf(argv, 'settings')[0];
+  let settingsText: string | undefined;
+  if (settingsPath !== undefined) {
+    try {
+      settingsText = readFileSync(settingsPath, 'utf8');
+    } catch (e) {
+      console.error(`DR84-LINK-GRAPH: UNUSABLE — cannot read the settings file: ${(e as Error).message}`);
+      return 2;
+    }
+  }
   let worst: 0 | 1 | 2 = 0;
   for (const path of reports) {
     let reportText: string;
@@ -238,7 +313,7 @@ export function main(argv: readonly string[]): number {
       worst = 2;
       continue;
     }
-    const r = gate(recordText, reportText, { subject, expect, gatedModule });
+    const r = gate(recordText, reportText, { subject, expect, gatedModule, settingsText });
     const head = r.code === 0 ? 'PASS' : r.code === 1 ? 'REFUSED' : 'UNUSABLE';
     console.log(`DR84-LINK-GRAPH [${head}] record=${recordPath} status=${r.status} report=${path}`);
     console.log(`  ${r.message}`);

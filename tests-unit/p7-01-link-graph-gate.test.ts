@@ -3,7 +3,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { GATED_MODULE, gate, inspectReport, main, offendingGraphLines, projectPathsSeen, statusOf } from '../scripts/p7-dr84-link-graph-gate';
+import {
+  GATED_MODULE,
+  gate,
+  includedProjectPaths,
+  inspectReport,
+  main,
+  offendingGraphLines,
+  projectPathsSeen,
+  statusOf,
+} from '../scripts/p7-dr84-link-graph-gate';
 
 /**
  * The parser half of DR-84's strengthened link gate.
@@ -147,6 +156,75 @@ describe('DR-84 link graph gate: a probe that did not work is never a pass', () 
     });
     expect(r.code).toBe(2);
     expect(r.message).toContain('expected marker');
+  });
+});
+
+describe('DR-84 link graph gate: the gated PATH is the one the build declares', () => {
+  /**
+   * The bypass an independent review measured on 576b32fb, and the reason this
+   * block exists. The gate refuses the module path `:offline-kernel`. Nothing
+   * in the tree pinned that path, so moving the module --
+   *
+   *   include(":modules:offline-kernel")
+   *   project(":modules:offline-kernel").projectDir = file("offline-kernel")
+   *
+   * -- keeps every file where it is, keeps the @Test count step green (it reads
+   * the DIRECTORY `offline-kernel/src/test`, not the project path), and turns
+   * BOTH gates off at once: Gradle then prints `project :modules:offline-kernel`,
+   * which is not the four words either gate looks for. The old text gate misses
+   * it too, since its pattern spells `project(":offline-kernel")`.
+   *
+   * A gate that goes quiet when its subject is renamed is worse than no gate,
+   * because the silence reads as a pass (RULE-3: a claim of absence needs a
+   * positive control). So the settings file is now that control: the gated path
+   * must be a path this build actually includes, or the report is UNUSABLE.
+   */
+  const SETTINGS = ['rootProject.name = "daftar"', 'include(":app")', 'include(":offline-kernel")'].join('\n');
+
+  it('the declared project paths are read from settings, in every spelling Gradle accepts', () => {
+    expect(includedProjectPaths(SETTINGS)).toEqual([':app', ':offline-kernel']);
+    expect(includedProjectPaths('include(":a", ":b")')).toEqual([':a', ':b']);
+    expect(includedProjectPaths("include(':a')\ninclude ':b'")).toEqual([':a', ':b']);
+    expect(includedProjectPaths('// include(":commented")\ninclude(":real")')).toEqual([':real']);
+  });
+
+  it('the gate still PASSES when the build declares the gated path and the graph is clean', () => {
+    const r = gate(OPEN, report('+--- junit:junit:4.13.2'), { expect: EXPECTED, settingsText: SETTINGS });
+    expect(r.code).toBe(0);
+  });
+
+  it('a RENAMED module makes the report UNUSABLE, not a PASS — the measured bypass, closed', () => {
+    const moved = ['rootProject.name = "daftar"', 'include(":app")', 'include(":modules:offline-kernel")'].join('\n');
+    const r = gate(OPEN, report('+--- project :modules:offline-kernel'), { expect: EXPECTED, settingsText: moved });
+    expect(r.code).toBe(2);
+    expect(r.message).toContain(':offline-kernel');
+    expect(r.message).toContain('settings');
+    // And the graph's own words are still reported, so the reader sees WHERE it went.
+    expect(r.paths).toContain(':modules:offline-kernel');
+  });
+
+  it('a settings file that includes nothing at all is UNUSABLE — an empty probe is not a zero', () => {
+    expect(gate(OPEN, report('+--- junit:junit:4.13.2'), { settingsText: 'rootProject.name = "daftar"' }).code).toBe(2);
+  });
+
+  it('CLOSED does not lift this one: a renamed subject is an unread probe, not a lifted law', () => {
+    const moved = 'include(":app")\ninclude(":modules:offline-kernel")';
+    expect(gate(CLOSED, report('+--- project :modules:offline-kernel'), { settingsText: moved }).code).toBe(2);
+  });
+
+  it('the CLI reads the settings file, and a renamed module exits 2', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dr84-settings-'));
+    const rec = join(dir, 'record.md');
+    writeFileSync(rec, OPEN, 'utf8');
+    const rep = join(dir, 'clean.txt');
+    writeFileSync(rep, report('+--- junit:junit:4.13.2'), 'utf8');
+    const ok = join(dir, 'settings-ok.kts');
+    writeFileSync(ok, SETTINGS, 'utf8');
+    const moved = join(dir, 'settings-moved.kts');
+    writeFileSync(moved, 'include(":app")\ninclude(":modules:offline-kernel")', 'utf8');
+    expect(main([`--record=${rec}`, `--report=${rep}`, `--settings=${ok}`])).toBe(0);
+    expect(main([`--record=${rec}`, `--report=${rep}`, `--settings=${moved}`])).toBe(2);
+    expect(main([`--record=${rec}`, `--report=${rep}`, `--settings=${join(dir, 'absent.kts')}`])).toBe(2);
   });
 });
 
