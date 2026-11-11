@@ -119,6 +119,24 @@ export function uncoveredMutatingHandlers(rawSource: string): string[] {
     .map((r) => `${r.httpMethod} ${r.route} (${r.handler})`);
 }
 
+/**
+ * The mutating handlers with NO body-layer check. The live case asserts this
+ * is empty; it is a named function of the source so a planted controller can
+ * go through the same checker.
+ */
+export function mutatingHandlersWithoutBodyLayer(rawSource: string): string[] {
+  return readHandlers(rawSource)
+    .filter((r) => r.mutating && !r.layers.includes('body'))
+    .map((r) => `${r.httpMethod} ${r.route} (${r.handler})`);
+}
+
+/** The mutating handlers covered at the DECORATOR layer (the live case asserts none). */
+export function mutatingHandlersAtDecoratorLayer(rawSource: string): string[] {
+  return readHandlers(rawSource)
+    .filter((r) => r.mutating && r.layers.includes('decorator'))
+    .map((r) => `${r.httpMethod} ${r.route} (${r.handler})`);
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // The law's own fixtures — both detectors must be live, and the law must red
 // ───────────────────────────────────────────────────────────────────────────
@@ -177,21 +195,82 @@ export class C {
 }
 `;
 
+const FIXTURE_NEAR_MISS_CHECK = `
+@Controller('/v1/x')
+export class C {
+  @Post('thing')
+  async makeThing(@Body() body: unknown): Promise<D> {
+    await this.admin.requireSomethingElse(body);
+    return this.svc.makeThing();
+  }
+}
+`;
+
+/** A GET with no check, a POST with one, and a DELETE and a PUT and a PATCH with none. */
+const FIXTURE_MIXED = `
+@Controller('/v1/x')
+export class C {
+  @Get('thing')
+  async readThing(): Promise<D> {
+    return this.svc.readThing();
+  }
+
+  @Post('thing')
+  async makeThing(@Principal() p: P): Promise<D> {
+    await this.admin.require(p.userId, 'thing.manage');
+    return this.svc.makeThing();
+  }
+
+  @Delete('thing/:id')
+  async dropThing(): Promise<D> {
+    return this.svc.dropThing();
+  }
+
+  @Put('thing/:id')
+  async replaceThing(): Promise<D> {
+    return this.svc.replaceThing();
+  }
+
+  @Patch('thing/:id')
+  async editThing(): Promise<D> {
+    return this.svc.editThing();
+  }
+}
+`;
+
 describe('the law, on fixtures', () => {
   it('sees the BODY layer', () => {
     const [record] = readHandlers(FIXTURE_BODY_LAYER);
     expect(record?.layers).toEqual(['body']);
     expect(uncoveredMutatingHandlers(FIXTURE_BODY_LAYER)).toEqual([]);
+    // NO FALSE RED, through the same checkers the live cases below use: a
+    // body-layer handler is not reported as missing its body layer or as
+    // sitting at the decorator layer, and a GET with no check is not a
+    // mutating handler at all.
+    expect(mutatingHandlersWithoutBodyLayer(FIXTURE_BODY_LAYER)).toEqual([]);
+    expect(mutatingHandlersAtDecoratorLayer(FIXTURE_BODY_LAYER)).toEqual([]);
+    expect(uncoveredMutatingHandlers(FIXTURE_MIXED)).not.toContain('Get thing (readThing)');
+    expect(uncoveredMutatingHandlers(FIXTURE_MIXED)).not.toContain('Post thing (makeThing)');
   });
 
   it('sees the DECORATOR layer, so that detector is not a dead constant', () => {
     const [record] = readHandlers(FIXTURE_DECORATOR_LAYER);
     expect(record?.layers).toEqual(['decorator']);
     expect(uncoveredMutatingHandlers(FIXTURE_DECORATOR_LAYER)).toEqual([]);
+    // NEGATIVE CONTROLS for the two live assertions about layers: a handler
+    // covered only at the decorator layer IS reported as missing a body-layer
+    // check and IS reported at the decorator layer.
+    expect(mutatingHandlersWithoutBodyLayer(FIXTURE_DECORATOR_LAYER)).toEqual(['Post thing (makeThing)']);
+    expect(mutatingHandlersAtDecoratorLayer(FIXTURE_DECORATOR_LAYER)).toEqual(['Post thing (makeThing)']);
   });
 
   it('REDS on a mutating handler with no check, and names it', () => {
     expect(uncoveredMutatingHandlers(FIXTURE_UNCHECKED)).toEqual(['Post thing (makeThing)']);
+    expect(mutatingHandlersWithoutBodyLayer(FIXTURE_UNCHECKED)).toEqual(['Post thing (makeThing)']);
+    // Every mutating verb is read, not only POST, and the report names exactly
+    // the unchecked ones in source order: the GET and the checked POST are not
+    // in it.
+    expect(uncoveredMutatingHandlers(FIXTURE_MIXED)).toEqual(['Delete thing/:id (dropThing)', 'Put thing/:id (replaceThing)', 'Patch thing/:id (editThing)']);
   });
 
   it('is NOT satisfied by a commented-out check', () => {
@@ -200,6 +279,10 @@ describe('the law, on fixtures', () => {
 
   it('is NOT satisfied by a check that only appears inside a string', () => {
     expect(uncoveredMutatingHandlers(FIXTURE_CHECK_IN_A_STRING)).toEqual(['Post thing (makeThing)']);
+    // Nor by a call that merely starts with the checker name:
+    // `.requireSomethingElse(` is not `.require(`, the pattern is anchored on
+    // the call's parenthesis, and this plant is what keeps it so.
+    expect(uncoveredMutatingHandlers(FIXTURE_NEAR_MISS_CHECK)).toEqual(['Post thing (makeThing)']);
   });
 });
 
@@ -240,7 +323,7 @@ describe('the law, on the live platform console', () => {
 
   it('finds EVERY mutating handler covered, and all of them at the body layer', () => {
     expect(uncoveredMutatingHandlers(SOURCE)).toEqual([]);
-    expect(mutating.every((h) => h.layers.includes('body'))).toBe(true);
+    expect(mutatingHandlersWithoutBodyLayer(SOURCE)).toEqual([]);
   });
 
   it('records that NOT ONE of them is covered at the decorator layer', () => {
@@ -248,6 +331,6 @@ describe('the law, on the live platform console', () => {
     // decorator-level law would report eleven false positives here. It is a
     // LEAD for the tree's owner, not a defect — the file's own header says
     // these routes authorize on platform role by design.
-    expect(mutating.filter((h) => h.layers.includes('decorator'))).toEqual([]);
+    expect(mutatingHandlersAtDecoratorLayer(SOURCE)).toEqual([]);
   });
 });
