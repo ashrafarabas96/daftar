@@ -1356,9 +1356,9 @@ async function buildFixture(): Promise<void> {
         SHORT_PERCENTILE_ITERATIONS,
         () => pace(route),
         // DR-98: this is a BUDGET series, so it carries the in-database verdict
-        // series as well as the wall clock. The median and the two RLS halves
-        // below are not budgets — they are the denominators of host-independent
-        // ratios — and stay on the wall clock on both sides of their ratio.
+        // series as well as the wall clock. The two RLS halves below are not
+        // budgets — their two sides are PRINCIPALS, not volumes — and stay on
+        // the wall clock on both sides of their ratio.
         'in-database',
       ),
     );
@@ -1369,6 +1369,13 @@ async function buildFixture(): Promise<void> {
     () => read200(READS.receivable(medianCustomerId)),
     SHORT_PERCENTILE_ITERATIONS,
     () => pace(ROUTE.receivable),
+    // STAGE 1 OF OPTION A (owner decision 2026-11-11): the DENOMINATOR of
+    // `P4-AL-72`'s balance ratio now carries the in-database series as well,
+    // so the in-database quotient of the two arms can be MEASURED and PRINTED.
+    // It is measured, not judged: the verdict below is still the wall-clock
+    // quotient against the same constant, and the owner sets an in-database
+    // constant only after the distribution of at least ten runs is read.
+    'in-database',
   );
   // The RLS cost's two halves, like against like: the SAME captured
   // statements on the SAME rows, as `daftar_app` through the product's own

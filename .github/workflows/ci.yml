@@ -1113,6 +1113,23 @@ jobs:
             }
           done
           grep -h 'P4-S4-MONITOR-' "$log" || true
+          # STAGE 1 OF OPTION A (owner decision 2026-11-11). The DENOMINATOR of
+          # `P4-AL-72`'s balance ratio is now measured in-database as well, and
+          # this knob plants its delay at the head of EVERY measured window —
+          # the median read included. So this run is also the positive control
+          # that the newly printed denominator RESPONDS to database time. Without
+          # it, the figure the owner is asked to anchor a constant on would be an
+          # unarmed number (RULE-27, DR-55), and this step is where the arming
+          # already happens: no extra suite execution is added for it.
+          mon=$(grep -o 'P4-S4-RATIO-MONITOR-FATTAIL .*' "$log" | tail -1)
+          test -n "$mon" || {
+            tail -160 "$log"
+            echo "the in-database-slowed run printed no P4-S4-RATIO-MONITOR-FATTAIL line, so nothing in this log says whether the ratio's denominator is measured at all"; exit 1
+          }
+          echo "$mon"
+          med=$(printf '%s\n' "$mon" | grep -o 'medianInDbP95=[0-9.]*' | cut -d= -f2)
+          test -n "$med" || { echo "the monitor line carries no medianInDbP95 field, so no number can be read from it"; exit 1; }
+          awk -v v="$med" 'BEGIN { if (v + 0 < 200) { printf "a 200 ms pg_sleep planted in EVERY in-database window left the ratio denominator at %s ms in-database — then that figure does not listen to database time and no constant may be anchored on it\n", v; exit 1 } }'
         env:
           PG_PORT: '5432'
           P4_S4_IN_DB_DELAY_MS: '200'
@@ -1170,6 +1187,21 @@ jobs:
           ' "$RUNNER_TEMP/monitor.txt" || {
             echo "the client-side control did not prove what it claims: either the delay never reached the wall clock or an in-database series missed its ceiling"; exit 1
           }
+          # STAGE 1 OF OPTION A (owner decision 2026-11-11), the other half of
+          # the same arming: a delay OUTSIDE the database must NOT enter the
+          # newly printed denominator. 200 ms is the planted amount, and the
+          # denominator's whole WALL p95 has been single-digit milliseconds in
+          # every run measured so far, so a figure at or above 200 ms could only
+          # have come from the client-side delay.
+          mon=$(grep -o 'P4-S4-RATIO-MONITOR-FATTAIL .*' "$log" | tail -1)
+          test -n "$mon" || {
+            tail -160 "$log"
+            echo "the client-side-delayed run printed no P4-S4-RATIO-MONITOR-FATTAIL line, so the absence claim below would be unmeasured"; exit 1
+          }
+          echo "$mon"
+          med=$(printf '%s\n' "$mon" | grep -o 'medianInDbP95=[0-9.]*' | cut -d= -f2)
+          test -n "$med" || { echo "the monitor line carries no medianInDbP95 field, so no number can be read from it"; exit 1; }
+          awk -v v="$med" 'BEGIN { if (v + 0 >= 200) { printf "a 200 ms CLIENT-SIDE delay pushed the ratio denominator to %s ms in-database — then that figure listens to something outside PostgreSQL\n", v; exit 1 } }'
         env:
           PG_PORT: '5432'
           P4_S4_CLIENT_DELAY_MS: '200'
