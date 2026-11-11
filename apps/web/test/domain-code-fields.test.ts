@@ -35,7 +35,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { ApiError } from '../src/lib/client';
 import { FALLBACK_ERROR_KEY, refusalKey } from '../src/lib/phase3-errors';
 
@@ -84,7 +84,21 @@ function attachedCodeFields(): Map<string, string[]> {
           if (!DOMAIN_CODE_VALUE.test(match[2] ?? '')) continue;
           const field = match[1] ?? '';
           if (!found.has(field)) found.set(field, []);
-          found.get(field)?.push(`${file.slice(REPO.length + 1)}:${index + 1}`);
+          // Repository-relative and `/`-separated, the way `od03.test.ts:84`
+          // spells the same kind of path. `refusalModules` builds its paths with
+          // `join`, so on Windows this slice yielded
+          // `apps\api\src\modules\selling\selling-errors.ts`, and the assertion
+          // below — which names the file with forward slashes, as every path in
+          // this repository is written — failed on the SEPARATOR alone while the
+          // derivation it tests was perfectly correct. A test that is red on one
+          // platform and green on another, for a reason that is not its subject,
+          // is a test nobody can read as a measurement.
+          found.get(field)?.push(
+            `${file
+              .slice(REPO.length + 1)
+              .split(sep)
+              .join('/')}:${index + 1}`,
+          );
         }
       });
   }
