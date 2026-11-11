@@ -154,7 +154,7 @@ import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
-import { readerOfRecordCall, stripReaderOfRecordCalls } from './reader-of-record-calls';
+import { READER_STRIP_CASES, readerOfRecordCall, stripReaderOfRecordCalls } from './reader-of-record-calls';
 import {
   FAT_TAIL,
   FOREIGN_CURRENCY,
@@ -1688,6 +1688,27 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
       }
     }
     console.log(`\nREADERS OF RECORD — P4-D\n${JSON.stringify(byRead, null, 1)}\n`);
+  });
+
+  /**
+   * The GATE above asks the law of the statements this cluster's reads HAPPEN
+   * to issue; this arm asks it of the CLASSES the removal must refuse, which no
+   * read has to contain for the removal to be wrong. It is the same table the
+   * database-free suite reads (`READER_STRIP_CASES`), asserted here because CI
+   * names every performance suite by its own path and globs none, so the
+   * database-free file alone would be NOT_RUN on the runner — and a law whose
+   * teeth are measured only on a developer's machine is a law with no runner's
+   * verdict. No fixture: the removal is a pure function of text and names.
+   */
+  it('GATE: the reader-of-record removal refuses a second copy of the arithmetic in every class, and refuses nothing else', () => {
+    for (const c of READER_STRIP_CASES) {
+      const remainder = stripReaderOfRecordCalls(c.text, c.names);
+      expect(remainder, `${c.what}\nthe removal left something other than the pinned remainder:\n${c.text}`).toBe(c.remainder);
+      expect(
+        /\bsum\s*\(/i.test(remainder),
+        `${c.what}\nstatement: ${c.text}\nremainder: ${JSON.stringify(remainder)}\nP4-AL-07 tightens and is never relaxed.`,
+      ).toBe(c.mustRefuse);
+    }
   });
 
   /**

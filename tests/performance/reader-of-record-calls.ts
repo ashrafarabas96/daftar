@@ -82,3 +82,74 @@ export function stripReaderOfRecordCalls(text: string, names: readonly string[])
   }
   return out;
 }
+
+/** One class of statement the removal must refuse or leave alone. */
+export interface ReaderStripCase {
+  /** What the class is, in the law's own terms. */
+  readonly what: string;
+  readonly text: string;
+  readonly names: readonly string[];
+  /** `true`: a `sum(` must survive the removal. `false`: it must not. */
+  readonly mustRefuse: boolean;
+  /** The exact remainder, so a pass is a measurement and not a coincidence. */
+  readonly remainder: string;
+}
+
+/**
+ * The classes themselves, in one table, because the two places that read them
+ * are a database-free suite and the law's own suite — and a class table that
+ * lives in only one of them is a class table only one runner ever reads.
+ *
+ * MEASURED, and the reason this table exists: this repository's CI names every
+ * performance suite by its own file path and globs none of them (`ci.yml` says
+ * so in its own comment at the open-page equivalence step: a suite nothing runs
+ * proves nothing). A new file under `tests/performance/` is therefore NOT_RUN
+ * on the runner until a step names it, and `ci.yml` belongs to another lane. So
+ * the classes are asserted from here by `receivables-s4-budgets.test.ts` too,
+ * which the runner does execute, and the law's teeth are measured on the runner
+ * on the same head as the law.
+ */
+export const READER_STRIP_CASES: readonly ReaderStripCase[] = [
+  {
+    what: 'a bare sum in the read itself',
+    text: 'SELECT sum(amount) FROM invoices WHERE customer_id = $1',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: 'SELECT sum(amount) FROM invoices WHERE customer_id = $1',
+  },
+  {
+    what: "a sum inside a reader of record's argument — the class the old pattern allowed",
+    text: 'SELECT invoice_outstanding(sum(x), $2)',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: 'SELECT sum(x), $2',
+  },
+  {
+    what: 'a reader of record call that sums nothing itself',
+    text: 'SELECT * FROM customer_ar_outstanding($1, $2)',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: false,
+    remainder: 'SELECT * FROM $1, $2',
+  },
+  {
+    what: 'two readers of record nested, with no sum of their own',
+    text: 'SELECT invoice_outstanding(customer_ar_outstanding($1, $2), $3)',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: false,
+    remainder: 'SELECT $1, $2, $3',
+  },
+  {
+    what: "a sum applied TO a reader of record's result",
+    text: 'SELECT sum(invoice_outstanding($1)) FROM customers WHERE id = $2',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: 'SELECT sum($1) FROM customers WHERE id = $2',
+  },
+  {
+    what: "CONTROL: an unlisted function keeps its call, so the removal's subject is the NAMES and not the shape",
+    text: 'SELECT some_other_function(sum(x), $2)',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: 'SELECT some_other_function(sum(x), $2)',
+  },
+];
