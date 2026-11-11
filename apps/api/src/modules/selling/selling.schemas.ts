@@ -154,6 +154,29 @@ export type CustomerCreateRequest = z.infer<typeof CustomerCreateSchema>;
 export type CustomerUpdateRequest = z.infer<typeof CustomerUpdateSchema>;
 export type CustomerLifecycleRequest = z.infer<typeof CustomerLifecycleSchema>;
 
+/**
+ * THE TWO SCHEMAS THE MOUNTED WRITE ROUTES ACTUALLY USE (owner decision
+ * DR-142, 2026-11-12), and they are the pair above MINUS `contacts`.
+ *
+ * `0091` creates `customer_create` and `customer_update` and nothing else, and
+ * DR-142's scope is "create and update only, no other table". `customer_contacts`
+ * IS another table, so neither routine writes one.
+ *
+ * A request that names `contacts` is therefore REFUSED by `.strict()`
+ * ("unrecognized key") and not accepted-then-dropped. Accepting a statement of
+ * contacts and silently storing none would tell the merchant their contacts are
+ * saved when the table is empty — a silent skip, which is the one outcome a
+ * command may never produce. The full `CustomerCreateSchema` /
+ * `CustomerUpdateSchema` above are left exactly as they are, so the day a
+ * contacts routine is approved the routes move back to them with no change to
+ * the published contract.
+ */
+export const CustomerWriteCreateSchema = CustomerCreateSchema.omit({ contacts: true }).strict();
+export const CustomerWriteUpdateSchema = CustomerUpdateSchema.omit({ contacts: true }).strict();
+
+export type CustomerWriteCreateRequest = z.infer<typeof CustomerWriteCreateSchema>;
+export type CustomerWriteUpdateRequest = z.infer<typeof CustomerWriteUpdateSchema>;
+
 // ── Customers: reads ─────────────────────────────────────────────────────
 
 /** `GET /v1/customers`. Keyset only: there is no `offset` key, so a caller cannot ask for one. */

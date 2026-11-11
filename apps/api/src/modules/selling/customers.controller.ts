@@ -1,12 +1,31 @@
-import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
-import type { CustomerAgingDto, CustomerDto, CustomerOpenInvoicesDto, CustomerPageDto, CustomerReceivableDto } from '@daftar/shared-contracts';
+import { Body, Controller, Get, Inject, Param, Post, Put, Query, Res, UsePipes } from '@nestjs/common';
+import type { Response } from 'express';
+import type {
+  CustomerAgingDto,
+  CustomerCommandResultDto,
+  CustomerDto,
+  CustomerOpenInvoicesDto,
+  CustomerPageDto,
+  CustomerReceivableDto,
+} from '@daftar/shared-contracts';
+import { ZodValidationPipe } from '../../common/validation';
 import { Membership } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
+import { newBusinessTransactionId } from '../inventory/business-transaction';
 import { strictUuidParam } from '../inventory/canonical-id';
 import { CustomerReadService } from './customer-reads';
+import { CustomerService } from './customer.service';
 import { sellingRefusal } from './selling-errors';
 import { phase4Permission } from './selling-permissions';
-import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoicesQuerySchema } from './selling.schemas';
+import {
+  CustomerAgingQuerySchema,
+  CustomerListQuerySchema,
+  CustomerOpenInvoicesQuerySchema,
+  CustomerWriteCreateSchema,
+  CustomerWriteUpdateSchema,
+  type CustomerWriteCreateRequest,
+  type CustomerWriteUpdateRequest,
+} from './selling.schemas';
 
 /**
  * The customer READ routes of P4-S1 (lock P4-AL-35, P4-AL-54; `OD-P4-03`
@@ -18,12 +37,22 @@ import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoices
  * acceptance), the query is validated by its own strict schema, and refusals
  * leave the read service already typed. Nothing is caught here.
  *
- * **The customer WRITE routes are absent from this slice and it is deliberate.**
- * `POST /v1/customers`, `PUT /v1/customers/:customerId` and the two lifecycle
- * routes have their full contract (`CustomerCreateRequestDto` and friends) and
- * their validated request schemas (`selling.schemas.ts`), and they are not
- * mounted, because a customer command cannot yet be written without breaking a
- * lock decision:
+ * **THE CREATE AND UPDATE ROUTES ARE NOW MOUNTED** (owner decision DR-142,
+ * 2026-11-12), because the condition this comment set out has been met:
+ * migration `0091` adds the two definer routines `customer_create` and
+ * `customer_update` in the `supplier_*` shape, and the two `customer.*`
+ * operation codes it needs were already present in `OPERATION_AUTHORITY`
+ * (`inventory-authorization.ts:100-101`). `daftar_app` still holds no DML on
+ * `customers`, so the mounted routes reach the table only through those
+ * routines.
+ *
+ * **The two LIFECYCLE routes remain absent, and that is now a SCOPE limit and
+ * not a missing precondition.** DR-142 approved create and update only, so
+ * `0091` creates no `customer_archive` / `customer_reactivate` routine and does
+ * not register their operation kinds. `customer.archive` and
+ * `customer.reactivate` need their own owner decision; the paragraph below is
+ * kept because it is still the reason a write route may never reach the table
+ * any other way:
  *
  * - P4-AL-38 gives `daftar_app` no DML on any Phase 4 table, so the write must
  *   go through a definer routine;
@@ -36,13 +65,58 @@ import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoices
  *   compile. Both files are outside this agent's ownership.
  *
  * Mounting a write route that reached the database any other way would be the
- * unauthorized writer the lock spent §11 closing. The requirement is stated for
- * the owners of those two files instead; the routes mount unchanged once the
- * four `customer.*` codes exist.
+ * unauthorized writer the lock spent §11 closing.
  */
 @Controller('/v1/customers')
 export class CustomersController {
-  constructor(@Inject(CustomerReadService) private readonly reads: CustomerReadService) {}
+  constructor(
+    @Inject(CustomerReadService) private readonly reads: CustomerReadService,
+    @Inject(CustomerService) private readonly customers: CustomerService,
+  ) {}
+
+  /**
+   * Creates an ACTIVE customer at revision 1. Requires `customers.manage`.
+   *
+   * The client-chosen customer id is the idempotency key and is passed on
+   * untouched: a replayed create is not a creation, so it answers 200 while a
+   * first create answers 201 — the accepted `SuppliersController` rule
+   * (`suppliers.controller.ts:70-72`).
+   *
+   * `contacts` is refused rather than ignored: see `CustomerWriteCreateSchema`.
+   */
+  @Post()
+  @phase4Permission('customers.manage')
+  @UsePipes(new ZodValidationPipe(CustomerWriteCreateSchema))
+  async create(
+    @Membership() m: MembershipContext,
+    @Body() body: CustomerWriteCreateRequest,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<CustomerCommandResultDto> {
+    const result = await this.customers.create(m, body, newBusinessTransactionId());
+    res.status(result.replayed ? 200 : 201);
+    return result;
+  }
+
+  /**
+   * States the customer's text in full, at the revision the client read, and
+   * never its status. Requires `customers.manage`.
+   *
+   * It is `PUT` and not `PATCH`: the body is a WHOLE statement in which an
+   * omitted optional field is CLEARED, which is what `CustomerUpdateRequestDto`
+   * publishes (`shared-contracts/src/customers.ts:84`) and what the supplier
+   * precedent mounts (`suppliers.controller.ts:76`). `PATCH` would promise a
+   * merge this command cannot express.
+   */
+  @Put(':customerId')
+  @phase4Permission('customers.manage')
+  @UsePipes(new ZodValidationPipe(CustomerWriteUpdateSchema))
+  async update(
+    @Membership() m: MembershipContext,
+    @Param('customerId') customerId: string,
+    @Body() body: CustomerWriteUpdateRequest,
+  ): Promise<CustomerCommandResultDto> {
+    return this.customers.update(m, strictUuidParam(customerId, 'customerId'), body, newBusinessTransactionId());
+  }
 
   /** A keyset page ordered by the merchant's own alphabet. Requires `customers.view`. */
   @Get()
