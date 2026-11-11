@@ -332,6 +332,15 @@ export interface DatasetTarget {
  * product path, so the chart of accounts, the branches and the tenancy are
  * whatever the product actually produces.
  */
+/**
+ * The control accounts `0090_mvp03_ar_source_document_guard.sql` guards: a
+ * hand-written `journal_lines` row on one of these is refused by the database
+ * (`DR-114`/ثالثًا/2). Read off the migration itself —
+ * `a.system_key IN ('accounts_receivable', 'customer_credit_liability')` —
+ * and not from a reading of its prose.
+ */
+const GUARDED_SYSTEM_KEYS = ['accounts_receivable', 'customer_credit_liability'];
+
 export async function generateDataset(pool: Pool, targets: readonly DatasetTarget[], spec: DatasetSpec): Promise<DatasetResult> {
   const startedAt = Date.now();
   const businesses: SeededBusiness[] = [];
@@ -342,10 +351,41 @@ export async function generateDataset(pool: Pool, targets: readonly DatasetTarge
     for (let i = 0; i < targets.length && i < spec.businessCount; i += 1) {
       const target = targets[i];
       if (!target) break;
-      const { rows: accountRows } = await client.query<{ id: string }>(`SELECT id FROM accounts WHERE business_id = $1 ORDER BY code LIMIT $2`, [
-        target.businessId,
-        spec.accountCount,
-      ]);
+      // ── This generator writes journal lines BY HAND, so it may not post to
+      // the control accounts `0090_mvp03_ar_source_document_guard.sql` guards
+      // (`DR-114`/ثالثًا/2, owner's decision 2026-11-11): a `journal_lines`
+      // row on `accounts_receivable` or on `customer_credit_liability`
+      // belongs to a sales document, because debt no document raised stands
+      // behind no customer's name. The guard is right and the SEED is what
+      // offends it, so the seed obeys the rule like any other writer.
+      //
+      // Two ORDINARY accounts take their place, so `spec.accountCount` is
+      // still satisfiable and the shape the planner sees does not change: the
+      // chart holds exactly 21 system accounts (`0040_accounting_chart.sql`)
+      // and `TIER1_SPEC.accountCount` is 20, so excluding two without
+      // replacing them would leave 19 and silently narrow every dataset this
+      // file produces. They carry NO `system_key` — a merchant's own
+      // accounts, which the chart supports by design — and each matches the
+      // nature of what it replaces: asset for asset (1100 → 1900), liability
+      // for liability (2210 → 2900). `ON CONFLICT DO NOTHING` keeps it
+      // idempotent across businesses and repeated runs.
+      await client.query(
+        `INSERT INTO accounts (tenant_id, business_id, code, name, type)
+         SELECT b.tenant_id, b.id, v.code, v.name, v.type
+           FROM businesses b
+           CROSS JOIN (VALUES ('1900', 'Perf ordinary asset', 'asset'),
+                              ('2900', 'Perf ordinary liability', 'liability')) AS v(code, name, type)
+          WHERE b.id = $1
+         ON CONFLICT (business_id, code) DO NOTHING`,
+        [target.businessId],
+      );
+      const { rows: accountRows } = await client.query<{ id: string }>(
+        `SELECT id FROM accounts
+          WHERE business_id = $1 AND (system_key IS NULL OR system_key <> ALL($3::text[]))
+          ORDER BY code
+          LIMIT $2`,
+        [target.businessId, spec.accountCount, GUARDED_SYSTEM_KEYS],
+      );
       if (accountRows.length === 0) throw new Error(`business ${target.businessId} has no accounts to post to`);
       const { rows: branchRows } = await client.query<{ id: string }>(`SELECT id FROM branches WHERE business_id = $1 ORDER BY created_at LIMIT 1`, [
         target.businessId,
