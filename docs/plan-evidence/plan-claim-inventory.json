@@ -2704,7 +2704,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 95,
+      "line": 104,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -2712,7 +2712,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 96,
+      "line": 105,
       "phase": "cross-phase",
       "signals": ["query-plan-json"],
       "kind": "mention",
@@ -2720,7 +2720,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 97,
+      "line": 106,
       "phase": "cross-phase",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -2728,7 +2728,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 203,
+      "line": 243,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze"],
       "kind": "mention",
@@ -2736,43 +2736,7 @@
     },
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 272,
-      "phase": "cross-phase",
-      "signals": ["seq-scan"],
-      "kind": "plan-gate",
-      "via": ["plan", "scans"],
-      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
-    },
-    {
-      "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 273,
-      "phase": "cross-phase",
-      "signals": [],
-      "kind": "plan-gate",
-      "via": ["plan", "text"],
-      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
-    },
-    {
-      "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 283,
-      "phase": "cross-phase",
-      "signals": ["seq-scan"],
-      "kind": "plan-gate",
-      "via": ["plan", "scans"],
-      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
-    },
-    {
-      "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 284,
-      "phase": "cross-phase",
-      "signals": [],
-      "kind": "plan-gate",
-      "via": ["plan", "text"],
-      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
-    },
-    {
-      "file": "tests/performance/accounting-read-plans.test.ts",
-      "line": 304,
+      "line": 312,
       "phase": "cross-phase",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2782,6 +2746,42 @@
     {
       "file": "tests/performance/accounting-read-plans.test.ts",
       "line": 313,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "text"],
+      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 323,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 324,
+      "phase": "cross-phase",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["plan", "text"],
+      "text": "expect(plan.text).toContain('journal_lines_business_account_idx');"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 344,
+      "phase": "cross-phase",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["plan", "scans"],
+      "text": "expect(plan.scans.some((s) => s === 'Seq Scan on journal_lines')).toBe(false);"
+    },
+    {
+      "file": "tests/performance/accounting-read-plans.test.ts",
+      "line": 353,
       "phase": "cross-phase",
       "signals": [],
       "kind": "plan-gate",
