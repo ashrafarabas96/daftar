@@ -35,6 +35,17 @@ export const API_CONTENT_SECURITY_POLICY = "default-src 'none'; frame-ancestors 
  * list cannot be undone on this project's own timetable, and that is an
  * owner's decision about a domain, not a middleware default.
  *
+ * `includeSubDomains` is the same KIND of decision about a domain — it binds
+ * every subdomain of whatever Host arrives, and this repository holds no
+ * deployment definition that fixes which Host that is (REL-09 review, finding
+ * 2, which was right to say the earlier comment was silent about it). It is
+ * set, and `preload` is not, for one difference that is not cosmetic:
+ * `includeSubDomains` is WITHDRAWABLE on this project's own timetable — ship
+ * `max-age=0` and every browser forgets it as it comes back — while a preload
+ * submission is a list someone else ships. A subdomain served over plain http
+ * is therefore a deployment choice this header makes visible and reversible,
+ * not a lock.
+ *
  * This does NOT claim to be the whole of HSTS for the deployment. Where TLS is
  * terminated by a load balancer, that balancer is the natural place for this
  * header and may already set it; a duplicate identical value is harmless, and
@@ -47,6 +58,16 @@ export const API_STRICT_TRANSPORT_SECURITY = 'max-age=31536000; includeSubDomain
 /**
  * Request context middleware (§99): every request runs inside an ALS context
  * with a request id; response carries X-Request-Id; standard security headers.
+ *
+ * REL-09 review, finding 1 — the exact reach, since "on every response" is
+ * wider than the mechanism. These headers are set on every response that
+ * REACHES ROUTING. Two kinds of response do not: a CORS preflight that
+ * `app.enableCors` answers (it is registered on the express instance in
+ * `main.ts` before `app.init()` installs module middleware), and a 400 that
+ * the built-in body parser produces for malformed JSON. Both predate this
+ * change and neither is introduced by it — it is recorded here because the
+ * earlier wording read as a guarantee, and a wrong guarantee is worse than a
+ * narrow one.
  */
 @Injectable()
 export class RequestContextMiddleware implements NestMiddleware {

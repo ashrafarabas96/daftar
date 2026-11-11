@@ -89,7 +89,7 @@ const PROD = headersOf(loadConfig(MERCHANT_PROD));
 const DEV = headersOf(loadConfig({ NODE_ENV: 'development' }));
 const TEST = headersOf(loadConfig({ NODE_ENV: 'test' }));
 
-describe('REL-09: the API sets a content policy on every response', () => {
+describe('REL-09: the API sets a content policy on every response that reaches routing', () => {
   it('POSITIVE CONTROL: the probe sees the headers the middleware already set', () => {
     // If this fails, every "absent" assertion below is worthless.
     for (const captured of [PROD, DEV, TEST]) {

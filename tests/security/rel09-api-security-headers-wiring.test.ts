@@ -48,7 +48,9 @@ describe('REL-09: a real API response carries the hardening headers', () => {
   it('an authenticated surface refusing a request carries them too', async () => {
     // The error path has its own `setHeader` calls (`common/error.filter.ts`),
     // so "the headers are on the happy path" is not the same claim as "the
-    // headers are on every response".
+    // headers are on every response that reaches routing". Two responses never
+    // reach it and are not claimed: a preflight answered by `enableCors`, and
+    // a body-parser 400 (REL-09 review, finding 1).
     const res = await t.request.get('/v1/me/businesses');
     expect(res.status).toBe(401);
     expect(res.headers['content-security-policy']).toContain("default-src 'none'");
