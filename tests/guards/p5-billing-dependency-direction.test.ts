@@ -23,10 +23,19 @@
  *   - It asserts an ABSENCE, so it carries a positive control: the same
  *     extractor run against `@daftar/accounting` must come back non-empty.
  *     Otherwise a broken extractor reads as a clean repository.
- *   - It counts specifiers, not words. A comment or a string that names the
- *     package (`scripts/check-supply-chain.ts` names it in prose, and this
- *     file names it throughout) is not an edge, and a text law would red on
- *     the documentation of the rule it enforces.
+ *   - It counts `from '…'` / `require('…')` specifiers, not bare mentions of
+ *     the package name: `scripts/check-supply-chain.ts` names the package in
+ *     prose and is not an edge. The extractor is a REGULAR EXPRESSION over
+ *     the file's text, so a specifier spelled inside a comment or a string is
+ *     matched like a real one — which is why this file, whose prose contains
+ *     the shape, excludes itself below. A narrow review of 2026-11-11 named
+ *     the earlier wording ("not words") as wider than what is measured. The
+ *     error it can produce is a FALSE RED on a file that documents the edge,
+ *     never a false green on a file that crosses it.
+ *   - It matches the package by specifier AND by path, so a relative import
+ *     that reaches the same source (`../../packages/billing/src/*`) is the
+ *     same edge and is reported. Measured zero today; the check is here so it
+ *     stays zero.
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -84,7 +93,10 @@ const OUTSIDE: ReadonlyArray<readonly [string, readonly string[]]> = trackedTsFi
   .map((p) => [p, importSpecifiers(readFileSync(join(REPO, p), 'utf8'))] as const);
 
 function importersOf(pkg: string): string[] {
-  return OUTSIDE.filter(([, specs]) => specs.some((s) => s === pkg || s.startsWith(`${pkg}/`))).map(([p]) => p);
+  // `@daftar/billing` and `…/packages/billing/…` are the same source read two
+  // ways, so the path spelling counts as the same edge.
+  const dir = `packages/${pkg.replace('@daftar/', '')}/`;
+  return OUTSIDE.filter(([, specs]) => specs.some((s) => s === pkg || s.startsWith(`${pkg}/`) || s.includes(dir))).map(([p]) => p);
 }
 
 describe('DR-95 boundary 1 — the probe is awake before it is believed', () => {

@@ -90,8 +90,14 @@ describe('B2 — the dunning window has a declared upper bound', () => {
 
     // The two rules that run AFTER it, each on an input of its own, asserted
     // by MESSAGE and not only by code: these three messages are how the order
-    // is pinned. If the grace checks were moved in front of the loop, the
-    // first expectation above would carry a grace message and red here.
+    // is pinned. MEASURED, after a narrow review of 2026-11-11 read the
+    // earlier sentence here and found it wrong: moving the grace checks in
+    // front of the loop does NOT change the first expectation (with grace 25
+    // and no retry seen yet, neither grace rule fires, so the offset bound
+    // still refuses and still carries its own message). What reds is the
+    // THIRD expectation below — `decide([0, 72], 24)` stops being refused,
+    // because "a grace window shorter than the last retry" has no last retry
+    // to compare against before the loop has run.
     const graceBound = expectRefusal(() => decide([0, 24], MAX_DUNNING_WINDOW_HOURS + 1), 'billing.dunning_policy_invalid');
     expect(graceBound.message).toContain('a grace window may not outlast');
     const graceShorter = expectRefusal(() => decide([0, 72], 24), 'billing.dunning_policy_invalid');
