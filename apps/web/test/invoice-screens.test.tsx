@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import ar from '@/messages/ar.json';
 import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
-import { formatCivilDate, formatMoney } from '@/lib/phase3-format';
+import { formatCivilDate, formatMomentDate, formatMoney } from '@/lib/phase3-format';
 import type { ViewEntry } from '@/lib/phase3-format';
 import { VIEW_REGISTRY as INVOICE_VIEWS } from '@/views/invoices/registry';
 import { findMerchantJargon, stripTsComments } from '../../../scripts/guards/merchant-jargon';
@@ -285,7 +285,8 @@ describe('the invoice list', () => {
 });
 
 describe('one invoice', () => {
-  const r = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, part of it collected');
+  const COLLECTED = 'two items, collected in full';
+  const r = render(INVOICE_VIEWS, 'InvoiceDetailView', COLLECTED);
 
   it('names the document and the day it was issued', () => {
     expect(text(r)).toContain('INV-2026-000002');
@@ -296,70 +297,107 @@ describe('one invoice', () => {
     const shown = text(r);
     expect(shown).toContain('Basmati rice 5 kg');
     expect(shown).toContain('Olive oil 1 L');
-    // The unit price and the line net, each a field of its own item.
     expect(shown).toContain(formatMoney('4500', 'ILS', 'en'));
-    expect(shown).toContain(formatMoney('13500', 'ILS', 'en'));
+    expect(shown).toContain(formatMoney('13000', 'ILS', 'en'));
     expect(shown).toContain(formatMoney('9000', 'ILS', 'en'));
-    // The quantity is the server's decimal text, re-spelled and isolated.
     expect(r.html).toContain('<bdi dir="ltr">3</bdi>');
   });
 
-  it('shows the invoice’s own subtotal, discount and total — and computes none of them', () => {
-    const shown = text(r);
-    expect(shown).toContain(formatMoney('22500', 'ILS', 'en'));
-    // The items are 13500 and 9000. A view that summed them would print 22500
-    // too, so the sum alone proves nothing — these are the figures that would
-    // appear ONLY from arithmetic the server did not do.
-    for (const invented of ['31500', '35500', '45000', '12500000']) {
-      expect(shown, invented).not.toContain(formatMoney(invented, 'ILS', 'en'));
-    }
-    // And the source names no arithmetic operator on a money field at all.
-    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
-    for (const op of ['BigInt(', 'Number(', 'parseInt', 'parseFloat', '.reduce(', ' + ', ' - ', ' * ', ' / ']) {
-      expect(source, `the detail view must not compute money: ${op}`).not.toContain(`Minor${op}`);
-    }
-    expect(source).not.toContain('.reduce(');
+  it('READS the subtotal rather than adding the items up', () => {
+    // The assertion the money review asked for, and it has teeth only because
+    // of the fixture: the server's own invariant is
+    // `SUM(net) === subtotal - discount` (`sale-payloads.ts:316`, measured), so
+    // with a non-zero discount SUM(net) is 22000 while the subtotal is 22500. A
+    // view that summed the items and labelled it "before discount" prints
+    // 220.00 where 225.00 belongs, and this fails.
+    // The NARROWEST element whose text starts with the label — the `Fact` row
+    // itself. Taking the first match found the whole totals card, whose text
+    // also holds the total, so the assertion below passed on the wrong element.
+    // The narrowest element that holds BOTH the label and a figure — the `Fact`
+    // row. Taking the first match found the whole totals card (whose text also
+    // holds the total, so the negative below passed on the wrong element), and
+    // taking the shortest match found the bare label (which holds no figure at
+    // all). The row is the shortest one that has both.
+    const label = en['invoices.detail.subtotal'];
+    const rows = [...elements(r.frame)]
+      .map((e) => textOf(e))
+      .filter((txt) => txt.startsWith(label) && txt.length > label.length)
+      .sort((a, b) => a.length - b.length);
+    expect(rows.length, 'the subtotal row must be findable').toBeGreaterThan(0);
+    const rowText = rows[0] ?? '';
+    expect(rowText).toContain(formatMoney('22500', 'ILS', 'en'));
+    expect(rowText).not.toContain(formatMoney('22000', 'ILS', 'en'));
+    expect(text(r)).toContain(formatMoney('500', 'ILS', 'en'));
+    expect(text(r)).toContain(formatMoney('22000', 'ILS', 'en'));
   });
 
-  it('shows what is collected and what is left ONLY from the settlement read', () => {
+  it('computes no money: the source holds no arithmetic at all', () => {
+    // The earlier probe tested `Minor` immediately followed by an operator,
+    // which made four of its arms impossible strings (`MinorBigInt(` and
+    // friends) and missed the one dangerous spelling,
+    // `BigInt(invoice.totalTxnMinor)`. These look for the operations themselves.
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    for (const op of ['BigInt(', 'Number(', 'parseInt', 'parseFloat', '.reduce(', '.sort(', '+=', '-=']) {
+      expect(source, `the detail view must not compute money: ${op}`).not.toContain(op);
+    }
+    // Positive control: the probe sees the call the view does make on a money
+    // field, so "not found" is a measurement and not an empty input.
+    expect(source).toContain('amountMinor=');
+  });
+
+  it('shows what was collected, in the settlement own currency', () => {
     const shown = text(r);
-    expect(shown).toContain(formatMoney('10000', 'ILS', 'en'));
-    expect(shown).toContain(formatMoney('12500', 'ILS', 'en'));
-    expect(shown).toContain(en['invoices.settlement.partial']);
-    // Without that read the screen says NOTHING about collection — it does not
-    // fall back to a zero, which would be a figure no answer supports.
+    expect(shown).toContain(en['invoices.settlement.paid']);
+    expect(shown).toContain(en['invoices.settlement.collected']);
+    expect(shown).toContain(en['invoices.settlement.remaining']);
+    // A cash invoice is paid in full and owes nothing — measured from
+    // `invoice_outstanding`'s cash branch (`0080:172-175`), not assumed.
+    expect(shown).toContain(formatMoney('22000', 'ILS', 'en'));
+    expect(shown).toContain(formatMoney('0', 'ILS', 'en'));
+    const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    expect(source).toContain('currency={settlement.currency}');
+  });
+
+  it('SAYS SO when the collection read was refused, instead of quietly omitting it', () => {
+    // Omitting it silently is the defect the money review named: read
+    // right-to-left the page would end at the total as its last and largest
+    // fact, and a merchant who has seen the collection card elsewhere reads its
+    // absence as "no collection record" — the whole amount still standing. The
+    // error ran toward asking for money already received.
+    const refused = render(INVOICE_VIEWS, 'InvoiceDetailView', 'the collection read was refused');
+    const shown = text(refused);
+    expect(shown).toContain(en['invoices.settlement.title']);
+    expect(shown).toContain(en['common.noPermission']);
+    expect(shown).not.toContain(en['invoices.settlement.collected']);
+    expect(shown).not.toContain(en['invoices.settlement.paid']);
+    expect(shown).not.toContain('FORBIDDEN');
+    expect(shown).toContain('INV-2026-000002');
+    expect(shown).toContain(formatMoney('22500', 'ILS', 'en'));
+  });
+
+  it('says nothing at all about collection when the read was never attempted', () => {
     const silent = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, settlement not read');
     expect(text(silent)).toContain('INV-2026-000002');
-    // Every label of the collection block is gone — the whole block is, so
-    // there is nothing a figure beside it could be read as.
-    //
-    // This assertion first also forbade `₪0.00` anywhere, on the idea that a
-    // missing settlement must not read as "nothing collected". That was wrong
-    // and the suite caught it: the invoice's own DISCOUNT is a legitimate
-    // `"0"` the server stated, and forbidding the spelling of zero forbade an
-    // honest field. The precise claim is the one below — no collection LABEL —
-    // because a zero can only be read as collection if a collection label sits
-    // beside it.
     for (const key of ['invoices.settlement.title', 'invoices.settlement.state', 'invoices.settlement.collected', 'invoices.settlement.remaining'] as const) {
       expect(text(silent), key).not.toContain(en[key]);
     }
     for (const state of ['unpaid', 'partial', 'paid'] as const) {
       expect(text(silent), state).not.toContain(en[`invoices.settlement.${state}`]);
     }
-    // Positive control: those labels DO appear when the read succeeded, so
-    // their absence is a measurement and not a label that never renders.
+    // Positive control: those labels DO appear when the read succeeded.
     expect(text(r)).toContain(en['invoices.settlement.collected']);
-    expect(text(r)).toContain(en['invoices.settlement.remaining']);
   });
 
   it('names no buyer, in any of the three languages — T-12 stands', () => {
     for (const locale of LOCALES) {
-      const html = render(INVOICE_VIEWS, 'InvoiceDetailView', 'two items, part of it collected', locale).html.toLowerCase();
-      for (const word of ['customer', 'عميل', 'müşteri', 'hadil', 'qasem']) {
+      const html = render(INVOICE_VIEWS, 'InvoiceDetailView', COLLECTED, locale).html.toLowerCase();
+      // `customer` is the probe that can actually fire: the fixture carries
+      // `customerSnapshot: null`, so there is no NAME in it to look for, and
+      // looking for one would be an empty arm pretending to be a control.
+      for (const word of ['customer', 'عميل', 'müşteri']) {
         expect(html, `${locale}: ${word}`).not.toContain(word.toLowerCase());
       }
     }
-    // And no buyer key is shipped for it to render.
     for (const locale of LOCALES) expect(CATALOGS[locale]['invoices.detail.customer'], locale).toBeUndefined();
   });
 
@@ -373,18 +411,68 @@ describe('one invoice', () => {
     ]) {
       expect(r.html, hidden).not.toContain(hidden);
     }
-    // The rate is on the DTO and is not the merchant's business on this screen.
+    // `not.toContain('rate')` would pass on sheer wording — `separate` and
+    // `generate` contain it — so the probe names the field reads instead.
     const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
-    expect(source).not.toContain('rate');
+    for (const read of ['invoice.rate', 'rate.rate', 'rateId', 'rate.source']) expect(source, read).not.toContain(read);
   });
 
-  it('says a cancelled invoice is cancelled, and still states its figure', () => {
+  it('dates a cancellation by the reader own day, not by UTC', () => {
+    // `voided_at` is `TIMESTAMPTZ` (`0075:275`) — a moment. The fixture is
+    // 22:30Z, half an hour before UTC midnight, so a view that sliced the first
+    // ten characters and formatted them in UTC would show 11 Nov while a
+    // merchant at UTC+2/+3 is already on the 12th.
     const cancelled = render(INVOICE_VIEWS, 'InvoiceDetailView', 'a cancelled invoice');
     expect(text(cancelled)).toContain(en['invoices.status.void']);
-    // The document's figure is a fact and stays; what may not appear is a due
-    // date, which would read as money still owed on a document that owes none.
-    expect(text(cancelled)).toContain(formatMoney('22500', 'ILS', 'en'));
+    expect(text(cancelled)).toContain(en['invoices.detail.cancelledOn']);
+    expect(cancelled.html).not.toContain('2026-11-11T22:30:00Z');
+    expect(text(cancelled)).toContain(formatMomentDate('2026-11-11T22:30:00Z', 'en'));
     const source = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'views', 'invoices', 'InvoiceDetailView.tsx'), 'utf8'));
+    expect(source).toContain('formatMomentDate(invoice.voidedAt');
+    expect(text(cancelled)).toContain(formatMoney('22000', 'ILS', 'en'));
     expect(source).not.toContain('dueDate');
+  });
+});
+
+describe('the view fixtures that no guard reads', () => {
+  it('a .json fixture under src/views names no buyer and no tax, since no law scans it', () => {
+    // T-12 and T-09 scan `.tsx?` only (`merchant-jargon.ts:193-201`,
+    // `od03.test.ts:78-89`), and the catalogue rule reads the three message
+    // files alone. This change introduced the first `.json` under `src/views`,
+    // so that file sits outside every guard — legal by the letter, and unguarded
+    // for whoever edits it next. This is the control that closes it.
+    const dir = join(__dirname, '..', 'src', 'views');
+    const walk = (at: string): string[] =>
+      readdirSync(at, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(at, e.name)) : e.name.endsWith('.json') ? [join(at, e.name)] : []));
+    const files = walk(dir);
+    // Positive control: there IS such a file, so the loop is not vacuous.
+    expect(files.length, 'no .json fixture found — this control would be empty').toBeGreaterThan(0);
+    for (const file of files) {
+      const raw = readFileSync(file, 'utf8');
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      for (const key of ['customerSnapshot', 'customerId']) {
+        if (key in parsed) expect(parsed[key], `${file}: ${key}`).toBeNull();
+      }
+      // `taxMinor` is a REQUIRED contract field on the invoice and on every
+      // item, so forbidding the word would forbid an honest one — the same
+      // over-broad mistake as forbidding the spelling of zero. The rule is the
+      // one P4-AL-44 actually states: wherever it appears, it is a structural
+      // zero.
+      const taxes: unknown[] = [];
+      const visit = (v: unknown): void => {
+        if (Array.isArray(v)) return v.forEach(visit);
+        if (v === null || typeof v !== 'object') return;
+        for (const [k, inner] of Object.entries(v)) {
+          if (/tax/i.test(k)) taxes.push(inner);
+          visit(inner);
+        }
+      };
+      visit(parsed);
+      // Positive control: the field IS there, so "all zero" is a measurement.
+      expect(taxes.length, `${file}: no tax field found — this arm would be empty`).toBeGreaterThan(0);
+      for (const value of taxes) expect(value, `${file}: a tax field must be the structural zero`).toBe('0');
+      // No tax VOCABULARY in any human-readable value, in any of the three languages.
+      expect(raw, file).not.toMatch(/ضريب|vergi|kdv|vat/i);
+    }
   });
 });

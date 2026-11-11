@@ -9,14 +9,14 @@
   "dueDate": null,
   "currency": "ILS",
   "status": "open",
-  "totalTxnMinor": "22500",
-  "totalBaseMinor": "22500",
+  "totalTxnMinor": "22000",
+  "totalBaseMinor": "22000",
   "createdAt": "2026-11-10T09:30:00Z",
   "saleId": "0f9c1e2a-1111-4c0d-9f3a-aaaaaaaaaaaa",
   "branchId": "0f9c1e2a-2222-4c0d-9f3a-bbbbbbbbbbbb",
   "notes": "Deliver after 5 pm",
   "subtotalTxnMinor": "22500",
-  "discountTxnMinor": "0",
+  "discountTxnMinor": "500",
   "taxMinor": "0",
   "rate": {
     "rateId": "0f9c1e2a-3333-4c0d-9f3a-cccccccccccc",
@@ -35,10 +35,10 @@
       "quantity": "3",
       "unitPriceTxnMinor": "4500",
       "grossTxnMinor": "13500",
-      "discountTxnMinor": "0",
-      "netTxnMinor": "13500",
+      "discountTxnMinor": "500",
+      "netTxnMinor": "13000",
       "taxMinor": "0",
-      "baseShareMinor": "13500"
+      "baseShareMinor": "13000"
     },
     {
       "itemId": "0f9c1e2a-4444-4c0d-9f3a-ffffffffffff",

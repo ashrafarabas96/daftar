@@ -128,22 +128,40 @@ const INVOICE: InvoiceDto = {
   rate: { ...detailFixture.rate, source: 'base' },
 };
 
+/**
+ * The settlement of THIS invoice, and the only state it can be in.
+ *
+ * Measured, not chosen: `customerId: null` forces `settlementMode: 'cash'`
+ * (`selling.schemas.ts:354-357`, mirrored by `invoices_walkin_terms_ck`), and
+ * `invoice_outstanding` answers a cash invoice `paid = total, outstanding = 0`
+ * by its own first branch (`0080:172-175`, and the function's COMMENT says so:
+ * "A cash-settled invoice reports paid = total and outstanding = 0, because the
+ * invoice entry debited `cash` and never the receivable account").
+ *
+ * So a walk-in invoice is ALWAYS fully collected, and the `partial` / `unpaid`
+ * states cannot be fixtured here at all: they need a credit invoice, which needs
+ * a named customer, which T-12 refuses. This file previously carried
+ * `paid 10000 / outstanding 12500` on a null-customer invoice — a state the
+ * product cannot produce, which is the same defect this registry's own header
+ * rejects for the list. Card: `cards/L8_CREDIT_SETTLEMENT_STATES_UNFIXTURABLE_AR.md`.
+ */
 const SETTLEMENT: InvoiceSettlementDto = {
   invoiceId: INVOICE.id,
   currency: 'ILS',
   baseCurrency: 'ILS',
-  totalTxnMinor: '22500',
-  totalBaseMinor: '22500',
-  paidTxnMinor: '10000',
-  paidBaseMinor: '10000',
-  outstandingTxnMinor: '12500',
-  outstandingBaseMinor: '12500',
-  settlementState: 'partial',
+  totalTxnMinor: '22000',
+  totalBaseMinor: '22000',
+  paidTxnMinor: '22000',
+  paidBaseMinor: '22000',
+  outstandingTxnMinor: '0',
+  outstandingBaseMinor: '0',
+  settlementState: 'paid',
 };
 
 const detail = (over: Partial<InvoiceDetailViewProps>): InvoiceDetailViewProps => ({
   invoice: INVOICE,
   settlement: SETTLEMENT,
+  settlementErrorKey: null,
   onBack: noop,
   ...over,
 });
@@ -165,13 +183,22 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'show more was refused, with the rows still on screen': list({ hasMore: false, errorKey: 'common.noPermission' }),
   }),
   defineView('InvoiceDetailView', InvoiceDetailView, {
-    'two items, part of it collected': detail({}),
-    // The settlement read needs `receivables.view` AND business-wide scope, so it
-    // can be refused while the invoice itself reads fine. Then the screen says
-    // nothing about collection rather than showing a zero.
+    // The state every invoice in the product is in today: a cash sale, fully
+    // collected. It is the one a merchant actually sees, so it is the default.
+    'two items, collected in full': detail({}),
+    // The settlement read needs `receivables.view` AND business-wide scope, so
+    // it can be refused while the invoice itself reads fine. Then the screen
+    // SAYS the figures are missing — it does not quietly omit them.
+    'the collection read was refused': detail({ settlement: null, settlementErrorKey: 'common.noPermission' }),
+    // And the case where it was never attempted carries no reason either.
     'two items, settlement not read': detail({ settlement: null }),
+    // 22:30Z is the half-hour before UTC midnight ON PURPOSE: a merchant at
+    // UTC+2/+3 is already on the next day, so a view that sliced the instant's
+    // first ten characters and formatted them in UTC would show the day BEFORE
+    // the one the merchant is living. The old fixture was 08:00Z, where no test
+    // could have seen the difference.
     'a cancelled invoice': detail({
-      invoice: { ...INVOICE, status: 'void', voidedAt: '2026-11-11T08:00:00Z' },
+      invoice: { ...INVOICE, status: 'void', voidedAt: '2026-11-11T22:30:00Z' },
       settlement: null,
     }),
   }),

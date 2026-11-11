@@ -35,14 +35,26 @@
  */
 import { Badge, Button, Card, List } from '@daftar/design-system';
 import type { InvoiceDto, InvoiceSettlementDto } from '@/lib/phase4-invoices-api';
-import { Ltr, formatDecimalText, rich, type ViewBaseProps } from '@/lib/phase3-format';
+import { Ltr, formatDecimalText, formatMomentDate, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { CivilDate, Code, Fact, Money } from '@/views/common/primitives';
-import { ActionRow, ItemName, STACK, ScreenTitle, SectionTitle } from '@/views/stock/parts';
+import { ActionRow, ItemName, Notice, STACK, ScreenTitle, SectionTitle } from '@/views/stock/parts';
 
 export interface InvoiceDetailViewProps {
   invoice: InvoiceDto;
-  /** Null when the settlement read was refused or failed: the screen then says nothing about collection. */
+  /** Null when the settlement read did not answer; `settlementErrorKey` says why. */
   settlement: InvoiceSettlementDto | null;
+  /**
+   * A catalogue key when the collection read failed or was refused, so the
+   * screen can SAY the figures are missing instead of just omitting them.
+   *
+   * Omitting them silently was a measured defect: read right-to-left the page
+   * then ends at the total as its last and largest fact, and a merchant who has
+   * seen the collection card on other invoices reads its absence as "no
+   * collection record" — i.e. the whole amount still stands. The error runs
+   * toward asking a customer for money already received, which is the unsafe
+   * direction, so the reason travels and is rendered.
+   */
+  settlementErrorKey: string | null;
   onBack: () => void;
 }
 
@@ -73,7 +85,16 @@ export function InvoiceDetailView(props: InvoiceDetailViewProps & ViewBaseProps)
           </Fact>
           {invoice.voidedAt !== null ? (
             <Fact label={t('invoices.detail.cancelledOn')}>
-              <CivilDate iso={invoice.voidedAt} locale={locale} />
+              {/*
+               * A MOMENT, not a civil date. `voided_at` is `TIMESTAMPTZ`
+               * (`0075:275`) and arrives as an instant, while `CivilDate` slices
+               * the first ten characters and formats them in UTC
+               * (`phase3-format.ts:174-176`) — so a void at 22:00Z would read a
+               * day EARLY for a merchant at UTC+2/+3, on a cancelled document.
+               * `formatMomentDate` resolves the instant in the reader's own zone,
+               * which is the question "which day was this cancelled" actually asks.
+               */}
+              <Ltr>{formatMomentDate(invoice.voidedAt, locale)}</Ltr>
             </Fact>
           ) : null}
           {invoice.notes !== null ? (
@@ -112,8 +133,26 @@ export function InvoiceDetailView(props: InvoiceDetailViewProps & ViewBaseProps)
             <Fact label={t('invoices.settlement.state')}>
               <Badge tone={SETTLEMENT_TONE[settlement.settlementState]}>{t(`invoices.settlement.${settlement.settlementState}`)}</Badge>
             </Fact>
-            <Fact label={t('invoices.settlement.collected')}>{money(settlement.paidTxnMinor)}</Fact>
-            <Fact label={t('invoices.settlement.remaining')}>{money(settlement.outstandingTxnMinor)}</Fact>
+            {/*
+             * Bound to the SETTLEMENT's own currency, not the invoice's. They are
+             * the same currency by construction today — this settlement is of
+             * this invoice — but labelling an amount with a currency taken from a
+             * different document than the one that stated it is the shape of the
+             * error even when it is not an instance of it.
+             */}
+            <Fact label={t('invoices.settlement.collected')}>
+              <Money amountMinor={settlement.paidTxnMinor} currency={settlement.currency} locale={locale} />
+            </Fact>
+            <Fact label={t('invoices.settlement.remaining')}>
+              <Money amountMinor={settlement.outstandingTxnMinor} currency={settlement.currency} locale={locale} />
+            </Fact>
+          </div>
+        </Card>
+      ) : props.settlementErrorKey !== null ? (
+        <Card>
+          <div style={STACK}>
+            <SectionTitle>{t('invoices.settlement.title')}</SectionTitle>
+            <Notice tone="info">{t(props.settlementErrorKey)}</Notice>
           </div>
         </Card>
       ) : null}
