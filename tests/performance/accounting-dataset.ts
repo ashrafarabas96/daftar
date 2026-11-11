@@ -335,9 +335,14 @@ export interface DatasetTarget {
 /**
  * The control accounts `0090_mvp03_ar_source_document_guard.sql` guards: a
  * hand-written `journal_lines` row on one of these is refused by the database
- * (`DR-114`/ثالثًا/2). Read off the migration itself —
- * `a.system_key IN ('accounts_receivable', 'customer_credit_liability')` —
- * and not from a reading of its prose.
+ * (`DR-114`/ثالثًا/2).
+ *
+ * This is a LITERAL, and it is honest about that: it was MEASURED equal to the
+ * list the migration itself names — `a.system_key IN ('accounts_receivable',
+ * 'customer_credit_liability')` — rather than derived from it at run time, so
+ * it can drift if a later migration widens the guard. What stops a drift from
+ * passing silently is the guard: a key missing from here fails LOUDLY on the
+ * runner, because the database refuses the seed.
  */
 const GUARDED_SYSTEM_KEYS = ['accounts_receivable', 'customer_credit_liability'];
 
@@ -386,7 +391,21 @@ export async function generateDataset(pool: Pool, targets: readonly DatasetTarge
           LIMIT $2`,
         [target.businessId, spec.accountCount, GUARDED_SYSTEM_KEYS],
       );
-      if (accountRows.length === 0) throw new Error(`business ${target.businessId} has no accounts to post to`);
+      // EXACTLY the asked-for number, or refuse. Before the exclusion above,
+      // a short result was impossible: `0040` raises `accounting.chart_incomplete`
+      // unless all 21 system accounts exist, so `LIMIT 20` could not come back
+      // with 19. The exclusion replaced that structural guarantee with an
+      // operational one — two rows inserted here — and an operational guarantee
+      // that nothing checks is not a guarantee: a pre-existing row at code
+      // `1900` or `2900` would make `ON CONFLICT DO NOTHING` keep it, the
+      // select would return 19, and `accountIndex % accountIds.length` at the
+      // line planner would QUIETLY fold index 19 onto account 0 — doubling one
+      // account's weight and breaking the very "the shape does not change"
+      // claim this change rests on. Caught by `daftar-finance`.
+      if (accountRows.length !== spec.accountCount)
+        throw new Error(
+          `business ${target.businessId} offers ${accountRows.length} postable accounts, not the ${spec.accountCount} this dataset's shape is defined by: a short set would be folded by the index modulo instead of refused`,
+        );
       const { rows: branchRows } = await client.query<{ id: string }>(`SELECT id FROM branches WHERE business_id = $1 ORDER BY created_at LIMIT 1`, [
         target.businessId,
       ]);
