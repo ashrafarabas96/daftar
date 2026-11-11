@@ -3,6 +3,8 @@ package app.daftar.offline
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -121,43 +123,62 @@ class ConflictVisibleToMerchantTest {
 
     @Test
     fun the_merchant_is_told_it_is_stock_and_given_the_step_that_resolves_it() {
-        // The vocabulary is asserted BY NAME rather than by symbol: a case that
-        // named a constant the enums do not have yet would not fail, it would
-        // stop the module compiling, and a module that does not compile runs
-        // zero cases -- which is the silent pass the kernel's own count gate
-        // exists to catch. So the red here is an assertion, not a build break.
-        val messageNames = MerchantMessage.entries.map { it.name }
-        val actionNames = RecoveryAction.entries.map { it.name }
-        assertTrue(
-            messageNames.any { it.contains("STOCK") },
-            "no MerchantMessage names a stock shortage, so the merchant cannot be told why " +
-                "the sale was refused. Have: $messageNames",
+        val view = StockConflict.explain(INSUFFICIENT_STOCK)
+        assertNotNull(
+            view,
+            "the server's stock refusal has no merchant-facing reading, so the till can only " +
+                "show it as something generic",
         )
-        assertTrue(
-            actionNames.any { it.contains("STOCK") },
-            "no RecoveryAction offers the explicit step the decision requires -- a stock " +
-                "receipt or adjustment, then a resend. Have: $actionNames",
-        )
-
-        val view = Recovery.explain(INSUFFICIENT_STOCK)
-
-        assertTrue(
-            view.message.name.contains("STOCK"),
+        assertEquals(
+            StockConflict.StockMessage.NOT_ENOUGH_STOCK_RECEIVE_OR_ADJUST_THEN_RESEND,
+            view.message,
             "the merchant must be told the sale was refused for stock, not given a generic " +
-                "'needs attention' or a device-software message; got ${view.message}",
+                "'needs attention' or a device-software message",
         )
-        assertTrue(
-            view.action.name.contains("STOCK") || view.action == RecoveryAction.RETRY_THE_SAME_OPERATION,
-            "the decision's part 3 is an EXPLICIT merchant step -- a receipt or an adjustment -- " +
-                "and then a resend; got ${view.action}",
+        assertEquals(
+            StockConflict.StockAction.FIX_THE_STOCK_THEN_RESEND,
+            view.action,
+            "DR-130's part 3 is an EXPLICIT merchant step -- a receipt or an adjustment -- and " +
+                "then a resend; no action means no way out of the conflict",
         )
-        assertFalse(
-            view.showsMoneyAsTaken,
-            "nothing was taken: the server refused the movement",
-        )
+        assertFalse(view.showsMoneyAsTaken, "nothing was taken: the server refused the movement")
         assertFalse(
             view.blocksNewCaptures,
             "one refused line must not stop the till from selling what IS in stock",
         )
+
+        // And it is not an explanation for everything: a code that is not the
+        // stock refusal comes back as "not mine", so no surface can read this
+        // object as a catch-all.
+        assertNull(
+            StockConflict.explain("offline.session_expired"),
+            "the stock reading answered a code that is not a stock refusal",
+        )
+        assertNull(StockConflict.explain(null), "a null code is not a stock refusal")
+    }
+
+    @Test
+    fun the_promoted_file_is_left_exactly_as_promoted() {
+        // WHY THE READING LIVES IN ITS OWN FILE, asserted so the reason cannot
+        // rot into a mystery. `Recovery.kt` is one of the twenty-seven files
+        // byte-pinned at the P7-01 promotion, and that pin's claim is a
+        // historical one: the promotion was a move, not a rewrite. Adding two
+        // enum constants there would move the hash, and re-pinning it would
+        // convert the claim from "these are the promoted bytes" into "these are
+        // the current bytes" -- the evidence spent rather than kept.
+        //
+        // So the pinned file still falls to its catch-all for this code, and
+        // that is RECORDED here rather than hidden: the surface asks
+        // `StockConflict` first and falls back to `Recovery.explain`. Whether
+        // the arms should eventually move INTO `Recovery` is the owner's call on
+        // that pin, and this case is what will fail if anyone takes it quietly.
+        val fallback = Recovery.explain(INSUFFICIENT_STOCK)
+        assertEquals(
+            MerchantMessage.DEVICE_SOFTWARE_PROBLEM,
+            fallback.message,
+            "the pinned file's behaviour for this code changed; if that was intended, the " +
+                "promotion pin and this case both need a decision, not a quiet update",
+        )
+        assertEquals(RecoveryAction.THIS_NEEDS_A_DEVELOPER, fallback.action)
     }
 }

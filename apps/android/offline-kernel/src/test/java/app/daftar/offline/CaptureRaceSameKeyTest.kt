@@ -51,16 +51,18 @@ class CaptureRaceSameKeyTest {
     /**
      * An engine that keeps the kernel's contract and nothing more: it begins,
      * it writes, it ends, and its transaction does NOT isolate a read from a
-     * concurrent write. `latchedReads` makes the interleaving deterministic
-     * rather than hoping for it: both callers are held inside `read` until both
-     * have arrived, so both observe the pre-write state exactly as two deferred
-     * transactions would.
+     * concurrent write -- which is all `Transactional` ever promised. It also
+     * REPLACES on a second write under one key, mirroring
+     * `SupportSQLiteDatabase`, so a lost capture shows up as a replaced row
+     * rather than as an engine error.
+     *
+     * It records what the kernel did, not what this suite hoped: how many
+     * reads saw the key absent, and how many writes reached the engine.
      */
-    private class RacyDisk(private val bothArrived: CountDownLatch) : Transactional {
+    private class RacyDisk : Transactional {
         private val rows = LinkedHashMap<String, StoredRow>()
         val writes = AtomicInteger(0)
         val readsThatSawNothing = AtomicInteger(0)
-        val overlapped = AtomicReference(false)
 
         @Synchronized
         private fun put(row: StoredRow) {
@@ -86,11 +88,12 @@ class CaptureRaceSameKeyTest {
         override fun read(key: String): StoredRow? {
             val seen = get(key)
             if (seen == null) readsThatSawNothing.incrementAndGet()
-            // Arrive, then wait for the other caller. If both get here before
-            // either writes, the overlap is a measured fact, not an assumption.
-            bothArrived.countDown()
-            val met = bothArrived.await(5, TimeUnit.SECONDS)
-            if (met && readsThatSawNothing.get() >= 2) overlapped.set(true)
+            // A pause with the read's answer already in hand. On an engine that
+            // does not isolate, this is the window in which the other caller
+            // reads the same absence -- so if anything but the kernel's own
+            // mutual exclusion were holding the law up, this is where it would
+            // fail.
+            Thread.sleep(25)
             return seen
         }
 
@@ -103,46 +106,53 @@ class CaptureRaceSameKeyTest {
     @Test
     fun two_captures_of_one_key_leave_one_row_and_one_refusal() {
         val key = "11111111-1111-4111-8111-111111111111"
-        val latch = CountDownLatch(2)
-        val disk = RacyDisk(latch)
+        val disk = RacyDisk()
         val store = EncryptedQueueStore(disk, Marker())
 
         val firstPayload = """{"qty":"1"}""".toByteArray()
         val secondPayload = """{"qty":"9"}""".toByteArray()
 
-        val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+        // THE CONTROL, and it is a rendezvous rather than a hope: neither
+        // thread calls the store until both have arrived, so the two captures
+        // are in flight at the same instant. A run where one finished before
+        // the other started would prove nothing about a race, and this latch is
+        // what makes that case fail instead of pass (RULE-27).
+        val startGate = CountDownLatch(2)
+        val bothStarted = AtomicReference(false)
+
+        val refusals = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
         val accepted = AtomicInteger(0)
 
         val threads = listOf(firstPayload, secondPayload).map { payload ->
             Thread {
+                startGate.countDown()
+                if (startGate.await(5, TimeUnit.SECONDS)) bothStarted.set(true)
                 try {
                     store.captureWithKey(key, payload, QueueDigest.of(payload))
                     accepted.incrementAndGet()
                 } catch (refused: PayloadRefused) {
-                    failures.add(refused)
+                    refusals.add(refused)
                 }
             }
         }
         threads.forEach { it.start() }
-        threads.forEach { it.join(10_000) }
+        threads.forEach { it.join(30_000) }
 
-        // POSITIVE CONTROL first: without a real overlap this case is not a
-        // race test at all, and reading its green as "no race" is the failure
-        // mode this control exists to prevent.
         assertTrue(
-            disk.overlapped.get(),
-            "the two captures never overlapped, so this run measured nothing about a race",
+            bothStarted.get(),
+            "the two captures were not in flight together, so this run measured nothing " +
+                "about a race",
         )
 
         assertEquals(
             1,
             accepted.get(),
-            "both captures were accepted under one key: the refusal depends on an isolation " +
-                "level the kernel neither requires nor checks",
+            "both captures were accepted under one key: the refusal is resting on an isolation " +
+                "level the kernel neither requires of Transactional nor provides itself",
         )
         assertEquals(
             1,
-            failures.size,
+            refusals.size,
             "exactly one of the two captures must be refused as a frozen key",
         )
         assertEquals(
@@ -154,6 +164,12 @@ class CaptureRaceSameKeyTest {
             1,
             disk.writes.get(),
             "the losing capture must not reach the engine's write at all",
+        )
+        assertEquals(
+            1,
+            disk.readsThatSawNothing.get(),
+            "only the FIRST capture may see the key absent; a second read that also saw nothing " +
+                "means the two read-modify-writes interleaved",
         )
     }
 

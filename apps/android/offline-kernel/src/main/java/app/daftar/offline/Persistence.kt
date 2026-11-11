@@ -134,6 +134,20 @@ class SchemaVersionRefused(val found: Int, val understood: Int) : Exception(
  * The contract is SQLite's own, and it is what the crash tests rely on: work
  * done after [begin] is durable only if [markSuccessful] ran before [end]. An
  * [end] without a [markSuccessful] rolls back.
+ *
+ * WHAT THIS INTERFACE DOES **NOT** PROMISE, stated because the kernel used to
+ * depend on it silently: **no isolation level**. A deferred SQLite transaction
+ * — which is what `beginTransaction` gives — lets two callers both read a key
+ * as absent and then both write it, and [write] mirrors
+ * `SupportSQLiteDatabase`, whose row write REPLACES on conflict. So an
+ * implementor owes this interface atomicity and durability, and owes it
+ * nothing about concurrency.
+ *
+ * The frozen-key law therefore cannot rest here, and no longer does:
+ * [EncryptedQueueStore] serialises its own read-modify-write instead of asking
+ * an engine for a guarantee this contract never required. Card P7-LINK-01, red
+ * first: two threads capturing one key were BOTH accepted, with the overlap
+ * measured rather than assumed, and the losing one reached the engine's write.
  */
 interface Transactional {
     fun begin()
@@ -270,39 +284,76 @@ class EncryptedQueueStore(
             payloadDigest = payloadDigest,
             sealedPayload = sealed,
         )
-        db.begin()
-        try {
-            // L2's other half, and the one DR-84 did not cover: A KEY ON DISK IS
-            // FROZEN. The digest guards above compare a payload with its own
-            // digest, so a SECOND capture under this key with different bytes and
-            // their own correct digest is internally consistent -- it would
-            // replace the frozen row, hash correctly, read back, and send a
-            // different intent under a key the server already holds. Neither
-            // door could see it, because neither compares the row with the row
-            // that is already there.
-            //
-            // The read is INSIDE the transaction on purpose: outside it, two
-            // captures racing on one key could both find nothing and both write.
-            // And `Transactional.write` is no help here -- it promises neither
-            // insert nor replace, mirroring `SupportSQLiteDatabase`, whose row
-            // write replaces on conflict.
-            //
-            // Found by independent review. An identical second capture is
-            // refused too: this store cannot tell a caller retrying from a
-            // caller replacing, and a key whose row exists has already decided
-            // its payload.
-            if (db.read(idempotencyKey) != null) {
-                throw PayloadRefused(
-                    "the key $idempotencyKey is already captured; refusing to replace a frozen payload. " +
-                        "A caller that needs those bytes reads the row, it does not capture them again",
-                )
+        // ONE WRITER AT A TIME, and the reason it is here rather than left to
+        // the engine. Everything below between `begin()` and `end()` is a
+        // read-modify-write whose correctness needs the read and the write to
+        // be indivisible, and `Transactional` promises no isolation level at
+        // all: on a deferred transaction two callers both read the key as
+        // absent, both write, and the second replaces a frozen payload.
+        //
+        // Card P7-LINK-01, measured before this lock existed: two threads
+        // capturing the same key were BOTH accepted and both reached the
+        // engine's write, with the overlap proven by a control inside the case
+        // rather than hoped for. The refusal below was never wrong; it was
+        // resting on a guarantee nobody had made.
+        //
+        // The gate is process-wide, not per instance: two `EncryptedQueueStore`
+        // objects over one database are the same disk, and an instance lock
+        // would serialise the wrong thing. It is held across the whole
+        // transaction, so it also orders the other write points against this
+        // one when they share a store.
+        // And it is held INLINE, not in a helper. `ATOMIC_WRITE_POINTS` is
+        // checked by equality against the functions that contain `begin()`, so
+        // factoring this read-modify-write into a private helper would empty
+        // this function of its transaction and weaken that guard to
+        // containment or a call-graph walk -- the file says so where the list
+        // is declared, and this lock is not worth paying that.
+        synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                // L2's other half, and the one DR-84 did not cover: A KEY ON DISK IS
+                // FROZEN. The digest guards above compare a payload with its own
+                // digest, so a SECOND capture under this key with different bytes and
+                // their own correct digest is internally consistent -- it would
+                // replace the frozen row, hash correctly, read back, and send a
+                // different intent under a key the server already holds. Neither
+                // door could see it, because neither compares the row with the row
+                // that is already there.
+                //
+                // The read is INSIDE the transaction on purpose: outside it, two
+                // captures racing on one key could both find nothing and both write.
+                // And `Transactional.write` is no help here -- it promises neither
+                // insert nor replace, mirroring `SupportSQLiteDatabase`, whose row
+                // write replaces on conflict.
+                //
+                // Found by independent review. An identical second capture is
+                // refused too: this store cannot tell a caller retrying from a
+                // caller replacing, and a key whose row exists has already decided
+                // its payload.
+                if (db.read(idempotencyKey) != null) {
+                    throw PayloadRefused(
+                        "the key $idempotencyKey is already captured; refusing to replace a frozen payload. " +
+                            "A caller that needs those bytes reads the row, it does not capture them again",
+                    )
+                }
+                db.write(row)
+                db.markSuccessful()
+            } finally {
+                db.end()
             }
-            db.write(row)
-            db.markSuccessful()
-        } finally {
-            db.end()
         }
         return row
+    }
+
+    private companion object {
+        /**
+         * The process-wide capture gate. A plain object, because what is needed
+         * is mutual exclusion and nothing else: no fairness, no reentrancy
+         * beyond the JVM monitor's own, and no timeout -- a capture that cannot
+         * take the gate is waiting on another capture, which is microseconds of
+         * disk work, and a timeout here would turn contention into a lost sale.
+         */
+        private val WRITE_GATE = Any()
     }
 
     /** Released by the merchant for sending: CAPTURED becomes QUEUED. */

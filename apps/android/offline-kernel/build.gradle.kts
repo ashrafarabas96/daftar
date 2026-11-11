@@ -40,6 +40,36 @@ android {
         jvmTarget = "17"
     }
 
+    /**
+     * The Robolectric suites live at `src/test/robolectric/java`, beside
+     * `src/test/java`, and this line is why they still run.
+     *
+     * MEASURED, not stylistic. Two gates pull in opposite directions:
+     *
+     *  - the `red-proofs` job compiles the kernel with a plain `kotlinc` and no
+     *    Android classpath, and it builds its shim from `src/main/java` and
+     *    `src/test/java` exactly (`ci.yml`, and `red_proofs.py` derives its
+     *    ROOT from those). A suite that imports `android.database.sqlite` under
+     *    `src/test/java` therefore breaks that job's BASELINE compile -- which
+     *    it did: run 43040853965 failed with `unresolved reference
+     *    'ContentValues'` and fifteen more, on the copy, not on the suite's own
+     *    law;
+     *  - the `android` job's count gate compares the executed case count with
+     *    `grep -rho "@Test" offline-kernel/src/test`, which is RECURSIVE over
+     *    `src/test`. A suite moved outside `src/test` entirely would execute
+     *    without being declared, and the gate would fail on the inequality.
+     *
+     * `src/test/robolectric/java` satisfies both: it is inside `src/test`, so
+     * the inventory counts it; it is outside `src/test/java`, so the shim never
+     * copies it; and this `srcDir` keeps it in the `test` source set, so
+     * `testDebugUnitTest` still runs it. Nothing under `.github` changes.
+     */
+    sourceSets {
+        getByName("test") {
+            java.srcDir("src/test/robolectric/java")
+        }
+    }
+
     // Robolectric needs the merged resources and the manifest of the module it
     // runs in; without this flag its runtime refuses to start and every case in
     // a Robolectric suite errors for a reason that has nothing to do with the
