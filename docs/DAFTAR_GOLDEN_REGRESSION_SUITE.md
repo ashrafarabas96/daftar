@@ -30,7 +30,7 @@
 | GOLD-22 | بلوغ حد الباقة | رسالة واضحة + Upgrade + لا فقدان بيانات |
 | GOLD-23 | Reconciliation jobs | تعمل وتنبّه على اختلاف مزروع عمدًا |
 | GOLD-24 | Smoke post-deploy (Master §111) | Login/Dashboard/Product/POS/Payment/Order/Storefront/WhatsApp queue/AI |
-| GOLD-25 | **Offline oversell exception (M)** — **منسوخٌ موضوعًا بـ`DR-128`** (لا مخزونَ سالبَ بلا استثناء؛ والمتجاوزُ عندَ المزامنةِ **تعارضٌ ظاهرٌ للتاجر**) | بيع Offline حقيقي يتزامن مع نفاد المخزون → العملية تُحفظ، حركة `offline_oversell_exception`، needs_attention، Alert للمالك، منع بيع لاحق حتى التسوية، Audit كامل |
+| GOLD-25 | **Offline oversell exception (M)** — **منسوخٌ موضوعًا بـ`DR-130`** (لا مخزونَ سالبَ بلا استثناء؛ والمتجاوزُ عندَ المزامنةِ **تعارضٌ ظاهرٌ للتاجر**) | بيع Offline حقيقي يتزامن مع نفاد المخزون → العملية تُحفظ، حركة `offline_oversell_exception`، needs_attention، Alert للمالك، منع بيع لاحق حتى التسوية، Audit كامل |
 | GOLD-26 | **دفعة بعملة مختلفة عن الفاتورة (D/E)** | فاتورة LBP + دفعة USD جزئية: التخصيص يسجل الطرفين + base + fx NUMERIC(20,10) + rounding؛ paid+outstanding=total بعملة الفاتورة |
 | GOLD-27 | **محاولة Void لفاتورة مدفوعة (J)** | Void مباشر مرفوض؛ void_invoice المركّب يعكس الدفعات ثم الفاتورة ذرّيًا؛ لا أرصدة/نقدية غير متسقة |
 | GOLD-28 | **Return ثم Refund بلا double reversal (I)** | مرتجع جزئي بخصم+ضريبة (Accounting §4.7). **يجب مطابقة أسطر القيود المتوقعة حرفيًا — وليس مجرد فحص توازن:** قيد Credit Note: `Dr 4100 Sales Returns 500، Dr 2100 Tax Payable 45، Cr 4200 Discounts 50، Cr 2200 Customer Refund Liability 495` (مجموع مدين 545 = مجموع دائن 545)؛ قيد المخزون: `Dr 1200 Inventory 300 / Cr 5000 COGS 300`؛ قيد الاسترداد: `Dr 2200 495 / Cr 1000 Cash 495`. الإيراد يُعكس مرة واحدة فقط؛ الـRefund تسوية نقدية لا تلمس الإيراد |
