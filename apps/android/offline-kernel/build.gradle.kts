@@ -39,6 +39,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    // Robolectric needs the merged resources and the manifest of the module it
+    // runs in; without this flag its runtime refuses to start and every case in
+    // a Robolectric suite errors for a reason that has nothing to do with the
+    // law under test.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 /**
@@ -85,4 +93,20 @@ dependencies {
     // than left to a transitive resolution.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlin:kotlin-test-junit:2.1.0")
+
+    // A REAL SQLite engine under the crash law, by the owner's condition
+    // (2026-11-11). `CrashMidWriteRealEngineTest` kills the caller between
+    // `write` and `markSuccessful`, and until now that law was only ever
+    // tested against fakes this module wrote: a rollback this module's own
+    // test implemented is not evidence about an engine. Robolectric runs the
+    // case against Android's own `SQLiteDatabase` with `SQLiteMode.NATIVE`, and
+    // the suite reads `sqlite_version()` out of that database so the claim
+    // "real engine" is measured in the case itself rather than implied by a
+    // dependency being present.
+    //
+    // 4.14.1 is the version whose supported SDK range includes this module's
+    // `compileSdk = 35`. It is a TEST dependency only: nothing in `src/main`
+    // gains an import, and `ci.yml` is untouched -- `testDebugUnitTest`
+    // already runs this source set.
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }
