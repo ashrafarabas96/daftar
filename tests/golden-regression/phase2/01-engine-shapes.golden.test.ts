@@ -5,8 +5,17 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PHASE4_INHERITED_PREFIX_END } from '../../../scripts/phase4-prefix';
 import { createScratchDb } from '../../helpers/scratch-db';
 import { ensurePostgres, ownerPool, resetData } from '../../helpers/test-app';
-import { must, post, refusal, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
-import { AT, expected, minor, type PersistedLine, type Shape } from './engine-shapes';
+import {
+  must,
+  post,
+  rate10,
+  refusal,
+  seedPostingFixture,
+  todayIn,
+  type PostCommand,
+  type PostLine,
+  type PostingFixture,
+} from '../../helpers/accounting-posting';
 
 /**
  * GOLDEN REGRESSION — ENGINE SHAPES (directive §70, execution plan §30/§33).
@@ -35,6 +44,83 @@ import { AT, expected, minor, type PersistedLine, type Shape } from './engine-sh
  * examples assume.
  */
 
+/** The instant every FX snapshot in this suite is taken at. */
+const AT = new Date('2026-03-14T09:15:00Z');
+
+/** A system account identity, as the closed registry in `0040` names it. */
+type Key =
+  | 'cash'
+  | 'bank'
+  | 'card_clearing'
+  | 'accounts_receivable'
+  | 'supplier_receivable'
+  | 'inventory'
+  | 'accounts_payable'
+  | 'tax_payable'
+  | 'customer_refund_liability'
+  | 'customer_credit_liability'
+  | 'sales_revenue'
+  | 'sales_returns'
+  | 'discounts'
+  | 'fx_gain'
+  | 'cogs'
+  | 'purchase_price_variance'
+  | 'fx_loss';
+
+/**
+ * The account code each identity must carry. Written out rather than read from
+ * the registry on purpose: a golden that asks the database what it seeded and
+ * then asserts the answer proves nothing. GOLD-28 wants the CODES.
+ */
+const CODE: Readonly<Record<Key, string>> = {
+  cash: '1000',
+  bank: '1010',
+  card_clearing: '1020',
+  accounts_receivable: '1100',
+  supplier_receivable: '1150',
+  inventory: '1200',
+  accounts_payable: '2000',
+  tax_payable: '2100',
+  customer_refund_liability: '2200',
+  customer_credit_liability: '2210',
+  sales_revenue: '4000',
+  sales_returns: '4100',
+  discounts: '4200',
+  fx_gain: '4900',
+  cogs: '5000',
+  purchase_price_variance: '6200',
+  fx_loss: '6900',
+};
+
+/** A foreign leg: the amount actually transacted and the rate to the base. */
+interface Foreign {
+  readonly amount: number;
+  readonly currency: 'USD' | 'EUR';
+  readonly rate: string;
+}
+
+/**
+ * One expected journal line, written in the rules document's own units: whole
+ * ILS for the base amount, whole units of the foreign currency for the leg.
+ * Every currency here has two minor units, so the conversion is a single ×100
+ * in one place rather than a hundred hand-written zeroes no reviewer can check.
+ */
+interface Line {
+  readonly account: Key;
+  readonly side: 'D' | 'C';
+  readonly base: number;
+  readonly foreign?: Foreign;
+}
+
+interface Shape {
+  /** The golden identity from the Phase 0 suite, where the rules give one. */
+  readonly id: string;
+  readonly title: string;
+  readonly lines: readonly Line[];
+}
+
+const minor = (whole: number): bigint => BigInt(Math.round(whole * 100));
+
 const command = (fx: PostingFixture, entryDate: string, shape: Shape): PostCommand => ({
   tenantId: fx.tenantId,
   businessId: fx.businessId,
@@ -59,6 +145,35 @@ const command = (fx: PostingFixture, entryDate: string, shape: Shape): PostComma
     }),
   ),
 });
+
+interface PersistedLine {
+  line_no: number;
+  code: string;
+  system_key: string;
+  debit_minor: string;
+  credit_minor: string;
+  base_amount_minor: string;
+  base_currency: string;
+  txn_amount_minor: string;
+  txn_currency: string;
+  fx_rate: string;
+  fx_rate_source: string;
+}
+
+const expected = (shape: Shape): PersistedLine[] =>
+  shape.lines.map((l, i) => ({
+    line_no: i + 1,
+    code: CODE[l.account],
+    system_key: l.account,
+    debit_minor: l.side === 'D' ? minor(l.base).toString() : '0',
+    credit_minor: l.side === 'C' ? minor(l.base).toString() : '0',
+    base_amount_minor: minor(l.base).toString(),
+    base_currency: 'ILS',
+    txn_amount_minor: (l.foreign === undefined ? minor(l.base) : minor(l.foreign.amount)).toString(),
+    txn_currency: l.foreign === undefined ? 'ILS' : l.foreign.currency,
+    fx_rate: rate10(l.foreign === undefined ? '1' : l.foreign.rate),
+    fx_rate_source: l.foreign === undefined ? 'base' : 'manual',
+  }));
 
 let fx: PostingFixture;
 let today: string;
