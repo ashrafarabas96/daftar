@@ -85,6 +85,7 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/customer-payments/:paymentId',
   'GET /v1/customers',
   'GET /v1/customers/:customerId',
+  'GET /v1/customers/:customerId/account-statement',
   'GET /v1/customers/:customerId/credits',
   'GET /v1/customers/:customerId/open-invoices',
   'GET /v1/customers/:customerId/receivable',
@@ -219,6 +220,7 @@ const RECEIVABLES_ROUTES: readonly string[] = [
   'POST /v1/customer-payments',
   'POST /v1/customer-credits/:creditId/applications',
   'GET /v1/customer-payments/:paymentId',
+  'GET /v1/customers/:customerId/account-statement',
   'GET /v1/customers/:customerId/credits',
 ];
 

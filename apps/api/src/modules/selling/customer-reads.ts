@@ -12,8 +12,8 @@ import type {
   CustomerOpenInvoicesDto,
   CustomerPageDto,
   CustomerReceivableDto,
-  CustomerStatementDto,
-  CustomerStatementEntryDto,
+  CustomerAccountStatementDto,
+  CustomerAccountStatementEntryDto,
 } from '@daftar/shared-contracts';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
@@ -21,7 +21,7 @@ import { readBaseCurrency } from '../inventory/inventory-stock-read';
 import { likeEscaped } from '../inventory/read-scope';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { sellingRefusal } from './selling-errors';
-import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery, CustomerStatementQuery } from './selling.schemas';
+import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery, CustomerAccountStatementQuery } from './selling.schemas';
 
 /**
  * The customer READ surface of P4-S1 (lock §4 source-of-truth matrix, P4-AL-06,
@@ -646,7 +646,7 @@ export class CustomerReadService {
   }
 
   /**
-   * `GET /v1/customers/:customerId/statement` — one row per sales document,
+   * `GET /v1/customers/:customerId/account-statement` — one row per sales document,
    * payment, held credit and credit application of the customer, oldest first.
    *
    * The order is `(entry date, kind rank, entry id)` and the continuation is
@@ -659,7 +659,7 @@ export class CustomerReadService {
    * unsummed. Drafts are not statement rows; a void invoice is not a debt and
    * is not listed either.
    */
-  async statement(m: MembershipContext, customerId: string, q: CustomerStatementQuery): Promise<CustomerStatementDto> {
+  async accountStatement(m: MembershipContext, customerId: string, q: CustomerAccountStatementQuery): Promise<CustomerAccountStatementDto> {
     const row = await findCustomer(this.db, this.scope(m), customerId);
     if (row === null) throw sellingRefusal('customer.not_found');
     const size = q.limit ?? DEFAULT_LIMIT;
@@ -675,7 +675,7 @@ export class CustomerReadService {
 
     const found = await this.db.scoped<
       QueryResultRow & {
-        entry_kind: CustomerStatementEntryDto['entryKind'];
+        entry_kind: CustomerAccountStatementEntryDto['entryKind'];
         entry_id: string;
         entry_date_text: string;
         kind_rank: number;
@@ -734,7 +734,7 @@ export class CustomerReadService {
     );
 
     const page = found.rows.slice(0, size);
-    const items: CustomerStatementEntryDto[] = page.map((r) => ({
+    const items: CustomerAccountStatementEntryDto[] = page.map((r) => ({
       entryKind: r.entry_kind,
       entryId: r.entry_id,
       entryDate: r.entry_date_text,

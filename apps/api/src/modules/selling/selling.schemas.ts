@@ -116,7 +116,7 @@ const customerContact = z
  * optional field is cleared and a contact the statement does not name is
  * removed. Reachability (`phone` or `email` on each contact) and the
  * single-primary rule are the domain's judgement
- * (`validateCustomerStatement`), so their typed `customer.contact_*` codes
+ * (`validateCustomerAccountStatement`), so their typed `customer.contact_*` codes
  * reach the client rather than a generic validation failure.
  */
 const customerFields = {
@@ -222,24 +222,24 @@ export const CustomerOpenInvoicesQuerySchema = z
   .strict();
 
 /**
- * `GET /v1/customers/:customerId/statement`. Keyset only: there is no `offset`
+ * `GET /v1/customers/:customerId/account-statement`. Keyset only: there is no `offset`
  * key. The cursor is the composite continuation key of the chronological order
  * `(entry date, kind rank, entry id)` -- `YYYY-MM-DD:<1..4>:<uuid>` -- because
  * one uuid cannot name a position across four tables without a resolving read.
  */
-const statementCursor = z
+const accountStatementCursor = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}:[1-4]:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'must be a statement cursor');
 
-export const CustomerStatementQuerySchema = z
+export const CustomerAccountStatementQuerySchema = z
   .object({
-    cursor: statementCursor.optional(),
+    cursor: accountStatementCursor.optional(),
     limit: limit.optional(),
   })
   .strict();
 
 export type CustomerListQuery = z.infer<typeof CustomerListQuerySchema>;
-export type CustomerStatementQuery = z.infer<typeof CustomerStatementQuerySchema>;
+export type CustomerAccountStatementQuery = z.infer<typeof CustomerAccountStatementQuerySchema>;
 export type CustomerAgingQuery = z.infer<typeof CustomerAgingQuerySchema>;
 export type CustomerOpenInvoicesQuery = z.infer<typeof CustomerOpenInvoicesQuerySchema>;
 

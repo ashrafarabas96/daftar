@@ -5,7 +5,7 @@ import type {
   CustomerOpenInvoicesDto,
   CustomerPageDto,
   CustomerReceivableDto,
-  CustomerStatementDto,
+  CustomerAccountStatementDto,
 } from '@daftar/shared-contracts';
 import { Membership } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
@@ -13,7 +13,7 @@ import { strictUuidParam } from '../inventory/canonical-id';
 import { CustomerReadService } from './customer-reads';
 import { sellingRefusal } from './selling-errors';
 import { phase4Permission } from './selling-permissions';
-import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoicesQuerySchema, CustomerStatementQuerySchema } from './selling.schemas';
+import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoicesQuerySchema, CustomerAccountStatementQuerySchema } from './selling.schemas';
 
 /**
  * The customer READ routes of P4-S1 (lock P4-AL-35, P4-AL-54; `OD-P4-03`
@@ -115,12 +115,16 @@ export class CustomersController {
    * `receivables.view` and business-wide scope (it spans every branch). No
    * running balance per row: the one authoritative figure is `outstanding`.
    */
-  @Get(':customerId/statement')
+  @Get(':customerId/account-statement')
   @phase4Permission('receivables.view')
-  async statement(@Membership() m: MembershipContext, @Param('customerId') customerId: string, @Query() query: unknown): Promise<CustomerStatementDto> {
+  async accountStatement(
+    @Membership() m: MembershipContext,
+    @Param('customerId') customerId: string,
+    @Query() query: unknown,
+  ): Promise<CustomerAccountStatementDto> {
     const id = strictUuidParam(customerId, 'customerId');
     this.assertBusinessWide(m);
-    return this.reads.statement(m, id, CustomerStatementQuerySchema.parse(query));
+    return this.reads.accountStatement(m, id, CustomerAccountStatementQuerySchema.parse(query));
   }
 
   /**

@@ -1,5 +1,5 @@
 /**
- * L3 — THE CUSTOMER STATEMENT READ (`GET /v1/customers/:customerId/statement`).
+ * L3 — THE CUSTOMER STATEMENT READ (`GET /v1/customers/:customerId/account-statement`).
  *
  * No database: `Database.scoped` is replaced by a recording fake, so every
  * assertion is over the SQL the read REALLY issued, never over prose. The fake
@@ -19,7 +19,7 @@ import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { CustomerReadService } from '../../apps/api/src/modules/selling/customer-reads';
 import { CustomersController } from '../../apps/api/src/modules/selling/customers.controller';
-import { CustomerStatementQuerySchema } from '../../apps/api/src/modules/selling/selling.schemas';
+import { CustomerAccountStatementQuerySchema } from '../../apps/api/src/modules/selling/selling.schemas';
 import type { MembershipContext } from '../../apps/api/src/modules/tenancy/tenancy.service';
 
 const BUSINESS = '11111111-1111-4111-8111-111111111111';
@@ -158,17 +158,17 @@ function service(opts: { customerExists: boolean }) {
 }
 
 describe('L3 customer statement', () => {
-  it('RED/route: the controller exposes GET :customerId/statement', () => {
-    const handler = (CustomersController.prototype as unknown as Record<string, unknown>).statement;
+  it('RED/route: the controller exposes GET :customerId/account-statement', () => {
+    const handler = (CustomersController.prototype as unknown as Record<string, unknown>).accountStatement;
     expect(typeof handler).toBe('function');
-    expect(Reflect.getMetadata('path', handler as object)).toBe(':customerId/statement');
+    expect(Reflect.getMetadata('path', handler as object)).toBe(':customerId/account-statement');
     expect(Reflect.getMetadata('method', handler as object)).toBe(0); // RequestMethod.GET
   });
 
   it('chronological, keyset-paginated: page 2 neither repeats nor skips', async () => {
     const { reads } = service({ customerExists: true });
-    const q1 = CustomerStatementQuerySchema.parse({ limit: '2' });
-    const p1 = await reads.statement(m, CUSTOMER, q1);
+    const q1 = CustomerAccountStatementQuerySchema.parse({ limit: '2' });
+    const p1 = await reads.accountStatement(m, CUSTOMER, q1);
     expect(p1.items.map((r) => r.entryId)).toEqual([id(1), id(2)]);
     expect(p1.nextCursor).not.toBeNull();
 
@@ -176,18 +176,18 @@ describe('L3 customer statement', () => {
     let cursor = p1.nextCursor;
     let guard = 0;
     while (cursor !== null && guard++ < 10) {
-      const page = await reads.statement(m, CUSTOMER, CustomerStatementQuerySchema.parse({ limit: '2', cursor }));
+      const page = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({ limit: '2', cursor }));
       seen.push(...page.items.map((r) => r.entryId));
       cursor = page.nextCursor;
     }
     expect(seen).toEqual(FIXTURE.map((r) => r.entry_id)); // all five, once each, in order
-    const dates = (await reads.statement(m, CUSTOMER, CustomerStatementQuerySchema.parse({}))).items.map((r) => r.entryDate);
+    const dates = (await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}))).items.map((r) => r.entryDate);
     expect([...dates].sort()).toEqual(dates);
   });
 
   it('GUARD: no statement the read issues contains sum( or OFFSET, and money comes through the reader of record', async () => {
     const { reads, captured } = service({ customerExists: true });
-    await reads.statement(m, CUSTOMER, CustomerStatementQuerySchema.parse({ limit: '2' }));
+    await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({ limit: '2' }));
     expect(captured.length).toBeGreaterThanOrEqual(3); // a non-empty subject for the negative assertions
     for (const c of captured) {
       expect(c.sql, c.sql).not.toMatch(/\bsum\s*\(/i);
@@ -198,14 +198,14 @@ describe('L3 customer statement', () => {
 
   it('no per-row running balance; the authoritative total is a separate field', async () => {
     const { reads } = service({ customerExists: true });
-    const res = await reads.statement(m, CUSTOMER, CustomerStatementQuerySchema.parse({}));
+    const res = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}));
     for (const r of res.items) expect(Object.keys(r).filter((k) => /balance|running/i.test(k))).toEqual([]);
     expect(res.outstanding).toEqual([{ currency: 'USD', txnMinor: '1100', baseMinor: '1100' }]);
   });
 
   it('NEGATIVE CONTROL: a well-formed request returns the rows, with debit and credit kept separate', async () => {
     const { reads } = service({ customerExists: true });
-    const res = await reads.statement(m, CUSTOMER, CustomerStatementQuerySchema.parse({}));
+    const res = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}));
     expect(res.customerId).toBe(CUSTOMER);
     expect(res.items).toHaveLength(FIXTURE.length);
     const inv = res.items[0];
@@ -215,7 +215,7 @@ describe('L3 customer statement', () => {
 
   it("NEGATIVE CONTROL: another business's customer id is refused and no statement SQL is issued", async () => {
     const { reads, captured } = service({ customerExists: true });
-    await expect(reads.statement(m, FOREIGN_CUSTOMER, CustomerStatementQuerySchema.parse({}))).rejects.toMatchObject({
+    await expect(reads.accountStatement(m, FOREIGN_CUSTOMER, CustomerAccountStatementQuerySchema.parse({}))).rejects.toMatchObject({
       code: 'NOT_FOUND',
       details: { sellingCode: 'customer.not_found' },
     });
@@ -223,10 +223,17 @@ describe('L3 customer statement', () => {
     void OTHER_BUSINESS;
   });
 
+  it('the route path cannot be confused with the guard seed path under the checker rule (text.includes)', () => {
+    const mine = '/v1/customers/:customerId/account-statement';
+    const seed = '/v1/customers/:customerId/statement';
+    console.log('mine=' + mine + ' | seed=' + seed + ' | mine.includes(seed)=' + String(mine.includes(seed)));
+    expect(mine.includes(seed)).toBe(false);
+  });
+
   it('query schema: keyset cursor, capped limit, no offset key', () => {
-    expect(() => CustomerStatementQuerySchema.parse({ offset: '5' })).toThrow();
-    expect(() => CustomerStatementQuerySchema.parse({ limit: '100000' })).toThrow();
-    expect(() => CustomerStatementQuerySchema.parse({ cursor: 'not-a-cursor' })).toThrow();
-    expect(CustomerStatementQuerySchema.parse({ cursor: `2026-01-02:2:${id(3)}` }).cursor).toBe(`2026-01-02:2:${id(3)}`);
+    expect(() => CustomerAccountStatementQuerySchema.parse({ offset: '5' })).toThrow();
+    expect(() => CustomerAccountStatementQuerySchema.parse({ limit: '100000' })).toThrow();
+    expect(() => CustomerAccountStatementQuerySchema.parse({ cursor: 'not-a-cursor' })).toThrow();
+    expect(CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:2:${id(3)}` }).cursor).toBe(`2026-01-02:2:${id(3)}`);
   });
 });

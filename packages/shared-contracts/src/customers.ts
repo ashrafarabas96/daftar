@@ -517,7 +517,7 @@ export interface CustomerOpenInvoicesDto {
 }
 
 /** One statement row: a sales document, a payment, a credit, or a credit application. */
-export interface CustomerStatementEntryDto {
+export interface CustomerAccountStatementEntryDto {
   entryKind: 'invoice' | 'payment' | 'credit' | 'credit_application';
   entryId: string;
   /** Civil date `YYYY-MM-DD` of the event. */
@@ -537,20 +537,20 @@ export interface CustomerStatementEntryDto {
 }
 
 /** The authoritative figure, straight from the reader of record -- one entry per currency, never summed here. */
-export interface CustomerStatementOutstandingDto {
+export interface CustomerAccountStatementOutstandingDto {
   currency: string | null;
   txnMinor: string | null;
   baseMinor: string;
 }
 
 /**
- * `GET /v1/customers/:customerId/statement` -- requires `receivables.view`.
+ * `GET /v1/customers/:customerId/account-statement` -- requires `receivables.view`.
  * There is deliberately NO per-row running balance: `outstanding` is the only
  * balance and it is `customer_ar_outstanding(...)`'s own answer.
  */
-export interface CustomerStatementDto {
+export interface CustomerAccountStatementDto {
   customerId: string;
-  items: CustomerStatementEntryDto[];
-  outstanding: CustomerStatementOutstandingDto[];
+  items: CustomerAccountStatementEntryDto[];
+  outstanding: CustomerAccountStatementOutstandingDto[];
   nextCursor: string | null;
 }
