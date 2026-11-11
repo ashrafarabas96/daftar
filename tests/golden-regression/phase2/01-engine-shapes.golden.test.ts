@@ -5,7 +5,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PHASE4_INHERITED_PREFIX_END } from '../../../scripts/phase4-prefix';
 import { createScratchDb } from '../../helpers/scratch-db';
 import { ensurePostgres, ownerPool, resetData } from '../../helpers/test-app';
-import { must, post, rate10, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
+import { must, post, refusal, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
+import { AT, expected, minor, type PersistedLine, type Shape } from './engine-shapes';
 
 /**
  * GOLDEN REGRESSION — ENGINE SHAPES (directive §70, execution plan §30/§33).
@@ -34,83 +35,6 @@ import { must, post, rate10, seedPostingFixture, todayIn, type PostCommand, type
  * examples assume.
  */
 
-/** The instant every FX snapshot in this suite is taken at. */
-const AT = new Date('2026-03-14T09:15:00Z');
-
-/** A system account identity, as the closed registry in `0040` names it. */
-type Key =
-  | 'cash'
-  | 'bank'
-  | 'card_clearing'
-  | 'accounts_receivable'
-  | 'supplier_receivable'
-  | 'inventory'
-  | 'accounts_payable'
-  | 'tax_payable'
-  | 'customer_refund_liability'
-  | 'customer_credit_liability'
-  | 'sales_revenue'
-  | 'sales_returns'
-  | 'discounts'
-  | 'fx_gain'
-  | 'cogs'
-  | 'purchase_price_variance'
-  | 'fx_loss';
-
-/**
- * The account code each identity must carry. Written out rather than read from
- * the registry on purpose: a golden that asks the database what it seeded and
- * then asserts the answer proves nothing. GOLD-28 wants the CODES.
- */
-const CODE: Readonly<Record<Key, string>> = {
-  cash: '1000',
-  bank: '1010',
-  card_clearing: '1020',
-  accounts_receivable: '1100',
-  supplier_receivable: '1150',
-  inventory: '1200',
-  accounts_payable: '2000',
-  tax_payable: '2100',
-  customer_refund_liability: '2200',
-  customer_credit_liability: '2210',
-  sales_revenue: '4000',
-  sales_returns: '4100',
-  discounts: '4200',
-  fx_gain: '4900',
-  cogs: '5000',
-  purchase_price_variance: '6200',
-  fx_loss: '6900',
-};
-
-/** A foreign leg: the amount actually transacted and the rate to the base. */
-interface Foreign {
-  readonly amount: number;
-  readonly currency: 'USD' | 'EUR';
-  readonly rate: string;
-}
-
-/**
- * One expected journal line, written in the rules document's own units: whole
- * ILS for the base amount, whole units of the foreign currency for the leg.
- * Every currency here has two minor units, so the conversion is a single ×100
- * in one place rather than a hundred hand-written zeroes no reviewer can check.
- */
-interface Line {
-  readonly account: Key;
-  readonly side: 'D' | 'C';
-  readonly base: number;
-  readonly foreign?: Foreign;
-}
-
-interface Shape {
-  /** The golden identity from the Phase 0 suite, where the rules give one. */
-  readonly id: string;
-  readonly title: string;
-  readonly lines: readonly Line[];
-}
-
-const minor = (whole: number): bigint => BigInt(Math.round(whole * 100));
-
 const command = (fx: PostingFixture, entryDate: string, shape: Shape): PostCommand => ({
   tenantId: fx.tenantId,
   businessId: fx.businessId,
@@ -135,35 +59,6 @@ const command = (fx: PostingFixture, entryDate: string, shape: Shape): PostComma
     }),
   ),
 });
-
-interface PersistedLine {
-  line_no: number;
-  code: string;
-  system_key: string;
-  debit_minor: string;
-  credit_minor: string;
-  base_amount_minor: string;
-  base_currency: string;
-  txn_amount_minor: string;
-  txn_currency: string;
-  fx_rate: string;
-  fx_rate_source: string;
-}
-
-const expected = (shape: Shape): PersistedLine[] =>
-  shape.lines.map((l, i) => ({
-    line_no: i + 1,
-    code: CODE[l.account],
-    system_key: l.account,
-    debit_minor: l.side === 'D' ? minor(l.base).toString() : '0',
-    credit_minor: l.side === 'C' ? minor(l.base).toString() : '0',
-    base_amount_minor: minor(l.base).toString(),
-    base_currency: 'ILS',
-    txn_amount_minor: (l.foreign === undefined ? minor(l.base) : minor(l.foreign.amount)).toString(),
-    txn_currency: l.foreign === undefined ? 'ILS' : l.foreign.currency,
-    fx_rate: rate10(l.foreign === undefined ? '1' : l.foreign.rate),
-    fx_rate_source: l.foreign === undefined ? 'base' : 'manual',
-  }));
 
 let fx: PostingFixture;
 let today: string;
@@ -193,6 +88,66 @@ async function postShape(shape: Shape): Promise<PersistedLine[]> {
 /** Assert a shape literally, and — separately — that it balances. */
 async function golden(shape: Shape): Promise<void> {
   expect(await postShape(shape)).toEqual(expected(shape));
+  const debits = shape.lines.filter((l) => l.side === 'D').reduce((a, l) => a + minor(l.base), 0n);
+  const credits = shape.lines.filter((l) => l.side === 'C').reduce((a, l) => a + minor(l.base), 0n);
+  expect(debits, `${shape.id} does not balance`).toBe(credits);
+}
+
+/** The marker the AR source-document guard puts in its own message (`0090`). */
+const GUARD_MARKER = 'MVP03_AR_SOURCE_DOCUMENT_GUARD';
+
+/**
+ * A SHAPE THIS SUITE MAY NO LONGER POST, AND WHY IT STAYS HERE ANYWAY.
+ *
+ * `0090_mvp03_ar_source_document_guard.sql` (`DR-114`/ثالثًا/2) refuses a
+ * `journal_lines` row on `accounts_receivable` or on
+ * `customer_credit_liability` unless its entry is one of that account's sales
+ * documents. Seven shapes below were carried by `manual_adjustment`, which is
+ * exactly the carrier the guard refuses — and the measured reason the guard
+ * exists is that such a journal holds debt no join can put behind any
+ * customer's name (`journal_lines` carries `branch_id` and `warehouse_id` and
+ * no counterparty column, `0042`).
+ *
+ * `DR-115`/1 moved the carrier to a real sales document wherever one produces
+ * the shape. For these seven no document on this head does, each for a reason
+ * MEASURED and not reasoned (`MVP03_SOURCE_OF_TRUTH_2026-11-10_AR.md` §16):
+ *
+ *   — `GOLD-65` and `GOLD-66` ARE produced by the reversal of a real credit
+ *     application — but `planCustomerCreditApplication` emits
+ *     `[...creditLines, ...arLines]` (`customer-settlement.ts:612`) and
+ *     `mirrorReversalLines` preserves line order (`sources.ts:156-158`), so
+ *     the document's `line_no` 1 is `2210` where these goldens assert
+ *     `accounts_receivable`. Reproducing them would mean REORDERING the
+ *     `Shape` literal, and `DR-115`/1 requires the expected output to be
+ *     unchanged by a letter. The shape is right; its order is the document's.
+ *   — `GOLD-67` and `RULES-6` need a RECEIVABLE CARRIED IN USD. A product's
+ *     price currency must equal the business base currency
+ *     (`catalog.service.ts:246-250`) and a sale's currency is its products'
+ *     (`sale-commit.service.ts:626`), so no invoice on this head is foreign
+ *     and no document carries a foreign AR line at all.
+ *   — `GOLD-81` and `GOLD-82` need `2210` debited against cash at a
+ *     DIFFERENT amount with a realized FX leg. `customer_credit` is exactly
+ *     two equal lines with no FX leg (`0081`, `v_nlines <> 2`), and a credit
+ *     application faces `2210` with the receivable, never with cash.
+ *   — `RULES-7B/1` needs a void. There is no void state: `invoices_state_ck`
+ *     refused `'void'` outright, measured on a live database (§12).
+ *
+ * So the shape and its sentence stay here WORD FOR WORD and what is asserted
+ * is the guard's refusal — the one thing that is true of this journal today:
+ * a merchant's receivable may not be moved by hand. Deleting them was never
+ * an option (`DR-115`, ما لا يُقرأ منه), and the deferred card
+ * `cards/MVP03_GOLDENS_AWAITING_VOID_AND_REFUND_AR.md` owns their return as
+ * real goldens the day their documents exist.
+ *
+ * THE ASSERTION IS ON THE MARKER, not on "it threw": a refusal from a
+ * balance, period or fingerprint rule read as this law speaking is precisely
+ * the false positive RULE-27 exists for. The shape's own arithmetic is still
+ * checked, because balancing needs no ledger — so a wrong shape still fails
+ * here, and these seven are not reduced to "something was refused".
+ */
+async function refusedWithoutASalesDocument(shape: Shape): Promise<void> {
+  const message = await refusal(() => postShape(shape));
+  expect(message, `${shape.id} must be refused BY THE AR SOURCE-DOCUMENT GUARD and not by another rule`).toContain(GUARD_MARKER);
   const debits = shape.lines.filter((l) => l.side === 'D').reduce((a, l) => a + minor(l.base), 0n);
   const credits = shape.lines.filter((l) => l.side === 'C').reduce((a, l) => a + minor(l.base), 0n);
   expect(debits, `${shape.id} does not balance`).toBe(credits);
@@ -293,8 +248,8 @@ describe('golden: engine shapes — cross-currency refund (RULES §5.1, GOLD-50)
 });
 
 describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GOLD-65/66/67)', () => {
-  it('Example A reopens AR and owes the customer a credit — revenue is not touched', async () => {
-    await golden({
+  it('Example A reopens AR and owes the customer a credit — revenue is not touched — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-65',
       title: 'reverse a wrongly allocated payment',
       lines: [
@@ -304,8 +259,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
     });
   });
 
-  it('Example B reverses ONE allocation of a split payment: 200, not the payment’s 500', async () => {
-    await golden({
+  it('Example B reverses ONE allocation of a split payment: 200, not the payment’s 500 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-66',
       title: 'partial reversal of a split payment',
       lines: [
@@ -315,8 +270,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
     });
   });
 
-  it('Example C reverses at the ORIGINAL snapshots — AR 1440 @3.60, the original 40 gain undone, credit 1480 @4.00', async () => {
-    await golden({
+  it('Example C reverses at the ORIGINAL snapshots — AR 1440 @3.60, the original 40 gain undone, credit 1480 @4.00 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-67',
       title: 'multi-currency allocation reversal',
       lines: [
@@ -329,8 +284,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
 });
 
 describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GOLD-81/82)', () => {
-  it('Case A consumes the whole credit: 370 EUR carried at 1480 paid out at 1554, 74 realized loss', async () => {
-    await golden({
+  it('Case A consumes the whole credit: 370 EUR carried at 1480 paid out at 1554, 74 realized loss — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-81',
       title: 'full same-currency refund of a customer credit',
       lines: [
@@ -341,8 +296,8 @@ describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GO
     });
   });
 
-  it('Case B releases the carrying value PROPORTIONALLY: 350 of 370 releases 1400, not 1480', async () => {
-    await golden({
+  it('Case B releases the carrying value PROPORTIONALLY: 350 of 370 releases 1400, not 1480 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-82',
       title: 'partial same-currency refund of a customer credit',
       lines: [
@@ -354,22 +309,25 @@ describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GO
   });
 });
 
-describe('golden: engine shapes — chargeback (RULES §5.2ب, GOLD-87)', () => {
-  it('reverses the CASH ORIGIN, not into a customer credit: the money left the business', async () => {
-    await golden({
-      id: 'GOLD-87',
-      title: 'card chargeback on an allocated payment',
-      lines: [
-        { account: 'accounts_receivable', side: 'D', base: 300 },
-        { account: 'card_clearing', side: 'C', base: 300 },
-      ],
-    });
-  });
-});
+/**
+ * MOVED — `GOLD-87` (chargeback, RULES §5.2ب) is now posted through a REAL
+ * SALES DOCUMENT and is asserted, unchanged, in
+ * `tests/golden-regression/phase4-s4/13-engine-shapes-on-sales-documents.golden.test.ts`.
+ *
+ * Its carrier is the reversal of a real `customer_payment_allocation` taken
+ * through a card method whose posting account is `card_clearing`
+ * (`DR-115`/1). Its `Shape` literal and the `expected()` that reads it did not
+ * change by a letter — both are imported from `./engine-shapes`, which is how
+ * that is proved rather than claimed. It is the ONE of the eight whose shape a
+ * real document reproduces column for column, `line_no` included.
+ *
+ * Nothing was deleted and the count did not fall: one assertion left this file
+ * and one arrived there, and the seven above are still asserted here.
+ */
 
 describe('golden: engine shapes — tri-currency settlement (RULES §6)', () => {
-  it('base ILS, invoice USD, payment EUR: 1480 in, 1440 of AR released, 40 realized gain', async () => {
-    await golden({
+  it('base ILS, invoice USD, payment EUR: 1480 in, 1440 of AR released, 40 realized gain — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'RULES-6',
       title: 'tri-currency settlement',
       lines: [
@@ -415,8 +373,8 @@ describe('golden: engine shapes — void of a paid invoice (RULES §7)', () => {
     });
   });
 
-  it('B/1 splits the credit note between the unpaid 700 of AR and the paid 300 now owed back', async () => {
-    await golden({
+  it('B/1 splits the credit note between the unpaid 700 of AR and the paid 300 now owed back — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'RULES-7B/1',
       title: 'void of a partly paid credit invoice',
       lines: [
