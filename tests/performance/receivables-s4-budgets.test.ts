@@ -154,6 +154,7 @@ import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
+import { readerOfRecordCall, stripReaderOfRecordCalls } from './reader-of-record-calls';
 import {
   FAT_TAIL,
   FOREIGN_CURRENCY,
@@ -739,8 +740,16 @@ function readersOfRecord(root: string): string[] {
       // quietly exempted from the ceiling. `invoice_outstanding` itself
       // carries two live signatures (`0084:526`, `0084:593`), which is where
       // this was measured (TL-P4-S5-R1, §H of the refund guard). Widening it
-      // is byte-neutral on the tree as it stands — the set is the same four
-      // names — and strictly wider the day it is not.
+      // is byte-neutral on the tree as it stands — the set is the same EIGHT
+      // names — and strictly wider the day it is not. Both halves were
+      // remeasured on this head with the gate's own helpers: reading every
+      // definition and reading only the last one give the identical eight-name
+      // set, and the distinction is live rather than vacuous because six
+      // routines in the Phase 4 DDL carry more than one definition
+      // (`invoice_outstanding`, `customer_ar_outstanding`, `customer_ar_aging`,
+      // `customer_collect_payment`, `accounting_sale_entry_complete`,
+      // `accounting_reversals_20_domain_source_guard`). "Four" was never the
+      // closure's count; the byte-neutrality claim itself holds, measured.
       const definitions = phase4RoutineBodies(root, name);
       if (definitions.length === 0) continue; // unreadable bodies are the S1 gate's subject, not this one's
       if (definitions.some((body) => [...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body)))) {
@@ -754,8 +763,7 @@ function readersOfRecord(root: string): string[] {
 }
 
 const READERS_OF_RECORD = readersOfRecord(join(__dirname, '..', '..'));
-const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\s*\\(`, 'i');
-const READER_OF_RECORD_CALL_G = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\([^)]*\\)`, 'gi');
+const READER_OF_RECORD_CALL = readerOfRecordCall(READERS_OF_RECORD);
 
 /** The three reads of one customer, labelled, so the fat-tail and median arms are built identically. */
 const readsOf = (
@@ -1676,7 +1684,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
       for (const c of statements) {
         // A `sum(` in the read's OWN statement would be the second copy. The
         // readers of record sum inside their own bodies, which is the point.
-        expect(/\bsum\s*\(/i.test(c.text.replace(READER_OF_RECORD_CALL_G, '')), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
+        expect(/\bsum\s*\(/i.test(stripReaderOfRecordCalls(c.text, READERS_OF_RECORD)), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
       }
     }
     console.log(`\nREADERS OF RECORD — P4-D\n${JSON.stringify(byRead, null, 1)}\n`);

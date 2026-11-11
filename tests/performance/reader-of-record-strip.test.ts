@@ -65,6 +65,11 @@ describe('P4-AL-07 — the removal that gives the law its teeth', () => {
     expect(refuses(text), `nesting two readers is not a second copy, and it was refused:\n${text}`).toBe(false);
   });
 
+  it('REFUSES a sum applied TO a reader of record’s result — the second copy, the other way round', () => {
+    const text = 'SELECT sum(invoice_outstanding($1)) FROM customers WHERE id = $2';
+    expect(refuses(text), `summing the reader's own answer is a second copy and was allowed:\n${text}`).toBe(true);
+  });
+
   it('CONTROL: the removal is driven by the names, so an unlisted function keeps its argument', () => {
     const text = 'SELECT some_other_function(sum(x), $2)';
     expect(stripReaderOfRecordCalls(text, NAMES), 'an unlisted function was removed, so the names are not the subject').toBe(text);
