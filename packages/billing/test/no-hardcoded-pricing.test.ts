@@ -142,6 +142,33 @@ export function pricingConfigOffences(source: string): string[] {
   return out;
 }
 
+/**
+ * The §20 arm-A offences of a set of sources: every numeric literal that is
+ * not on the allowlist, named with its file. The sources and the allowlist are
+ * PARAMETERS so a planted violation travels through the same checker the live
+ * case uses.
+ */
+function numericOffences(sources: ReadonlyArray<readonly [string, string]>, allowed: Readonly<Record<string, string>>): string[] {
+  const offences: string[] = [];
+  for (const [file, source] of sources) {
+    for (const lit of numericLiteralsOf(source)) {
+      if (!(lit in allowed)) offences.push(`${file}: ${lit}`);
+    }
+  }
+  return offences;
+}
+
+/** The §20 arm-C offences of a set of sources: each three-letter uppercase string literal. */
+function currencyOffences(sources: ReadonlyArray<readonly [string, string]>): string[] {
+  const offences: string[] = [];
+  for (const [file, source] of sources) {
+    for (const lit of stringLiteralsOf(source)) {
+      if (/^[A-Z]{3}$/.test(lit)) offences.push(`${file}: '${lit}'`);
+    }
+  }
+  return offences;
+}
+
 describe('§20 arm A — every numeric literal in src is allowlisted with a reason', () => {
   it('finds literals at all (the extraction is not vacuous)', () => {
     const all = SOURCES.flatMap(([, s]) => numericLiteralsOf(s));
@@ -151,15 +178,24 @@ describe('§20 arm A — every numeric literal in src is allowlisted with a reas
     // in a comment and must therefore NOT be found.
     expect(all).toContain('18n');
     expect(all).not.toContain('0043');
+
+    // NEGATIVE CONTROL: the same checker the live case below uses, fed a
+    // planted price, must report it by file and value. A checker that returned
+    // nothing would make the live case pass for every possible `src/`.
+    expect(numericOffences([['plant.ts', 'export const PRO = 30_000n;']], ALLOWED_NUMERIC)).toEqual(['plant.ts: 30_000n']);
+    // A price that borrows a value the allowlist already permits is the arm-B
+    // case, not this one; arm A must still report a value that is NOT listed.
+    expect(numericOffences([['plant.ts', 'const a = 12; const b = 7;']], ALLOWED_NUMERIC)).toEqual(['plant.ts: 7']);
+    // NO FALSE RED: the nearest legitimate shapes are not reported — an
+    // allowlisted value, a migration number in a comment, a price in a string
+    // body, and an identifier that merely carries digits.
+    expect(numericOffences([['ok.ts', 'const m = 12; const z = 0n; const t = 3_600_000;']], ALLOWED_NUMERIC)).toEqual([]);
+    expect(numericOffences([['ok.ts', '// price 30_000n, migration 0043\n/* 9999 */ const a = 1;']], ALLOWED_NUMERIC)).toEqual([]);
+    expect(numericOffences([['ok.ts', "const s = 'costs 30_000n'; const v30000 = 2;"]], ALLOWED_NUMERIC)).toEqual([]);
   });
 
   it('contains no numeric literal outside the allowlist', () => {
-    const offences: string[] = [];
-    for (const [file, source] of SOURCES) {
-      for (const lit of numericLiteralsOf(source)) {
-        if (!(lit in ALLOWED_NUMERIC)) offences.push(`${file}: ${lit}`);
-      }
-    }
+    const offences = numericOffences(SOURCES, ALLOWED_NUMERIC);
     expect(offences, 'a numeric literal in src is not in the §20 allowlist').toEqual([]);
   });
 
@@ -225,15 +261,18 @@ describe('§20 arm C — no currency is written into the source', () => {
     // A value that is in code, and one that is only in prose.
     expect(all).toContain('billing.invariant_violated');
     expect(all.some((l) => l.includes('MIGRATION PATCH REQUEST'))).toBe(false);
+
+    // NEGATIVE CONTROL: a planted currency code goes through the same checker
+    // the live case below uses and must be reported by file and value.
+    expect(currencyOffences([['plant.ts', "export const C = 'ILS';"]])).toEqual(["plant.ts: 'ILS'"]);
+    expect(currencyOffences([['plant.ts', 'const c = "USD";']])).toEqual(["plant.ts: 'USD'"]);
+    // NO FALSE RED: a code in a comment, a longer or lower-case word, and an
+    // empty string are not currency codes.
+    expect(currencyOffences([['ok.ts', "// 'ILS' is configuration\nconst a = 'ILSX'; const b = 'ils'; const c = ''; const d = 'Ils';"]])).toEqual([]);
   });
 
   it('contains no three-letter uppercase currency code', () => {
-    const offences: string[] = [];
-    for (const [file, source] of SOURCES) {
-      for (const lit of stringLiteralsOf(source)) {
-        if (/^[A-Z]{3}$/.test(lit)) offences.push(`${file}: '${lit}'`);
-      }
-    }
+    const offences = currencyOffences(SOURCES);
     expect(offences, 'a currency code is written into src; a currency is configuration').toEqual([]);
   });
 });
