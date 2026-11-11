@@ -108,11 +108,48 @@ const OUTSIDE: ReadonlyArray<readonly [string, readonly string[]]> = trackedTsFi
   .filter((p) => p !== SELF)
   .map((p) => [p, resolveSpecs(p, importSpecifiers(readFileSync(join(REPO, p), 'utf8')))] as const);
 
-function importersOf(pkg: string): string[] {
+type Corpus = ReadonlyArray<readonly [string, readonly string[]]>;
+
+/**
+ * The importers of `pkg` in ANY corpus. The corpus is a parameter so the
+ * negative controls below can run THIS checker over a planted entry: a law
+ * that asserts an absence and has no planted violation to point at is a law
+ * nobody has seen say no (the charter's §5, restated by the coordinator on
+ * 2026-11-12). Until this round the file carried four positive controls and
+ * no negative one.
+ */
+function importersIn(corpus: Corpus, pkg: string): string[] {
   // `@daftar/billing` and any path that reaches `packages/billing/` are the
   // same source read two ways, so both spellings count as the same edge.
   const dir = `packages/${pkg.replace('@daftar/', '')}/`;
-  return OUTSIDE.filter(([, specs]) => specs.some((s) => s === pkg || s.startsWith(`${pkg}/`) || s.includes(dir))).map(([p]) => p);
+  return corpus.filter(([, specs]) => specs.some((s) => s === pkg || s.startsWith(`${pkg}/`) || s.includes(dir))).map(([p]) => p);
+}
+
+function importersOf(pkg: string): string[] {
+  return importersIn(OUTSIDE, pkg);
+}
+
+/** One corpus entry built the way the real one is: text in, specifiers out. */
+function entry(file: string, source: string): readonly [string, readonly string[]] {
+  return [file, resolveSpecs(file, importSpecifiers(source))] as const;
+}
+
+interface Manifest {
+  readonly dependencies?: Record<string, string>;
+  readonly devDependencies?: Record<string, string>;
+  readonly peerDependencies?: Record<string, string>;
+}
+
+/** Every manifest in `manifests` that declares `pkg`, named with its field. */
+function declarersIn(manifests: ReadonlyArray<readonly [string, Manifest]>, pkg: string): string[] {
+  const declaring: string[] = [];
+  for (const [name, pkgJson] of manifests) {
+    for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
+      const section = pkgJson[field];
+      if (section && Object.prototype.hasOwnProperty.call(section, pkg)) declaring.push(`${name} (${field})`);
+    }
+  }
+  return declaring;
 }
 
 describe('DR-95 boundary 1 — the probe is awake before it is believed', () => {
@@ -180,19 +217,59 @@ describe('DR-95 boundary 1 — nothing outside the package imports @daftar/billi
     );
     expect(manifests.length, 'no manifest was read, so this case would pass on nothing').toBeGreaterThan(3);
 
-    const declaring: string[] = [];
-    for (const m of manifests) {
-      const pkg = JSON.parse(readFileSync(join(REPO, m), 'utf8')) as {
-        dependencies?: Record<string, string>;
-        devDependencies?: Record<string, string>;
-        peerDependencies?: Record<string, string>;
-      };
-      for (const field of ['dependencies', 'devDependencies', 'peerDependencies'] as const) {
-        if (pkg[field] && Object.prototype.hasOwnProperty.call(pkg[field], '@daftar/billing')) {
-          declaring.push(`${m} (${field})`);
-        }
-      }
-    }
+    const read = manifests.map((m) => [m, JSON.parse(readFileSync(join(REPO, m), 'utf8')) as Manifest] as const);
+    const declaring = declarersIn(read, '@daftar/billing');
     expect(declaring, `these manifests declare @daftar/billing: ${declaring.join(', ')}`).toEqual([]);
+  });
+});
+
+describe('DR-95 boundary 1 — the law says no to a planted edge (the negative controls)', () => {
+  /**
+   * The audit that created this law planted exactly this import into exactly
+   * this file and every suite stayed green. The plant is a STRING here and
+   * never on disk, so nothing restores it and DR-09 is untouched.
+   */
+  it('NEGATIVE CONTROL: a bare `@daftar/billing` import from a merchant module is reported', () => {
+    const planted = entry(
+      'apps/api/src/modules/accounting/accounting-posting.adapter.ts',
+      ["import { Injectable } from '@nestjs/common';", "import { subscriptionLedger } from '@daftar/billing';", 'export const x = subscriptionLedger;'].join(
+        '\n',
+      ),
+    );
+    expect(planted[1], 'the extractor read no specifier out of the plant, so this control proves nothing').toContain('@daftar/billing');
+    const reported = importersIn([planted], '@daftar/billing');
+    expect(reported, 'the checker missed a bare @daftar/billing import').toEqual([planted[0]]);
+  });
+
+  it('NEGATIVE CONTROL: the sibling relative spelling is reported through the same checker', () => {
+    const planted = entry(
+      'packages/accounting/src/platform-credit.ts',
+      ["import { credit } from '../../billing/src/credit';", 'export const y = credit;'].join('\n'),
+    );
+    expect(
+      planted[1].some((spec) => spec.includes('packages/billing/')),
+      'the plant did not resolve into the package, so this control proves nothing',
+    ).toBe(true);
+    const reported = importersIn([planted], '@daftar/billing');
+    expect(reported, 'the checker missed a resolved sibling import').toEqual([planted[0]]);
+  });
+
+  it('NEGATIVE CONTROL: a manifest declaring the package is reported, with its field', () => {
+    const reported = declarersIn([['apps/api/package.json', { dependencies: { '@daftar/billing': 'workspace:*' } }]], '@daftar/billing');
+    expect(reported, 'the checker missed a declared dependency').toEqual(['apps/api/package.json (dependencies)']);
+  });
+
+  it('NO FALSE RED: a package whose name merely STARTS with the name is not the edge', () => {
+    // `@daftar/billingx` is a different package, and a law that reports it
+    // turns a clean tree red on shared property. The matcher's own shape is
+    // what makes this hold (`===` or `pkg + '/'`), so it is asserted rather
+    // than assumed.
+    const planted = entry('apps/web/src/pages/plans.ts', ["import { ui } from '@daftar/billingx';", 'export const z = ui;'].join('\n'));
+    expect(planted[1], 'the plant carries no specifier at all').toContain('@daftar/billingx');
+    expect(importersIn([planted], '@daftar/billing'), 'a different package was reported as the edge').toEqual([]);
+    expect(
+      declarersIn([['apps/web/package.json', { dependencies: { '@daftar/billingx': '1.0.0' } }]], '@daftar/billing'),
+      'a different package was reported as declared',
+    ).toEqual([]);
   });
 });
