@@ -27,7 +27,15 @@ import { describe, expect, it } from 'vitest';
  *   L5  every leaf branch restricts on `business_id = p_business_id` — the
  *       structural merchant check, five branches, counted exactly;
  *   L6  nothing at or below `frozenThrough` is touched, and the number is
- *       `0092` — above every number this base carries.
+ *       `0092` — above every number this base carries;
+ *   L7  the database suite still carries the FOREIGN `business_id` case, and
+ *       that case still asserts a COUNT of zero rows. L7 reads the SUITE, not
+ *       the SQL, because what the owner's condition adds is the existence of a
+ *       case: «`INVOKER` keeps row security in force» means a foreign id must
+ *       yield THE EMPTY SET — not a refusal, not one partial row — and only an
+ *       assertion on the count can tell those three apart. A case folded into
+ *       the reachability case, or weakened to `toEqual([])`, or deleted, is a
+ *       law that stopped being measured, and L7 goes red on each.
  *
  * THIS SUITE IS NOT A SUBSTITUTE FOR THE DATABASE. It reads text. Whether the
  * INSTALLED function really behaves is `tests/integration/
@@ -51,9 +59,27 @@ import { describe, expect, it } from 'vitest';
 const REPO_ROOT = join(__dirname, '..', '..');
 const MIGRATIONS_DIR = join(REPO_ROOT, 'infrastructure', 'database', 'migrations');
 const MIGRATION = '0092_p4s1_customer_account_statement_reader.sql';
-const RAW = readFileSync(join(MIGRATIONS_DIR, MIGRATION), 'utf8');
+const DB_SUITE_PATH = join(REPO_ROOT, 'tests', 'integration', 'l3-customer-statement-running-balance.test.ts');
+
+/**
+ * THE TWO TEXTS THE LAWS ARE READ OFF. Six of them read the migration; the
+ * seventh reads the database suite, because what it guards is the existence of
+ * a CASE and not a property of the SQL. They travel together so one mutation
+ * function can return a whole world and the digest can cover both.
+ */
+interface Texts {
+  readonly migration: string;
+  readonly dbSuite: string;
+}
+
+const WORLD: Texts = {
+  migration: readFileSync(join(MIGRATIONS_DIR, MIGRATION), 'utf8'),
+  dbSuite: readFileSync(DB_SUITE_PATH, 'utf8'),
+};
 
 const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex').slice(0, 16);
+/** One digest over the whole world, so a mutation to either text is visible. */
+const worldSha = (w: Texts): string => sha(`${sha(w.migration)}:${sha(w.dbSuite)}`);
 
 /** The literal `0091` pins at `:135` and `:238`. Byte for byte, or it is a different path. */
 const PINNED_PATH = 'SET search_path = pg_catalog, public, pg_temp';
@@ -72,9 +98,9 @@ const MANIFEST = JSON.parse(readFileSync(join(REPO_ROOT, 'infrastructure', 'data
 interface Law {
   readonly id: string;
   readonly claim: string;
-  readonly holds: (text: string) => string | null;
-  /** Deletes the ONE line this law guards. Returns the mutated text. */
-  readonly kill: (text: string) => string;
+  readonly holds: (w: Texts) => string | null;
+  /** Deletes the ONE line this law guards. Returns the mutated world. */
+  readonly kill: (w: Texts) => Texts;
 }
 
 /** Deletes every line containing `needle`; throws if there was none to delete. */
@@ -108,7 +134,7 @@ const LAWS: readonly Law[] = [
   {
     id: 'L1',
     claim: 'the running balance is a cumulative window INSIDE the reader, partitioned by currency over the total order',
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       const body = bodyOf(t);
       if (body.length === 0) return 'the reader body could not be delimited';
       if (!body.includes('OVER (PARTITION BY s.currency_code')) return 'no window partitioned by currency_code in the body';
@@ -116,23 +142,23 @@ const LAWS: readonly Law[] = [
       if (!/ORDER BY s\.entry_date, s\.kind_rank, s\.entry_id/.test(body)) return 'the window is not ordered by the total order';
       return null;
     },
-    kill: (t) => dropLines(t, 'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW'),
+    kill: (w) => ({ ...w, migration: dropLines(w.migration, 'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW') }),
   },
   {
     id: 'L2',
     claim: `the search_path is pinned as the literal \`${PINNED_PATH}\`, and no current_setting is read`,
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       if (countOf(t, PINNED_PATH) !== 1) return `the pinned literal appears ${countOf(t, PINNED_PATH)} times, expected exactly 1`;
       if (/current_setting\s*\(/.test(t)) return 'the file reads current_setting';
       if (!new RegExp(`LANGUAGE sql STABLE ${PINNED_PATH} AS \\$\\$`).test(t)) return 'the reader does not carry the pinned path on its own definition';
       return null;
     },
-    kill: (t) => dropLines(t, `LANGUAGE sql STABLE ${PINNED_PATH} AS $$`),
+    kill: (w) => ({ ...w, migration: dropLines(w.migration, `LANGUAGE sql STABLE ${PINNED_PATH} AS $$`) }),
   },
   {
     id: 'L3',
     claim: 'PUBLIC is revoked and daftar_app ALONE is granted EXECUTE',
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       if (!t.includes('REVOKE ALL ON FUNCTION customer_account_statement(UUID, UUID) FROM PUBLIC;')) return 'PUBLIC is not revoked';
       const grants = t.split('\n').filter((l) => /^GRANT\s/.test(l));
       if (grants.length !== 1) return `the file carries ${grants.length} GRANT statements, expected exactly 1`;
@@ -140,12 +166,12 @@ const LAWS: readonly Law[] = [
         return `the one GRANT is not EXECUTE to daftar_app alone: ${grants[0]}`;
       return null;
     },
-    kill: (t) => dropLines(t, 'FROM PUBLIC;'),
+    kill: (w) => ({ ...w, migration: dropLines(w.migration, 'FROM PUBLIC;') }),
   },
   {
     id: 'L4',
     claim: 'the file carries zero DML',
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       const offenders = t
         .split('\n')
         .map((l, i) => [i + 1, l] as const)
@@ -157,12 +183,12 @@ const LAWS: readonly Law[] = [
       if (!/^CREATE FUNCTION customer_account_statement\(/m.test(t)) return 'the DML probe is blind: it found no CREATE FUNCTION either';
       return null;
     },
-    kill: (t) => `${t}\nINSERT INTO customers (id) VALUES (gen_random_uuid());\n`,
+    kill: (w) => ({ ...w, migration: `${w.migration}\nINSERT INTO customers (id) VALUES (gen_random_uuid());\n` }),
   },
   {
     id: 'L5',
     claim: 'every one of the five leaf branches restricts on business_id = p_business_id',
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       const body = bodyOf(t);
       const branches = countOf(body, 'UNION ALL') + 1;
       if (branches !== 5) return `the body carries ${branches} branches, expected 5`;
@@ -170,12 +196,35 @@ const LAWS: readonly Law[] = [
       if (checks !== 5) return `the body carries ${checks} merchant restrictions for ${branches} branches`;
       return null;
     },
-    kill: (t) => dropLines(t, 'WHERE p.business_id = p_business_id AND p.customer_id = p_customer_id'),
+    kill: (w) => ({ ...w, migration: dropLines(w.migration, 'WHERE p.business_id = p_business_id AND p.customer_id = p_customer_id') }),
+  },
+  {
+    id: 'L7',
+    claim: 'the database suite carries the FOREIGN business_id case, and it asserts a COUNT of zero rows',
+    holds: ({ dbSuite: t }) => {
+      // This one law reads the SUITE and not the migration: the thing it
+      // guards is that the case the owner's text requires has not been
+      // deleted, folded into the reachability case, or weakened into a
+      // truthiness check. `toBe(0)` on a length, and nothing looser: a
+      // `toEqual([])` would pass on a row the suite forgot to select, and a
+      // refusal would mean the filter never ran at all.
+      if (!t.includes('B2 the foreign business_id answers ZERO ROWS')) return 'the foreign business_id case is gone';
+      // FLATTENED FIRST. `prettier` wraps a long `expect(` over three lines,
+      // so a raw substring probe for `expect(aAskingForB.length,` reports the
+      // case as deleted when only its formatting moved — a false red, which is
+      // how a law gets disabled.
+      const flat = t.replace(/\s+/g, ' ');
+      if (!/expect\( ?aAskingForB\.length ?,/.test(flat)) return 'the case no longer measures the COUNT of returned rows';
+      if (!/expect\( ?aAskingForB\.length ?,[\s\S]{0,400}?\)\.toBe\(0\)/.test(flat)) return 'the count is not asserted to be exactly 0';
+      if (!/expect\( ?aAskingForBFailure ?,/.test(flat)) return 'the case does not rule out a refusal, so it cannot tell an empty set from an error';
+      return null;
+    },
+    kill: (w) => ({ ...w, dbSuite: dropLines(w.dbSuite, 'aAskingForB.length,') }),
   },
   {
     id: 'L6',
     claim: 'the number is 0092, above every number on this base, and nothing at or below frozenThrough is touched',
-    holds: (t) => {
+    holds: ({ migration: t }) => {
       if (!t.startsWith(`-- ${MIGRATION}\n`)) return 'the file does not name itself on its first line';
       const onDisk = readdirSync(MIGRATIONS_DIR)
         .filter((f) => /^\d{4}_.*\.sql$/.test(f))
@@ -198,21 +247,21 @@ const LAWS: readonly Law[] = [
       if (compared !== MANIFEST.migrations.length || compared === 0) return 'the frozen-set probe compared nothing';
       return null;
     },
-    kill: (t) => t.replace(`-- ${MIGRATION}\n`, '-- 0087_p4s1_customer_account_statement_reader.sql\n'),
+    kill: (w) => ({ ...w, migration: w.migration.replace(`-- ${MIGRATION}\n`, '-- 0087_p4s1_customer_account_statement_reader.sql\n') }),
   },
 ];
 
 describe('0092 — the statement reader, laws over the text (A: they hold)', () => {
   it.each(LAWS.map((l) => [l.id, l.claim, l] as const))('%s — %s', (_id, _claim, law) => {
-    expect(law.holds(RAW)).toBeNull();
+    expect(law.holds(WORLD)).toBeNull();
   });
 });
 
 describe('0092 — DR-145: each law goes RED when the line it guards is deleted (B: the negative controls)', () => {
   it.each(LAWS.map((l) => [l.id, l] as const))('%s fails on its own mutant', (id, law) => {
-    const before = sha(RAW);
-    const mutant = law.kill(RAW);
-    const after = sha(mutant);
+    const before = worldSha(WORLD);
+    const mutant = law.kill(WORLD);
+    const after = worldSha(mutant);
     // The mutation really happened. A kill that changed nothing would make the
     // red below unreadable: the law would be passing on the ORIGINAL text.
     expect(after, `${id}: the kill changed nothing (sha ${before})`).not.toBe(before);

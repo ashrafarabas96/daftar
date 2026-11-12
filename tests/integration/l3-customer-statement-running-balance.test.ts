@@ -277,6 +277,38 @@ describe('§B tenant isolation — the law before the status', () => {
   });
 });
 
+/**
+ * §B2 — A SEPARATE LAW, AND DELIBERATELY NOT FOLDED INTO §B.
+ *
+ * §B asserts that the CALLER cannot reach another merchant's statement: its
+ * subject is reachability, and its evidence is that none of B's entry ids comes
+ * back and that none of B's rows moved.
+ *
+ * This section asserts something else about the same call: WHAT THE READER
+ * ANSWERS WITH. The owner's text is «`INVOKER` keeps row security in force»,
+ * and the law that follows from it is that `p_business_id` FILTERS ABOVE the
+ * caller's own policies — so a foreign id yields THE EMPTY SET. Not a refusal,
+ * not an exception, not one partial row. The three outcomes are different
+ * defects and only an assertion on the COUNT separates them: a reader that
+ * raised would be a reader whose filter never ran, and a reader that returned
+ * one row would be a leak of exactly one row.
+ *
+ * It is `NOT_RUN` where it was written: it needs a live cluster.
+ */
+describe('§B2 the foreign business_id answers ZERO ROWS — the filter above the policies', () => {
+  it('A asking with B’s business_id gets exactly 0 rows, not a refusal and not a partial row', () => {
+    expect(aAskingForBFailure, 'the law is ZERO ROWS: a refusal means the filter never ran, which is a different reader').toBeNull();
+    expect(
+      aAskingForB.length,
+      `a foreign business_id returned ${aAskingForB.length} row(s); the law is that it filters above the caller's policies and returns none`,
+    ).toBe(0);
+    // The probe is SIGHTED: the very same statement text, under B's own GUCs,
+    // returns rows for the same arguments. Without this arm a zero could come
+    // from a broken query rather than from the filter (RULE-11).
+    expect(bRowsAfter.length, 'the probe is blind: the same call returns nothing for B either').toBeGreaterThan(0);
+  });
+});
+
 describe('§C the boundaries', () => {
   it('a customer with no activity answers the EMPTY SET and not an error', async () => {
     const rows = await asApp<StatementRow>(app, A.shop, SELECT_STATEMENT, [A.shop.businessId, quietCustomer]);
