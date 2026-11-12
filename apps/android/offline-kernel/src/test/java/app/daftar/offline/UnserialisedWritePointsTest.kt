@@ -63,9 +63,23 @@ class UnserialisedWritePointsTest {
      * The wait is BOUNDED on purpose: serialised callers never meet, and they
      * must not hang. See the note on this class's suite.
      */
-    private class RendezvousDisk(partners: Int) : Transactional {
+    private class RendezvousDisk : Transactional {
         private val rows = LinkedHashMap<String, StoredRow>()
-        private val meeting = CountDownLatch(partners)
+        // NOT armed by construction. The setup calls (`captureWithKey`, `markReleased`)
+        // read through this engine too, and a latch armed at construction was spent by
+        // them before the two threads started -- so the rendezvous forced nothing and
+        // the first case passed on a kernel that loses the update. Measured on the
+        // runner (run 43133015653: 155 executed, only card 2's red failed), not argued.
+        // It is armed explicitly, AFTER the setup, and the case checks it is armed.
+        @Volatile private var meeting = CountDownLatch(0)
+
+        fun arm(partners: Int) {
+            meeting = CountDownLatch(partners)
+        }
+
+        /** Partners still awaited at the rendezvous: 0 means the rendezvous forces nothing. */
+        fun pendingPartners(): Long = meeting.count
+
         val writes = AtomicInteger(0)
         val metAPartner = AtomicInteger(0)
 
@@ -109,7 +123,7 @@ class UnserialisedWritePointsTest {
     @Test
     fun two_recorded_send_attempts_leave_two_attempts_on_the_row() {
         val key = "77777777-7777-4777-8777-777777777777"
-        val disk = RendezvousDisk(partners = 2)
+        val disk = RendezvousDisk()
         val store = EncryptedQueueStore(disk, Marker())
 
         val payload = """{"qty":"3"}""".toByteArray()
@@ -119,6 +133,17 @@ class UnserialisedWritePointsTest {
             0,
             disk.attemptsOf(key),
             "the fixture must start from a row with no attempts, or this measures nothing",
+        )
+
+        // ARM the rendezvous now that the setup has finished with the engine, and PROVE it
+        // is armed: a harness whose latch is already open forces no overlap, and a green
+        // below would then say nothing about the kernel (RULE-27).
+        disk.arm(partners = 2)
+        assertEquals(
+            2L,
+            disk.pendingPartners(),
+            "the rendezvous is not armed with two partners, so the two reads below are not " +
+                "forced to overlap and this case would pass on a kernel that loses the update",
         )
 
         val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
