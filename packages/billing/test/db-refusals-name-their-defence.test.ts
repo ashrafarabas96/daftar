@@ -90,6 +90,59 @@ const dbTests = readdirSync(DB_DIR)
   .filter((f) => f.endsWith('.test.ts'))
   .map((f) => ({ file: f, literals: stringLiteralsOf(readFileSync(join(DB_DIR, f), 'utf8')) }));
 
+/** What the two text laws below read: a file name and its string literals. */
+type Corpus = ReadonlyArray<{ readonly file: string; readonly literals: readonly string[] }>;
+
+/**
+ * Every literal in `corpus` that IS a shared SQLSTATE, named with the defences
+ * that raise it. Taken as a parameter so a PLANTED corpus goes through THIS
+ * checker and not through a copy of it: until this round the law asserted an
+ * empty list and nothing had ever seen it report anything at all.
+ */
+function bareSharedIn(corpus: Corpus): string[] {
+  const bare: string[] = [];
+  for (const { file, literals } of corpus) {
+    for (const literal of literals) {
+      const shared = SHARED.get(literal);
+      if (shared !== undefined) bare.push(`${file}: '${literal}' is raised by ${shared}`);
+    }
+  }
+  return bare;
+}
+
+/**
+ * The any-error assertions in `sources`, read over code with `//` comments
+ * stripped. Taken as a parameter for the same reason: the SECOND pattern
+ * (`toBeTruthy()` on a refusal) had no witness of its own, and the first
+ * witness tested the regex alone rather than this checker.
+ */
+function anyErrorOffencesIn(sources: ReadonlyArray<readonly [string, string]>): string[] {
+  const offences: string[] = [];
+  for (const [file, source] of sources) {
+    // Comments are stripped first. The comment explaining this law quotes
+    // the very form it bans, and a law that cannot tell code from the
+    // sentence describing it reports its own documentation as a defect —
+    // which is what happened on the first run of this law.
+    const code = source
+      .split('\n')
+      .map((line) => line.replace(/\/\/.*$/, ''))
+      .join('\n');
+    for (const m of code.matchAll(/\.not\.toBe\(\s*''\s*\)/g)) {
+      offences.push(`${file.split('/').pop()}: ${m[0]} — assert the defence, not the existence of an error`);
+    }
+    for (const m of code.matchAll(/expect\(\s*(?:code|refusal|refusedBy[^)]*)\s*[,)][^;]*?\.toBeTruthy\(\)/g)) {
+      offences.push(`${file.split('/').pop()}: ${m[0].slice(0, 60)} — toBeTruthy() on a refusal is an any-error assertion`);
+    }
+  }
+  return offences;
+}
+
+/** The two banned forms, and the two forms that must NOT be reported. */
+const PLANT_BARE = "const code = ''; expect(code).not.toBe('');\n";
+const PLANT_TRUTHY = 'const code = refuse(); expect(code).toBeTruthy();\n';
+const PLANT_PROSE = "// never write expect(code).not.toBe('') nor expect(code).toBeTruthy()\n";
+const PLANT_NAMED = 'expect(code).toBe("23514/si_credit_within_charge");\n';
+
 describe('the requested DDL declares no anonymous CHECK', () => {
   it('names every table CHECK it declares', () => {
     const ddl = readFileSync(DDL, 'utf8');
@@ -127,14 +180,24 @@ describe('a refusal in the DB lane names the defence that refused, not its class
   });
 
   it('asserts no shared SQLSTATE on its own', () => {
-    const bare: string[] = [];
-    for (const { file, literals } of dbTests) {
-      for (const literal of literals) {
-        const shared = SHARED.get(literal);
-        if (shared !== undefined) bare.push(`${file}: '${literal}' is raised by ${shared}`);
-      }
-    }
-    expect(bare, 'a DB case asserts a SQLSTATE that more than one defence raises').toStrictEqual([]);
+    expect(bareSharedIn(dbTests), 'a DB case asserts a SQLSTATE that more than one defence raises').toStrictEqual([]);
+
+    // THE WITNESS, folded into this case because `tools/law-ran.py` pins this
+    // file's case count literally. A planted corpus goes through the checker
+    // above, so an empty live list is read as "nothing to report" and not as
+    // "the lookup is broken".
+    const plantedShared = bareSharedIn([{ file: 'planted.test.ts', literals: ['23514'] }]);
+    expect(plantedShared.length, 'the checker missed a bare shared SQLSTATE').toBe(1);
+    expect(plantedShared[0], 'the report names no file').toContain('planted.test.ts');
+    expect(plantedShared[0], 'the report names no defence').toContain('six CHECK constraints');
+
+    // AND THE OTHER DIRECTION: the qualified form this lane requires, and a
+    // billing code, are not reports — a law that flagged them would make the
+    // lane unwritable.
+    expect(
+      bareSharedIn([{ file: 'planted.test.ts', literals: ['23514/si_credit_within_charge', 'billing.credit_exhausted'] }]),
+      'the qualified form was read as a bare class',
+    ).toStrictEqual([]);
   });
 
   it('names a defence for every CHECK constraint in the requested DDL', () => {
@@ -174,34 +237,31 @@ describe('a refusal in the DB lane names the defence that refused, not its class
   // a gate over a list, so each of these also carries its own witness.
 
   it('bans an ANY-ERROR assertion on a refusal, which a bare SQLSTATE ban cannot see', () => {
-    // `.not.toBe('')` accepts every failure there is, a lost connection and
-    // a typo in the SQL included, so it is weaker than the bare-class
-    // assertion this gate was built to ban — and it names no class, so the
-    // bare-class law never looked at it. One such assertion stood in
-    // `credit-ledger-attempts.test.ts` for four rounds.
-    const offences: string[] = [];
-    for (const file of dbTestPaths()) {
-      // Comments are stripped first. The comment explaining this law quotes
-      // the very form it bans, and a law that cannot tell code from the
-      // sentence describing it reports its own documentation as a defect —
-      // which is what happened on the first run of this law.
-      const code = readFileSync(file, 'utf8')
-        .split('\n')
-        .map((line) => line.replace(/\/\/.*$/, ''))
-        .join('\n');
-      for (const m of code.matchAll(/\.not\.toBe\(\s*''\s*\)/g)) {
-        offences.push(`${file.split('/').pop()}: ${m[0]} — assert the defence, not the existence of an error`);
-      }
-      for (const m of code.matchAll(/expect\(\s*(?:code|refusal|refusedBy[^)]*)\s*[,)][^;]*?\.toBeTruthy\(\)/g)) {
-        offences.push(`${file.split('/').pop()}: ${m[0].slice(0, 60)} — toBeTruthy() on a refusal is an any-error assertion`);
-      }
-    }
+    // Comments are stripped inside the checker. The comment explaining this
+    // law quotes the very form it bans, and a law that cannot tell code from
+    // the sentence describing it reports its own documentation as a defect —
+    // which is what happened on the first run of this law.
+    const offences = anyErrorOffencesIn(dbTestPaths().map((file) => [file, readFileSync(file, 'utf8')] as const));
     expect(offences, 'a refusal is asserted as "some error happened"').toStrictEqual([]);
 
-    // The witness: the law is over a shape that EXISTS in the corpus, so a
-    // typo in the pattern would show up here rather than passing silently.
-    const planted = `const code = ''; expect(code).not.toBe('');`;
-    expect(/\.not\.toBe\(\s*''\s*\)/.test(planted), 'the pattern no longer matches the form it bans').toBe(true);
+    // THE WITNESSES, through the checker above and not through a copy of the
+    // pattern. Folded into this case because this file's case count is pinned.
+    const bare = anyErrorOffencesIn([['planted.test.ts', PLANT_BARE]]);
+    expect(bare.length, 'the checker missed an any-error assertion of the first form').toBe(1);
+    const truthy = anyErrorOffencesIn([['planted.test.ts', PLANT_TRUTHY]]);
+    expect(truthy.length, 'the checker missed an any-error assertion of the second form').toBe(1);
+    expect(truthy[0], 'the report names no file').toContain('planted.test.ts');
+
+    // AND THE OTHER DIRECTION, which is why the checker strips comments: the
+    // same two forms written in prose are not offences, and an assertion on
+    // the DEFENCE's name is what this lane is supposed to write.
+    expect(
+      anyErrorOffencesIn([
+        ['prose.test.ts', PLANT_PROSE],
+        ['named.test.ts', PLANT_NAMED],
+      ]),
+      'prose or a named-defence assertion was read as an any-error assertion',
+    ).toStrictEqual([]);
   });
 
   it('pins EVERY figure of the context-setting census, not only the session count', () => {
