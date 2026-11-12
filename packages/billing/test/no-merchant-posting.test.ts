@@ -222,7 +222,8 @@ describe('§16 — the boundary says no to a planted crossing (the negative cont
   // is nothing to restore and DR-09 is untouched.
   //
   // The merchant authority's specifier is ASSEMBLED here, never spelled inside
-  // an import-shaped literal. `scripts/phase3-review-index.ts` reads
+  // an import-shaped literal. The Phase 3 review index generator (its npm
+  // script is named in this commit's message, not here) reads
   // `import ... from '<spec>'` out of a test's RAW text and resolves it to the
   // named package's entry module, so a spelled plant makes the generated
   // review index claim this suite COVERS that module. It does not: this
