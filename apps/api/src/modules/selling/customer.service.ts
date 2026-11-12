@@ -1,12 +1,14 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { customerCreatePayload, customerUpdatePayload, normalizeDocumentText, type CustomerText, type MovementPayload } from '@daftar/inventory';
 import type { CustomerCommandResultDto } from '@daftar/shared-contracts';
+import { AuditService } from '../audit/audit.service';
 import { Database, type TransactionSql } from '../../infra/database';
 import type { BusinessTransactionId } from '../inventory/business-transaction';
 import { InventoryAuthorizationService, type InventoryCommandAuthority } from '../inventory/inventory-authorization';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { CustomerReadService, findCustomer } from './customer-reads';
-import { rethrowSellingRefusal, sellingRefusal } from './selling-errors';
+import { auditThenRethrowSellingRefusal, type SellingAttempt } from './selling-refusal-audit';
+import { sellingRefusal } from './selling-errors';
 import type { CustomerWriteCreateRequest, CustomerWriteUpdateRequest } from './selling.schemas';
 
 /**
@@ -52,13 +54,24 @@ export class CustomerService {
     @Inject(Database) private readonly db: Database,
     @Inject(InventoryAuthorizationService) private readonly authorization: InventoryAuthorizationService,
     @Inject(CustomerReadService) private readonly reads: CustomerReadService,
+    // P4-AL-48: a refusal is audited as heavily as a success, and a customer
+    // command is refused inside a routine whose `RAISE EXCEPTION` aborts the
+    // transaction — so without this, a refused create or update would persist
+    // no evidence at all. The precedent is `SaleCommitService`
+    // (`sale-commit.service.ts:132`).
+    @Inject(AuditService) private readonly audit: AuditService,
   ) {}
 
   async create(m: MembershipContext, input: CustomerWriteCreateRequest, btx: BusinessTransactionId): Promise<CustomerCommandResultDto> {
+    // Built BEFORE the try, so a refusal raised on the command's very first
+    // line still has the id, the operation and the request's own facts to
+    // audit; the intent digest is filled in as it is learned.
+    const attempt = customerAttempt('customer.create', input.customerId, input);
     try {
       const authority = await this.authorization.authorize(m, 'customer.create', btx);
       const text = customerText(input);
       const built = customerCreatePayload({ tenantId: m.tenantId, businessId: m.businessId, customerId: input.customerId, ...text });
+      attempt.intentSha256 = built.intentSha256;
 
       // The idempotency proof comes first and reads nothing else: the id is
       // the caller's key, so the same id under a different intent is a second
@@ -79,11 +92,16 @@ export class CustomerService {
         ]),
       );
     } catch (e) {
-      return rethrowSellingRefusal(e);
+      // The composer produces the refusal that will leave, classifies THAT
+      // object, writes the row and throws the same object. Nothing is
+      // swallowed or reshaped: it ends in `rethrowSellingRefusal` exactly as
+      // this method did before, so the merchant's refusal is unchanged.
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
   async update(m: MembershipContext, customerId: string, input: CustomerWriteUpdateRequest, btx: BusinessTransactionId): Promise<CustomerCommandResultDto> {
+    const attempt = customerAttempt('customer.update', customerId, input);
     try {
       const authority = await this.authorization.authorize(m, 'customer.update', btx);
       const text = customerText(input);
@@ -94,6 +112,7 @@ export class CustomerService {
         expectedRevision: input.expectedRevision,
         ...text,
       });
+      attempt.intentSha256 = built.intentSha256;
 
       const replay = await this.prove(m, customerId, input.expectedRevision, built.intentSha256);
       if (replay !== null) return replay;
@@ -109,7 +128,7 @@ export class CustomerService {
         ]),
       );
     } catch (e) {
-      return rethrowSellingRefusal(e);
+      return await auditThenRethrowSellingRefusal(this.audit, m, attempt, e);
     }
   }
 
@@ -155,6 +174,50 @@ export class CustomerService {
     if (stored === null) throw new Error('a customer the routine wrote is not readable');
     return { ...(await this.reads.get(m, customerId)), replayed, businessTransactionId: stored.business_transaction_id };
   }
+}
+
+/**
+ * What a refused customer command knows about itself (P4-AL-48), built from the
+ * REQUEST alone so that a refusal on the command's first line still audits.
+ *
+ * `branchId` and `tillSessionId` are NULL and that is the TRUTH rather than a
+ * gap: a customer is business-wide master data and names no branch (P4-AL-37),
+ * and no customer command runs on a till.
+ *
+ * THE FIGURES CARRY NO CUSTOMER TEXT, ON PURPOSE. `audit_events.metadata` is
+ * "safe metadata only" (`0004:11`) and P4-AL-54 governs what a refusal may
+ * record. A name, a phone or an email is the merchant's customer's personal
+ * data, and a refused attempt is exactly the row most likely to be read by
+ * someone debugging rather than by the merchant who owns it — so what is
+ * recorded is WHICH FIELDS the statement named, never their contents. The
+ * entity id and the intent digest already identify the attempt uniquely, and
+ * the digest distinguishes two different statements of the same id without
+ * revealing either.
+ *
+ * There is no money figure because a customer carries none: its position is
+ * derived from the ledger (P4-AL-06), never from this record.
+ */
+function customerAttempt(
+  operation: 'customer.create' | 'customer.update',
+  customerId: string,
+  input: { readonly phone?: string | null; readonly email?: string | null; readonly notes?: string | null; readonly expectedRevision?: number },
+): SellingAttempt {
+  const attempt: SellingAttempt = {
+    operation,
+    entity: 'customer',
+    entityId: customerId,
+    branchId: null,
+    tillSessionId: null,
+    figures: {
+      statesPhone: input.phone !== undefined && input.phone !== null,
+      statesEmail: input.email !== undefined && input.email !== null,
+      statesNotes: input.notes !== undefined && input.notes !== null,
+    },
+  };
+  // A decimal string, never a JSON number — the shape `RefusalAttempt.figures`
+  // requires and the one `openingFloatMinor` already uses.
+  if (input.expectedRevision !== undefined) attempt.figures['expectedRevision'] = String(input.expectedRevision);
+  return attempt;
 }
 
 /** The four texts as the customer stores them: trimmed, NULL when empty or omitted (a full statement). */
