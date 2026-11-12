@@ -294,6 +294,27 @@ the same everywhere.
 | 56 | `supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.receive_refund')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 | 57 | `supplier_update(uuid,integer,text,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 
+### Part A, continued — the two P4-S1 customer write doors (owner decision DR-142)
+
+`0091` adds the customer write command pair, so Part A now holds 59 doors.
+The two rows are APPENDED rather than inserted at their alphabetical place,
+and the count in the heading above is left exactly as it was, because the lane
+that owns this page granted the addition on the condition that `git diff -U0`
+show `+` lines only: inserting them after `customer_collect_payment` would
+have renumbered rows 21–57, and editing the heading would have modified a
+line. Renumbering and folding these two rows into the list above is the owning
+lane's to do. No law reads the count — the law reads whether the page names
+every recorded signature.
+
+`receivables` is the domain the LAW derives, not a claim that customer master
+data is a receivable: the domain comes from the family of the operation code
+the body signs, and the `customer` family maps to `receivables`.
+
+| # | signature | owner | DEFINER | `search_path` | EXECUTE grantees | PUBLIC EXECUTE | operation / domain | tenant source | business source | assertion source | permission source | caller-controlled ids | structural bindings | reads | writes |
+| - | --------- | ----- | ------- | ------------- | ---------------- | -------------- | ------------------ | ------------- | --------------- | ---------------- | ----------------- | --------------------- | ------------------- | ----- | ------ |
+| 58 | `customer_create(uuid,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / receivables | signed claim | signed claim | `inventory_assertion_consume('customer.create')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
+| 59 | `customer_update(uuid,integer,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / receivables | signed claim | signed claim | `inventory_assertion_consume('customer.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
+
 ## Part B — the 164 sealed definers
 
 Every other `SECURITY DEFINER` routine of either principal. Each has an

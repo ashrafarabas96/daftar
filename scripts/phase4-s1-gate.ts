@@ -358,6 +358,45 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
       'and the aging then spreads the figure ACROSS the schedule instead of one band',
     ],
   },
+  // ── THE P4-S1 CUSTOMER WRITE COMMAND PAIR (owner decision DR-142) ──────
+  //
+  // `0091` adds `customer_create` and `customer_update` as definer command
+  // routines, and this is the suite that measures them. It is rostered here
+  // and not deferred for the reason the P4-S7 rows above give: a Phase 4 suite
+  // on disk is listed and run, or this gate is red, and narrowing the scan to
+  // hide one is the move the gate exists to forbid. Its basename `p4s1-…`
+  // matches `PHASE4_SUITE_SLICED` and no foreign roster claims it, so
+  // `unrosteredElsewhere` demands exactly this row.
+  //
+  // The floor was measured from the tree by this gate's own instrument
+  // (`testTitles` after `stripTsProse`) and is EQUAL to the count today, so it
+  // becomes a floor as the suite grows. What a count cannot see is
+  // SUBSTITUTION, so the row also pins BY NAME the claims the slice promised
+  // out loud: creation at revision 1 with its replay, the update that states
+  // the whole customer and leaves `status` alone, the stale revision, the
+  // direct write refused for the role the API runs as, the EXECUTE matrix, the
+  // two halves of merchant isolation, the revision guard, the 0075 guards
+  // still triggered, and the migration applying upward both on a clean
+  // database and on one that already holds rows.
+  {
+    id: 'S1-CW-01',
+    area: 'customer-write',
+    runner: 'root',
+    file: 'tests/integration/p4s1-customer-write-commands.test.ts',
+    cases: 13,
+    titles: [
+      'creates at revision 1, active, with 201; and replays the same statement as 200',
+      'updates the whole statement at the revision read: revision 2, an omitted optional field CLEARED, status untouched',
+      'refuses a stale revision with customer.revision_changed, and leaves the row alone',
+      'refuses INSERT, UPDATE, DELETE and TRUNCATE with 42501, while SELECT through the same connection succeeds',
+      'grants the two routines to daftar_app and to nobody else, and no DML with them',
+      'business B can neither read nor write business A customer, and A still sees it unchanged',
+      'refuses a jumped revision, a rewritten identity and a DELETE, while a one-step change is admitted',
+      'both 0075 guards are still triggered on the table after 0091',
+      'applies from zero on a clean database, and leaves the asserted end state',
+      'applies on a database already holding rows, and changes no table but the registry it writes',
+    ],
+  },
 ];
 
 /** The permanent core, run as commands after the predecessor gate. */
