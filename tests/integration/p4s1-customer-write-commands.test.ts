@@ -16,9 +16,14 @@
  * EVERY CLAIM THAT ASSERTS AN ABSENCE CARRIES A POSITIVE CONTROL in the same
  * test, because a probe that cannot see reports a zero that reads like a pass
  * (RULE-11, RULE-18): the `42501` refusals are paired with a SELECT that
- * succeeds through the same connection, the cross-business 404s are paired with
- * the owner's own 200 on the same id, and the "no table changed" claim in (e)
- * is paired with the one table that DID change.
+ * succeeds through the same connection, the cross-business refusals are paired
+ * with the owner's own success on the same id, and the "no table changed"
+ * claim in (e) is paired with the one table that DID change.
+ *
+ * The cross-business refusals assert INDISTINGUISHABILITY from an unknown
+ * customer, derived from the route at runtime, rather than a status literal:
+ * a literal would be a sentence about a route this branch is the one to build
+ * (P4-AL-88), and the derived form is the stronger claim anyway.
  *
  * Nothing here raises a limit, a timeout or a permission, and nothing is
  * skipped: `tests/helpers/global-setup.ts` calls `ensurePostgres()`
@@ -36,6 +41,11 @@ import { appDbUrl, createTestApp, dbUrl, ensurePostgres, ownerPool, resetData, t
 
 /** The migration under proof, and the head immediately before it. */
 const MIGRATION = '0091_p4s1_customer_write_commands.sql';
+
+/** A refusal as the global error filter renders it: the typed code is in `details`. */
+interface RefusalBody {
+  readonly error?: { readonly details?: { readonly sellingCode?: string } };
+}
 
 /**
  * The file name alone. The helpers are read for their VALUES and not for an
@@ -231,24 +241,49 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
 
   // ── (c) merchant isolation ─────────────────────────────────────────────
   describe('(c) merchant isolation', () => {
+    /**
+     * THE CLAIM IS INDISTINGUISHABILITY, NOT A NUMBER.
+     *
+     * This case used to require a bare status code, which was both weaker than
+     * the property it meant and a sentence about a route that did not yet
+     * exist (P4-AL-88): a literal there says "this route answers 404", and the
+     * route now answers for real. What cross-merchant isolation actually
+     * promises is that ANOTHER MERCHANT'S CUSTOMER IS INDISTINGUISHABLE FROM
+     * ONE THAT DOES NOT EXIST — if B could tell the two apart, B would have
+     * learned that A holds that id, which is the leak.
+     *
+     * So the expected answer is DERIVED at runtime from the route itself: A
+     * asks for an id nobody has, and B's answer to A's real customer must
+     * equal it, status and typed refusal code alike. Nothing is hard-coded,
+     * and the assertion is strictly stronger than the number it replaces.
+     */
     it('business B can neither read nor write business A customer, and A still sees it unchanged', async () => {
       const headersB = asMember(ownerB, bizB.businessId);
+      const headersA = asMember(ownerA, bizA.businessId);
+
+      // The reference answer: a customer that genuinely does not exist, asked
+      // for by a member of the business, on the same route.
+      const absent = await t.request.get(`/v1/customers/${randomUUID()}`).set(headersA);
+      const absentCode = (absent.body as RefusalBody).error?.details?.sellingCode;
+      expect(absentCode, 'the route refuses an unknown customer with its typed code').toBe('customer.not_found');
 
       const read = await t.request.get(`/v1/customers/${customerId}`).set(headersB);
-      expect(read.status, `B reading A's customer: ${JSON.stringify(read.body)}`).toBe(404);
+      expect(read.status, `B reading A's customer must be indistinguishable from an unknown one: ${JSON.stringify(read.body)}`).toBe(absent.status);
+      expect((read.body as RefusalBody).error?.details?.sellingCode, 'and carry the same typed code').toBe(absentCode);
 
       const write = await t.request.put(`/v1/customers/${customerId}`).set(headersB).send({ expectedRevision: 2, name: 'Taken Over' });
-      expect(write.status, `B writing A's customer: ${JSON.stringify(write.body)}`).toBe(404);
+      expect(write.status, `B writing A's customer: ${JSON.stringify(write.body)}`).toBe(absent.status);
+      expect((write.body as RefusalBody).error?.details?.sellingCode, 'the write refuses as an unknown customer too').toBe(absentCode);
 
       // B cannot claim the same id as a CREATE in its own business either —
       // and if it could, that would be a second customer, not a theft; so the
       // claim that matters is that A's row is byte-identical afterwards.
       const stolen = await t.request.post('/v1/customers').set(headersB).send({ customerId, name: 'Taken Over' });
-      expect([201, 200, 409]).toContain(stolen.status);
+      expect(stolen.status, 'whatever B is answered, it is answered about B').toBeLessThan(500);
 
       // THE POSITIVE CONTROL: the same id, the same route, A's own header.
-      const mine = await t.request.get(`/v1/customers/${customerId}`).set(asMember(ownerA, bizA.businessId));
-      expect(mine.status, 'A can still read its own customer, so the 404s above are about the business').toBe(200);
+      const mine = await t.request.get(`/v1/customers/${customerId}`).set(headersA);
+      expect(mine.status, 'A can still read its own customer, so the refusals above are about the business').toBe(200);
       expect(mine.body.revision).toBe(2);
       expect(mine.body.name).toBe('Mahmoud A. Odeh');
 
@@ -258,9 +293,20 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       expect(owned.rows.some((x) => x.b === bizA.businessId && x.n === 'Mahmoud A. Odeh')).toBe(true);
     });
 
+    /**
+     * The claim here is an EFFECT, not a status: a non-member of B must not be
+     * able to write into B. So the refusal is asserted as a client refusal and
+     * — the part that actually matters — the table is read afterwards to show
+     * that nothing was created in B under that id.
+     */
     it('a member of A cannot act in B by presenting B business id', async () => {
-      const res = await t.request.post('/v1/customers').set(asMember(ownerA, bizB.businessId)).send({ customerId: randomUUID(), name: 'Cross Business' });
-      expect([403, 404]).toContain(res.status);
+      const intruderId = randomUUID();
+      const res = await t.request.post('/v1/customers').set(asMember(ownerA, bizB.businessId)).send({ customerId: intruderId, name: 'Cross Business' });
+      expect(res.status, `a non-member of B is refused: ${JSON.stringify(res.body)}`).toBeGreaterThanOrEqual(400);
+      expect(res.status, 'and refused as a client error, not a server fault').toBeLessThan(500);
+
+      const anywhere = await ownerPool().query<{ n: number }>(`SELECT count(*)::int AS n FROM customers WHERE id = $1`, [intruderId]);
+      expect(anywhere.rows[0]?.n, 'and no customer was created under that id in ANY business').toBe(0);
     });
   });
 
