@@ -1130,7 +1130,7 @@ jobs:
         env:
           PG_PORT: '5432'
           PERF01_NEGATIVE_CONTROL_MS: '200'
-      - name: Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail
+      - name: Budget negative control — the POS ratio gate and P4-A must be able to fail, and P4-B must NOT fail on a client-side delay
         run: |
           set -e
           log="$RUNNER_TEMP/negative-control-pos.log"
@@ -1138,15 +1138,63 @@ jobs:
             tail -80 "$log"
             echo "the SLOWED POS budgets PASSED — the ratio gate and P4-A/P4-B cannot fail, so their green means nothing"; exit 1
           fi
-          for tag in PERF01-BUDGET-RATIO PERF01-BUDGET-P4A PERF01-BUDGET-P4B; do
+          for tag in PERF01-BUDGET-RATIO PERF01-BUDGET-P4A; do
             grep -q "$tag" "$log" || {
               tail -120 "$log"
               echo "the slowed run failed, but NOT on $tag's assertion — the control proves nothing about it"; exit 1
             }
           done
+          # AND P4-B MUST NOT BE AMONG THEM, BY DESIGN. Its verdict is the time
+          # PostgreSQL spent executing (DR-98), so a 200 ms delay planted in
+          # the CLIENT must leave it green — if it fails here, the verdict is
+          # still listening to something outside the database. This is the
+          # negative half of the pair; the positive half is the next step.
+          #
+          # AN ABSENCE OF `PERF01-BUDGET-P4B` PROVES NOTHING ON ITS OWN: the
+          # log is free of it as well when the instrument refused, when P4-B
+          # never reached its verdict, or when the delay never reached the wall
+          # clock — and this run is red by design, so one more red is not
+          # visible. The checker requires the facts that give the absence its
+          # meaning: P4-B printed its line, the wall clock saw the delay
+          # (wallP50 >= 200), and the in-database p95 stayed under the ceiling
+          # the line itself reports. Its logic is exercised, planted and
+          # accepted, by tests-unit/p4b-client-delay-control.test.ts.
+          npx tsx scripts/check-p4b-client-delay-log.ts "$log" || {
+            tail -160 "$log"
+            echo "the client-side control did not prove what it claims about P4-B"; exit 1
+          }
         env:
           PG_PORT: '5432'
           POS_PERF_NEGATIVE_CONTROL_MS: '200'
+      - name: Budget negative control — a delay INSIDE the database must fail P4-B
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-pos-in-db.log"
+          # The positive half: 200 ms slept INSIDE the database on a
+          # `daftar_app` connection, inside every measured window. A ceiling
+          # nothing can breach is not a ceiling, so this step requires the NEW
+          # verdict to go red, and to go red ON P4-B's own assertion.
+          if npx vitest run tests/performance/pos-s3-budgets.test.ts -t 'P4-B' >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the in-database-SLOWED P4-B PASSED — it cannot fail on database time, so its green means nothing"; exit 1
+          fi
+          grep -q 'PERF01-BUDGET-P4B' "$log" || {
+            tail -160 "$log"
+            echo "the in-database-slowed run failed, but NOT on P4-B's assertion — the control proves nothing about P4-B"; exit 1
+          }
+          grep -q 'judgedOn' "$log" || {
+            tail -160 "$log"
+            echo "P4-B's failure message carries no judgedOn, so the log does not say which clock refused it"; exit 1
+          }
+          # The instrument must not be what broke: a BLIND or EVICTED clock
+          # would also turn the suite red, and that red would prove nothing.
+          ! grep -q 'PERF01-INSTRUMENT-' "$log" || {
+            tail -160 "$log"
+            echo "the instrument itself refused in the control run, so this red says nothing about the budget"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          POS_PERF_IN_DB_DELAY_MS: '200'
       # DR-98, extended to the P4-S4 receivables budgets. `P4-D` and `P4-F`
       # in-transaction are now asserted on the time PostgreSQL spent EXECUTING
       # (pg_stat_statements), not on the client's wall clock, so the two
