@@ -529,19 +529,28 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
         return { digest: createHash('sha256').update(acl).digest('hex'), acl };
       };
 
-      /** `SET LOCAL ROLE daftar_worker`, then the call; the SQLSTATE, in its own transaction. */
-      const callAs = async (role: string, sql: string, params: unknown[]): Promise<string> => {
+      /**
+       * `SET LOCAL ROLE <role>`, then the call, in a transaction of its own.
+       *
+       * It returns the SQLSTATE **and** the message, because a control that
+       * names only a code cannot distinguish two refusals that share one:
+       * every domain refusal in this schema raises `P0001`.
+       */
+      const callAs = async (role: string, sql: string, params: unknown[]): Promise<{ readonly code: string; readonly message: string }> => {
         await c.query('BEGIN');
         try {
           await c.query(`SET LOCAL ROLE ${role}`);
-          const code = await c.query(sql, params).then(
-            () => 'executed',
-            (e: unknown) => String((e as { code?: string }).code ?? 'no-code'),
+          const outcome = await c.query(sql, params).then(
+            () => ({ code: 'executed', message: 'executed' }),
+            (e: unknown) => ({
+              code: String((e as { code?: string }).code ?? 'no-code'),
+              message: String((e as { message?: string }).message ?? 'no-message'),
+            }),
           );
           // The same guard the shared helpers carry: a verdict inherited from
           // an aborted transaction is not a measurement of this role.
-          expect(code, `this claim read an ABORTED transaction, so it measured nothing: ${role} / ${sql}`).not.toBe(ABORTED);
-          return code;
+          expect(outcome.code, `this claim read an ABORTED transaction, so it measured nothing: ${role} / ${sql}`).not.toBe(ABORTED);
+          return outcome;
         } finally {
           await c.query('ROLLBACK').catch(() => undefined);
         }
@@ -556,44 +565,74 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       const before = await aclDigest();
       expect(before.acl, 'daftar_worker holds no EXECUTE before the plant').not.toContain('daftar_worker');
 
+      /** Both signatures, so the plant and its restore cover everything the claim claims. */
+      const SIGNATURES = ['customer_create(uuid,text,text,text,text)', 'customer_update(uuid,integer,text,text,text,text)'] as const;
+
       try {
         // ── THE CLAIM ────────────────────────────────────────────────────
-        expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'customer_create called by daftar_worker').toBe('42501');
-        expect(await callAs('daftar_worker', UPDATE, [customerId, 'Worker Edit']), 'customer_update called by daftar_worker').toBe('42501');
+        expect((await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint'])).code, 'customer_create called by daftar_worker').toBe('42501');
+        expect((await callAs('daftar_worker', UPDATE, [customerId, 'Worker Edit'])).code, 'customer_update called by daftar_worker').toBe('42501');
 
         // THE POSITIVE CONTROL for the refusals: the same connection, the same
-        // SET LOCAL ROLE mechanism, the role the pattern DOES grant. It must
-        // get past the privilege check — it fails later, on the missing signed
-        // assertion, which is a different refusal entirely and proves the
-        // 42501s above are about the ACL and not about a broken call.
+        // SET LOCAL ROLE mechanism, the role the pattern DOES grant.
+        //
+        // IT NAMES THE CODE IT EXPECTS. `not.toBe('42501')` would be a loose
+        // reader: a malformed parameter (`22P02`) or any other fault would
+        // satisfy it and the control would pass while measuring nothing. What
+        // this call actually fails on, once past the privilege check, is the
+        // assertion gate — `0054:361` raises `inventory.assertion_missing`
+        // under `ERRCODE = 'P0001'`. `P0001` is `raise_exception` and every
+        // domain refusal in this schema uses it, so the code alone is
+        // ambiguous and the message is asserted with it.
         const asApp = await callAs('daftar_app', CREATE, [randomUUID(), 'App Mint']);
-        expect(asApp, 'daftar_app is NOT stopped by the privilege check').not.toBe('42501');
-        expect(asApp, 'it is stopped later, by the assertion gate').not.toBe('executed');
+        expect(asApp.code, 'daftar_app is stopped by a RAISE, not by the privilege check').toBe('P0001');
+        expect(asApp.message, 'and the RAISE is the assertion gate refusing an unsigned command').toContain('inventory.assertion_missing');
 
         // ── THE PLANT: the opposite state, so the claim is shown ABLE TO FAIL ──
-        await c.query(`GRANT EXECUTE ON FUNCTION customer_create(uuid,text,text,text,text) TO daftar_worker`);
+        // BOTH functions, because the claim is about both.
+        for (const sig of SIGNATURES) await c.query(`GRANT EXECUTE ON FUNCTION ${sig} TO daftar_worker`);
         const planted = await aclDigest();
         // The plant is PROVED APPLIED before its verdict is read (RULE-27):
-        // the digest moved and the ACL now names the role.
+        // the digest moved and BOTH routines' ACLs now name the role.
         expect(planted.digest, 'the plant changed the catalogue ACL').not.toBe(before.digest);
-        expect(planted.acl, 'and the ACL now names daftar_worker').toContain('daftar_worker');
+        expect(
+          planted.acl.split('\n').filter((l) => l.includes('daftar_worker')),
+          'both routines now name daftar_worker',
+        ).toHaveLength(2);
 
-        // And now the claim FAILS: the same call is no longer refused 42501.
-        expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'with the grant planted, 42501 is no longer the answer').not.toBe('42501');
+        // And now the claim FAILS, for each function in turn: the same calls
+        // are no longer refused 42501, and each is stopped by the gate instead.
+        const plantedCreate = await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']);
+        const plantedUpdate = await callAs('daftar_worker', UPDATE, [customerId, 'Worker Edit']);
+        // Stated POSITIVELY, for the same reason the control is: with the
+        // grant in place each call now reaches the assertion gate, so the
+        // expected answer is that gate's own refusal — naming it rules out
+        // every other way a call could stop, which `not.toBe('42501')` would
+        // have admitted.
+        expect(plantedCreate.code, 'with the grant planted, customer_create is stopped by the gate and not the ACL').toBe('P0001');
+        expect(plantedUpdate.code, 'with the grant planted, customer_update is stopped by the gate and not the ACL').toBe('P0001');
+        expect(plantedCreate.message, 'and the gate is the one refusing it').toContain('inventory.assertion_missing');
+        expect(plantedUpdate.message, 'and so for the update').toContain('inventory.assertion_missing');
       } finally {
         // ── THE RESTORE, from the saved copy and not from the tree ───────
-        await c.query(`REVOKE EXECUTE ON FUNCTION customer_create(uuid,text,text,text,text) FROM daftar_worker`).catch(() => undefined);
+        for (const sig of SIGNATURES) await c.query(`REVOKE EXECUTE ON FUNCTION ${sig} FROM daftar_worker`).catch(() => undefined);
       }
 
-      const after = await aclDigest();
-      expect(after.digest, `the ACL is restored byte for byte: ${before.digest} -> ${after.digest}`).toBe(before.digest);
-      expect(after.acl, 'and daftar_worker holds no EXECUTE again').not.toContain('daftar_worker');
+      try {
+        const after = await aclDigest();
+        expect(after.digest, `the ACL is restored byte for byte: ${before.digest} -> ${after.digest}`).toBe(before.digest);
+        expect(after.acl, 'and daftar_worker holds no EXECUTE again').not.toContain('daftar_worker');
 
-      // The claim holds again on the restored state, which is what makes the
-      // restoration a measurement rather than an assertion.
-      expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'refused once more after the restore').toBe('42501');
-
-      await c.end();
+        // The claim holds again on the restored state, for BOTH functions,
+        // which is what makes the restoration a measurement and not an
+        // assertion.
+        expect((await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint'])).code, 'customer_create refused once more').toBe('42501');
+        expect((await callAs('daftar_worker', UPDATE, [customerId, 'Worker Edit'])).code, 'customer_update refused once more').toBe('42501');
+      } finally {
+        // The connection is closed here and not after the assertions: an
+        // assertion that throws above would otherwise leak it.
+        await c.end();
+      }
     });
   });
 });
