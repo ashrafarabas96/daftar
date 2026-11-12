@@ -1175,7 +1175,7 @@ async function postedEntries(paymentId: string): Promise<{ readonly entries: num
  * whose expected size is derived from whatever happened to execute is not a
  * census. The audit names every missing case, so a mismatch is never a riddle.
  */
-const DECLARED_CASES = 18;
+const DECLARED_CASES = 19;
 
 /** The P4-D read series this file declares: three fat-tail HTTP reads + median + the two RLS halves. */
 const DECLARED_READ_SERIES = 3;
@@ -1356,9 +1356,9 @@ async function buildFixture(): Promise<void> {
         SHORT_PERCENTILE_ITERATIONS,
         () => pace(route),
         // DR-98: this is a BUDGET series, so it carries the in-database verdict
-        // series as well as the wall clock. The median and the two RLS halves
-        // below are not budgets — they are the denominators of host-independent
-        // ratios — and stay on the wall clock on both sides of their ratio.
+        // series as well as the wall clock. The two RLS halves below are not
+        // budgets — their two sides are PRINCIPALS, not volumes — and stay on
+        // the wall clock on both sides of their ratio.
         'in-database',
       ),
     );
@@ -1369,6 +1369,13 @@ async function buildFixture(): Promise<void> {
     () => read200(READS.receivable(medianCustomerId)),
     SHORT_PERCENTILE_ITERATIONS,
     () => pace(ROUTE.receivable),
+    // STAGE 1 OF OPTION A (owner decision 2026-11-11): the DENOMINATOR of
+    // `P4-AL-72`'s balance ratio now carries the in-database series as well,
+    // so the in-database quotient of the two arms can be MEASURED and PRINTED.
+    // It is measured, not judged: the verdict below is still the wall-clock
+    // quotient against the same constant, and the owner sets an in-database
+    // constant only after the distribution of at least ten runs is read.
+    'in-database',
   );
   // The RLS cost's two halves, like against like: the SAME captured
   // statements on the SAME rows, as `daftar_app` through the product's own
@@ -1797,6 +1804,75 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         },
       ]),
     );
+  });
+
+  /**
+   * STAGE 1 OF THE OWNER'S OPTION A (owner decision 2026-11-11): MEASURE THE
+   * IN-DATABASE QUOTIENT OF THIS RATIO'S TWO ARMS, PRINT IT EVERY RUN, AND
+   * JUDGE NOTHING WITH IT.
+   *
+   * WHAT THIS CASE DOES NOT DO. It does not touch the verdict. The case below
+   * is unchanged: the WALL-CLOCK quotient against
+   * `RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max`, exactly as `main` judges it. No
+   * constant is derived here, none is proposed here, and
+   * `inDbRatio` is printed with `judgedOn=none` so no reader can mistake it
+   * for a verdict. The owner sets the in-database constant AFTER the
+   * distribution of at least ten runs is read, and not before.
+   *
+   * WHY THE DENOMINATOR HAD TO BE MEASURED AT ALL. DR-98 converted this
+   * budget's CEILING to the in-database clock but not this RATIO, and measured
+   * on `main` (`4c878e0f`) the string `'in-database'` has exactly ONE call site
+   * in this file — the `P4-D` reads loop, i.e. the NUMERATOR. The median read
+   * was taken wall-clock-only, so the in-database quotient had never been
+   * measured in any run and no constant could be anchored from history. The
+   * `'in-database'` argument on that call is the whole of the change this case
+   * reads.
+   *
+   * WHY THE LENGTHS ARE ASSERTED AND THE RATIO IS NOT. A printed number nobody
+   * can make move is not a measurement (RULE-27, DR-55), and a percentile over
+   * fewer samples than declared is not the claimed percentile (P4-AL-76). So
+   * the four series — both arms, both clocks — are asserted to carry
+   * `SHORT_PERCENTILE_ITERATIONS` samples each: the printed quotient is either
+   * about these two arms at their declared sample count, or this case is RED.
+   * That is a guard on the printed figure, not a judgement of it.
+   *
+   * THE PRINTED MARKER IS PURE ASCII AND UNCONDITIONAL, and it is printed
+   * BEFORE any assertion in this case, so a run whose lengths are wrong still
+   * carries the numbers that explain why (RULE-29: a step silent on success
+   * carries no evidence of itself). `ci.yml`'s controls grep for
+   * `P4-S4-RATIO-MONITOR-FATTAIL` rather than for the prose.
+   */
+  it('MONITOR (DR-98 stage 1, P4-AL-72): the in-database quotient of P4-D’s two arms is measured and printed, and judges nothing', () => {
+    requireFixture();
+    const fat = must(readSeries.get(READS.receivable(dataset.fatCustomerId)), 'the fat-tail receivable series');
+    const med = must(medianReceivable, 'the median receivable series');
+    const fatInDb = must(fat.inDatabaseMs, 'the fat-tail arm’s in-database series');
+    const medInDb = must(med.inDatabaseMs, 'the median arm’s in-database series — the denominator this stage exists to measure');
+    const fatInDbP95 = quantile(fatInDb, 0.95);
+    const medInDbP95 = quantile(medInDb, 0.95);
+    const fatWallP95 = quantile(fat.samplesMs, 0.95);
+    const medWallP95 = quantile(med.samplesMs, 0.95);
+    console.log(
+      `P4-S4-RATIO-MONITOR-FATTAIL depth=in-database judgedOn=none ` +
+        `fatInDbP95=${fatInDbP95.toFixed(3)} medianInDbP95=${medInDbP95.toFixed(3)} ` +
+        `inDbRatio=${medInDbP95 === 0 ? 'no-denominator' : (fatInDbP95 / medInDbP95).toFixed(3)} ` +
+        `wallFatP95=${fatWallP95.toFixed(3)} wallMedianP95=${medWallP95.toFixed(3)} ` +
+        `wallRatio=${medWallP95 === 0 ? 'no-denominator' : (fatWallP95 / medWallP95).toFixed(3)} ` +
+        `judgedMax=${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} appliesTo=wallRatio ` +
+        `fatWallSamples=${fat.samplesMs.length} fatInDbSamples=${fatInDb.length} ` +
+        `medianWallSamples=${med.samplesMs.length} medianInDbSamples=${medInDb.length} ` +
+        `fatOpenInvoices=${volume.fatOpenInvoices} medianOpenInvoices=${MEDIAN.invoicesEach}`,
+    );
+    for (const [label, length] of [
+      ['fat-tail wall', fat.samplesMs.length],
+      ['fat-tail in-database', fatInDb.length],
+      ['median wall', med.samplesMs.length],
+      ['median in-database', medInDb.length],
+    ] as const)
+      expect(
+        length,
+        `${label}: ${length} samples against ${SHORT_PERCENTILE_ITERATIONS} declared — the printed quotient would not be about these two arms at their declared sample count (P4-AL-76)`,
+      ).toBe(SHORT_PERCENTILE_ITERATIONS);
   });
 
   it(`RATIO (host-independent, P4-AL-72): p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median)`, () => {
