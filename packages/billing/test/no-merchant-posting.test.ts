@@ -220,12 +220,21 @@ describe('§17 / TL-P5-R2 — platform SaaS tax stays unsupported', () => {
 describe('§16 — the boundary says no to a planted crossing (the negative controls)', () => {
   // Every plant below is a STRING. Nothing is written into `src/`, so there
   // is nothing to restore and DR-09 is untouched.
+  //
+  // The merchant authority's specifier is ASSEMBLED here, never spelled inside
+  // an import-shaped literal. `scripts/phase3-review-index.ts` reads
+  // `import ... from '<spec>'` out of a test's RAW text and resolves it to the
+  // named package's entry module, so a spelled plant makes the generated
+  // review index claim this suite COVERS that module. It does not: this
+  // suite's corpus is this package's own `src/` and nothing else (measured
+  // 2026-11-12). A citation is not coverage, so the citation is by assembly.
+  const MERCHANT = ['@daftar', 'accounting'].join('/');
 
   it('NEGATIVE CONTROL: an import of the merchant posting engine is reported', () => {
-    const planted = "import { postEntry } from '@daftar/accounting';\nexport const post = postEntry;\n";
+    const planted = "import { postEntry } from '" + MERCHANT + "';\nexport const post = postEntry;\n";
     const specs = importedModules(planted);
-    expect(specs, 'the extractor read nothing out of the plant, so this control proves nothing').toContain('@daftar/accounting');
-    expect(crossings(specs), 'the checker missed an import of the merchant authority').toEqual(['@daftar/accounting']);
+    expect(specs, 'the extractor read nothing out of the plant, so this control proves nothing').toContain(MERCHANT);
+    expect(crossings(specs), 'the checker missed an import of the merchant authority').toEqual([MERCHANT]);
   });
 
   it('NEGATIVE CONTROL: a database driver import is reported too', () => {
