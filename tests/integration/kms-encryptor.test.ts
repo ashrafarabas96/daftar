@@ -18,6 +18,7 @@ const TOKEN = 'kms-bridge-token-with-at-least-32-characters!!';
 const PROD_BASE: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   PROCESS_MODE: 'merchant-api',
+  CORS_ORIGINS: 'https://app.example.com', // REL-10: production names its browser origins explicitly
   APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar',
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
