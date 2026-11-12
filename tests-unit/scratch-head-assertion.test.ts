@@ -67,6 +67,11 @@ describe('the barrier suite uses the derived head', () => {
     expect(suite, 'the suite is back to a literal head, so the next migration reds it before one assertion runs').not.toMatch(/startsWith\('00\d\d_'\)/);
   });
 
+  it('refuses to derive the head from an EMPTY folder: a comparison against nothing passes vacuously', () => {
+    expect(suite, 'the derivation has no positive control that the migrations folder holds files').toContain('migrationFiles()');
+    expect(suite).toContain('NO SUBJECT');
+  });
+
   it('asks the checker, against the head the folder holds', () => {
     expect(suite).toContain('scratchHeadProblem(');
     expect(suite).toContain('headMigration()');

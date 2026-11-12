@@ -86,7 +86,7 @@
  */
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createScratchDb, headMigration, urlOf, type ScratchDb } from '../helpers/scratch-db';
+import { createScratchDb, headMigration, migrationFiles, urlOf, type ScratchDb } from '../helpers/scratch-db';
 import { scratchHeadProblem } from '../helpers/scratch-head';
 import { randomUUID } from 'node:crypto';
 
@@ -770,6 +770,9 @@ beforeAll(async () => {
   // the folder, not written here as a number: a literal stops being true the
   // day a migration is added and reds this suite before one assertion runs
   // (it did, when 0091 landed). A database built lower is still refused.
+  // A comparison against NOTHING passes vacuously, so the derivation has its
+  // own positive control: the folder it is derived from must hold files.
+  if (migrationFiles().length === 0) throw new Error('NO SUBJECT — no migration files on disk, so "built to the head" would compare against nothing');
   const problem = scratchHeadProblem(db.applied, headMigration());
   if (problem !== null) throw new Error(problem);
 }, 900_000);
