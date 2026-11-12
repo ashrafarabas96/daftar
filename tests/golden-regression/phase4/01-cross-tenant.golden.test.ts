@@ -224,9 +224,21 @@ const RECEIVABLES_ROUTES: readonly string[] = [
   'GET /v1/customers/:customerId/credits',
 ];
 
+/**
+ * The two P4-S1 customer WRITE routes (owner decision DR-142), driven by their
+ * own section at the end of this file for the reason `SALE_ROUTES` records: a
+ * POST or a PUT issued as a GET is a 404 that looks like isolation, so the two
+ * generic loops cannot express either of them.
+ */
+const CUSTOMER_WRITE_ROUTES: readonly string[] = ['POST /v1/customers', 'PUT /v1/customers/:customerId'];
+
 /** A route the two generic loops below can drive: a GET whose subject is a customer or an invoice. */
 const isGenericReadRoute = (route: string): boolean =>
-  route.startsWith('GET ') && !SALE_ROUTES.includes(route) && !POS_ROUTES.includes(route) && !RECEIVABLES_ROUTES.includes(route);
+  route.startsWith('GET ') &&
+  !SALE_ROUTES.includes(route) &&
+  !POS_ROUTES.includes(route) &&
+  !RECEIVABLES_ROUTES.includes(route) &&
+  !CUSTOMER_WRITE_ROUTES.includes(route);
 
 /** The two relations 0079 creates. Both must refuse a foreign business at SQL, and neither may be written by `daftar_app`. */
 const POS_RELATIONS: readonly string[] = ['pos_cart_lines', 'pos_till_sessions'];
@@ -522,10 +534,15 @@ describe('the enumeration is checked, not trusted (G-02)', () => {
     // `GET /v1/customers/:customerId/receivable` the day somebody widened it.
     for (const route of RECEIVABLES_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a receivables route but is not on the surface`).toContain(route);
     expect(RECEIVABLES_ROUTES.length, 'the receivables surface is empty, so its whole section below would prove nothing').toBe(4);
+    // The P4-S1 customer writes, registered against their own section the same
+    // way the three above are: a route no section claims is a route nothing
+    // drives, and the equality below is what refuses that.
+    for (const route of CUSTOMER_WRITE_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a customer write route but is not on the surface`).toContain(route);
+    expect(CUSTOMER_WRITE_ROUTES.length, 'the customer write surface is empty, so its whole section below would prove nothing').toBe(2);
     expect(
       PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),
-      'a route is driven by the generic loops, by the sale section, by the POS section or by the receivables section — never by none of them',
-    ).toEqual([...SALE_ROUTES, ...POS_ROUTES, ...RECEIVABLES_ROUTES].sort());
+      'a route is driven by the generic loops, by the sale section, by the POS section, by the receivables section or by the customer write section — never by none of them',
+    ).toEqual([...SALE_ROUTES, ...POS_ROUTES, ...RECEIVABLES_ROUTES, ...CUSTOMER_WRITE_ROUTES].sort());
   });
 
   it('the fixture is real: each of the three businesses holds its own customer and its own invoice', async () => {
@@ -2096,10 +2113,15 @@ describe('HTTP: the customer write commands refuse another tenant’s business',
     );
   }
 
-  /** One customer row as the OWNER sees it — the state a refused write must not have moved. */
+  /**
+   * One customer row as the OWNER sees it — the state a refused write must not
+   * have moved. It carries `revision`, `name`, `updated_at` and
+   * `last_intent_sha256`: the four a cross-business write would have disturbed,
+   * and the four the before/after comparison therefore prints.
+   */
   async function customerRow(shop: Shop, customerId: string): Promise<string> {
     const r = await ownerPool().query<{ s: string }>(
-      `SELECT name || '|' || revision::text || '|' || status || '|' || last_intent_sha256 AS s
+      `SELECT 'rev=' || revision::text || ' name=' || name || ' updated_at=' || updated_at::text || ' intent=' || last_intent_sha256 AS s
          FROM customers WHERE business_id = $1 AND id = $2`,
       [shop.businessId, customerId],
     );
@@ -2134,13 +2156,27 @@ describe('HTTP: the customer write commands refuse another tenant’s business',
     expect(await revisionOf(A, mineId), 'created at revision 1').toBe(1);
 
     // DENY 1 — the CREATE's own form of the attack: A's header reusing an id
-    // that already exists in A2. A2's row may not move, whatever A is answered.
-    const a2Before = await customerRow(A2, A2.customerId);
+    // that already exists in ANOTHER business. A2's row may not move, whatever
+    // A is answered.
+    //
+    // THE COLLISION TARGET IS ITS OWN CUSTOMER, created in A2 through the same
+    // route under A2's own header, and NOT the shops' fixture `customerId`.
+    // Reusing the fixture id made A hold a row under it, which then made the
+    // update case below ambiguous — a 200 there was A editing A'S OWN row, not
+    // a leak. The collision is kept; the pollution of the other cases is not.
+    const collisionId = randomUUID();
+    const seeded = await t.request.post('/v1/customers').set(hdr(owner, A2.businessId)).send({ customerId: collisionId, name: 'A2 collision target' });
+    expect(seeded.status, `the A2 collision target could not be created: ${JSON.stringify(seeded.body)}`).toBe(201);
+
+    const a2Before = await customerRow(A2, collisionId);
     const a2CountBefore = await customerCount(A2);
-    const reused = await t.request.post('/v1/customers').set(hdr(owner, A.businessId)).send({ customerId: A2.customerId, name: 'Taken Over' });
-    expect(reused.status, `POST /v1/customers answered ${reused.status} for A2's customer id under A's header`).toBeLessThan(500);
-    expect(await customerRow(A2, A2.customerId), 'A2’s customer was rewritten through A’s header').toBe(a2Before);
+    const reused = await t.request.post('/v1/customers').set(hdr(owner, A.businessId)).send({ customerId: collisionId, name: 'Taken Over' });
+    // THE LAW FIRST, and the status after it: the law is that A2's row does not
+    // move. A create under a colliding id may legitimately succeed FOR A,
+    // because the key is `(business_id, id)`.
+    expect(await customerRow(A2, collisionId), `A2’s customer moved through A’s header: ${a2Before} -> ${await customerRow(A2, collisionId)}`).toBe(a2Before);
     expect(await customerCount(A2), 'A2 gained or lost a customer through A’s header').toBe(a2CountBefore);
+    expect(reused.status, `POST /v1/customers answered ${reused.status} for A2's customer id under A's header`).toBeLessThan(500);
 
     // DENY 2 — another tenant's token against this tenant's business.
     const tokenBefore = await customerCount(A);
@@ -2169,20 +2205,34 @@ describe('HTTP: the customer write commands refuse another tenant’s business',
       .put(`/v1/customers/${mineId}`)
       .set(hdr(owner, A2.businessId))
       .send({ expectedRevision: at + 1, name: 'Taken Over' });
+    const mineAfter = await customerRow(A, mineId);
+    expect(mineAfter, `A’s customer MOVED through A2’s header: ${mineBefore} -> ${mineAfter}`).toBe(mineBefore);
     expect([403, 404, 409, 422], `PUT answered ${underA2.status} for A's customer under A2's header`).toContain(underA2.status);
-    expect(await customerRow(A, mineId), 'A’s customer was edited through A2’s header').toBe(mineBefore);
 
     // DENY 2 — the harder half: the OTHER business's customer id under the
     // actor's own valid header. A controller that trusted its path parameter
     // would have edited another merchant's master data.
+    //
+    // THE LAW IS ASSERTED BEFORE THE STATUS, and this ordering is the whole
+    // lesson of this case. `expect` throws, so a status assertion placed first
+    // means the law is never evaluated when the status surprises us — which is
+    // exactly what happened: run 43202764044 reported a 200 here and the
+    // row-identity assertion below it never ran, leaving "did the row move?"
+    // unanswered by the log. The law now answers first, and prints the before
+    // and after values when it does not hold.
+    //
+    // A holds no row under these ids — the collision above is its own id now —
+    // so the status IS the law here too: `customer_update` finds nothing in A
+    // and refuses `customer.not_found`.
     for (const other of [A2, B]) {
       const otherBefore = await customerRow(other, other.customerId);
       const res = await t.request
         .put(`/v1/customers/${other.customerId}`)
         .set(hdr(owner, A.businessId))
         .send({ expectedRevision: await revisionOf(other, other.customerId), name: 'Taken Over' });
+      const otherAfter = await customerRow(other, other.customerId);
+      expect(otherAfter, `${other.businessId}’s customer MOVED through A’s header: ${otherBefore} -> ${otherAfter}`).toBe(otherBefore);
       expect([403, 404, 409, 422], `PUT answered ${res.status} for ${other.businessId}'s customer under A's header`).toContain(res.status);
-      expect(await customerRow(other, other.customerId), `${other.businessId}’s customer was edited through A’s header`).toBe(otherBefore);
     }
 
     // DENY 3 — another tenant's token against this tenant's business.
@@ -2191,7 +2241,8 @@ describe('HTTP: the customer write commands refuse another tenant’s business',
       .put(`/v1/customers/${mineId}`)
       .set(hdr(ownerB, A.businessId))
       .send({ expectedRevision: await revisionOf(A, mineId), name: 'Another Tenant' });
+    const afterToken = await customerRow(A, mineId);
+    expect(afterToken, `another tenant’s token MOVED A’s customer: ${beforeToken} -> ${afterToken}`).toBe(beforeToken);
     expect([401, 403, 404], `PUT answered ${foreignToken.status} for another tenant's token`).toContain(foreignToken.status);
-    expect(await customerRow(A, mineId), 'another tenant’s token edited A’s customer').toBe(beforeToken);
   });
 });
