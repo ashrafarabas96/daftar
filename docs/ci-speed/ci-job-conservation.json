@@ -2,20 +2,19 @@
   "$schema": "daftar/ci-job-conservation/1",
   "law": "tests/guards/ci-job-conservation.test.ts",
   "baseline": {
-    "rev": "4c878e0f3382e11f0c2e82289a35c0103809c438",
+    "rev": "8b1a678062c92328550bd27815da58187404652f",
     "job": "backend",
-    "steps": 57
+    "steps": 58
   },
   "jobs": [
     "backend",
     "backend-static",
     "backend-gates-p2",
-    "backend-golden",
-    "backend-neg-controls"
+    "backend-golden"
   ],
   "totals": {
     "shared": 11,
-    "assigned": 46
+    "assigned": 47
   },
   "shared": [
     "Build contract, accounting and design-system packages",
@@ -36,7 +35,8 @@
     "Budget negative control — a delay INSIDE the database must fail the accounting A and B budgets": "backend",
     "Budget negative control — a delay OUTSIDE the database must NOT fail the P4-D and P4-F-TXN budgets": "backend",
     "Budget negative control — a delay OUTSIDE the database must NOT fail the accounting A and B budgets": "backend",
-    "Budget negative control — the POS ratio gate and the P4-A and P4-B budgets must be able to fail": "backend-neg-controls",
+    "Budget negative control — the POS ratio gate and P4-A must be able to fail, and P4-B must NOT fail on a client-side delay": "backend",
+    "Budget negative control — a delay INSIDE the database must fail P4-B": "backend",
     "Database contract from zero (throw-away embedded server; same check as the release gate)": "backend-static",
     "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)": "backend",
     "Format": "backend-static",

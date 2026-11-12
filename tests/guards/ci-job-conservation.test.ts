@@ -2,7 +2,7 @@
  * THE JOB-CONSERVATION LAW (owner decision DR-105, CI-SPEED phase 1).
  *
  * `backend` used to run everything. It now runs only what the three SEALED
- * laws pin to a job literally named `backend`, and the rest runs in four
+ * laws pin to a job literally named `backend`, and the rest runs in three
  * sibling jobs that have NO `needs` on it. That is a speed change, and a
  * speed change is exactly the shape in which work silently disappears: a
  * step moved out of a job and into no job at all still leaves a green tick,
@@ -29,7 +29,7 @@
  *   C-4  Every step the register calls SHARED really does appear in two or
  *        more jobs. A register allowed to call a unique step "shared" would
  *        let any assignment be erased by moving its name into that list.
- *   C-5  The five jobs exist and each has steps — the positive control,
+ *   C-5  The four jobs exist and each has steps — the positive control,
  *        because every count below is a count over them and a typo in a job
  *        name would otherwise make all of C-1..C-4 pass over nothing.
  *
@@ -194,8 +194,8 @@ function conservationProblems(ciText: string, reg: Register): string[] {
 }
 
 describe('the job-conservation law (DR-105)', () => {
-  it('C-5: the five jobs of the family exist and have steps', () => {
-    expect(register.jobs).toEqual(['backend', 'backend-static', 'backend-gates-p2', 'backend-golden', 'backend-neg-controls']);
+  it('C-5: the four jobs of the family exist and have steps', () => {
+    expect(register.jobs).toEqual(['backend', 'backend-static', 'backend-gates-p2', 'backend-golden']);
     for (const job of register.jobs) expect(stepsOf(ci, job).length, job).toBeGreaterThan(0);
   });
 
