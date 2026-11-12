@@ -1060,9 +1060,19 @@ jobs:
           # the CLIENT must leave it green — if it fails here, the verdict is
           # still listening to something outside the database. This is the
           # negative half of the pair; the positive half is the next step.
-          ! grep -q 'PERF01-BUDGET-P4B' "$log" || {
+          #
+          # AN ABSENCE OF `PERF01-BUDGET-P4B` PROVES NOTHING ON ITS OWN: the
+          # log is free of it as well when the instrument refused, when P4-B
+          # never reached its verdict, or when the delay never reached the wall
+          # clock — and this run is red by design, so one more red is not
+          # visible. The checker requires the facts that give the absence its
+          # meaning: P4-B printed its line, the wall clock saw the delay
+          # (wallP50 >= 200), and the in-database p95 stayed under the ceiling
+          # the line itself reports. Its logic is exercised, planted and
+          # accepted, by tests-unit/p4b-client-delay-control.test.ts.
+          npx tsx scripts/check-p4b-client-delay-log.ts "$log" || {
             tail -160 "$log"
-            echo "a CLIENT-SIDE delay failed PERF01-BUDGET-P4B — its verdict still listens to something outside PostgreSQL"; exit 1
+            echo "the client-side control did not prove what it claims about P4-B"; exit 1
           }
         env:
           PG_PORT: '5432'
