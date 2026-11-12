@@ -34,9 +34,9 @@ and the failure message names the §17 condition and the ruling id.
 | fact | value |
 | ---- | ----- |
 | routines owned by the two internal principals | 240 |
-| of those, `SECURITY DEFINER` | **221** (163 inventory, 58 accounting) |
+| of those, `SECURITY DEFINER` | **223** (165 inventory, 58 accounting) |
 | of those, `INVOKER` | 19 — **out of scope**, see "T-05's scope" below |
-| definers with an `EXECUTE` grantee other than their owner (**the doors**) | **57** |
+| definers with an `EXECUTE` grantee other than their owner (**the doors**) | **59** |
 | definers with an explicit, empty ACL and therefore no caller at all | **164** (122 trigger functions, 42 helpers) |
 | definers executable by `PUBLIC` | **0** |
 | definers whose `proacl` is null (default PUBLIC `EXECUTE` never revoked) | **0** |
@@ -141,7 +141,7 @@ The three gaps this page and its law close:
    that a later phase's design grant would not redden an accepted contract.
    That leaves §17 condition 1 to a shape test: a Phase 4 migration could grant
    `daftar_app` `EXECUTE` on a cross-tenant reader and nothing would say so.
-   This page restores the equality, per signature, over all 221.
+   This page restores the equality, per signature, over all 223.
 3. **The authority proof as a property of the set** — §17 condition 2.
    `accounting-posting-authority` proves `accounting_post_entry` needs its
    assertion. Nothing said that *every* door a login credential can open needs
@@ -230,7 +230,7 @@ boundary, and that is §17 condition 1. The red proof grants one of them to
 
 Every `SECURITY DEFINER` routine of either internal principal that any
 principal other than its owner may `EXECUTE`. `DEFINER`, `search_path` and
-PUBLIC `EXECUTE` are uniform across all 221 and are asserted as set-wide
+PUBLIC `EXECUTE` are uniform across all 223 and are asserted as set-wide
 clauses by the law, so a row that drifts is red even though the column reads
 the same everywhere.
 
