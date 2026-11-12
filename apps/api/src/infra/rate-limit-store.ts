@@ -190,8 +190,20 @@ export function rateLimitScopeSegment(scope: RateLimitScope): string {
  * tenant by construction (see the header) — but a tag over exactly the part
  * the two keys of one request SHARE. The block key is this key plus a
  * `:blocked` suffix (`increment`), so both carry the same first `{`…`}` and
- * land in one slot BY CONSTRUCTION, including when the caller's own text
- * carries a brace: the tag ends before any of it.
+ * land in one slot BY CONSTRUCTION — the tag spans exactly the text the two
+ * keys have in common, and the suffix lies outside it.
+ *
+ * A `}` inside the caller's own key does NOT break that. The review of #77
+ * was right that the earlier wording here ("the tag ends before any of it")
+ * was false, so this is what was measured instead: such a brace TRUNCATES the
+ * tag at itself, identically for both keys, so the pair still shares a slot
+ * (`POST-/v1/x-}z` → tag `ip:default:POST-/v1/x-`, counter and flag both 8399).
+ * What it does cost is spread, not correctness: two different keys that agree
+ * up to their first `}` would then share one slot (`a}b}c` → tag
+ * `ip:default:a`). No caller reaches that today — the general allowance's key
+ * is a `sha256` from `throttler.guard.js`, which carries no brace — and it is
+ * written down because the next person will read this comment, not re-measure
+ * it.
  *
  * Measured, because the alternative was assuming: one constant tag for every
  * key would also satisfy the cluster, by collapsing every allowance in the

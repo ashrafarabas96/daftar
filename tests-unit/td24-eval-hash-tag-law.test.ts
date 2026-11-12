@@ -18,9 +18,13 @@
  * through the fix for TD-24, with nothing visibly broken.
  *
  * What holds it shut today is a document, not the code:
- * `docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md:42` guarantees cluster mode
- * disabled. A setting changed in the infrastructure unit would open it
- * silently, which is why this is a law and not a comment.
+ * `docs/DAFTAR_AWS_REFERENCE_ARCHITECTURE.md` guarantees it in the line that
+ * reads "ElastiCache Redis (cluster mode disabled, Multi-AZ)". The citation is
+ * by TEXT and not by line number on purpose: the first form of this comment
+ * said `:42`, which was true where it was written and pointed at an unrelated
+ * worker-JWT paragraph once the patch was carried onto another base (review of
+ * #77). A setting changed in the infrastructure unit would open this silently,
+ * which is why this is a law and not a comment.
  *
  * ── WHAT IS MEASURED, AND WHAT IS NOT ────────────────────────────────────
  *
@@ -155,8 +159,10 @@ describe('TD-24 law — one EVAL, one slot', () => {
       { what: 'the general allowance, which has no verified tenant by construction', key: 'POST-/v1/orders-203.0.113.9' },
       { what: 'an IPv6 client, whose address carries colons', key: 'GET-/v1/products-2001:db8::1' },
       { what: 'a verified tenant', key: 'k', tenantId: TENANT },
-      // Caller text with braces of its own cannot break the pair: the tag
-      // closes inside the part the two keys share, before any of it.
+      // Caller text with braces of its own cannot break the pair. NOT because
+      // the tag ends before that text — it does not; see TD24-SLOT-D — but
+      // because whatever the tag turns out to be, both keys compute it from
+      // the same characters.
       { what: 'caller text carrying a closing brace', key: 'POST-/v1/x-a}b' },
       { what: 'caller text carrying a whole brace pair', key: 'POST-/v1/x-{z}q' },
     ];
@@ -185,6 +191,39 @@ describe('TD-24 law — one EVAL, one slot', () => {
     // performance defect traded for a correctness one. Measured, not assumed.
     expect(new Set(tags).size).toBe(cases.length);
     expect(new Set(tags.map((t) => crc16(t) % SLOTS)).size).toBeGreaterThan(1);
+  });
+
+  it('TD24-SLOT-D: a `}` in the caller key truncates the tag — the pair still agrees, the spread is what pays', async () => {
+    // The review of #77 found the comment in `rate-limit-store.ts` claiming the
+    // tag "ends before" the caller's text. It does not: the tag runs from the
+    // first `{` to the first `}` AFTER it, so a brace inside the caller's own
+    // key cuts the tag at that point. This case pins both halves of what that
+    // means, so the next reader does not have to trust a sentence.
+    //
+    // HALF ONE — correctness is untouched, because the truncation is identical
+    // for the counter and its flag.
+    const withBrace = await keysOfOneEval({ key: 'POST-/v1/x-}z' });
+    expect(new Set(withBrace.map(slotOf)).size).toBe(1);
+
+    // HALF TWO — and the tag really is cut: it carries no `}` and stops at the
+    // brace rather than spanning the whole caller key.
+    const [counterKey = ''] = withBrace;
+    const tag = hashTag(counterKey);
+    expect(tag).not.toContain('}');
+    expect(tag.endsWith('POST-/v1/x-')).toBe(true);
+
+    // HALF THREE — the price. Two DIFFERENT caller keys that agree up to their
+    // first `}` collapse into one slot. That is a spread cost, not a CROSSSLOT
+    // defect, and no caller reaches it today: the general allowance's key is a
+    // `sha256` from `@nestjs/throttler`, which carries no brace.
+    const a = await keysOfOneEval({ key: 'POST-/v1/x-}aaa' });
+    const b = await keysOfOneEval({ key: 'POST-/v1/x-}bbb' });
+    expect(hashTag(a[0] ?? '')).toBe(hashTag(b[0] ?? ''));
+    expect(slotOf(a[0] ?? '')).toBe(slotOf(b[0] ?? ''));
+    // While two keys that differ BEFORE any brace do not collapse — so the
+    // assertion above is about the truncation and not about everything.
+    const c = await keysOfOneEval({ key: 'POST-/v1/y-}aaa' });
+    expect(hashTag(c[0] ?? '')).not.toBe(hashTag(a[0] ?? ''));
   });
 
   it('TD24-SLOT-C (negative control): the untagged shape this card removes does NOT share a slot', async () => {
