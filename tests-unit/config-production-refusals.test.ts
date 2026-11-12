@@ -34,7 +34,15 @@ import { REQUIRED_SCHEMA_MIGRATION, loadConfig, migrationOrdinal, schemaFloor } 
  * `tests-unit/sec01-worker-jwt-deny.test.ts` already uses.
  */
 
-/** A merchant API that is otherwise complete and correct, in production. */
+/**
+ * A merchant API that is otherwise complete and correct, in production.
+ *
+ * This repeats the fixture in `tests-unit/sec01-worker-jwt-deny.test.ts`, and the
+ * duplication is deliberate (review of #79 noted it): a shared fixture would tie
+ * two cards' suites together, so that a key one card needs would silently change
+ * what the other measures. Repeated, a newly required variable reddens both files
+ * and the cost is visible rather than hidden.
+ */
 const MERCHANT_PROD: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   PROCESS_MODE: 'merchant-api',
@@ -194,7 +202,9 @@ describe('config.ts: the wrapper that makes a schema failure readable', () => {
     // the key, a refusal would become "invalid configuration" and nothing
     // more — which is a support call rather than a fix.
     expect(() => loadConfig({ ...MERCHANT_PROD, PORT: '70000' })).toThrow(/Invalid configuration \(fails fast at startup\)/);
-    expect(() => loadConfig({ ...MERCHANT_PROD, PORT: '70000' })).toThrow(/PORT/);
+    // `/PORT/` alone would also match `SUPPORT_SESSION_MAX_MINUTES` (review
+    // of #79), so the key is pinned with its separator.
+    expect(() => loadConfig({ ...MERCHANT_PROD, PORT: '70000' })).toThrow(/\bPORT:/);
   });
 });
 
@@ -204,9 +214,22 @@ describe('config.ts: the schema floor has an ordinal to compare against', () => 
     // ordinal. That branch is only reachable by editing the constant — which
     // is precisely the edit this assertion catches, because the throw would
     // make it red.
+    //
+    // The review of #79 was right that the first form of this test asserted
+    // `schemaFloor() === migrationOrdinal(REQUIRED_SCHEMA_MIGRATION)`, which is
+    // the implementation restated: both sides came from the same parse, so a
+    // defect in that parse stayed green here. The ordinal is now derived by the
+    // TEST's own regex, so the two sides are independent and a parse that
+    // started disagreeing with the file name would redden.
+    const pinned = /^(\d{4})_/.exec(REQUIRED_SCHEMA_MIGRATION);
+    expect(pinned, `REQUIRED_SCHEMA_MIGRATION ${REQUIRED_SCHEMA_MIGRATION} must open with a four-digit ordinal`).not.toBeNull();
     const floor = schemaFloor();
     expect(Number.isSafeInteger(floor)).toBe(true);
-    expect(floor).toBe(migrationOrdinal(REQUIRED_SCHEMA_MIGRATION));
+    expect(floor).toBe(Number(pinned?.[1]));
+    // And it is the ordinal of a migration that EXISTS, not merely a number:
+    // `migrationOrdinal` is the implementation's own reading, kept here as a
+    // cross-check of the two parses rather than as the claim itself.
+    expect(migrationOrdinal(REQUIRED_SCHEMA_MIGRATION)).toBe(floor);
   });
 
   it('migrationOrdinal refuses a name with no leading ordinal (negative control)', () => {
