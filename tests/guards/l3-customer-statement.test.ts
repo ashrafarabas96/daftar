@@ -17,6 +17,7 @@
  */
 import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
+import { PERMISSION_KEY } from '../../apps/api/src/common/guards';
 import { CustomerReadService } from '../../apps/api/src/modules/selling/customer-reads';
 import { CustomersController } from '../../apps/api/src/modules/selling/customers.controller';
 import { CustomerAccountStatementQuerySchema } from '../../apps/api/src/modules/selling/selling.schemas';
@@ -255,6 +256,33 @@ describe('L3 customer statement', () => {
   it('the cursor accepts rank 5 (credit application) and refuses rank 6', () => {
     expect(CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:5:${id(3)}` }).cursor).toBe(`2026-01-02:5:${id(3)}`);
     expect(() => CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:6:${id(3)}` })).toThrow();
+  });
+
+  it('LOAD-BEARING (permission): the route names receivables.view, the key the permission guard reads', () => {
+    const handler = (CustomersController.prototype as unknown as Record<string, object>).accountStatement as object;
+    expect(Reflect.getMetadata(PERMISSION_KEY, handler)).toBe('receivables.view');
+    // Positive control that the probe can see: a sibling route's key reads the same way.
+    const sibling = (CustomersController.prototype as unknown as Record<string, object>).list as object;
+    expect(Reflect.getMetadata(PERMISSION_KEY, sibling)).toBe('customers.view');
+  });
+
+  it('LOAD-BEARING (scope): an actor whose scope is not business-wide is refused before any read; a business-wide one is served', async () => {
+    let reads = 0;
+    const fakeReads = {
+      async accountStatement() {
+        reads += 1;
+        return { customerId: CUSTOMER, items: [], outstanding: [], outstandingScope: 'whole_customer', nextCursor: null };
+      },
+    };
+    const controller = new CustomersController(fakeReads as never);
+    const assigned = { ...m, branchScopeMode: 'assigned' } as unknown as MembershipContext;
+    await expect(controller.accountStatement(assigned, CUSTOMER, {})).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      details: { sellingCode: 'customer.business_wide_scope_required' },
+    });
+    expect(reads, 'a refused actor reached the read').toBe(0);
+    await expect(controller.accountStatement(m, CUSTOMER, {})).resolves.toMatchObject({ customerId: CUSTOMER });
+    expect(reads, 'the business-wide actor reached the read exactly once').toBe(1);
   });
 
   it('query schema: keyset cursor, capped limit, no offset key', () => {

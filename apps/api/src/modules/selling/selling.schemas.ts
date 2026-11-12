@@ -116,7 +116,7 @@ const customerContact = z
  * optional field is cleared and a contact the statement does not name is
  * removed. Reachability (`phone` or `email` on each contact) and the
  * single-primary rule are the domain's judgement
- * (`validateCustomerAccountStatement`), so their typed `customer.contact_*` codes
+ * (`validateCustomerStatement`), so their typed `customer.contact_*` codes
  * reach the client rather than a generic validation failure.
  */
 const customerFields = {
@@ -225,7 +225,7 @@ export const CustomerOpenInvoicesQuerySchema = z
  * `GET /v1/customers/:customerId/account-statement`. Keyset only: there is no `offset`
  * key. The cursor is the composite continuation key of the chronological order
  * `(entry date, kind rank, entry id)` -- `YYYY-MM-DD:<1..5>:<uuid>` -- because
- * one uuid cannot name a position across four tables without a resolving read.
+ * one uuid cannot name a position across five tables without a resolving read.
  */
 const accountStatementCursor = z
   .string()

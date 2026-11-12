@@ -4,7 +4,7 @@
  *
  * `tests/guards/l3-customer-statement.test.ts` captures the statement TEXT and
  * simulates the cursor in JavaScript. It cannot prove what only a database can
- * refuse: that the four-branch `UNION ALL` is valid against the real schema,
+ * refuse: that the five-branch `UNION ALL` is valid against the real schema,
  * that its column types line up, that the order really is
  * `(date, type rank, id)`, and that the keyset predicate pages without
  * repeating or skipping a row. This suite asks the database.
@@ -30,6 +30,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ownerPool } from '../helpers/test-app';
 import { onboardS3Business } from '../helpers/inventory-commands';
+import { addMember, readAs } from '../helpers/merchant-reads';
 import { confirmSale, seedSaleFixtures } from '../golden-regression/phase4-s2/sale-path';
 import { creditSnapshot, invoiceTotals, must } from '../golden-regression/phase4-s4/harness';
 import { applyCredit, collectPayment, rateToR10, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
@@ -277,7 +278,7 @@ describe('the statement, executed', () => {
     foreignCustomerId = (await seedSaleFixtures(ownerPool(), shop2, w.day)).customerId;
   });
 
-  it('the subject exists: the slice is installed and the four seeded rows are all on the statement', async () => {
+  it('the subject exists: the slice is installed and the seven seeded rows are all on the statement', async () => {
     expect(missing, `the slice is not installed: ${missing.join('; ')}`).toEqual([]);
     const { status, body } = await getStatement(customerId, '?limit=50');
     expect(status, JSON.stringify(body)).toBe(200);
@@ -363,6 +364,24 @@ describe('the statement, executed', () => {
     );
     expect(oracle.rows.length, 'NO SUBJECT: the reader of record returned nothing').toBeGreaterThan(0);
     expect(body.outstanding).toEqual(oracle.rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor, baseMinor: r.base_minor })));
+  });
+
+  it('LOAD-BEARING over HTTP: a member without receivables.view is refused, and a branch-assigned member is refused for scope; the owner is served', async () => {
+    // The built-in cashier does not hold receivables.view (permissions.ts, cashier list).
+    const cashier = await addMember(w.t, w.owner, w.shop, 'l3 statement cashier', 'cashier');
+    const noPermission = await readAs(w.t, cashier, w.shop.businessId, statementPath(customerId, '?limit=1'));
+    expect(noPermission.status, JSON.stringify(noPermission.body)).toBe(403);
+    expect(noPermission.body?.error?.details?.sellingCode, 'refused by the permission guard, not by the scope rule').not.toBe(
+      'customer.business_wide_scope_required',
+    );
+    // The built-in manager holds receivables.view; assigned to one branch, its scope is not business-wide.
+    const manager = await addMember(w.t, w.owner, w.shop, 'l3 statement manager', 'manager', [w.shop.branchX]);
+    const narrow = await readAs(w.t, manager, w.shop.businessId, statementPath(customerId, '?limit=1'));
+    expect(narrow.status, JSON.stringify(narrow.body)).toBe(403);
+    expect(narrow.body?.error?.details?.sellingCode).toBe('customer.business_wide_scope_required');
+    // Positive control: the owner (all branches, holds the key) reads the same URL.
+    const owner = await readAs(w.t, w.owner, w.shop.businessId, statementPath(customerId, '?limit=1'));
+    expect(owner.status).toBe(200);
   });
 
   it('NEGATIVE CONTROL: another business’s customer id is refused, not answered', async () => {

@@ -516,7 +516,7 @@ export interface CustomerOpenInvoicesDto {
   nextCursor: string | null;
 }
 
-/** One statement row: a sales document, a payment, a credit, or a credit application. */
+/** One statement row: a sales document, a payment, a payment allocation, a held credit, or a credit application (five kinds). */
 export interface CustomerAccountStatementEntryDto {
   entryKind: 'invoice' | 'payment' | 'payment_allocation' | 'credit' | 'credit_application';
   entryId: string;
