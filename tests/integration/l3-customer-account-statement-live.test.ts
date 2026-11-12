@@ -32,14 +32,17 @@ import { ownerPool } from '../helpers/test-app';
 import { onboardS3Business } from '../helpers/inventory-commands';
 import { confirmSale, seedSaleFixtures } from '../golden-regression/phase4-s2/sale-path';
 import { creditSnapshot, invoiceTotals, must } from '../golden-regression/phase4-s4/harness';
-import { collectPayment, rateToR10, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
+import { applyCredit, collectPayment, rateToR10, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
 import { baseCurrency, settlementMissing, settlementWorld, stateFxRate, stockUp, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
 
 /** What the route answers, as far as this suite reads it. */
 interface Entry {
-  entryKind: 'invoice' | 'payment' | 'credit' | 'credit_application';
+  entryKind: 'invoice' | 'payment' | 'payment_allocation' | 'credit' | 'credit_application';
   entryId: string;
   entryDate: string;
+  currency: string;
+  debitTxnMinor: string | null;
+  creditTxnMinor: string | null;
   amountTxnMinor: string;
 }
 interface Outstanding {
@@ -55,7 +58,7 @@ interface StatementBody {
 }
 
 /** The statement's own rank of each kind: the second key of its order. */
-const RANK: Readonly<Record<Entry['entryKind'], number>> = { invoice: 1, payment: 2, credit: 3, credit_application: 4 };
+const RANK: Readonly<Record<Entry['entryKind'], number>> = { invoice: 1, payment: 2, payment_allocation: 3, credit: 4, credit_application: 5 };
 
 /** `(date, rank, id)`. A uuid orders bytewise in PostgreSQL, which is lowercase-hex string order. */
 function compareEntries(a: Entry, b: Entry): number {
@@ -79,9 +82,33 @@ function amountMismatches(items: readonly Entry[], stored: ReadonlyMap<string, s
 
 describe('§P pure controls: the order check and the amount check can fail at all', () => {
   // The invoice's id sorts AFTER the payment's, so only the type rank can put it first.
-  const invoice: Entry = { entryKind: 'invoice', entryId: 'ffffffff-0000-4000-8000-000000000001', entryDate: '2026-01-02', amountTxnMinor: '100' };
-  const payment: Entry = { entryKind: 'payment', entryId: '00000000-0000-4000-8000-000000000002', entryDate: '2026-01-02', amountTxnMinor: '60' };
-  const earlier: Entry = { entryKind: 'payment', entryId: '99999999-0000-4000-8000-000000000003', entryDate: '2026-01-01', amountTxnMinor: '5' };
+  const invoice: Entry = {
+    entryKind: 'invoice',
+    entryId: 'ffffffff-0000-4000-8000-000000000001',
+    entryDate: '2026-01-02',
+    currency: 'USD',
+    debitTxnMinor: null,
+    creditTxnMinor: null,
+    amountTxnMinor: '100',
+  };
+  const payment: Entry = {
+    entryKind: 'payment',
+    entryId: '00000000-0000-4000-8000-000000000002',
+    entryDate: '2026-01-02',
+    currency: 'USD',
+    debitTxnMinor: null,
+    creditTxnMinor: null,
+    amountTxnMinor: '60',
+  };
+  const earlier: Entry = {
+    entryKind: 'payment',
+    entryId: '99999999-0000-4000-8000-000000000003',
+    entryDate: '2026-01-01',
+    currency: 'USD',
+    debitTxnMinor: null,
+    creditTxnMinor: null,
+    amountTxnMinor: '5',
+  };
 
   it('the right order is accepted, and every wrong one is counted', () => {
     expect(outOfOrder([earlier, invoice, payment])).toBe(0);
@@ -104,6 +131,8 @@ let invoiceAId: string;
 let invoiceBId: string;
 let paymentId: string;
 let creditId: string;
+let allocationIds: string[] = [];
+let applicationIds: string[] = [];
 let dayA: string;
 
 const statementPath = (id: string, query = ''): string => `/v1/customers/${id}/account-statement${query}`;
@@ -137,7 +166,9 @@ async function storedAmounts(): Promise<ReadonlyMap<string, string>> {
   const q = await ownerPool().query<{ id: string; amount: string }>(
     `SELECT id::text AS id, total_txn_minor::text AS amount FROM invoices WHERE business_id = $1 AND customer_id = $2
      UNION ALL SELECT id::text, amount_minor::text FROM payments WHERE business_id = $1 AND customer_id = $2
-     UNION ALL SELECT id::text, original_amount_minor::text FROM customer_credits WHERE business_id = $1 AND customer_id = $2`,
+     UNION ALL SELECT id::text, original_amount_minor::text FROM customer_credits WHERE business_id = $1 AND customer_id = $2
+     UNION ALL SELECT id::text, invoice_amount_applied_minor::text FROM payment_allocations WHERE business_id = $1 AND customer_id = $2
+     UNION ALL SELECT id::text, invoice_amount_applied_minor::text FROM customer_credit_applications WHERE business_id = $1 AND customer_id = $2`,
     [w.shop.businessId, customerId],
   );
   return new Map(q.rows.map((r) => [r.id, r.amount] as const));
@@ -193,6 +224,54 @@ describe('the statement, executed', () => {
     expect(pay.status, `the overpayment is accepted: ${JSON.stringify(pay.body)}`).toBeLessThan(300);
     expect((await creditSnapshot(ownerPool(), w.shop.businessId, creditId)).originalAmountMinor, 'the retained credit exists').toBeTruthy();
 
+    // Two PARTIAL applications of the retained credit onto invoice B, the same day:
+    // two `credit_application` rows that share (date, rank), so the cursor's tie
+    // boundary is exercised by PostgreSQL. The product's own endpoint, the
+    // golden-12 shape (releasedBefore accumulates; the credit row is the authority).
+    const totalsB = await invoiceTotals(ownerPool(), w.shop.businessId, invoiceBId);
+    const credit0 = await creditSnapshot(ownerPool(), w.shop.businessId, creditId);
+    const original = BigInt(credit0.originalAmountMinor);
+    expect(BigInt(totalsB.totalTxnMinor) >= original, 'NO SUBJECT: invoice B cannot absorb the credit').toBe(true);
+    expect(original >= 2n, 'NO SUBJECT: the credit cannot be split in two').toBe(true);
+    const firstPart = original / 2n;
+    let releasedBefore = 0n;
+    applicationIds = [];
+    for (const consumed of [firstPart, original - firstPart]) {
+      const before = await creditSnapshot(ownerPool(), w.shop.businessId, creditId);
+      const applicationId = randomUUID();
+      const res = await applyCredit(w.t, w.headers, {
+        applicationId,
+        creditId,
+        customerId,
+        invoiceId: invoiceBId,
+        applicationDate: w.day,
+        consumedMinor: consumed.toString(),
+        remainingBeforeMinor: before.remainingAmountMinor,
+        creditOriginalMinor: before.originalAmountMinor,
+        creditOriginalCarryingMinor: before.originalCarryingBaseAmountMinor,
+        creditToBaseRateR10: rateToR10(before.creditToBaseRate),
+        leg: {
+          invoiceId: invoiceBId,
+          appliedMinor: consumed.toString(),
+          paymentAmountMinor: consumed.toString(),
+          releasedBeforeMinor: releasedBefore.toString(),
+          invoiceTotalTxnMinor: totalsB.totalTxnMinor,
+          invoiceTotalBaseMinor: totalsB.totalBaseMinor,
+          invoiceToBaseRateR10: rateToR10(totalsB.sourceToBaseRate),
+          paymentToBaseRateR10: rateToR10(before.creditToBaseRate),
+        },
+      });
+      expect(res.status, `the credit application of ${consumed} is accepted: ${JSON.stringify(res.body)}`).toBeLessThan(300);
+      applicationIds.push(applicationId);
+      releasedBefore += consumed;
+    }
+    const alloc = await ownerPool().query<{ id: string }>(`SELECT id::text AS id FROM payment_allocations WHERE business_id = $1 AND payment_id = $2`, [
+      w.shop.businessId,
+      paymentId,
+    ]);
+    allocationIds = alloc.rows.map((r) => r.id);
+    expect(allocationIds.length, 'the payment really allocated to invoice A').toBeGreaterThan(0);
+
     // ANOTHER business, with its own customer, to be asked for under THIS business's header.
     const shop2 = await onboardS3Business(w.t, w.owner, 'l3 account statement other');
     foreignCustomerId = (await seedSaleFixtures(ownerPool(), shop2, w.day)).customerId;
@@ -202,18 +281,18 @@ describe('the statement, executed', () => {
     expect(missing, `the slice is not installed: ${missing.join('; ')}`).toEqual([]);
     const { status, body } = await getStatement(customerId, '?limit=50');
     expect(status, JSON.stringify(body)).toBe(200);
-    expect(body.items.map((r) => r.entryId).sort()).toEqual([invoiceAId, invoiceBId, paymentId, creditId].sort());
-    expect(new Set(body.items.map((r) => r.entryKind))).toEqual(new Set(['invoice', 'payment', 'credit']));
+    expect(body.items.map((r) => r.entryId).sort()).toEqual([invoiceAId, invoiceBId, paymentId, creditId, ...allocationIds, ...applicationIds].sort());
+    expect(new Set(body.items.map((r) => r.entryKind))).toEqual(new Set(['invoice', 'payment', 'payment_allocation', 'credit', 'credit_application']));
     expect(new Set(body.items.map((r) => r.entryDate)).size, 'the rows span more than one date').toBeGreaterThan(1);
   });
 
   it('ORDER: the rows come back in (date, type rank, id), executed by PostgreSQL', async () => {
     const { body } = await getStatement(customerId, '?limit=50');
-    expect(body.items.length).toBeGreaterThanOrEqual(4);
+    expect(body.items.length).toBeGreaterThanOrEqual(7);
     expect(outOfOrder(body.items), `out of order: ${JSON.stringify(body.items.map((r) => [r.entryDate, r.entryKind, r.entryId]))}`).toBe(0);
     // Same day, three kinds: the rank decides, not the id (B, payment, credit all dated today).
     const today = body.items.filter((r) => r.entryDate === w.day).map((r) => r.entryKind);
-    expect(today).toEqual(['invoice', 'payment', 'credit']);
+    expect(today).toEqual(['invoice', 'payment', ...allocationIds.map(() => 'payment_allocation'), 'credit', 'credit_application', 'credit_application']);
     expect(body.items[0]?.entryId, 'the earlier invoice is first').toBe(invoiceAId);
   });
 
@@ -242,6 +321,37 @@ describe('the statement, executed', () => {
       expect(seen, `limit ${size}`).toEqual(whole);
       expect(new Set(seen).size, `limit ${size} repeated a row`).toBe(seen.length);
     }
+  });
+
+  it('TIE BOUNDARY: two rows share (date, rank) and a page edge between them neither repeats nor skips, executed by PostgreSQL', async () => {
+    const whole = (await getStatement(customerId, '?limit=50')).body.items;
+    const apps = whole.filter((r) => r.entryKind === 'credit_application');
+    expect(apps.length, 'NO SUBJECT: no two rows share (date, rank)').toBe(2);
+    expect(apps[0]?.entryDate).toBe(apps[1]?.entryDate);
+    const firstIdx = whole.findIndex((r) => r.entryId === apps[0]?.entryId);
+    const p1 = await getStatement(customerId, `?limit=${firstIdx + 1}`);
+    expect(p1.body.items.at(-1)?.entryId, 'page 1 ends exactly on the first of the tied rows').toBe(apps[0]?.entryId);
+    const p2 = await getStatement(customerId, `?limit=50&cursor=${encodeURIComponent(p1.body.nextCursor ?? '')}`);
+    expect(p2.body.items[0]?.entryId, 'page 2 starts on the second tied row: neither repeated nor skipped').toBe(apps[1]?.entryId);
+  });
+
+  it('CLOSES ON THE READER OF RECORD, per currency: debit minus credit equals customer_ar_outstanding.txn_minor', async () => {
+    const { body } = await getStatement(customerId, '?limit=50');
+    const oracle = await ownerPool().query<{ currency_code: string; txn_minor: string }>(
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r WHERE r.currency_code IS NOT NULL`,
+      [w.shop.businessId, customerId],
+    );
+    expect(oracle.rows.length, 'NO SUBJECT: the reader of record states no currency').toBeGreaterThan(0);
+    const net = new Map<string, bigint>();
+    for (const r of body.items) {
+      const cur = net.get(r.currency) ?? 0n;
+      net.set(r.currency, cur + BigInt(r.debitTxnMinor ?? '0') - BigInt(r.creditTxnMinor ?? '0'));
+    }
+    for (const o of oracle.rows) expect(net.get(o.currency_code)?.toString(), `closure for ${o.currency_code}`).toBe(o.txn_minor);
+    expect(
+      body.items.some((r) => r.entryKind === 'payment' && (r.debitTxnMinor !== null || r.creditTxnMinor !== null)),
+      'the payment as received posts to neither side',
+    ).toBe(false);
   });
 
   it('OUTSTANDING equals the reader of record, customer_ar_outstanding, row for row', async () => {

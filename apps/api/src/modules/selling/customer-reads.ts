@@ -646,18 +646,27 @@ export class CustomerReadService {
   }
 
   /**
-   * `GET /v1/customers/:customerId/account-statement` — one row per sales document,
-   * payment, held credit and credit application of the customer, oldest first.
+   * `GET /v1/customers/:customerId/account-statement` — one row per credit
+   * sales document, payment, payment allocation, held credit and credit
+   * application of the customer, oldest first.
+   *
+   * THE STATEMENT CLOSES ON THE READER OF RECORD. The debit side holds only
+   * what `customer_ar_outstanding` counts (an OPEN invoice of a CREDIT sale:
+   * the predicate of `invoice_outstanding`, `0080`/`0084`); a cash-settled or
+   * void invoice is not a debt and is not a debit row. The credit side holds
+   * only what is APPLIED to such a document, in that document's own currency —
+   * one row per payment allocation and per credit application, the stored
+   * `invoice_amount_applied_minor`, which is the very column the reader sums.
+   * So, per currency, debit minus credit is what `outstanding` states, and no
+   * retained (unapplied) money is posted a second time. The payment as
+   * received and the retained credit are stated rows with NEITHER side. Every
+   * amount carries its own `currency`; a column is never summed across them.
    *
    * The order is `(entry date, kind rank, entry id)` and the continuation is
    * that same triple, so a page boundary can neither repeat nor skip a row and
-   * there is no `OFFSET` (budget `P4-D`). Every amount is the row's OWN stored
-   * figure; this read adds nothing up and carries NO per-row running balance
-   * (P4-AL-07: no registered reader supplies one, so a running figure would be
-   * a second copy of the arithmetic). The authoritative balance is
-   * `customer_ar_outstanding(...)`'s own rows, handed through unchanged and
-   * unsummed. Drafts are not statement rows; a void invoice is not a debt and
-   * is not listed either.
+   * there is no `OFFSET` (budget `P4-D`). This read adds nothing up and carries
+   * NO per-row running balance (P4-AL-07). `outstanding` is the customer's
+   * WHOLE balance (never the page's total), handed through unchanged.
    */
   async accountStatement(m: MembershipContext, customerId: string, q: CustomerAccountStatementQuery): Promise<CustomerAccountStatementDto> {
     const row = await findCustomer(this.db, this.scope(m), customerId);
@@ -700,17 +709,31 @@ export class CustomerReadService {
                      i.total_txn_minor::text AS amount_txn_minor, i.total_base_minor::text AS amount_base_minor,
                      NULL::text AS reference
                 FROM invoices i
-               WHERE i.business_id = $1 AND i.customer_id = $2 AND i.status = 'open'
+                JOIN sales sl ON sl.business_id = i.business_id AND sl.id = i.sale_id
+               WHERE i.business_id = $1 AND i.customer_id = $2
+                 AND i.document_kind = 'invoice' AND i.status = 'open' AND sl.settlement_mode = 'credit'
               UNION ALL
               SELECT 2, 'payment', p.id, p.payment_date,
                      NULL::text, NULL::uuid, p.currency_code::text,
-                     NULL::text, p.amount_minor::text,
+                     NULL::text, NULL::text,
                      p.amount_minor::text, p.base_amount_minor::text,
                      p.reference
                 FROM payments p
                WHERE p.business_id = $1 AND p.customer_id = $2
               UNION ALL
-              SELECT 3, 'credit', c.id, c.credit_date,
+              SELECT 3, 'payment_allocation', pa.id, p.payment_date,
+                     ai.document_number, pa.invoice_id, pa.invoice_currency::text,
+                     NULL::text, pa.invoice_amount_applied_minor::text,
+                     pa.invoice_amount_applied_minor::text, pa.invoice_carrying_base_released_minor::text,
+                     p.reference
+                FROM payment_allocations pa
+                JOIN payments p ON p.business_id = pa.business_id AND p.id = pa.payment_id
+                JOIN invoices ai ON ai.business_id = pa.business_id AND ai.id = pa.invoice_id
+                JOIN sales asl ON asl.business_id = ai.business_id AND asl.id = ai.sale_id
+               WHERE pa.business_id = $1 AND pa.customer_id = $2
+                 AND ai.document_kind = 'invoice' AND ai.status = 'open' AND asl.settlement_mode = 'credit'
+              UNION ALL
+              SELECT 4, 'credit', c.id, c.credit_date,
                      NULL::text, c.origin_payment_id, c.currency_code::text,
                      NULL::text, NULL::text,
                      c.original_amount_minor::text, c.original_carrying_base_amount_minor::text,
@@ -718,14 +741,16 @@ export class CustomerReadService {
                 FROM customer_credits c
                WHERE c.business_id = $1 AND c.customer_id = $2
               UNION ALL
-              SELECT 4, 'credit_application', a.id, a.application_date,
+              SELECT 5, 'credit_application', a.id, a.application_date,
                      ai.document_number, a.invoice_id, a.invoice_currency::text,
                      NULL::text, a.invoice_amount_applied_minor::text,
                      a.invoice_amount_applied_minor::text, a.invoice_carrying_base_released_minor::text,
                      NULL::text
                 FROM customer_credit_applications a
                 JOIN invoices ai ON ai.business_id = a.business_id AND ai.id = a.invoice_id
+                JOIN sales asl ON asl.business_id = ai.business_id AND asl.id = ai.sale_id
                WHERE a.business_id = $1 AND a.customer_id = $2
+                 AND ai.document_kind = 'invoice' AND ai.status = 'open' AND asl.settlement_mode = 'credit'
          ) s
         WHERE ($3::date IS NULL OR (s.entry_date, s.kind_rank, s.entry_id) > ($3::date, $4::int, $5::uuid))
         ORDER BY s.entry_date, s.kind_rank, s.entry_id
@@ -751,6 +776,7 @@ export class CustomerReadService {
     return {
       customerId,
       items,
+      outstandingScope: 'whole_customer',
       outstanding: outstanding.rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor, baseMinor: r.base_minor })),
       nextCursor: found.rows.length > size && last !== undefined ? `${last.entry_date_text}:${last.kind_rank}:${last.entry_id}` : null,
     };

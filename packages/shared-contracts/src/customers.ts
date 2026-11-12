@@ -518,7 +518,7 @@ export interface CustomerOpenInvoicesDto {
 
 /** One statement row: a sales document, a payment, a credit, or a credit application. */
 export interface CustomerAccountStatementEntryDto {
-  entryKind: 'invoice' | 'payment' | 'credit' | 'credit_application';
+  entryKind: 'invoice' | 'payment' | 'payment_allocation' | 'credit' | 'credit_application';
   entryId: string;
   /** Civil date `YYYY-MM-DD` of the event. */
   entryDate: string;
@@ -550,6 +550,8 @@ export interface CustomerAccountStatementOutstandingDto {
  */
 export interface CustomerAccountStatementDto {
   customerId: string;
+  /** `outstanding` is the customer's WHOLE balance, never the total of this page. */
+  outstandingScope: 'whole_customer';
   items: CustomerAccountStatementEntryDto[];
   outstanding: CustomerAccountStatementOutstandingDto[];
   nextCursor: string | null;

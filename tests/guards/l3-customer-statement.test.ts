@@ -84,13 +84,13 @@ const FIXTURE: Row[] = [
     related_id: null,
     currency_code: 'USD',
     debit_txn_minor: null,
-    credit_txn_minor: '700',
+    credit_txn_minor: null,
     amount_txn_minor: '700',
     amount_base_minor: '700',
     reference: 'R-1',
   },
   {
-    kind_rank: 3,
+    kind_rank: 4,
     entry_kind: 'credit',
     entry_id: id(4),
     entry_date: '2026-01-02',
@@ -104,7 +104,7 @@ const FIXTURE: Row[] = [
     reference: null,
   },
   {
-    kind_rank: 4,
+    kind_rank: 5,
     entry_kind: 'credit_application',
     entry_id: id(5),
     entry_date: '2026-01-03',
@@ -196,6 +196,28 @@ describe('L3 customer statement', () => {
     expect(captured.some((c) => /customer_ar_outstanding\(/.test(c.sql))).toBe(true);
   });
 
+  it('CLOSES ON THE READER OF RECORD: the statement keeps only open credit-sale invoices, on every branch that names an invoice', async () => {
+    const { reads, captured } = service({ customerExists: true });
+    await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}));
+    const stmt = captured.find((c) => /UNION ALL/i.test(c.sql));
+    expect(stmt, 'the statement SQL was captured').toBeDefined();
+    const sql = (stmt as Captured).sql;
+    // The three branches that name an invoice (the invoice, its allocations, its credit applications) each carry the full predicate.
+    expect(sql.match(/settlement_mode = 'credit'/g)?.length).toBe(3);
+    expect(sql.match(/status = 'open'/g)?.length).toBe(3);
+    expect(sql.match(/document_kind = 'invoice'/g)?.length).toBe(3);
+    // Applied money is posted per allocation, from the column the reader itself sums; the payment as received is a stated row with neither side.
+    expect(sql).toMatch(/FROM payment_allocations pa/);
+    expect(sql).toMatch(/pa\.invoice_amount_applied_minor/);
+    expect(sql.match(/p\.amount_minor::text/g)?.length, 'the payment row states its amount once, as a memo').toBe(1);
+  });
+
+  it('the payload says outstanding is the whole customer balance, not the page total', async () => {
+    const { reads } = service({ customerExists: true });
+    const res = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({ limit: '1' }));
+    expect(res.outstandingScope).toBe('whole_customer');
+  });
+
   it('no per-row running balance; the authoritative total is a separate field', async () => {
     const { reads } = service({ customerExists: true });
     const res = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}));
@@ -210,7 +232,7 @@ describe('L3 customer statement', () => {
     expect(res.items).toHaveLength(FIXTURE.length);
     const inv = res.items[0];
     expect(inv).toMatchObject({ entryKind: 'invoice', documentNumber: 'INV-1', debitTxnMinor: '1000', creditTxnMinor: null, amountTxnMinor: '1000' });
-    expect(res.items[2]).toMatchObject({ entryKind: 'payment', debitTxnMinor: null, creditTxnMinor: '700' });
+    expect(res.items[2]).toMatchObject({ entryKind: 'payment', debitTxnMinor: null, creditTxnMinor: null, amountTxnMinor: '700' });
   });
 
   it("NEGATIVE CONTROL: another business's customer id is refused and no statement SQL is issued", async () => {
@@ -228,6 +250,11 @@ describe('L3 customer statement', () => {
     const seed = '/v1/customers/:customerId/statement';
     console.log('mine=' + mine + ' | seed=' + seed + ' | mine.includes(seed)=' + String(mine.includes(seed)));
     expect(mine.includes(seed)).toBe(false);
+  });
+
+  it('the cursor accepts rank 5 (credit application) and refuses rank 6', () => {
+    expect(CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:5:${id(3)}` }).cursor).toBe(`2026-01-02:5:${id(3)}`);
+    expect(() => CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:6:${id(3)}` })).toThrow();
   });
 
   it('query schema: keyset cursor, capped limit, no offset key', () => {
