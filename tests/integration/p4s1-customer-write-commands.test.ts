@@ -13,6 +13,14 @@
  *   (e) the migration applies UPWARD on a clean database AND on a database
  *       that already holds rows.
  *
+ * and, on the owner's requirement after review, the claim (b) does NOT make:
+ *
+ *   (f) a NAMED runtime principal other than `daftar_app` is refused `42501`
+ *       when it ACTUALLY CALLS each routine — an execution claim, where (b)
+ *       is a catalogue claim about `proacl`. It is proved able to fail by
+ *       planting the opposite grant, and the catalogue is restored from a
+ *       digest taken before the plant.
+ *
  * EVERY CLAIM THAT ASSERTS AN ABSENCE CARRIES A POSITIVE CONTROL in the same
  * test, because a probe that cannot see reports a zero that reads like a pass
  * (RULE-11, RULE-18): the `42501` refusals are paired with a SELECT that
@@ -30,7 +38,7 @@
  * unconditionally, so this suite either measures a real database or does not
  * run at all. It never reports a pass without one.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asMember, onboardS3Business, registerActor, type HttpActor } from '../helpers/inventory-commands';
@@ -413,5 +421,112 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
         'no other pre-existing table changed',
       ).toEqual([]);
     }, 420_000);
+  });
+
+  // ── (f) a named role other than daftar_app is refused AT CALL TIME ─────
+  describe('(f) another runtime principal is refused when it actually calls', () => {
+    /**
+     * WHY THIS IS NOT THE SAME CLAIM AS (b).
+     *
+     * (b) reads `proacl` and shows PUBLIC holds no EXECUTE. That is a
+     * CATALOGUE claim: it proves no grant was written. It does not prove that
+     * a NAMED role is refused when it calls, and those are different
+     * sentences — the second is the one a merchant's security actually rests
+     * on, and only an execution can say it.
+     *
+     * WHY `daftar_worker`. It is a runtime principal the schema already
+     * defines (`phase3-runtime-grant-model.json`, `runtimePrincipals`), and
+     * the model records it as holding ZERO `EXECUTE` entries on the whole
+     * Phase 3-and-later surface — measured: `execute.daftar_worker` is an
+     * empty list. So it is the principal whose refusal is most meaningful: a
+     * background worker that could mint a customer would be a path to master
+     * data from a job queue, and the model says it must hold nothing. It is
+     * also NOT `daftar_app`, which is the one role the pattern grants.
+     *
+     * The session connects as the superuser and takes the role with
+     * `SET LOCAL ROLE` inside a transaction — the `purchase-commands.ts:544`
+     * pattern — so the privilege under test is the function's own ACL and not
+     * a connection string.
+     */
+    it('daftar_worker is refused 42501 by both routines, and the claim is proved able to fail', async () => {
+      const c = new Client({ connectionString: dbUrl });
+      await c.connect();
+
+      /** The ACL of both routines, as one ordered digest — the state to restore TO. */
+      const aclDigest = async (): Promise<{ readonly digest: string; readonly acl: string }> => {
+        const r = await c.query<{ sig: string; acl: string }>(
+          `SELECT p.oid::regprocedure::text AS sig, coalesce(array_to_string(p.proacl, ','), '<null>') AS acl
+             FROM pg_proc p
+            WHERE p.oid IN (to_regprocedure('public.customer_create(uuid,text,text,text,text)'),
+                            to_regprocedure('public.customer_update(uuid,integer,text,text,text,text)'))
+            ORDER BY 1`,
+        );
+        expect(r.rows.length, 'both routines are in the catalogue (the control for every claim below)').toBe(2);
+        const acl = r.rows.map((x) => `${x.sig}=${x.acl}`).join('\n');
+        return { digest: createHash('sha256').update(acl).digest('hex'), acl };
+      };
+
+      /** `SET LOCAL ROLE daftar_worker`, then the call; the SQLSTATE, in its own transaction. */
+      const callAs = async (role: string, sql: string, params: unknown[]): Promise<string> => {
+        await c.query('BEGIN');
+        try {
+          await c.query(`SET LOCAL ROLE ${role}`);
+          return await c.query(sql, params).then(
+            () => 'executed',
+            (e: unknown) => String((e as { code?: string }).code ?? 'no-code'),
+          );
+        } finally {
+          await c.query('ROLLBACK').catch(() => undefined);
+        }
+      };
+
+      const CREATE = `SELECT replayed FROM customer_create($1::uuid, $2::text, NULL, NULL, NULL)`;
+      const UPDATE = `SELECT replayed FROM customer_update($1::uuid, 1::integer, $2::text, NULL, NULL, NULL)`;
+
+      // THE SAVED COPY, taken before anything is planted, and the state the
+      // restoration is measured against. `git checkout` could not restore
+      // this: a grant lives in the catalogue, not in the tree.
+      const before = await aclDigest();
+      expect(before.acl, 'daftar_worker holds no EXECUTE before the plant').not.toContain('daftar_worker');
+
+      try {
+        // ── THE CLAIM ────────────────────────────────────────────────────
+        expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'customer_create called by daftar_worker').toBe('42501');
+        expect(await callAs('daftar_worker', UPDATE, [customerId, 'Worker Edit']), 'customer_update called by daftar_worker').toBe('42501');
+
+        // THE POSITIVE CONTROL for the refusals: the same connection, the same
+        // SET LOCAL ROLE mechanism, the role the pattern DOES grant. It must
+        // get past the privilege check — it fails later, on the missing signed
+        // assertion, which is a different refusal entirely and proves the
+        // 42501s above are about the ACL and not about a broken call.
+        const asApp = await callAs('daftar_app', CREATE, [randomUUID(), 'App Mint']);
+        expect(asApp, 'daftar_app is NOT stopped by the privilege check').not.toBe('42501');
+        expect(asApp, 'it is stopped later, by the assertion gate').not.toBe('executed');
+
+        // ── THE PLANT: the opposite state, so the claim is shown ABLE TO FAIL ──
+        await c.query(`GRANT EXECUTE ON FUNCTION customer_create(uuid,text,text,text,text) TO daftar_worker`);
+        const planted = await aclDigest();
+        // The plant is PROVED APPLIED before its verdict is read (RULE-27):
+        // the digest moved and the ACL now names the role.
+        expect(planted.digest, 'the plant changed the catalogue ACL').not.toBe(before.digest);
+        expect(planted.acl, 'and the ACL now names daftar_worker').toContain('daftar_worker');
+
+        // And now the claim FAILS: the same call is no longer refused 42501.
+        expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'with the grant planted, 42501 is no longer the answer').not.toBe('42501');
+      } finally {
+        // ── THE RESTORE, from the saved copy and not from the tree ───────
+        await c.query(`REVOKE EXECUTE ON FUNCTION customer_create(uuid,text,text,text,text) FROM daftar_worker`).catch(() => undefined);
+      }
+
+      const after = await aclDigest();
+      expect(after.digest, `the ACL is restored byte for byte: ${before.digest} -> ${after.digest}`).toBe(before.digest);
+      expect(after.acl, 'and daftar_worker holds no EXECUTE again').not.toContain('daftar_worker');
+
+      // The claim holds again on the restored state, which is what makes the
+      // restoration a measurement rather than an assertion.
+      expect(await callAs('daftar_worker', CREATE, [randomUUID(), 'Worker Mint']), 'refused once more after the restore').toBe('42501');
+
+      await c.end();
+    });
   });
 });
