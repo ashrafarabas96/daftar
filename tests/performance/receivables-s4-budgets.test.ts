@@ -1183,7 +1183,10 @@ async function postedEntries(paymentId: string): Promise<{ readonly entries: num
  * whose expected size is derived from whatever happened to execute is not a
  * census. The audit names every missing case, so a mismatch is never a riddle.
  */
-const DECLARED_CASES = 18;
+// 19 since the P4-AL-07 class table got its own arm beside the GATE that asks
+// the law of the statements this cluster happens to issue: the runner found 19
+// where the literal said 18, which is the census doing exactly its job.
+const DECLARED_CASES = 19;
 
 /** The P4-D read series this file declares: three fat-tail HTTP reads + median + the two RLS halves. */
 const DECLARED_READ_SERIES = 3;
@@ -1694,11 +1697,12 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
    * The GATE above asks the law of the statements this cluster's reads HAPPEN
    * to issue; this arm asks it of the CLASSES the removal must refuse, which no
    * read has to contain for the removal to be wrong. It is the same table the
-   * database-free suite reads (`READER_STRIP_CASES`), asserted here because CI
-   * names every performance suite by its own path and globs none, so the
-   * database-free file alone would be NOT_RUN on the runner — and a law whose
-   * teeth are measured only on a developer's machine is a law with no runner's
-   * verdict. No fixture: the removal is a pure function of text and names.
+   * database-free suite reads (`READER_STRIP_CASES`), asserted here because
+   * nothing on the runner reaches that file — measured by its name's absence
+   * everywhere but its own doc comment, which is the reach question and not the
+   * narrower "is it named in `ci.yml`" one. A law whose teeth are measured only
+   * on a developer's machine is a law with no runner's verdict. No fixture: the
+   * removal is a pure function of text and names.
    */
   it('GATE: the reader-of-record removal refuses a second copy of the arithmetic in every class, and refuses nothing else', () => {
     for (const c of READER_STRIP_CASES) {
@@ -1709,6 +1713,18 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         `${c.what}\nstatement: ${c.text}\nremainder: ${JSON.stringify(remainder)}\nP4-AL-07 tightens and is never relaxed.`,
       ).toBe(c.mustRefuse);
     }
+    // The seed that proves this arm can go red (DR-55, RULE-27): the removal
+    // this replaced — a pattern that cannot balance parentheses — must get at
+    // least one class WRONG, or the classes are vacuous and agree with any
+    // implementation. The second expectation keeps the seed from being a probe
+    // that matches nothing.
+    const unbalanced = (text: string, names: readonly string[]): string =>
+      text.replace(new RegExp(`\\b(?:public\\.)?(?:${names.join('|')})\\([^)]*\\)`, 'gi'), '');
+    expect(
+      READER_STRIP_CASES.filter((c) => /\bsum\s*\(/i.test(unbalanced(c.text, c.names)) !== c.mustRefuse).length,
+      'the unbalanced pattern this removal replaced satisfies every class, so these classes cannot tell the two apart',
+    ).toBeGreaterThan(0);
+    expect(unbalanced('SELECT invoice_outstanding($1)', ['invoice_outstanding']), 'the seed pattern matched nothing').toBe('SELECT ');
   });
 
   /**

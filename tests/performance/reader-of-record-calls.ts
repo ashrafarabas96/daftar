@@ -48,12 +48,17 @@ export function readerOfRecordCall(names: readonly string[]): RegExp {
  * `text`, keeping its arguments, at any nesting depth.
  *
  * Parentheses inside string literals and dollar-quoted bodies are counted like
- * any other character. A literal carrying an unbalanced parenthesis would
- * therefore pair a call's opening parenthesis with the wrong `)`; what that can
- * do is keep MORE of the statement in the remainder, never less, so it cannot
- * make a summing read pass — only fail, naming the statement in the law's own
- * message. Recorded rather than asserted away because the subject is the
- * statements this project's own reads issue.
+ * any other character, so a literal carrying an unbalanced parenthesis pairs a
+ * call's opening parenthesis with the wrong `)`. MEASURED, not reasoned: eight
+ * such statements were probed — an unbalanced `(` and an unbalanced `)` inside
+ * a single-quoted literal, a `)` inside a dollar-quoted body, a `)` in a
+ * literal inside a sum's own argument, an escaped quote, a line comment, and
+ * two reader calls in one statement — and NONE of them let a summing read
+ * through, with the probe's own control sighted (a removal that deleted
+ * everything would have read as unsafe). The distortion eats INTO the literal
+ * and leaves MORE of the statement in the remainder, never less, which is the
+ * refusing direction. Three of the eight are permanent cases in the table
+ * below, one of them the "allowed" side under the same distortion.
  */
 export function stripReaderOfRecordCalls(text: string, names: readonly string[]): string {
   const head = new RegExp(`\\b(?:public\\.)?(?:${names.join('|')})\\s*\\(`, 'gi');
@@ -100,14 +105,17 @@ export interface ReaderStripCase {
  * are a database-free suite and the law's own suite — and a class table that
  * lives in only one of them is a class table only one runner ever reads.
  *
- * MEASURED, and the reason this table exists: this repository's CI names every
- * performance suite by its own file path and globs none of them (`ci.yml` says
- * so in its own comment at the open-page equivalence step: a suite nothing runs
- * proves nothing). A new file under `tests/performance/` is therefore NOT_RUN
- * on the runner until a step names it, and `ci.yml` belongs to another lane. So
- * the classes are asserted from here by `receivables-s4-budgets.test.ts` too,
- * which the runner does execute, and the law's teeth are measured on the runner
- * on the same head as the law.
+ * MEASURED, and the reason this table exists: nothing reaches
+ * `reader-of-record-strip.test.ts` on the runner. The test is REACH, not naming
+ * — the CI-speed lane measured suites that no `ci.yml` argument names and that
+ * gate scripts run anyway, so "not named" is not "not run" (their measurement,
+ * not mine). Mine is narrower: this suite's name appears nowhere in `scripts`,
+ * `.github`, `packages`, `apps` or `tests` but a doc comment here, with the
+ * probe sighted on the suites that lane named. A suite nothing reaches is
+ * NOT_RUN, and NOT_RUN does not count — so the classes are asserted from here
+ * by `receivables-s4-budgets.test.ts` too, which the runner does execute, and
+ * the law's teeth are measured on the runner on the same head as the law.
+ * `ci.yml` belongs to another lane and was not touched.
  */
 export const READER_STRIP_CASES: readonly ReaderStripCase[] = [
   {
@@ -151,5 +159,34 @@ export const READER_STRIP_CASES: readonly ReaderStripCase[] = [
     names: ['invoice_outstanding', 'customer_ar_outstanding'],
     mustRefuse: true,
     remainder: 'SELECT some_other_function(sum(x), $2)',
+  },
+  {
+    // The removal pairs the call's `(` with the `)` INSIDE the literal, so it
+    // eats into the literal and the sum after it survives in the remainder —
+    // more text, not less, which is the refusing direction. Measured, not
+    // reasoned: eight literal, dollar-quote, escaped-quote and comment cases
+    // were probed and none let a summing read through.
+    what: "a sum after a reader's argument whose literal carries an unbalanced )",
+    text: "SELECT invoice_outstanding(')', sum(x))",
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: "SELECT '', sum(x))",
+  },
+  {
+    what: 'a sum after a reader whose dollar-quoted body carries a )',
+    text: 'SELECT invoice_outstanding($q$ ) $q$, sum(x))',
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: true,
+    remainder: 'SELECT $q$  $q$, sum(x))',
+  },
+  {
+    // The "allowed" side under the same distortion: the literal is eaten and
+    // nothing is summed, so the statement must still pass. Without this case
+    // the three above could be satisfied by a removal that refuses everything.
+    what: 'CONTROL: the same literal distortion with no sum anywhere is still allowed',
+    text: "SELECT invoice_outstanding(')', $2)",
+    names: ['invoice_outstanding', 'customer_ar_outstanding'],
+    mustRefuse: false,
+    remainder: "SELECT '', $2)",
   },
 ];
