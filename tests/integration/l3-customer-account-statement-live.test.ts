@@ -21,6 +21,17 @@
  * with the STORED column of its own source row, and `outstanding` with the
  * rows `customer_ar_outstanding(...)` itself returns.
  *
+ * §C — THE CASH EXCLUSION, LIVE. The statement's debit row rests on
+ * `status = 'open' AND sl.settlement_mode = 'credit'`, and until now that was
+ * proven only by reading the captured SQL as TEXT, so any later change that
+ * re-admitted a cash invoice would pass the whole suite. §C gives it a
+ * subject in the database: one customer, two `open` invoices of the SAME
+ * total on the SAME day, one credit and one cash. A cash invoice to a named
+ * customer is legal and STAYS `open` — `0080_phase4_cash_invoice_no_receivable.sql`
+ * excludes it by its MODE, not by its status — so the clause is the only
+ * thing keeping it off the statement, and dropping it moves the net from the
+ * credit invoice's amount to the sum of the two.
+ *
  * §P — the PURE controls. They need no database, so they can be planted
  * against: they prove that the order check and the amount check can fail at
  * all (a comparator with the type rank removed, or a row with an altered
@@ -137,6 +148,10 @@ let creditId: string;
 let allocationIds: string[] = [];
 let applicationIds: string[] = [];
 let dayA: string;
+/** §C — the cash-exclusion subject: ONE customer, two `open` invoices of the SAME total, one credit and one cash. */
+let twinCustomerId: string;
+let twinCreditInvoiceId: string;
+let twinCashInvoiceId: string;
 
 const statementPath = (id: string, query = ''): string => `/v1/customers/${id}/account-statement${query}`;
 
@@ -162,6 +177,39 @@ async function sellOn(day: string, quantity: string): Promise<{ invoiceId: strin
     [w.shop.businessId, saleId],
   );
   return { invoiceId: must(r.rows[0], `the invoice of sale ${saleId}`).invoice_id };
+}
+
+/**
+ * A sale on `day` to `customer` in the STATED settlement mode, through the
+ * same command as `sellOn`. `payment` present is the ONLY way the P4-S2
+ * adapter states `settlementMode: 'cash'` (`sale-path.ts:133`); no payment
+ * document is written by it, so a cash invoice is left `status = 'open'` and
+ * is excluded from the receivable by its MODE and by nothing else
+ * (`0080_phase4_cash_invoice_no_receivable.sql`). That is what makes this a
+ * live subject rather than a tautology.
+ */
+async function sellInMode(customer: string, day: string, quantity: string, mode: 'credit' | 'cash'): Promise<{ invoiceId: string }> {
+  const saleId = randomUUID();
+  const res = await confirmSale(w.t, w.headers, {
+    saleId,
+    customerId: customer,
+    warehouseId: w.shop.w1,
+    branchId: w.shop.branchX,
+    occurredOn: day,
+    lines: [{ productId: w.shop.piece.productId, quantity }],
+    ...(mode === 'cash' ? { payment: { paymentMethodId: w.paymentMethodId } } : {}),
+  });
+  expect(res.status, `the ${mode} sale on ${day} commits: ${JSON.stringify(res.body)}`).toBeLessThan(300);
+  const r = await ownerPool().query<{ invoice_id: string; settlement_mode: string }>(
+    `SELECT i.id::text AS invoice_id, s.settlement_mode
+       FROM sales s JOIN invoices i ON i.business_id = s.business_id AND i.sale_id = s.id
+      WHERE s.business_id = $1 AND s.id = $2`,
+    [w.shop.businessId, saleId],
+  );
+  const row = must(r.rows[0], `the invoice of sale ${saleId}`);
+  // The mode is read back from the STORED sale: the adapter's translation is proven, not assumed.
+  expect(row.settlement_mode, `sale ${saleId} is stored as a ${mode} sale`).toBe(mode);
+  return { invoiceId: row.invoice_id };
 }
 
 /** The STORED amount of each source row, by id: the oracle for "each row carries its own amount". */
@@ -274,6 +322,14 @@ describe('the statement, executed', () => {
     allocationIds = alloc.rows.map((r) => r.id);
     expect(allocationIds.length, 'the payment really allocated to invoice A').toBeGreaterThan(0);
 
+    // §C THE CASH-EXCLUSION SUBJECT: its own customer, so no other row of this
+    // suite can carry the number. Two sales of the SAME quantity on the SAME
+    // day — one credit, one cash — so the two invoices differ in settlement
+    // mode and in NOTHING ELSE that the statement's predicate reads.
+    twinCustomerId = (await seedSaleFixtures(ownerPool(), w.shop, w.day)).customerId;
+    twinCreditInvoiceId = (await sellInMode(twinCustomerId, w.day, '2', 'credit')).invoiceId;
+    twinCashInvoiceId = (await sellInMode(twinCustomerId, w.day, '2', 'cash')).invoiceId;
+
     // ANOTHER business, with its own customer, to be asked for under THIS business's header.
     const shop2 = await onboardS3Business(w.t, w.owner, 'l3 account statement other');
     foreignCustomerId = (await seedSaleFixtures(ownerPool(), shop2, w.day)).customerId;
@@ -383,6 +439,76 @@ describe('the statement, executed', () => {
     );
     expect(oracle.rows.length, 'NO SUBJECT: the reader of record returned nothing').toBeGreaterThan(0);
     expect(body.outstanding).toEqual(oracle.rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor, baseMinor: r.base_minor })));
+  });
+
+  it('§C CASH IS EXCLUDED, executed: of two open invoices of equal total, only the CREDIT one is a debit row, and the net is its amount alone', async () => {
+    expect(missing, `the slice is not installed: ${missing.join('; ')}`).toEqual([]);
+
+    // ── THE SUBJECT, read from the STORED rows. Every clause here is a
+    // positive control: without it, "the cash invoice is absent" could be
+    // absence of a cash invoice rather than exclusion of one.
+    const stored = await ownerPool().query<{ id: string; total: string; status: string; mode: string; currency: string }>(
+      `SELECT i.id::text AS id, i.total_txn_minor::text AS total, i.status, s.settlement_mode AS mode, i.currency_code::text AS currency
+         FROM invoices i JOIN sales s ON s.business_id = i.business_id AND s.id = i.sale_id
+        WHERE i.business_id = $1 AND i.customer_id = $2 AND i.document_kind = 'invoice'`,
+      [w.shop.businessId, twinCustomerId],
+    );
+    expect(stored.rows.map((r) => r.id).sort(), 'NO SUBJECT: the two twin invoices are not both stored').toEqual(
+      [twinCreditInvoiceId, twinCashInvoiceId].sort(),
+    );
+    const credit = must(
+      stored.rows.find((r) => r.id === twinCreditInvoiceId),
+      'the stored credit twin',
+    );
+    const cash = must(
+      stored.rows.find((r) => r.id === twinCashInvoiceId),
+      'the stored cash twin',
+    );
+    expect(credit.mode).toBe('credit');
+    expect(cash.mode, 'NO SUBJECT: the cash twin is not a cash sale, so nothing is being excluded').toBe('cash');
+    // THE CASH INVOICE IS `open`. This is the whole point: `status = 'open'`
+    // alone does not keep it out, so the `settlement_mode` clause is the only
+    // thing that does.
+    expect(cash.status, 'NO SUBJECT: a cash invoice that is not `open` would be excluded by the status clause alone').toBe('open');
+    expect(credit.status).toBe('open');
+    expect(cash.currency, 'the twins share a currency, so one net covers both').toBe(credit.currency);
+    const creditTotal = BigInt(credit.total);
+    const bothTotals = creditTotal + BigInt(cash.total);
+    expect(cash.total, 'the twins carry the SAME total, so the mode is the only difference').toBe(credit.total);
+    expect(creditTotal > 0n, 'NO SUBJECT: a zero total would make both answers equal').toBe(true);
+    expect(bothTotals === creditTotal, 'NO SUBJECT: the right answer and the wrong answer are the same number').toBe(false);
+
+    // ── THE LAW.
+    const { status, body } = await getStatement(twinCustomerId, '?limit=50');
+    expect(status, JSON.stringify(body)).toBe(200);
+    // THE NUMBER FIRST, so that a change which re-admits cash fails on an
+    // AMOUNT and not merely on a row count: the net debit is the credit
+    // twin's amount, and it is NOT the sum of the two.
+    let net = 0n;
+    for (const r of body.items) net += BigInt(r.debitTxnMinor ?? '0') - BigInt(r.creditTxnMinor ?? '0');
+    expect(net.toString(), 'the net debit is the credit invoice alone').toBe(creditTotal.toString());
+    expect(net.toString(), 'and not the two invoices summed').not.toBe(bothTotals.toString());
+
+    // Then the rows themselves.
+    expect(
+      body.items.map((r) => r.entryId),
+      'the statement carries the credit invoice and NOTHING else',
+    ).toEqual([twinCreditInvoiceId]);
+    expect(
+      body.items.some((r) => r.entryId === twinCashInvoiceId),
+      'the cash invoice is not a row of the statement',
+    ).toBe(false);
+
+    // And the reader of record says the same, so the statement is not merely
+    // self-consistent: `customer_ar_outstanding` excludes cash by `0080`.
+    const oracle = await ownerPool().query<{ currency_code: string; txn_minor: string }>(
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r WHERE r.currency_code IS NOT NULL`,
+      [w.shop.businessId, twinCustomerId],
+    );
+    expect(oracle.rows.length, 'NO SUBJECT: the reader of record states no currency for the twin customer').toBe(1);
+    expect(must(oracle.rows[0], 'the reader of record row').txn_minor, 'the statement closes on the reader of record, cash excluded in both').toBe(
+      creditTotal.toString(),
+    );
   });
 
   it('LOAD-BEARING over HTTP: a member without receivables.view is refused, and a branch-assigned member is refused for scope; the owner is served', async () => {
