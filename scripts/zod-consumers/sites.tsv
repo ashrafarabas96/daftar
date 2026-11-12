@@ -257,7 +257,10 @@ tests/golden-regression/phase4-s4/harness.ts	165	find-shift	safe	R-RECEIVER	cons
 tests/golden-regression/phase4-s4/settlement-path.ts	810	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
 tests/golden-regression/phase4/01-cross-tenant.golden.test.ts	1685	find-shift	safe	R-RECEIVER	const row = (await openInvoices(shop, actor)).find((i) => i.invoiceId === invoiceId);
 tests/golden-regression/phase4/04-schema-lint.golden.test.ts	162	find-shift	safe	R-RECEIVER	const column = columns.find((a) => a.relation === relation && a.column === required);
-tests/guards/l3-customer-statement.test.ts	202	find-shift	safe	HAND	const stmt = captured.find((c) => /UNION ALL/i.test(c.sql));
+tests/guards/l3-customer-statement.test.ts	218	find-shift	safe	HAND	const stmt = captured.find((c) => /UNION ALL/i.test(c.sql));
+tests/guards/l3-customer-statement.test.ts	279	find-shift	safe	HAND	const credit = res.items.find((r) => r.entryKind === 'credit');
+tests/guards/l3-customer-statement.test.ts	297	find-shift	safe	R-RECEIVER	const sql = (captured.find((c) => /UNION ALL/i.test(c.sql)) as Captured).sql;
+tests/guards/l3-customer-statement.test.ts	303	find-shift	safe	R-RECEIVER	const entry = SELLING_ROUTE_AUTHORITY.find((r) => r.path === '/v1/customers/:customerId/account-statement');
 tests/guards/mig-0084-end-state-signature-law.test.ts	442	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
 tests/guards/mig-0084-end-state-signature-law.test.ts	466	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
 tests/guards/p4s1-roster-floor-and-deference.test.ts	82	find-shift	safe	R-RECEIVER	const found = S7_ROWS.find((r) => r.file.endsWith(suffix));

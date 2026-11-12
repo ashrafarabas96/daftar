@@ -294,6 +294,12 @@ export const HAND_TABLE: Entry[] = [
     'safe',
     'A `.find(` over `captured`, the SQL statements a recording fake received, picking the one containing UNION ALL; the receiver is an array of SQL text, not a validation-issue collection, so no zod order or count can affect it (the receiver rule missed it only because `.parse(` of the query schema sits in the adjacent statement).',
   ),
+  E(
+    'tests/guards/l3-customer-statement.test.ts',
+    "const credit = res.items.find((r) => r.entryKind === 'credit');",
+    'safe',
+    'A `.find(` over `res.items`, the statement rows the read returned, picking the credit row by its kind; the receiver is a page of statement rows, not a validation-issue collection, so no zod order or count can affect it (the receiver rule missed it only because `.parse(` of the query schema sits in the adjacent statement).',
+  ),
 ];
 
 /** Group rules: whole classes of sites that are not zod issues at all. */
