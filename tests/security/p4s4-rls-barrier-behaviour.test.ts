@@ -766,7 +766,7 @@ async function withPlant(c: Client, rel: Relation, plant: readonly string[], fn:
 beforeAll(async () => {
   db = await createScratchDb('daftar_p4s4_barrier');
   const head = db.applied[db.applied.length - 1];
-  if (head === undefined || !head.startsWith('0086_')) throw new Error(`the scratch database was not built to 0086 but to ${String(head)}`);
+  if (head === undefined || !head.startsWith('0090_')) throw new Error(`the scratch database was not built to 0090 but to ${String(head)}`);
 }, 900_000);
 
 afterAll(async () => {

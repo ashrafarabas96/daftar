@@ -1,0 +1,1 @@
+GOLD-87 as a real-document golden was WITHDRAWN by the owner (DR-115 addendum, 2026-11-11): the case now lives as the eighth refusal arm in `tests/golden-regression/phase2/01-engine-shapes.golden.test.ts`, and its return as a real golden is owned by `.local-context/cards/MVP03_GOLDENS_AWAITING_VOID_AND_REFUND_AR.md`.
