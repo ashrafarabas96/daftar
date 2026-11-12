@@ -226,7 +226,7 @@ because for a door that binds nothing the `EXECUTE` ACL *is* the whole
 boundary, and that is §17 condition 1. The red proof grants one of them to
 `daftar_app` inside a rolled-back transaction and asserts the law names it.
 
-## Part A — the 57 doors
+## Part A — the 59 doors
 
 Every `SECURITY DEFINER` routine of either internal principal that any
 principal other than its owner may `EXECUTE`. `DEFINER`, `search_path` and
