@@ -107,6 +107,13 @@ export const SELLING_ROUTE_AUTHORITY: readonly {
     sensitive: false as const,
     businessWide: true,
   }),
+  Object.freeze({
+    method: 'GET' as const,
+    path: '/v1/customers/:customerId/account-statement',
+    permission: 'receivables.view' as const,
+    sensitive: false as const,
+    businessWide: true,
+  }),
   Object.freeze({ method: 'GET' as const, path: '/v1/invoices', permission: 'sales.view' as const, sensitive: false as const, businessWide: false }),
   Object.freeze({ method: 'GET' as const, path: '/v1/invoices/:invoiceId', permission: 'sales.view' as const, sensitive: false as const, businessWide: false }),
   Object.freeze({

@@ -19,6 +19,7 @@ import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import { PERMISSION_KEY } from '../../apps/api/src/common/guards';
 import { CustomerReadService } from '../../apps/api/src/modules/selling/customer-reads';
+import { SELLING_ROUTE_AUTHORITY } from '../../apps/api/src/modules/selling/selling-permissions';
 import { CustomersController } from '../../apps/api/src/modules/selling/customers.controller';
 import { CustomerAccountStatementQuerySchema } from '../../apps/api/src/modules/selling/selling.schemas';
 import type { MembershipContext } from '../../apps/api/src/modules/tenancy/tenancy.service';
@@ -41,8 +42,11 @@ interface Row {
   currency_code: string;
   debit_txn_minor: string | null;
   credit_txn_minor: string | null;
-  amount_txn_minor: string;
-  amount_base_minor: string;
+  amount_txn_minor: string | null;
+  amount_base_minor: string | null;
+  credit_original_txn_minor?: string | null;
+  credit_remaining_txn_minor?: string | null;
+  credit_remaining_base_minor?: string | null;
   reference: string | null;
 }
 
@@ -100,8 +104,11 @@ const FIXTURE: Row[] = [
     currency_code: 'USD',
     debit_txn_minor: null,
     credit_txn_minor: null,
-    amount_txn_minor: '200',
-    amount_base_minor: '200',
+    amount_txn_minor: null,
+    amount_base_minor: null,
+    credit_original_txn_minor: '200',
+    credit_remaining_txn_minor: '150',
+    credit_remaining_base_minor: '150',
     reference: null,
   },
   {
@@ -147,7 +154,15 @@ function fakeDb(opts: { customerExists: boolean }) {
                 r.entry_date > cDate ||
                 (r.entry_date === cDate && (r.kind_rank > (cRank as number) || (r.kind_rank === cRank && r.entry_id > (cId as string)))),
             );
-      return { rows: rows.slice(0, lim).map((r) => ({ ...r, entry_date_text: r.entry_date })) };
+      return {
+        rows: rows.slice(0, lim).map((r) => ({
+          credit_original_txn_minor: null,
+          credit_remaining_txn_minor: null,
+          credit_remaining_base_minor: null,
+          ...r,
+          entry_date_text: r.entry_date,
+        })),
+      };
     },
   };
   return { db, captured };
@@ -256,6 +271,40 @@ describe('L3 customer statement', () => {
   it('the cursor accepts rank 5 (credit application) and refuses rank 6', () => {
     expect(CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:5:${id(3)}` }).cursor).toBe(`2026-01-02:5:${id(3)}`);
     expect(() => CustomerAccountStatementQuerySchema.parse({ cursor: `2026-01-02:6:${id(3)}` })).toThrow();
+  });
+
+  it('THE CREDIT BALANCE is the STORED REMAINING, named for what it is, never an amount and never part of outstanding', async () => {
+    const { reads, captured } = service({ customerExists: true });
+    const res = await reads.accountStatement(m, CUSTOMER, CustomerAccountStatementQuerySchema.parse({}));
+    const credit = res.items.find((r) => r.entryKind === 'credit');
+    expect(credit, 'the fixture has a retained credit').toBeDefined();
+    expect(credit).toMatchObject({
+      customerCreditRemainingTxnMinor: '150',
+      customerCreditOriginalTxnMinor: '200',
+      customerCreditRemainingBaseMinor: '150',
+      amountTxnMinor: null,
+      amountBaseMinor: null,
+      debitTxnMinor: null,
+      creditTxnMinor: null,
+    });
+    for (const r of res.items.filter((x) => x.entryKind !== 'credit'))
+      expect([r.customerCreditRemainingTxnMinor, r.customerCreditOriginalTxnMinor, r.customerCreditRemainingBaseMinor], r.entryKind).toEqual([
+        null,
+        null,
+        null,
+      ]);
+    expect(res.items.filter((r) => r.entryKind === 'credit').length, 'one explicit row per credit, never one total').toBe(1);
+    const sql = (captured.find((c) => /UNION ALL/i.test(c.sql)) as Captured).sql;
+    expect(sql).toMatch(/c\.remaining_amount_minor::text AS credit_remaining_txn_minor/);
+    expect(sql).toMatch(/c\.original_amount_minor::text AS credit_original_txn_minor/);
+  });
+
+  it('the route is in the route-permission table, with the permission and scope its controller enforces', () => {
+    const entry = SELLING_ROUTE_AUTHORITY.find((r) => r.path === '/v1/customers/:customerId/account-statement');
+    expect(entry, 'the route is missing from SELLING_ROUTE_AUTHORITY').toBeDefined();
+    const handler = (CustomersController.prototype as unknown as Record<string, object>).accountStatement as object;
+    expect(entry?.permission).toBe(Reflect.getMetadata(PERMISSION_KEY, handler));
+    expect(entry).toMatchObject({ method: 'GET', sensitive: false, businessWide: true });
   });
 
   it('LOAD-BEARING (permission): the route names receivables.view, the key the permission guard reads', () => {

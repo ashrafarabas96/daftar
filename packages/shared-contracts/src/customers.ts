@@ -531,8 +531,18 @@ export interface CustomerAccountStatementEntryDto {
   debitTxnMinor: string | null;
   creditTxnMinor: string | null;
   /** The row's own stored amount in its currency (a held credit carries this and neither side). */
-  amountTxnMinor: string;
-  amountBaseMinor: string;
+  amountTxnMinor: string | null;
+  amountBaseMinor: string | null;
+  /**
+   * ONLY on a `credit` row (null on every other kind): the customer's credit
+   * BALANCE, as the STORED remaining the product maintains, and the amount the
+   * credit was born with. They are never the row's `amountTxnMinor` (null
+   * here), never a debit or a credit of the receivable, and never part of
+   * `outstanding`: nothing is netted against it (DR-114/(ب)). One row per credit.
+   */
+  customerCreditRemainingTxnMinor: string | null;
+  customerCreditRemainingBaseMinor: string | null;
+  customerCreditOriginalTxnMinor: string | null;
   reference: string | null;
 }
 

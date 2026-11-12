@@ -44,7 +44,9 @@ interface Entry {
   currency: string;
   debitTxnMinor: string | null;
   creditTxnMinor: string | null;
-  amountTxnMinor: string;
+  amountTxnMinor: string | null;
+  customerCreditRemainingTxnMinor?: string | null;
+  customerCreditOriginalTxnMinor?: string | null;
 }
 interface Outstanding {
   currency: string | null;
@@ -78,7 +80,7 @@ function outOfOrder(items: readonly Entry[]): number {
 
 /** How many rows carry an amount other than their own stored one. */
 function amountMismatches(items: readonly Entry[], stored: ReadonlyMap<string, string>): number {
-  return items.filter((r) => stored.get(r.entryId) !== r.amountTxnMinor).length;
+  return items.filter((r) => r.amountTxnMinor !== null && stored.get(r.entryId) !== r.amountTxnMinor).length;
 }
 
 describe('§P pure controls: the order check and the amount check can fail at all', () => {
@@ -118,7 +120,7 @@ describe('§P pure controls: the order check and the amount check can fail at al
   });
 
   it('an altered amount is counted, an untouched one is not', () => {
-    const stored = new Map([invoice, payment, earlier].map((r) => [r.entryId, r.amountTxnMinor] as const));
+    const stored = new Map([invoice, payment, earlier].map((r) => [r.entryId, r.amountTxnMinor ?? ''] as const));
     expect(amountMismatches([earlier, invoice, payment], stored)).toBe(0);
     expect(amountMismatches([earlier, { ...invoice, amountTxnMinor: '101' }, payment], stored)).toBe(1);
   });
@@ -167,7 +169,6 @@ async function storedAmounts(): Promise<ReadonlyMap<string, string>> {
   const q = await ownerPool().query<{ id: string; amount: string }>(
     `SELECT id::text AS id, total_txn_minor::text AS amount FROM invoices WHERE business_id = $1 AND customer_id = $2
      UNION ALL SELECT id::text, amount_minor::text FROM payments WHERE business_id = $1 AND customer_id = $2
-     UNION ALL SELECT id::text, original_amount_minor::text FROM customer_credits WHERE business_id = $1 AND customer_id = $2
      UNION ALL SELECT id::text, invoice_amount_applied_minor::text FROM payment_allocations WHERE business_id = $1 AND customer_id = $2
      UNION ALL SELECT id::text, invoice_amount_applied_minor::text FROM customer_credit_applications WHERE business_id = $1 AND customer_id = $2`,
     [w.shop.businessId, customerId],
@@ -233,11 +234,11 @@ describe('the statement, executed', () => {
     const credit0 = await creditSnapshot(ownerPool(), w.shop.businessId, creditId);
     const original = BigInt(credit0.originalAmountMinor);
     expect(BigInt(totalsB.totalTxnMinor) >= original, 'NO SUBJECT: invoice B cannot absorb the credit').toBe(true);
-    expect(original >= 2n, 'NO SUBJECT: the credit cannot be split in two').toBe(true);
-    const firstPart = original / 2n;
+    expect(original >= 4n, 'NO SUBJECT: the credit cannot be consumed in two quarters and keep a remainder').toBe(true);
+    const quarter = original / 4n;
     let releasedBefore = 0n;
     applicationIds = [];
-    for (const consumed of [firstPart, original - firstPart]) {
+    for (const consumed of [quarter, quarter]) {
       const before = await creditSnapshot(ownerPool(), w.shop.businessId, creditId);
       const applicationId = randomUUID();
       const res = await applyCredit(w.t, w.headers, {
@@ -353,6 +354,24 @@ describe('the statement, executed', () => {
       body.items.some((r) => r.entryKind === 'payment' && (r.debitTxnMinor !== null || r.creditTxnMinor !== null)),
       'the payment as received posts to neither side',
     ).toBe(false);
+  });
+
+  it('THE CREDIT BALANCE: the credit row shows the STORED remaining, not the original, and nothing is netted into outstanding', async () => {
+    const { body } = await getStatement(customerId, '?limit=50');
+    const rows = body.items.filter((r) => r.entryKind === 'credit');
+    expect(rows.length, 'one explicit row per credit').toBe(1);
+    const row = rows[0] as Entry;
+    const stored = await ownerPool().query<{ original: string; remaining: string }>(
+      `SELECT original_amount_minor::text AS original, remaining_amount_minor::text AS remaining FROM customer_credits WHERE business_id = $1 AND id = $2`,
+      [w.shop.businessId, creditId],
+    );
+    const st = must(stored.rows[0], 'the stored credit row');
+    expect(st.remaining, 'NO SUBJECT: the credit was partially consumed, so remaining differs from original').not.toBe(st.original);
+    expect(BigInt(st.remaining) > 0n, 'NO SUBJECT: a fully consumed credit would show 0 and prove little').toBe(true);
+    expect(row.customerCreditRemainingTxnMinor, 'the row shows the stored remaining').toBe(st.remaining);
+    expect(row.customerCreditOriginalTxnMinor, 'and the original under its own name').toBe(st.original);
+    expect(row.amountTxnMinor, 'the credit row has no generic amount to be misread as a debt or payment').toBeNull();
+    expect(row.debitTxnMinor === null && row.creditTxnMinor === null).toBe(true);
   });
 
   it('OUTSTANDING equals the reader of record, customer_ar_outstanding, row for row', async () => {

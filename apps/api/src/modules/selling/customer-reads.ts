@@ -659,7 +659,13 @@ export class CustomerReadService {
    * `invoice_amount_applied_minor`, which is the very column the reader sums.
    * So, per currency, debit minus credit is what `outstanding` states, and no
    * retained (unapplied) money is posted a second time. The payment as
-   * received and the retained credit are stated rows with NEITHER side. Every
+   * received and the retained credit are stated rows with NEITHER side. The
+   * credit row states the customer's credit BALANCE, the STORED
+   * `remaining_amount_minor` (a stored column read as it is, never computed
+   * here), beside its original amount, in fields named for what they are, and
+   * its `amountTxnMinor` is null so it cannot be read as a debt or a payment.
+   * One row per credit: no total across credits (that would be a sum), and
+   * nothing is netted against the receivable (DR-114/(ب)). Every
    * amount carries its own `currency`; a column is never summed across them.
    *
    * The order is `(entry date, kind rank, entry id)` and the continuation is
@@ -693,20 +699,25 @@ export class CustomerReadService {
         currency_code: string;
         debit_txn_minor: string | null;
         credit_txn_minor: string | null;
-        amount_txn_minor: string;
-        amount_base_minor: string;
+        amount_txn_minor: string | null;
+        amount_base_minor: string | null;
+        credit_original_txn_minor: string | null;
+        credit_remaining_txn_minor: string | null;
+        credit_remaining_base_minor: string | null;
         reference: string | null;
       }
     >(
       this.scope(m),
       `SELECT s.entry_kind, s.entry_id, to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date_text, s.kind_rank,
               s.document_number, s.related_id, s.currency_code,
-              s.debit_txn_minor, s.credit_txn_minor, s.amount_txn_minor, s.amount_base_minor, s.reference
+              s.debit_txn_minor, s.credit_txn_minor, s.amount_txn_minor, s.amount_base_minor,
+              s.credit_original_txn_minor, s.credit_remaining_txn_minor, s.credit_remaining_base_minor, s.reference
          FROM (
               SELECT 1 AS kind_rank, 'invoice'::text AS entry_kind, i.id AS entry_id, i.issue_date AS entry_date,
                      i.document_number, NULL::uuid AS related_id, i.currency_code::text AS currency_code,
                      i.total_txn_minor::text AS debit_txn_minor, NULL::text AS credit_txn_minor,
                      i.total_txn_minor::text AS amount_txn_minor, i.total_base_minor::text AS amount_base_minor,
+                     NULL::text AS credit_original_txn_minor, NULL::text AS credit_remaining_txn_minor, NULL::text AS credit_remaining_base_minor,
                      NULL::text AS reference
                 FROM invoices i
                 JOIN sales sl ON sl.business_id = i.business_id AND sl.id = i.sale_id
@@ -717,6 +728,7 @@ export class CustomerReadService {
                      NULL::text, NULL::uuid, p.currency_code::text,
                      NULL::text, NULL::text,
                      p.amount_minor::text, p.base_amount_minor::text,
+                     NULL::text, NULL::text, NULL::text,
                      p.reference
                 FROM payments p
                WHERE p.business_id = $1 AND p.customer_id = $2
@@ -725,6 +737,7 @@ export class CustomerReadService {
                      ai.document_number, pa.invoice_id, pa.invoice_currency::text,
                      NULL::text, pa.invoice_amount_applied_minor::text,
                      pa.invoice_amount_applied_minor::text, pa.invoice_carrying_base_released_minor::text,
+                     NULL::text, NULL::text, NULL::text,
                      p.reference
                 FROM payment_allocations pa
                 JOIN payments p ON p.business_id = pa.business_id AND p.id = pa.payment_id
@@ -736,7 +749,9 @@ export class CustomerReadService {
               SELECT 4, 'credit', c.id, c.credit_date,
                      NULL::text, c.origin_payment_id, c.currency_code::text,
                      NULL::text, NULL::text,
-                     c.original_amount_minor::text, c.original_carrying_base_amount_minor::text,
+                     NULL::text, NULL::text,
+                     c.original_amount_minor::text AS credit_original_txn_minor, c.remaining_amount_minor::text AS credit_remaining_txn_minor,
+                     c.remaining_carrying_base_amount_minor::text AS credit_remaining_base_minor,
                      NULL::text
                 FROM customer_credits c
                WHERE c.business_id = $1 AND c.customer_id = $2
@@ -745,6 +760,7 @@ export class CustomerReadService {
                      ai.document_number, a.invoice_id, a.invoice_currency::text,
                      NULL::text, a.invoice_amount_applied_minor::text,
                      a.invoice_amount_applied_minor::text, a.invoice_carrying_base_released_minor::text,
+                     NULL::text, NULL::text, NULL::text,
                      NULL::text
                 FROM customer_credit_applications a
                 JOIN invoices ai ON ai.business_id = a.business_id AND ai.id = a.invoice_id
@@ -770,6 +786,9 @@ export class CustomerReadService {
       creditTxnMinor: r.credit_txn_minor,
       amountTxnMinor: r.amount_txn_minor,
       amountBaseMinor: r.amount_base_minor,
+      customerCreditOriginalTxnMinor: r.credit_original_txn_minor,
+      customerCreditRemainingTxnMinor: r.credit_remaining_txn_minor,
+      customerCreditRemainingBaseMinor: r.credit_remaining_base_minor,
       reference: r.reference,
     }));
     const last = page[page.length - 1];
