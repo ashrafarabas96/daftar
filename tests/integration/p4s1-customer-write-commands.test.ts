@@ -82,20 +82,64 @@ async function allTables(q: Queryable): Promise<string[]> {
   return r.rows.map((x) => x.t);
 }
 
-/** Run one statement and return its SQLSTATE, or the literal 'executed'. */
-async function sqlstateOf(c: Client, sql: string, params: unknown[] = []): Promise<string> {
-  return await c.query(sql, params).then(
-    () => 'executed',
-    (e: unknown) => String((e as { code?: string }).code ?? 'no-code'),
-  );
+/**
+ * `25P02` — `current transaction is aborted, commands ignored until end of
+ * transaction block`.
+ *
+ * ONE STATEMENT PER TRANSACTION, AND THIS IS WHY. In PostgreSQL ANY error
+ * aborts the whole transaction, a refusal this suite deliberately provokes
+ * included, and every statement after it returns `25P02` instead of its own
+ * error. So a second refusal asserted in the same transaction as the first
+ * measures NOTHING — and it reads as a pass or a fail by accident, in either
+ * direction, which is worse than no claim at all.
+ *
+ * The two helpers below therefore open and roll back a transaction of their
+ * OWN around each statement, and each one asserts that what it observed is not
+ * `25P02`. That guard is here, once, rather than at each call site, so no
+ * future claim in this suite can inherit a verdict from an abort.
+ */
+const ABORTED = '25P02';
+const ABORT_TEXT = 'current transaction is aborted';
+
+/** Set the GUCs a transaction needs for row security to apply to it. */
+async function applyScope(c: Client, scope?: { readonly tenantId: string; readonly businessId: string }): Promise<void> {
+  if (scope === undefined) return;
+  // `is_local = true`, so it lasts exactly as long as this transaction — which
+  // is precisely why it has to be re-applied per isolated statement.
+  await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [scope.tenantId, scope.businessId]);
 }
 
-/** Run one statement and return its refusal message, or 'executed'. */
-async function refusalOf(q: Queryable, sql: string, params: unknown[] = []): Promise<string> {
-  return await q.query(sql, params).then(
-    () => 'executed',
-    (e: unknown) => String((e as { message?: string }).message ?? 'no-message'),
-  );
+/** One statement, in a transaction of its own, as its SQLSTATE or 'executed'. */
+async function sqlstateOf(c: Client, sql: string, params: unknown[] = [], scope?: { readonly tenantId: string; readonly businessId: string }): Promise<string> {
+  await c.query('BEGIN');
+  try {
+    await applyScope(c, scope);
+    const code = await c.query(sql, params).then(
+      () => 'executed',
+      (e: unknown) => String((e as { code?: string }).code ?? 'no-code'),
+    );
+    expect(code, `this claim read an ABORTED transaction, so it measured nothing: ${sql}`).not.toBe(ABORTED);
+    return code;
+  } finally {
+    await c.query('ROLLBACK').catch(() => undefined);
+  }
+}
+
+/** One statement, in a transaction of its own, as its refusal message or 'executed'. */
+async function refusalOf(c: Client, sql: string, params: unknown[] = [], scope?: { readonly tenantId: string; readonly businessId: string }): Promise<string> {
+  await c.query('BEGIN');
+  try {
+    await applyScope(c, scope);
+    const outcome = await c.query(sql, params).then(
+      () => ({ message: 'executed', code: 'executed' }),
+      (e: unknown) => ({ message: String((e as { message?: string }).message ?? 'no-message'), code: String((e as { code?: string }).code ?? 'no-code') }),
+    );
+    expect(outcome.code, `this claim read an ABORTED transaction, so it measured nothing: ${sql}`).not.toBe(ABORTED);
+    expect(outcome.message, `this claim read an abort message, so it measured nothing: ${sql}`).not.toContain(ABORT_TEXT);
+    return outcome.message;
+  } finally {
+    await c.query('ROLLBACK').catch(() => undefined);
+  }
 }
 
 describe('P4-S1 the customer write commands (DR-142)', () => {
@@ -197,16 +241,22 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
     it('refuses INSERT, UPDATE, DELETE and TRUNCATE with 42501, while SELECT through the same connection succeeds', async () => {
       const c = new Client({ connectionString: appDbUrl });
       await c.connect();
+      const scope = { tenantId: bizA.tenantId, businessId: bizA.businessId };
       try {
+        // THE POSITIVE CONTROL, FIRST, and in a transaction of its own: this
+        // connection can see the table at all, so the four refusals below are
+        // about the privilege and not about a dead connection or an invisible
+        // row (RULE-11).
         await c.query('BEGIN');
-        await c.query(`SELECT set_config('app.tenant_id', $1, true), set_config('app.business_id', $2, true)`, [bizA.tenantId, bizA.businessId]);
-
-        // THE POSITIVE CONTROL, FIRST: this connection can see the table at
-        // all, so the four refusals below are about the privilege and not
-        // about a dead connection or an invisible row (RULE-11).
+        await applyScope(c, scope);
         const seen = await c.query<{ n: number }>(`SELECT count(*)::int AS n FROM customers WHERE id = $1`, [customerId]);
         expect(seen.rows[0]?.n, 'daftar_app can READ the customer it just created').toBe(1);
+        await c.query('ROLLBACK');
 
+        // EACH REFUSAL IN ITS OWN TRANSACTION. The INSERT's own `42501` aborts
+        // the transaction it runs in, so running the other three after it in
+        // that same transaction made them read `25P02` and measure nothing.
+        // `sqlstateOf` now isolates and refuses an abort outright.
         expect(
           await sqlstateOf(
             c,
@@ -214,13 +264,14 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
                                     business_transaction_id, created_by, updated_by)
              VALUES ($1, $2, $3, 'Direct', 'active', 1, repeat('a', 64), repeat('a', 64), $4, $5, $5)`,
             [bizA.tenantId, bizA.businessId, randomUUID(), randomUUID(), bizA.userId],
+            scope,
           ),
           'a direct INSERT',
         ).toBe('42501');
 
-        expect(await sqlstateOf(c, `UPDATE customers SET name = 'Direct' WHERE id = $1`, [customerId]), 'a direct UPDATE').toBe('42501');
-        expect(await sqlstateOf(c, `DELETE FROM customers WHERE id = $1`, [customerId]), 'a direct DELETE').toBe('42501');
-        expect(await sqlstateOf(c, `TRUNCATE customers`), 'a direct TRUNCATE').toBe('42501');
+        expect(await sqlstateOf(c, `UPDATE customers SET name = 'Direct' WHERE id = $1`, [customerId], scope), 'a direct UPDATE').toBe('42501');
+        expect(await sqlstateOf(c, `DELETE FROM customers WHERE id = $1`, [customerId], scope), 'a direct DELETE').toBe('42501');
+        expect(await sqlstateOf(c, `TRUNCATE customers`, [], scope), 'a direct TRUNCATE').toBe('42501');
       } finally {
         await c.query('ROLLBACK').catch(() => undefined);
         await c.end();
@@ -324,17 +375,20 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       const c = new Client({ connectionString: dbUrl });
       await c.connect();
       try {
-        await c.query('BEGIN');
-
         // THE POSITIVE CONTROL, FIRST: a one-step revision on an editable
-        // column IS admitted, so the three refusals below are the guard's
-        // judgement and not a connection that cannot write at all. Rolled
-        // back with everything else.
+        // column IS admitted, so the refusals below are the guard's judgement
+        // and not a connection that cannot write at all. `refusalOf` runs it
+        // in a transaction of its own and rolls it back, so it changes nothing.
         expect(
           await refusalOf(c, `UPDATE customers SET name = 'Guard Control', revision = revision + 1 WHERE id = $1`, [customerId]),
           'a legal one-step change',
         ).toBe('executed');
 
+        // EACH REFUSAL IN ITS OWN TRANSACTION. The first guard refusal aborts
+        // the transaction it runs in, so the ones after it in that same
+        // transaction were reading `25P02` and the abort's message instead of
+        // their own — which is exactly how a real refusal and a missing one
+        // became indistinguishable here.
         expect(await refusalOf(c, `UPDATE customers SET revision = revision + 2 WHERE id = $1`, [customerId])).toContain('customer.revision_changed');
         expect(await refusalOf(c, `UPDATE customers SET revision = revision WHERE id = $1`, [customerId])).toContain('customer.revision_changed');
         expect(
@@ -480,10 +534,14 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
         await c.query('BEGIN');
         try {
           await c.query(`SET LOCAL ROLE ${role}`);
-          return await c.query(sql, params).then(
+          const code = await c.query(sql, params).then(
             () => 'executed',
             (e: unknown) => String((e as { code?: string }).code ?? 'no-code'),
           );
+          // The same guard the shared helpers carry: a verdict inherited from
+          // an aborted transaction is not a measurement of this role.
+          expect(code, `this claim read an ABORTED transaction, so it measured nothing: ${role} / ${sql}`).not.toBe(ABORTED);
+          return code;
         } finally {
           await c.query('ROLLBACK').catch(() => undefined);
         }
