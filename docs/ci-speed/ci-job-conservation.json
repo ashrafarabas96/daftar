@@ -2,9 +2,9 @@
   "$schema": "daftar/ci-job-conservation/1",
   "law": "tests/guards/ci-job-conservation.test.ts",
   "baseline": {
-    "rev": "8b1a678062c92328550bd27815da58187404652f",
+    "rev": "cd447421b407f2482c31b8ca181eee34f99ecbd8",
     "job": "backend",
-    "steps": 58
+    "steps": 61
   },
   "jobs": [
     "backend",
@@ -14,7 +14,7 @@
   ],
   "totals": {
     "shared": 11,
-    "assigned": 47
+    "assigned": 50
   },
   "shared": [
     "Build contract, accounting and design-system packages",
@@ -41,6 +41,9 @@
     "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)": "backend",
     "Format": "backend-static",
     "Golden regression suite": "backend-golden",
+    "Chromium install inputs (pinned playwright-core, runner image)": "backend",
+    "Restore the Chromium build (nothing is downloaded on a hit)": "backend",
+    "Restore the Chromium apt dependencies as .deb archives": "backend",
     "Install Chromium for the gate's real-browser matrix": "backend",
     "Integration + security tests": "backend",
     "Keep the gate's browser screenshots and results": "backend",

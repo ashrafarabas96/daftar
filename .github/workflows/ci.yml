@@ -569,8 +569,97 @@ jobs:
       # say something new.
       #
       # An entry the coordinator has not filled is a FAIL, not a skip.
+      # CHROMIUM-NET-01. `--with-deps` is two fetches in one: apt pulls the
+      # font and library packages, and the pinned playwright-core downloads the
+      # browser build. Both crossed the network in EVERY run, and on 2026-11-11
+      # the apt half took a whole run down: run 43023156012 lost its `backend`
+      # job after nine minutes of `Temporary failure resolving
+      # 'security.ubuntu.com'` over ten rounds, for ten FONT packages, on a
+      # commit whose only difference from a green one was four `.md` files. So
+      # the tree was not the cause, and nothing here is a `retry`, a
+      # `continue-on-error` or a raised timeout: what is removed is the per-run
+      # dependency on the network. The step still runs, still installs the same
+      # packages named by the same pinned playwright-core, and still fails if
+      # either half fails.
+      #
+      # The key is the pinned `playwright-core` version — the dependency list
+      # and the browser build are both functions of it — and the runner's own
+      # `ImageOS`, because a different image has a different preinstalled
+      # baseline and therefore a different MISSING set. The exact image build is
+      # PRINTED and not keyed: keying it would miss the cache on every weekly
+      # image roll, while a baseline change inside one `ImageOS` is handled
+      # below by refilling the cache rather than by trusting it.
+      - name: Chromium install inputs (pinned playwright-core, runner image)
+        id: chromium-inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package-lock.json').packages['node_modules/playwright-core'].version")
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "refusing an unreadable playwright-core version: '$version'" >&2; exit 1 ;;
+          esac
+          echo "playwright-core: $version"
+          echo "runner image: ImageOS=${ImageOS:-unset} ImageVersion=${ImageVersion:-unset}"
+          test -n "${ImageOS:-}"
+          echo "key=chromium-${ImageOS}-pw${version}-v1" >> "$GITHUB_OUTPUT"
+      - name: Restore the Chromium build (nothing is downloaded on a hit)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.chromium-inputs.outputs.key }}-browser
+      - name: Restore the Chromium apt dependencies as .deb archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/chromium-deb
+          key: ${{ steps.chromium-inputs.outputs.key }}-deb
       - name: Install Chromium for the gate's real-browser matrix
-        run: npx playwright-core install --with-deps chromium
+        env:
+          DEB_DIR: ${{ runner.temp }}/chromium-deb
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEB_DIR"
+          # The missing set is named by the pinned playwright-core itself, never
+          # hand-written here: `install-deps --dry-run` simulates the install
+          # with `apt-get install -s`, which reads the image's OWN package lists
+          # and reaches no network, and exits non-zero while anything is
+          # missing. Its own documented words, from the pinned version: `On
+          # Linux, simulate the install via apt-get and exit with a non-zero
+          # code if any required packages are missing`. So the same command at
+          # the end of this step is the verdict on it, and the `|| true` here is
+          # on the LISTING only — the verdict below carries no `|| true`.
+          missing=$(npx playwright-core install-deps --dry-run chromium || true)
+          printf '%s\n' "$missing"
+          pkgs=$(printf '%s\n' "$missing" | sed -n 's/^  \([a-z][a-z0-9.+:-]*\)$/\1/p')
+          if [ -z "$pkgs" ]; then
+            echo "every apt dependency is already present on this image: nothing to fetch"
+          elif [ -f "$DEB_DIR/.list" ] && [ "$(cat "$DEB_DIR/.list")" = "$pkgs" ]; then
+            debs=$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)
+            echo "cache hit: installing $debs cached .deb archive(s) from disk, no apt fetch"
+            test "$debs" -gt 0
+            sudo dpkg -i "$DEB_DIR"/*.deb
+          else
+            # A miss, or an image whose baseline moved under the same key. The
+            # archives are fetched ONCE and then installed from disk. This is
+            # the only arm that touches the network, and it is the FIRST fill of
+            # the cache rather than a second attempt at anything.
+            echo "cache fill: fetching $(printf '%s\n' "$pkgs" | wc -l) archive(s) once"
+            rm -rf "$DEB_DIR"
+            mkdir -p "$DEB_DIR"
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends --download-only \
+              -o Dir::Cache::archives="$DEB_DIR" $pkgs
+            sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR"
+            find "$DEB_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +
+            sudo dpkg -i "$DEB_DIR"/*.deb
+            printf '%s\n' "$pkgs" > "$DEB_DIR/.list"
+          fi
+          # playwright-core's own verdict, taken AFTER the install: a non-zero
+          # exit here means a dependency is still missing, and the step fails.
+          npx playwright-core install-deps --dry-run chromium
+          # The browser build. On a cache hit this reports it as already
+          # installed and downloads nothing.
+          npx playwright-core install chromium
       - name: Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)
         run: npm run gate:phase4:s1
         env:
@@ -1489,6 +1578,50 @@ jobs:
         run: |
           npm run build -w @daftar/api
           npm run build -w @daftar/web
+      # CHROMIUM-NET-01. `--with-deps` is two fetches in one: apt pulls the
+      # font and library packages, and the pinned playwright-core downloads the
+      # browser build. Both crossed the network in EVERY run, and on 2026-11-11
+      # the apt half took a whole run down: run 43023156012 lost its `backend`
+      # job after nine minutes of `Temporary failure resolving
+      # 'security.ubuntu.com'` over ten rounds, for ten FONT packages, on a
+      # commit whose only difference from a green one was four `.md` files. So
+      # the tree was not the cause, and nothing here is a `retry`, a
+      # `continue-on-error` or a raised timeout: what is removed is the per-run
+      # dependency on the network. The step still runs, still installs the same
+      # packages named by the same pinned playwright-core, and still fails if
+      # either half fails.
+      #
+      # The key is the pinned `playwright-core` version — the dependency list
+      # and the browser build are both functions of it — and the runner's own
+      # `ImageOS`, because a different image has a different preinstalled
+      # baseline and therefore a different MISSING set. The exact image build is
+      # PRINTED and not keyed: keying it would miss the cache on every weekly
+      # image roll, while a baseline change inside one `ImageOS` is handled
+      # below by refilling the cache rather than by trusting it.
+      - name: Chromium install inputs (pinned playwright-core, runner image)
+        id: chromium-inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package-lock.json').packages['node_modules/playwright-core'].version")
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "refusing an unreadable playwright-core version: '$version'" >&2; exit 1 ;;
+          esac
+          echo "playwright-core: $version"
+          echo "runner image: ImageOS=${ImageOS:-unset} ImageVersion=${ImageVersion:-unset}"
+          test -n "${ImageOS:-}"
+          echo "key=chromium-${ImageOS}-pw${version}-v1" >> "$GITHUB_OUTPUT"
+      - name: Restore the Chromium build (nothing is downloaded on a hit)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.chromium-inputs.outputs.key }}-browser
+      - name: Restore the Chromium apt dependencies as .deb archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/chromium-deb
+          key: ${{ steps.chromium-inputs.outputs.key }}-deb
       - name: Install Chromium for the pinned playwright-core
         # DR-18. `--with-deps` installs apt packages, and as a non-root user
         # playwright runs them through `sudo`: measured, `install-deps
@@ -1513,12 +1646,59 @@ jobs:
         # One step with a shell branch, not two steps with `if:`, deliberately:
         # two steps would leave one `skipped` in every run, and `skipped` is
         # what this project refuses to read as evidence.
+        env:
+          DEB_DIR: ${{ runner.temp }}/chromium-deb
         run: |
           if [ "${{ runner.environment }}" = "self-hosted" ]; then
+            # The 33 system packages were installed once as root on that
+            # machine, so the apt half is already satisfied there and only the
+            # browser is installed — exactly as before CHROMIUM-NET-01.
             npx playwright-core install chromium
-          else
-            npx playwright-core install --with-deps chromium
+            exit 0
           fi
+          set -euo pipefail
+          mkdir -p "$DEB_DIR"
+          # The missing set is named by the pinned playwright-core itself, never
+          # hand-written here: `install-deps --dry-run` simulates the install
+          # with `apt-get install -s`, which reads the image's OWN package lists
+          # and reaches no network, and exits non-zero while anything is
+          # missing. Its own documented words, from the pinned version: `On
+          # Linux, simulate the install via apt-get and exit with a non-zero
+          # code if any required packages are missing`. So the same command at
+          # the end of this step is the verdict on it, and the `|| true` here is
+          # on the LISTING only — the verdict below carries no `|| true`.
+          missing=$(npx playwright-core install-deps --dry-run chromium || true)
+          printf '%s\n' "$missing"
+          pkgs=$(printf '%s\n' "$missing" | sed -n 's/^  \([a-z][a-z0-9.+:-]*\)$/\1/p')
+          if [ -z "$pkgs" ]; then
+            echo "every apt dependency is already present on this image: nothing to fetch"
+          elif [ -f "$DEB_DIR/.list" ] && [ "$(cat "$DEB_DIR/.list")" = "$pkgs" ]; then
+            debs=$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)
+            echo "cache hit: installing $debs cached .deb archive(s) from disk, no apt fetch"
+            test "$debs" -gt 0
+            sudo dpkg -i "$DEB_DIR"/*.deb
+          else
+            # A miss, or an image whose baseline moved under the same key. The
+            # archives are fetched ONCE and then installed from disk. This is
+            # the only arm that touches the network, and it is the FIRST fill of
+            # the cache rather than a second attempt at anything.
+            echo "cache fill: fetching $(printf '%s\n' "$pkgs" | wc -l) archive(s) once"
+            rm -rf "$DEB_DIR"
+            mkdir -p "$DEB_DIR"
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends --download-only \
+              -o Dir::Cache::archives="$DEB_DIR" $pkgs
+            sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR"
+            find "$DEB_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +
+            sudo dpkg -i "$DEB_DIR"/*.deb
+            printf '%s\n' "$pkgs" > "$DEB_DIR/.list"
+          fi
+          # playwright-core's own verdict, taken AFTER the install: a non-zero
+          # exit here means a dependency is still missing, and the step fails.
+          npx playwright-core install-deps --dry-run chromium
+          # The browser build. On a cache hit this reports it as already
+          # installed and downloads nothing.
+          npx playwright-core install chromium
       - name: Browser gate red proof (planted overflow, raw key, console error, missing string)
         run: npm run gate:browser -- --plant=all --steps=header,stock --out=release/browser-red-proof
         env:
