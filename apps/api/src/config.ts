@@ -171,6 +171,42 @@ const EnvSchema = z
       fail('RECONCILER_DATABASE_URL', `must NOT be set in PROCESS_MODE=${mode} (only the reconciler process holds reconciliation authority)`);
     }
 
+    // ── SEC-01: the worker is denied the SESSION signing key, in EVERY
+    // environment ────────────────────────────────────────────────────────
+    // `JWT_SECRET`/`JWT_KEYS` are the ring that mints access tokens. The
+    // worker has no session authority — it delivers credentials and
+    // publishes the outbox — and `TokenService` is provided only in
+    // `identityProviders`, never in the worker's container. That is not
+    // enough. The ring is a VALUE on the configuration object that every
+    // worker provider receives ('APP_CONFIG'), and `parseKeyRing` is a
+    // top-level export, so a worker that merely RECEIVES the secret can mint
+    // a token for any user and any session by constructing TokenService by
+    // hand. Measured before this block existed: it did, and the merchant
+    // API's own verifier accepted the token
+    // (`tests-unit/sec01-worker-jwt-deny.test.ts`).
+    //
+    // Like the reconciler block above, this is therefore a property of the
+    // MODE rather than of NODE_ENV: a staging box or a laptop is exactly
+    // where the habit — and then the adapter that uses it — gets written. So
+    // it sits BEFORE the production gate below, and a test that only proves
+    // the production case proves nothing about the denial.
+    //
+    // It is deliberately an INDEPENDENT `if`, NOT an arm chained onto the
+    // reconciler's `if/else if`: that chain's `else` arm is the converse
+    // control that denies RECONCILER_DATABASE_URL to every OTHER mode, and a
+    // worker arm inside it would exempt the worker from that control —
+    // opening a wider hole than this one closes.
+    if (mode === 'worker') {
+      for (const n of ['JWT_SECRET', 'JWT_KEYS'] as const) {
+        if (c[n]) {
+          fail(
+            n,
+            'must NOT be set in PROCESS_MODE=worker (the session signing key mints an access token for any user; the worker holds no session authority — SEC-01)',
+          );
+        }
+      }
+    }
+
     if (c.NODE_ENV !== 'production') return;
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
     // production must deploy the separated runtimes.
