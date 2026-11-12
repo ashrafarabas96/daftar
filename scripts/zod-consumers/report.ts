@@ -288,6 +288,12 @@ export const HAND_TABLE: Entry[] = [
     'safe',
     'Membership of a path in a list (`toContain`): independent of order and of how many other issues exist.',
   ),
+  E(
+    'tests/guards/l3-customer-statement.test.ts',
+    'const stmt = captured.find((c) => /UNION ALL/i.test(c.sql));',
+    'safe',
+    'A `.find(` over `captured`, the SQL statements a recording fake received, picking the one containing UNION ALL; the receiver is an array of SQL text, not a validation-issue collection, so no zod order or count can affect it (the receiver rule missed it only because `.parse(` of the query schema sits in the adjacent statement).',
+  ),
 ];
 
 /** Group rules: whole classes of sites that are not zod issues at all. */
