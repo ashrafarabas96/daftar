@@ -1,0 +1,481 @@
+/**
+ * ROUND 6 — the Contract Diff on `subscription_invoices`, settled and pinned.
+ *
+ * Master Continuous Mission V3 §12: «قبل الترقية احسم Contract Diff بين
+ * حالات `subscription_invoices` وحقولها الثابتة في الـspec القديم، ومسار
+ * draft→finalized الذي يطبق الرصيد والـpayable، وDDL scratch» — before
+ * promotion, settle the Contract Diff between the invoice's states and fixed
+ * fields in the earlier spec, the draft→finalized path that applies the
+ * credit and the payable, and the scratch DDL.
+ *
+ * It needed settling because the two documents had grown two vocabularies
+ * for one relation, and — worse — both used `total_minor`, for amounts that
+ * differ by exactly the credit applied. `src/invoice-states.ts` records what
+ * was settled and why. THIS file is what stops it drifting again: every
+ * assertion below reads the DDL out of the live catalogue, or attacks it,
+ * and compares against the exported constants. Nothing here retypes the
+ * contract and then checks its own copy — the defect round 5's M10 was.
+ *
+ * Class, as everywhere in `test/db/`:
+ * `PROVEN BY EXECUTION AGAINST THE REQUESTED DDL (SCRATCH CLUSTER)`. The
+ * official schema and command are still `WAITING_FOR_INTEGRATED_SURFACE`,
+ * and V3 keeps that proof at integration.
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Client } from 'pg';
+
+import { borrowedSchema, connect, constraintOf, ownerUrl, refusedBy, uuid } from './helpers/cluster';
+import { createBusiness, createDraftInvoice, finalizeInvoice, insertGrant, remainderOf, type Scope } from './helpers/finalize';
+import { canTransitionInvoice, FINALIZATION_WRITABLE_COLUMNS, SUBSCRIPTION_INVOICE_STATES, type SubscriptionInvoiceState } from '../../src/invoice-states';
+
+const TENANT = '7f1a0000-0000-4000-8000-000000000003';
+const T1 = '2026-02-01T00:00:00.000Z';
+
+let owner: Client;
+
+async function freshScope(currency = 'USD'): Promise<Scope> {
+  const businessId = uuid();
+  await createBusiness(owner, borrowedSchema(), TENANT, businessId, currency);
+  return { tenantId: TENANT, businessId, currency };
+}
+
+/** One constraint's definition, as the catalogue holds it. */
+async function constraintDef(name: string): Promise<string> {
+  const r = await owner.query<{ def: string }>(
+    `SELECT pg_get_constraintdef(c.oid) AS def
+       FROM pg_constraint c
+       JOIN pg_class t ON t.oid = c.conrelid
+       JOIN pg_namespace n ON n.oid = t.relnamespace
+      WHERE n.nspname = 'p5scratch' AND t.relname = 'subscription_invoices' AND c.conname = $1`,
+    [name],
+  );
+  const def = r.rows[0]?.def;
+  expect(def, `the constraint ${name} is not in the catalogue — this file would otherwise prove nothing`).toBeTruthy();
+  return def ?? '';
+}
+
+/** The columns the relation actually has, discovered rather than listed. */
+async function columnsOf(): Promise<readonly string[]> {
+  const r = await owner.query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'p5scratch' AND table_name = 'subscription_invoices'
+      ORDER BY ordinal_position`,
+  );
+  return r.rows.map((row) => row.column_name);
+}
+
+/** A row sitting in `state`, built only by transitions the contract allows. */
+async function invoiceIn(state: SubscriptionInvoiceState, s: Scope): Promise<string> {
+  const id = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+  if (state === 'draft') return id;
+  if (state === 'voided') {
+    await owner.query(`UPDATE p5scratch.subscription_invoices SET state = 'voided' WHERE id = $1`, [id]);
+    return id;
+  }
+  await owner.query(`UPDATE p5scratch.subscription_invoices SET state = 'open', issued_at = $2 WHERE id = $1`, [id, T1]);
+  if (state === 'open') return id;
+  await owner.query(`UPDATE p5scratch.subscription_invoices SET state = $2 WHERE id = $1`, [id, state]);
+  return id;
+}
+
+beforeAll(async () => {
+  owner = await connect(ownerUrl());
+});
+
+afterAll(async () => {
+  await owner?.end();
+});
+
+describe('the state set the database enforces is the state set the package exports', () => {
+  it('names exactly the five settled states', async () => {
+    const def = await constraintDef('si_state_known');
+    const named = [...def.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
+    expect(named.length, 'the state extraction came back empty or short').toBe(SUBSCRIPTION_INVOICE_STATES.length);
+    expect([...named].sort()).toStrictEqual([...SUBSCRIPTION_INVOICE_STATES].sort());
+  });
+
+  it('does not name `finalized`, in the database either', async () => {
+    const def = await constraintDef('si_state_known');
+    expect(def).not.toContain('finalized');
+  });
+
+  it('refuses a state outside the set', async () => {
+    const s = await freshScope();
+    const id = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    const code = await owner.query(`UPDATE p5scratch.subscription_invoices SET state = 'finalized' WHERE id = $1`, [id]).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
+    // 23514 is the CHECK; 23000 would be the trigger. Either refuses, and
+    // the assertion names both rather than pretending to know which fires
+    // first — but it must not be empty.
+    expect(['23514/si_state_known', '23000/si_transition_allowed']).toContain(code);
+  });
+});
+
+describe('the money vocabulary the Contract Diff settled', () => {
+  it('is the spec’s four columns, and the database has them all', async () => {
+    const columns = await columnsOf();
+    for (const column of ['charge_minor', 'credit_minor', 'tax_minor', 'total_minor']) {
+      expect(columns, `${column} is missing from the realized relation`).toContain(column);
+    }
+    // Round 5's names are gone: a relation that still carried
+    // `payable_minor` beside `total_minor` would be the diff, not its
+    // resolution.
+    expect(columns).not.toContain('payable_minor');
+    expect(columns).not.toContain('credit_applied_minor');
+  });
+
+  it('makes the total the spec’s arithmetic, and refuses anything else', async () => {
+    const def = await constraintDef('si_total_is_charge_minus_credit');
+    expect(def.replace(/[\s()]/g, '')).toContain('total_minor=charge_minor-credit_minor+tax_minor');
+
+    const s = await freshScope();
+    const code = await owner
+      .query(
+        `INSERT INTO p5scratch.subscription_invoices
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,300,900,'draft')`,
+        [uuid(), s.tenantId, s.businessId],
+      )
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+    expect(code, 'the database accepted a total that is not charge minus credit').toBe('23514/si_total_is_charge_minus_credit');
+  });
+
+  it('keeps platform tax structurally unrepresentable rather than defaulted', async () => {
+    const s = await freshScope();
+    const code = await owner
+      .query(
+        `INSERT INTO p5scratch.subscription_invoices
+           (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, tax_minor, total_minor, state)
+         VALUES ($1,$2,$3,nextval('p5scratch.scratch_period_seq')::integer,'USD',1000,0,1,1001,'draft')`,
+        [uuid(), s.tenantId, s.businessId],
+      )
+      .then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+    expect(code).toBe('23514/si_tax_structural_zero');
+  });
+
+  it('allows one invoice per business per period, and no second', async () => {
+    const s = await freshScope();
+    await createDraftInvoice(owner, 'p5scratch', s, 1000n, 7);
+    const code = await createDraftInvoice(owner, 'p5scratch', s, 1000n, 7).then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
+    expect(code, 'a second invoice for one period is the double renewal the unique index exists to refuse').toBe('23505/si_one_per_period_uq');
+  });
+});
+
+describe('the transitions the database allows are the transitions the package allows', () => {
+  it('agrees on all twenty-five pairs', async () => {
+    const s = await freshScope();
+    const disagreements: string[] = [];
+    for (const from of SUBSCRIPTION_INVOICE_STATES) {
+      const id = await invoiceIn(from, s);
+      for (const to of SUBSCRIPTION_INVOICE_STATES) {
+        await owner.query('BEGIN');
+        // `issued_at` is written ONLY for `-> open`, which must carry one.
+        // Writing it for every target was this case's first version, and it
+        // reported `draft -> voided` as refused — by its own fixture, since
+        // an abandoned draft was never issued and the trigger refuses to
+        // give it an instant. A law that mutates more than the transition
+        // it is testing measures its own mutation.
+        const code = await owner
+          .query(
+            `UPDATE p5scratch.subscription_invoices
+                SET state = $2,
+                    issued_at = CASE WHEN $2 = 'open' THEN coalesce(issued_at, $3::timestamptz) ELSE issued_at END
+              WHERE id = $1`,
+            [id, to, T1],
+          )
+          .then(
+            () => '',
+            (e: unknown) => refusedBy(e),
+          );
+        await owner.query('ROLLBACK');
+        const dbAllows = code === '';
+        if (dbAllows !== canTransitionInvoice(from, to)) {
+          disagreements.push(
+            `${from}->${to}: database ${dbAllows ? 'allows' : `refuses (${code})`}, package ${canTransitionInvoice(from, to) ? 'allows' : 'refuses'}`,
+          );
+        }
+      }
+    }
+    expect(disagreements, 'the database and the package disagree about the invoice lifecycle').toStrictEqual([]);
+  });
+
+  it('refuses a DELETE in every state', async () => {
+    const s = await freshScope();
+    for (const state of SUBSCRIPTION_INVOICE_STATES) {
+      const id = await invoiceIn(state, s);
+      const code = await owner.query(`DELETE FROM p5scratch.subscription_invoices WHERE id = $1`, [id]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+      expect(code, `a ${state} invoice was deleted`).toBe('23000/si_never_deleted');
+    }
+  });
+});
+
+describe('the currency boundary — a grant funds its own currency and no other', () => {
+  /**
+   * ROUND 7. The High-Velocity mission lists "Credit and FX correctness"
+   * among the Phase 5 fixes to preserve, and the author's own challenger
+   * brief had to admit this boundary was asserted in the pure core and
+   * never attacked from the DATABASE side. It is attacked here. There is
+   * no FX CONVERSION anywhere in this slice — a credit is spent in the
+   * currency it was granted in or not at all — so what has to hold is that
+   * no row can be written which spends across currencies.
+   */
+  it('refuses a consumption whose currency differs from the grant it names', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const grantUsd = await insertGrant(owner, 'p5scratch', usd, 1000n, T1);
+    // The INVOICE is EUR, like the consumption. That is deliberate: the
+    // first version of this case invoiced in USD, so `pca_invoice_fk`
+    // refused the row and the case passed without the grant key ever being
+    // consulted. Mutation M27 proved it — removing the currency from
+    // `pca_grant_same_owner_currency_kind` left the case green. Only the
+    // GRANT disagrees here, so only the grant key can answer.
+    const invoiceEur = await createDraftInvoice(owner, 'p5scratch', eur, 1000n);
+    const refusal = await owner
+      .query(
+        `INSERT INTO p5scratch.platform_credit_adjustments
+           (id, tenant_id, business_id, kind, amount_minor, currency, occurred_at, source_ref, reason,
+            applies_to_grant_id, invoice_id)
+         VALUES ($1,$2,$3,'consumption',100,'EUR',$4,'inv-fx','spending a USD grant as EUR',$5,$6)`,
+        [uuid(), usd.tenantId, usd.businessId, T1, grantUsd, invoiceEur],
+      )
+      .then(
+        () => ({ code: '', constraint: '' }),
+        (e: unknown) => ({ code: refusedBy(e), constraint: constraintOf(e) }),
+      );
+    // 23503 is the self-FK: the referenced identity carries the currency,
+    // so a EUR consumption resolves against no USD grant. The constraint is
+    // named because 23503 is the code of every key in this schema.
+    expect(refusal, 'a consumption spent a grant of another currency').toStrictEqual({
+      code: '23503/pca_grant_same_owner_currency_kind',
+      constraint: 'pca_grant_same_owner_currency_kind',
+    });
+  });
+
+  it('refuses a consumption whose currency differs from the invoice it names', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const grantEur = await insertGrant(owner, 'p5scratch', eur, 1000n, T1);
+    const invoiceUsd = await createDraftInvoice(owner, 'p5scratch', usd, 1000n);
+    await owner.query('BEGIN');
+    await owner.query(
+      `INSERT INTO p5scratch.platform_credit_adjustments
+         (id, tenant_id, business_id, kind, amount_minor, currency, occurred_at, source_ref, reason,
+          applies_to_grant_id, invoice_id)
+       VALUES ($1,$2,$3,'consumption',100,'EUR',$4,'inv-fx-2','a EUR consumption against a USD invoice',$5,$6)`,
+      [uuid(), usd.tenantId, usd.businessId, T1, grantEur, invoiceUsd],
+    );
+    // The invoice FK is DEFERRABLE INITIALLY DEFERRED, so the refusal is
+    // due at COMMIT and not at the INSERT. Asserting it at the INSERT would
+    // have reported this boundary as unenforced.
+    const code = await owner.query('COMMIT').then(
+      () => '',
+      (e: unknown) => refusedBy(e),
+    );
+    await owner.query('ROLLBACK').catch(() => undefined);
+    expect(code, 'a consumption named an invoice in another currency').toBe('23503/pca_invoice_fk');
+  });
+
+  it('spends only the currency being invoiced, leaving the other untouched', async () => {
+    const usd = await freshScope('USD');
+    const eur: Scope = { ...usd, currency: 'EUR' };
+    const usdGrant = await insertGrant(owner, 'p5scratch', usd, 700n, T1);
+    const eurGrant = await insertGrant(owner, 'p5scratch', eur, 900n, T1);
+
+    const invoice = await createDraftInvoice(owner, 'p5scratch', usd, 500n);
+    await owner.query('BEGIN');
+    const plan = await finalizeInvoice(owner, 'p5scratch', usd, invoice, 500n, 'inv-usd', T1, { withLock: true });
+    await owner.query('COMMIT');
+
+    expect(plan.application.appliedMinor).toBe(500n);
+    expect(await remainderOf(owner, usdGrant)).toBe(200n);
+    expect(await remainderOf(owner, eurGrant), 'the other currency’s grant was drawn into a USD invoice').toBe(900n);
+  });
+});
+
+describe('what finalization may write, and nothing else', () => {
+  it('refuses the finalization when it also changes a column fixed at composition', async () => {
+    const s = await freshScope();
+    const columns = await columnsOf();
+    const fixed = columns.filter((column) => !FINALIZATION_WRITABLE_COLUMNS.includes(column));
+    // Discovered from the relation rather than listed here: a law that
+    // enumerates its own subjects stops seeing the column somebody adds.
+    expect(fixed.length, 'the fixed-column set came back empty').toBeGreaterThan(4);
+
+    // Each mutation is otherwise LEGAL: the arithmetic stays consistent,
+    // the sibling business exists in the same tenant, the period is free.
+    // That matters more than it looks. The first version of this case wrote
+    // `charge_minor + 1` and left the total alone, so the arithmetic CHECK
+    // refused it and the trigger was never consulted — a mutation that
+    // deleted the trigger's charge clause left the case green. A law that
+    // only ever fires behind another defence has measured the other
+    // defence.
+    const sibling = await freshScope();
+    const values: Readonly<Record<string, string>> = {
+      id: `'${uuid()}'::uuid`,
+      tenant_id: `'${uuid()}'::uuid`,
+      business_id: `'${sibling.businessId}'::uuid`,
+      period_index: `period_index + 1000`,
+      currency: `'EUR'`,
+      charge_minor: `1001`,
+      tax_minor: `tax_minor + 0`,
+    };
+
+    const survived: string[] = [];
+    const refusedByTrigger: string[] = [];
+    for (const column of fixed) {
+      const mutation = values[column];
+      expect(mutation, `no mutation is defined for the fixed column ${column} — the case would silently skip it`).toBeTruthy();
+      if (column === 'tax_minor') {
+        // `tax_minor` cannot be moved at all: the structural-zero CHECK
+        // makes any other value unrepresentable, so the trigger's clause
+        // for it can never be the thing that refuses, and this case does
+        // not claim to prove it.
+        continue;
+      }
+      const id = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+      const total = column === 'charge_minor' ? 601 : 600;
+      await owner.query('BEGIN');
+      const code = await owner
+        .query(
+          `UPDATE p5scratch.subscription_invoices
+              SET state = 'open', issued_at = $2, credit_minor = 400, total_minor = ${total}, ${column} = ${mutation}
+            WHERE id = $1`,
+          [id, T1],
+        )
+        .then(
+          () => '',
+          (e: unknown) => refusedBy(e),
+        );
+      await owner.query('ROLLBACK');
+      if (code === '') survived.push(column);
+      if (code.startsWith('23000/')) refusedByTrigger.push(`${column}=${code}`);
+    }
+    expect(survived, 'a column fixed at composition was changed by a finalization').toStrictEqual([]);
+    // And it is the CONTRACT's trigger that refuses every one of them, not
+    // an accident of some other constraint. `tenant_id` is in the list too,
+    // which is worth knowing: a BEFORE trigger runs before the ownership
+    // FK is evaluated, so the trigger — not the FK — is what reports it.
+    // ROUND 10, the challenger's F-11: each column is paired with the name
+    // of the defence that refused it, not with the SQLSTATE class alone.
+    // 23000 is raised from fifteen sites in this schema, so a bare 23000
+    // here would have been satisfied by any one of them.
+    expect(refusedByTrigger.sort()).toStrictEqual(
+      [
+        'business_id=23000/si_fixed_at_composition',
+        'charge_minor=23000/si_fixed_at_composition',
+        'currency=23000/si_fixed_at_composition',
+        'id=23000/si_fixed_at_composition',
+        'period_index=23000/si_fixed_at_composition',
+        'tenant_id=23000/si_fixed_at_composition',
+      ].sort(),
+    );
+  });
+
+  it('permits the finalization that writes only the credit, the total and the instant', async () => {
+    const s = await freshScope();
+    const id = await createDraftInvoice(owner, 'p5scratch', s, 1000n);
+    // Inside a transaction that is rolled back, because this case is about
+    // the BEFORE trigger and nothing else: the credit it writes has no
+    // consumption rows behind it, and the DEFERRED agreement constraint
+    // would rightly refuse it at COMMIT. That constraint is proved in
+    // `credit-ledger-atomicity.test.ts`; proving it again here by letting
+    // this case fail on it would mean proving neither.
+    await owner.query('BEGIN');
+    await owner.query(`UPDATE p5scratch.subscription_invoices SET state = 'open', issued_at = $2, credit_minor = 400, total_minor = 600 WHERE id = $1`, [
+      id,
+      T1,
+    ]);
+    const r = await owner.query<{ state: string; credit_minor: string; total_minor: string }>(
+      `SELECT state, credit_minor::text, total_minor::text FROM p5scratch.subscription_invoices WHERE id = $1`,
+      [id],
+    );
+    expect(r.rows[0]).toMatchObject({ state: 'open', credit_minor: '400', total_minor: '600' });
+    await owner.query('ROLLBACK');
+  });
+
+  it('freezes the credit and the total once the invoice is past draft', async () => {
+    const s = await freshScope();
+    const id = await invoiceIn('open', s);
+    for (const mutation of ['credit_minor = 1, total_minor = 999', 'issued_at = now()']) {
+      const code = await owner.query(`UPDATE p5scratch.subscription_invoices SET state = 'paid', ${mutation} WHERE id = $1`, [id]).then(
+        () => '',
+        (e: unknown) => refusedBy(e),
+      );
+      expect(code, `a settled invoice accepted: ${mutation}`).toBe('23000/si_only_state_after_draft');
+    }
+  });
+});
+
+describe('the principals this lane proves things about', () => {
+  /**
+   * ROUND 8, the independent challenger's F-05. The evidence ledger claimed
+   * "no RLS claim in this lane is made as a superuser", and the schema owner
+   * was the cluster's bootstrap superuser, which bypasses row-level security
+   * unconditionally. The claim happened to survive — the seven cases that
+   * assert RLS do connect as the application role — but the premise was
+   * false, `FORCE ROW LEVEL SECURITY` constrained nothing for the owner, and
+   * that bypass is what concealed F-01. The principal of a run is part of its
+   * result, so it is now asserted by a case and not described in a document.
+   */
+  it('neither the schema owner nor the invariant principal can bypass row-level security', async () => {
+    const r = await owner.query<{ rolname: string; rolsuper: boolean; rolbypassrls: boolean }>(
+      `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles
+        WHERE rolname IN ('p5owner', 'p5_app', 'p5_invariants') ORDER BY rolname`,
+    );
+    expect(r.rows).toStrictEqual([
+      { rolname: 'p5_app', rolsuper: false, rolbypassrls: false },
+      { rolname: 'p5_invariants', rolsuper: false, rolbypassrls: false },
+      { rolname: 'p5owner', rolsuper: false, rolbypassrls: false },
+    ]);
+  });
+
+  it('the invariant principal may read exactly two relations and write nothing', async () => {
+    // The definer of `assert_invoice_credit_agrees` is the smallest principal
+    // that can state the invariant. Asserted against the catalogue, because
+    // "SELECT only" in a comment is not a privilege.
+    const priv = async (table: string, p: string): Promise<boolean> => {
+      const r = await owner.query<{ ok: boolean }>(`SELECT has_table_privilege('p5_invariants', $1, $2) AS ok`, [table, p]);
+      return r.rows[0]?.ok === true;
+    };
+    for (const table of ['p5scratch.subscription_invoices', 'p5scratch.platform_credit_adjustments']) {
+      expect(await priv(table, 'SELECT'), `${table}: the invariant cannot read what it compares`).toBe(true);
+      for (const write of ['INSERT', 'UPDATE', 'DELETE']) {
+        expect(await priv(table, write), `${table}: the invariant may ${write}`).toBe(false);
+      }
+    }
+    // Not on the remainder table at all, and not able to create anything:
+    // the CREATE needed for the ownership transfer is revoked again.
+    expect(await priv('p5scratch.platform_credit_grant_remainders', 'SELECT')).toBe(false);
+    const schema = await owner.query<{ ok: boolean }>(`SELECT has_schema_privilege('p5_invariants', 'p5scratch', 'CREATE') AS ok`);
+    expect(schema.rows[0]?.ok).toBe(false);
+  });
+
+  it('the invariant function is owned by that principal and is definer-rights', async () => {
+    const r = await owner.query<{ owner: string; security: boolean; config: string[] | null }>(
+      `SELECT pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS security, p.proconfig AS config
+         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'p5scratch' AND p.proname = 'assert_invoice_credit_agrees'`,
+    );
+    expect(r.rows[0]?.owner).toBe('p5_invariants');
+    expect(r.rows[0]?.security, 'the agreement invariant runs with the caller’s rights').toBe(true);
+    // ROUND 12: `public` joined the definer's search path, because the
+    // borrowed relations the invariant reads now live either in the fixture
+    // schema or in `public` (the real-schema lane), and a definer function
+    // with no `public` on its path cannot see the frozen ones.
+    expect(r.rows[0]?.config).toStrictEqual(['search_path=p5scratch, public, pg_temp']);
+  });
+});

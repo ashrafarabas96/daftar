@@ -11,15 +11,17 @@
     "packages/domain-core",
     "packages/accounting",
     "packages/inventory",
+    "packages/billing",
     "packages/shared-contracts",
     "packages/design-system"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/web && npm run test:unit",
+    "test": "npm run test -w @daftar/domain-core && npm run test -w @daftar/accounting && npm run test -w @daftar/shared-contracts && npm run test -w @daftar/inventory && npm run test -w @daftar/billing && npm run test -w @daftar/web && npm run test:unit",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run tests/integration tests/security tests/guards",
     "test:golden": "vitest run tests/golden-regression",
+    "test:db:billing": "P5_SUITE_DIR='packages/billing/test/db' bash packages/billing/test/db/run-db-proof.sh",
     "perf:baseline": "vitest run tests/perf",
     "perf:phase2:s8": "vitest run tests/performance",
     "perf:phase4:s4": "vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts",
