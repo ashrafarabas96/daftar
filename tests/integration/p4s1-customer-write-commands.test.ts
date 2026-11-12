@@ -42,7 +42,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asMember, onboardS3Business, registerActor, type HttpActor } from '../helpers/inventory-commands';
-import { createScratchDb, migrationFiles, type ScratchDb } from '../helpers/scratch-db';
+import { createScratchDb, headMigration, migrationFiles, type ScratchDb } from '../helpers/scratch-db';
 import type { Queryable } from '../helpers/stock-ledger';
 import { changedTables, tableDigest } from '../helpers/table-digest';
 import { appDbUrl, createTestApp, dbUrl, ensurePostgres, ownerPool, resetData, type TestApp } from '../helpers/test-app';
@@ -634,5 +634,56 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
         await c.end();
       }
     });
+  });
+
+  // ── (g) the control for the derived-head guard in the barrier suite ────
+  describe('(g) a scratch database below the complete set is still detected', () => {
+    /**
+     * THE MANDATORY POSITIVE CONTROL for the one line this branch changed in
+     * `tests/security/p4s4-rls-barrier-behaviour.test.ts` — a file that
+     * belongs to the train, changed under a LIMITED permission from the
+     * coordinator.
+     *
+     * That line used to read `!head.startsWith('0086_')` and now reads
+     * `head !== headMigration()`. Deriving the head removes a literal that
+     * goes stale at every migration; it must NOT remove the guard's ability
+     * to refuse a database built short of the complete set. So the red arm is
+     * proved here rather than asserted: a scratch database built deliberately
+     * to an EARLIER head must NOT satisfy the new predicate.
+     *
+     * It lives in this suite and not in the barrier suite because the
+     * permission is for one line in a file this lane does not own, and a
+     * control added there would widen that change.
+     */
+    let shortDb: ScratchDb | undefined;
+
+    afterAll(async () => {
+      await shortDb?.drop();
+    });
+
+    it('headMigration() is the migrations directory own highest file, and a short build fails the predicate', async () => {
+      // PART ONE, which needs no database: the derivation is the directory's
+      // highest file, and it is NOT the stale literal the line used to carry.
+      const files = migrationFiles().map(base);
+      const highest = files[files.length - 1];
+      expect(highest, 'the migrations directory has a highest file').toBeDefined();
+      expect(base(headMigration()), 'headMigration() derives that same file').toBe(highest);
+      expect(highest?.startsWith('0086_'), 'and it is no longer the 0086 the old literal pinned').toBe(false);
+      expect(highest).toBe(MIGRATION);
+
+      // PART TWO, the red arm: a database built to the migration BEFORE the
+      // head. The seed is the `upTo` option, and it is PROVED APPLIED before
+      // its verdict is read (RULE-27) — the applied list ends where asked and
+      // does not contain the head.
+      const short = headBefore();
+      shortDb = await createScratchDb('daftar_l3_short_of_head', { upTo: short });
+      const appliedHead = base(String(shortDb.applied[shortDb.applied.length - 1]));
+      expect(appliedHead, 'the seed applied: the build stopped at the migration before the head').toBe(short);
+      expect(shortDb.applied.map(base), 'and the head itself is absent').not.toContain(highest);
+
+      // THE CLAIM GOES RED: this is exactly the comparison the barrier suite's
+      // `beforeAll` performs, and on a short build it must not hold.
+      expect(appliedHead === base(headMigration()), 'a database below the complete set does NOT satisfy the derived-head guard').toBe(false);
+    }, 420_000);
   });
 });
