@@ -434,14 +434,23 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
      * sentences — the second is the one a merchant's security actually rests
      * on, and only an execution can say it.
      *
-     * WHY `daftar_worker`. It is a runtime principal the schema already
-     * defines (`phase3-runtime-grant-model.json`, `runtimePrincipals`), and
-     * the model records it as holding ZERO `EXECUTE` entries on the whole
-     * Phase 3-and-later surface — measured: `execute.daftar_worker` is an
-     * empty list. So it is the principal whose refusal is most meaningful: a
-     * background worker that could mint a customer would be a path to master
-     * data from a job queue, and the model says it must hold nothing. It is
-     * also NOT `daftar_app`, which is the one role the pattern grants.
+     * WHY `daftar_worker`. It is one of the seven runtime principals the
+     * project's Phase 3 runtime grant model already defines, and that model
+     * records it as holding ZERO `EXECUTE` entries over the whole Phase
+     * 3-and-later surface — measured: its execute list is empty. So it is the
+     * principal whose refusal is most meaningful: a background worker able to
+     * mint a customer would be a path from a job queue into master data, and
+     * the model says it must hold nothing. It is also NOT `daftar_app`, which
+     * is the one role the pattern grants.
+     *
+     * NO FILE IS NAMED IN THIS COMMENT, and that is deliberate rather than
+     * vague. The review-index generator turns a unique basename of ten
+     * characters or more into a COVERAGE needle, so citing a file here would
+     * make the index record this suite as covering it. This suite does not
+     * cover the grant model or the generator; it cites them. A false coverage
+     * claim in a review index is the same defect as a stale count in a
+     * security inventory. The paths are in the commit message, which the index
+     * does not read.
      *
      * The session connects as the superuser and takes the role with
      * `SET LOCAL ROLE` inside a transaction — the `purchase-commands.ts:544`
