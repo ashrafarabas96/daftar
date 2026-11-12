@@ -444,7 +444,7 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 807,
+      "line": 896,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -452,7 +452,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 813,
+      "line": 902,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
@@ -460,7 +460,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 828,
+      "line": 917,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -468,7 +468,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 897,
+      "line": 986,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -476,7 +476,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 900,
+      "line": 989,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -484,7 +484,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 902,
+      "line": 991,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -492,7 +492,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 903,
+      "line": 992,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -500,7 +500,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 914,
+      "line": 1003,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -508,7 +508,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 934,
+      "line": 1023,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -516,7 +516,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 937,
+      "line": 1026,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -3205,7 +3205,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 147,
+      "line": 149,
       "phase": "phase-4",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -3213,7 +3213,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 148,
+      "line": 150,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -3221,7 +3221,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 241,
+      "line": 258,
       "phase": "phase-4",
       "signals": ["node-type"],
       "kind": "mention",
@@ -3229,7 +3229,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 243,
+      "line": 260,
       "phase": "phase-4",
       "signals": ["index-name"],
       "kind": "mention",
@@ -3237,7 +3237,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 244,
+      "line": 261,
       "phase": "phase-4",
       "signals": ["index-cond"],
       "kind": "mention",
@@ -3245,7 +3245,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 400,
+      "line": 417,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3253,7 +3253,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 451,
+      "line": 468,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -3261,7 +3261,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 456,
+      "line": 473,
       "phase": "phase-4",
       "signals": ["explain", "query-plan-json"],
       "kind": "mention",
@@ -3269,7 +3269,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 457,
+      "line": 474,
       "phase": "phase-4",
       "signals": ["query-plan-json"],
       "kind": "assertion",
@@ -3277,7 +3277,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 582,
+      "line": 599,
       "phase": "phase-4",
       "signals": ["index-scan", "index-only-scan", "bitmap-plan"],
       "kind": "mention",
@@ -3285,7 +3285,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 585,
+      "line": 602,
       "phase": "phase-4",
       "signals": ["node-type", "index-name"],
       "kind": "mention",
@@ -3293,7 +3293,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 590,
+      "line": 607,
       "phase": "phase-4",
       "signals": ["index-cond", "index-name"],
       "kind": "assertion",
@@ -3301,7 +3301,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 642,
+      "line": 659,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3309,7 +3309,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 643,
+      "line": 660,
       "phase": "phase-4",
       "signals": ["planning-statistics"],
       "kind": "mention",
@@ -3317,7 +3317,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 645,
+      "line": 662,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3326,7 +3326,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 646,
+      "line": 663,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3335,7 +3335,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 662,
+      "line": 679,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3343,7 +3343,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 668,
+      "line": 685,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -3351,7 +3351,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 681,
+      "line": 698,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -3359,7 +3359,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 698,
+      "line": 715,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3368,7 +3368,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 699,
+      "line": 716,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3377,7 +3377,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 710,
+      "line": 727,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3386,7 +3386,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 712,
+      "line": 729,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -3394,7 +3394,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 725,
+      "line": 742,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3402,7 +3402,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 740,
+      "line": 757,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3410,7 +3410,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 741,
+      "line": 758,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3418,7 +3418,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 742,
+      "line": 759,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -3426,7 +3426,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 770,
+      "line": 787,
       "phase": "phase-4",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -3434,7 +3434,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 772,
+      "line": 789,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3443,7 +3443,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 783,
+      "line": 800,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3452,7 +3452,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 784,
+      "line": 801,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3461,7 +3461,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 788,
+      "line": 805,
       "phase": "phase-4",
       "signals": ["node-type", "seq-scan"],
       "kind": "mention",
@@ -3469,7 +3469,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 804,
+      "line": 821,
       "phase": "phase-4",
       "signals": ["node-type", "seq-scan"],
       "kind": "mention",
@@ -3477,7 +3477,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 806,
+      "line": 823,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -3486,7 +3486,7 @@
     },
     {
       "file": "tests/performance/pos-s3-budgets.test.ts",
-      "line": 859,
+      "line": 876,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
