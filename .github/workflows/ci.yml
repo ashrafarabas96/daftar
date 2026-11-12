@@ -1571,11 +1571,286 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      # P7-CI-GRADLE. `gradle wrapper` runs with the runner image's own Gradle
+      # (9.8.2), and Gradle configures every subproject of the project it is
+      # invoked in before it runs any task -- the `wrapper` task included.
+      # `:app` (com.android.application) survives that; `:offline-kernel`
+      # (com.android.library on AGP 8.7.3) does not, because AGP 8.7.3 is not
+      # supported on Gradle 9.x. So configuration died at `:offline-kernel`
+      # with "compileSdkVersion is not specified" BEFORE the 8.9 wrapper was
+      # written and before `./gradlew` ran at all -- even though that module
+      # does set `compileSdk = 35`. The measured tell: on main the log names
+      # both "8.9" and "9.8.2"; on this branch only "9.8.2".
+      #
+      # The bootstrap therefore runs where there is no project to configure.
+      # An empty directory has no subprojects, so `wrapper` cannot reach the
+      # Android modules; its wrapper files are copied into apps/android and
+      # `./gradlew` builds on 8.9 exactly as before. The build is unchanged:
+      # same tasks, same versions, nothing disabled, no limit raised, no
+      # continue-on-error. The AGP upgrade stays out of this fix because the
+      # defect is in the bootstrap step, not in the module.
       - name: Android lint + unit tests + assemble
         run: |
+          set -euo pipefail
+          boot=$(mktemp -d)
+          # Gradle 9.8.2 refuses a directory that contains no settings file:
+          # "Directory '/tmp/...' does not contain a Gradle build", measured on
+          # run 41630023714. An EMPTY settings file makes it a valid build whose
+          # subproject count is zero, which is precisely the property this
+          # bootstrap needs -- a build Gradle will accept, with nothing in it
+          # for 9.8.2 to configure.
+          : > "$boot/settings.gradle.kts"
+          gradle --project-dir "$boot" wrapper --gradle-version 8.9 --distribution-type bin
+          test -f "$boot/gradlew"
+          cp -R "$boot/gradle" "$boot/gradlew" "$boot/gradlew.bat" apps/android/
+          rm -rf "$boot"
           cd apps/android
-          gradle wrapper --gradle-version 8.9 --distribution-type bin
+          # Positive control for the fix: the wrapper, not the image's 9.8.2,
+          # must be what runs the build. A silent fallback would otherwise
+          # reproduce the very failure this step exists to remove.
+          ./gradlew --version | tee /tmp/gradlew-version.txt
+          grep -qx 'Gradle 8.9' /tmp/gradlew-version.txt
           ./gradlew lint testDebugUnitTest assembleDebug --no-daemon --stacktrace
+      # CI-VARIANT-TASKS. A green Android build is not evidence that a test
+      # ran. `lint testDebugUnitTest assembleDebug` name no project, so Gradle
+      # runs them in whichever subproject HAS them, and it is not an error for
+      # a subproject to lack one -- a module whose tests hang off a task name
+      # this command never says would contribute zero cases and the job would
+      # still be green. That is the hole this step closes, by counting the
+      # cases that the JUnit XML says actually executed, per subproject.
+      #
+      # DECLARED LIMIT, so the gate is not read as more than it is. This
+      # comment used to say the equality assertion was "NOT yet pinned" and
+      # that the only hard assertion was `offline-kernel > 0`. BOTH halves of
+      # that are now stale, and the second was wrong when it was written:
+      #
+      #   - there are two hard assertions below, not one: `kernel > 0` (the
+      #     anti-silence property) AND `kernel == static` (equality against
+      #     the inventory this tree declares);
+      #   - "equality against the static inventory, so a deleted suite turns
+      #     red" is RETRACTED. The inventory is counted from the same tree
+      #     being tested, so deleting a suite lowers both sides together and
+      #     the comparison stays green -- which is exactly what the comment
+      #     under the assertion says, and the two could not both be true.
+      #
+      # What the equality DOES catch is a divergence on one tree: cases that
+      # were declared and did not execute, or two counts that do not name the
+      # same identity (RULE-30). Catching a DELETED suite needs a number
+      # pinned outside the tree, and no such number is claimed here -- naming
+      # the limit rather than implying it is covered.
+      - name: Unit tests actually ran (counted per subproject from JUnit XML)
+        run: |
+          set -euo pipefail
+          cd apps/android
+          # `grep -o` exits 1 when it matches nothing, and under `pipefail`
+          # that would abort the whole step through `set -e` -- so a subproject
+          # with no test XML at all would kill this gate BEFORE the
+          # offline-kernel assertion below was ever reached, turning a missing
+          # result into a red whose message names the wrong thing. The `|| true`
+          # keeps the no-match case a counted zero. Measured: with the kernel's
+          # results directory deleted this step now fails on its own assertion
+          # and says so, and with `:app` empty it still reaches that assertion.
+          count_executed () {
+            local dir="$1"
+            if [ ! -d "$dir" ]; then echo 0; return 0; fi
+            local xml cases skipped
+            xml=$(find "$dir" -name "*.xml" -type f -exec cat {} + 2>/dev/null)
+            cases=$(printf '%s' "$xml" | { grep -o "<testcase" || true; } | wc -l)
+            # A `<testcase>` carrying a `<skipped/>` child was COLLECTED, not executed.
+            # Counting it would let a suite that skipped every case read as a suite
+            # that ran, which is the same silent pass by another route, so the skipped
+            # ones are subtracted and the number this gate compares is the number of
+            # cases that actually executed.
+            skipped=$(printf '%s' "$xml" | { grep -o "<skipped" || true; } | wc -l)
+            echo $(( cases - skipped ))
+          }
+          app=$(count_executed app/build/test-results)
+          kernel=$(count_executed offline-kernel/build/test-results)
+          static=$(grep -rho "@Test" offline-kernel/src/test 2>/dev/null | wc -l)
+          echo "app            executed: $app"
+          echo "offline-kernel executed: $kernel"
+          echo "offline-kernel static @Test occurrences: $static"
+          echo "total executed: $((app + kernel))"
+          if [ "$kernel" -eq 0 ]; then
+            echo "FAIL: offline-kernel executed ZERO cases -- the module's tests"
+            echo "      did not run, which is exactly the silent pass this gate exists for"
+            exit 1
+          fi
+          # Equality, not containment. A count that merely exceeds zero cannot tell a
+          # full run from a partial one: a suite that lost a file, or a class whose
+          # cases were filtered out, still clears a floor. The static inventory is the
+          # count this tree declares, measured at three agreeing identities (bare
+          # `@Test` occurrences, `@Test` at the start of a line, and `@Test` followed
+          # by `fun `), which agreed at 119 on 1f6fb1f6, at 133 on 07e02468 and at
+          # 136 on 544069b6 -- so the executed count must MATCH it. The number is
+          # never written here: it is read from the tree being tested, so a suite
+          # added or removed moves both sides of the comparison together.
+          if [ "$kernel" -ne "$static" ]; then
+            echo "FAIL: offline-kernel executed $kernel of the $static cases this tree declares."
+            echo "      A difference is not noise: either cases did not run, or the two"
+            echo "      counts do not name the same identity. Both need reading, neither"
+            echo "      is cleared by lowering this gate."
+            exit 1
+          fi
+          echo "ok: the executed count equals the declared inventory ($kernel == $static)"
+
+      # DR-84 LINK GATE, JUDGED ON GRADLE'S OWN RESOLVED GRAPH.
+      #
+      # `tests-unit/p7-01-capture-digest-gate.test.ts` refuses the dependency
+      # by reading one build file's lines, and the independent review of the P7
+      # seal file found that too narrow: `project(path = ":offline-kernel")`,
+      # `projects.offlineKernel`, the same call wrapped over several lines, and
+      # a dependency exported through SOME OTHER module all reach the kernel
+      # without that file ever spelling it. The set of spellings is open, so a
+      # text gate cannot close it. Gradle's resolved report can: every one of
+      # them collapses to `project :offline-kernel` at whatever depth the graph
+      # puts it, and that is what this step reads.
+      #
+      # The text gate is kept, not replaced. Two independent gates on one law
+      # is the arrangement that survives one of them being wrong.
+      #
+      # Node 24 is set up here only to RUN the gate: the file is erasable
+      # TypeScript, Node 24 strips the types natively, so this needs no
+      # `npm ci` in a job that has none. The version is asserted rather than
+      # assumed, because an older Node would fail to parse the gate and a
+      # job that cannot run its gate must say so.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: DR-84 link gate - the app does not resolve the offline kernel
+        run: |
+          set -euo pipefail
+          node -v
+          case "$(node -v)" in
+            v24.*) ;;
+            *) echo "FAIL: this gate needs Node 24 (native type stripping)"; exit 1 ;;
+          esac
+          cd apps/android
+          ./gradlew :app:dependencies --no-daemon > "$RUNNER_TEMP/app-deps.txt"
+          # The log carries the measurement, not only an exit code (RULE-29):
+          # how much report there was, and how many project dependencies of ANY
+          # name it holds.
+          wc -l < "$RUNNER_TEMP/app-deps.txt"
+          { grep -c 'project :' "$RUNNER_TEMP/app-deps.txt" || true; }
+          cd "$GITHUB_WORKSPACE"
+          node scripts/p7-dr84-link-graph-gate.ts \
+            --record=docs/decisions/2026-11-04-dr84-capture-digest-gate.md \
+            --report="$RUNNER_TEMP/app-deps.txt" \
+            --settings=apps/android/settings.gradle.kts \
+            --expect=debugRuntimeClasspath \
+            --expect=androidx.core:core-ktx
+      # THE CONTROLS, ONE PER SPELLING (RULE-27). A gate whose refusal has
+      # never been seen is a gate nobody has measured: the plant is proved to
+      # bite before its silence is read as absence. Each form is planted on a
+      # COPY of apps/android outside the repository, Gradle resolves it there,
+      # and this same gate must exit non-zero on the report. A plant that
+      # Gradle refuses to configure is INCONCLUSIVE, which is red here and not
+      # a quietly skipped case.
+      - name: DR-84 link gate - planted negative controls, one per spelling
+        run: |
+          set -euo pipefail
+          GATE="$GITHUB_WORKSPACE/scripts/p7-dr84-link-graph-gate.ts"
+          RECORD="$GITHUB_WORKSPACE/docs/decisions/2026-11-04-dr84-capture-digest-gate.md"
+          plant () {
+            form=$1
+            W="$RUNNER_TEMP/p7-plant-$form"
+            rm -rf "$W"
+            cp -R "$GITHUB_WORKSPACE/apps/android" "$W"
+            rm -rf "$W/app/build" "$W/offline-kernel/build" "$W/.gradle" "$W/build"
+            case "$form" in
+              direct)
+                printf '\ndependencies { implementation(project(":offline-kernel")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              pathnamed)
+                printf '\ndependencies { implementation(project(path = ":offline-kernel")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              multiline)
+                {
+                  echo ''
+                  echo 'dependencies {'
+                  echo '    implementation('
+                  echo '        project('
+                  echo '            ":offline-kernel"'
+                  echo '        )'
+                  echo '    )'
+                  echo '}'
+                } >> "$W/app/build.gradle.kts"
+                ;;
+              typesafe)
+                # Appended, not prepended: Gradle requires `pluginManagement {}`
+                # to be the first block in a settings file, so a line put above
+                # it would fail configuration for a reason that has nothing to
+                # do with this gate.
+                printf '\nenableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")\n' \
+                  >> "$W/settings.gradle.kts"
+                printf '\ndependencies { implementation(projects.offlineKernel) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              transitive)
+                # The case no build-file text gate can ever see: `:app` names
+                # `:relay`, and `:relay` exports the kernel.
+                mkdir -p "$W/relay"
+                {
+                  echo 'plugins {'
+                  echo '    id("com.android.library")'
+                  echo '    id("org.jetbrains.kotlin.android")'
+                  echo '}'
+                  echo 'android {'
+                  echo '    namespace = "app.daftar.relay"'
+                  echo '    compileSdk = 35'
+                  echo '    defaultConfig { minSdk = 26 }'
+                  echo '    compileOptions {'
+                  echo '        sourceCompatibility = JavaVersion.VERSION_17'
+                  echo '        targetCompatibility = JavaVersion.VERSION_17'
+                  echo '    }'
+                  echo '}'
+                  echo 'dependencies { api(project(":offline-kernel")) }'
+                } > "$W/relay/build.gradle.kts"
+                printf '\ninclude(":relay")\n' >> "$W/settings.gradle.kts"
+                printf '\ndependencies { implementation(project(":relay")) }\n' \
+                  >> "$W/app/build.gradle.kts"
+                ;;
+              *)
+                echo "FAIL: unknown planted form '$form'"; exit 1 ;;
+            esac
+            out="$RUNNER_TEMP/plant-$form.txt"
+            if ! (cd "$W" && ./gradlew :app:dependencies --no-daemon > "$out" 2>&1); then
+              echo "CONTROL INCONCLUSIVE: Gradle refused the planted '$form' build."
+              echo "  A control whose plant never configured proves nothing, so this"
+              echo "  is red and not a skipped case."
+              tail -40 "$out" || true
+              exit 1
+            fi
+            # The code must be 1 (REFUSED) and nothing else. `if ! node ...` would
+            # also accept 2 (UNUSABLE), which is the code for "the probe did not
+            # work" -- so a plant whose report never resolved would have printed
+            # `control ok` and proved nothing. An independent review named this on
+            # 576b32fb: the control asserted non-zero, while the claim it is quoted
+            # for is refusal (RULE-27).
+            set +e
+            node "$GATE" --record="$RECORD" --report="$out" \
+              --settings="$W/settings.gradle.kts" --expect=debugRuntimeClasspath
+            code=$?
+            set -e
+            if [ "$code" -eq 0 ]; then
+              echo "CONTROL FAILED: the gate PASSED a graph that carries the kernel"
+              echo "                through the '$form' spelling."
+              exit 1
+            fi
+            if [ "$code" -ne 1 ]; then
+              echo "CONTROL INCONCLUSIVE: the gate exited $code, not 1 (REFUSED), on"
+              echo "  the planted '$form'. A report the gate could not read does not"
+              echo "  demonstrate refusal, so this is red and not a passing control."
+              exit 1
+            fi
+            echo "control ok: the gate refused the planted '$form' with exit 1"
+          }
+          for form in direct pathnamed multiline typesafe transitive; do
+            plant "$form"
+          done
+          echo "DR84-LINK-GRAPH CONTROLS: 5 of 5 planted spellings were refused"
 
   # -------------------------------------------------------------------------
   # 4b. Real-browser gate (Phase 3 corrective §8, TD-06). The production web
@@ -1922,3 +2197,363 @@ jobs:
           name: secret-history-scan
           path: release/secret-history-scan.json
           if-no-files-found: ignore
+
+  red-proofs:
+    needs: workspaces
+    # DR-85 item 4, and the blocker it closes: the independent review found that
+    # card P7-01's acceptance criterion -- "N of N caught by name against a
+    # floor MEASURED from the guard itself" -- had only half of itself met. The
+    # floor is measured (`tests-unit/p7-01-offline-kernel-promotion.test.ts`
+    # counts 105 `Proof(` rows out of the harness's own source, reads its 102
+    # literal, counts 100 static arm sites and says in words that 100 is a
+    # FLOOR and not the verdict). The other half was never met: `red_proofs`
+    # had zero mentions anywhere in this file -- measured with a positive
+    # control, `runs-on` at 6 hits over 86,021 bytes, so that zero was a
+    # measurement and not an empty probe.
+    #
+    # And it was not an oversight, it was an impossibility. The harness copies
+    # `ROOT/src` and `ROOT/test` (red_proofs.py:4571) and `run-tests.sh`
+    # compiles `"$SRC"/app/daftar/offline/*.kt`, which is the PRE-promotion
+    # layout. P7-01 moved the module to the Gradle convention, so there is no
+    # `offline-kernel/test` at all -- measured, `git ls-tree` of the module
+    # lists exactly `.gitignore README.md build.gradle.kts src tools`. Run it
+    # as it stands and `copytree` raises before a single proof is reached.
+    #
+    # The obvious repair -- teach the harness the new paths -- is refused here:
+    # `tools/red_proofs.py` and `tools/run-tests.sh` are two of the 27 files
+    # whose sha256 IS the proof that this promotion was a move and not a
+    # rewrite (654521c1..., dd79f4fa...). Editing them would buy this job by
+    # destroying the evidence it exists to complete.
+    #
+    # So the tree is shimmed instead, outside the repository: `tools/` copied
+    # byte-for-byte, and `src/` and `test/` built from `src/main/java` and
+    # `src/test/java`. The harness derives ROOT from its own file's location
+    # (red_proofs.py:167-168), so a copy of `tools/` one level under the shim
+    # root is all it takes. No pinned byte is touched, and the step proves that
+    # by re-hashing both files against their pins before running anything.
+    runs-on: ubuntu-latest
+    # Not a RAISED limit: this job did not exist, and GitHub's default is 360
+    # minutes, so naming 120 TIGHTENS it. The run cost is genuinely unmeasured
+    # -- 105 proofs, each compiling and running the Kotlin suite, parallel over
+    # `os.cpu_count()`, and the host this card was executed on has no JDK -- so
+    # the first green run here is also the first measurement of it.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: The two pinned harness files are unmodified before anything runs
+        working-directory: apps/android/offline-kernel
+        run: |
+          set -euo pipefail
+          # The pins come from tests-unit/p7-01-offline-kernel-promotion.test.ts,
+          # which derives them from `git cat-file blob 9ae37881:prep/phase7/...`.
+          # Read here too, because this job is about to COPY these files and a
+          # copy of the wrong bytes would measure the wrong harness.
+          echo '654521c108b483e776659d348ca3855c3206f2c24007669eb06ee2dc55b3f090  tools/red_proofs.py' > /tmp/p7-pins
+          echo 'dd79f4fae41ace54f2d2c2e1db817680471d78e973061856b76a2d355b68737a  tools/run-tests.sh' >> /tmp/p7-pins
+          sha256sum -c /tmp/p7-pins
+
+      - name: Stage the shim tree the harness's own layout expects
+        run: |
+          set -euo pipefail
+          SHIM="$RUNNER_TEMP/p7-shim"
+          rm -rf "$SHIM"
+          mkdir -p "$SHIM"
+          M=apps/android/offline-kernel
+          cp -R "$M/tools" "$SHIM/tools"
+          # The four tool files are committed 100644 — measured, `git ls-tree`
+          # of the module shows no 755 among them — so the self-test hits a
+          # PermissionError the moment it execs `red-proofs.sh`. That is a
+          # FOURTH reason this harness had never run, found by running it.
+          # Fixed on the COPY: the committed mode is left exactly as it is,
+          # and the 27 sha256 pins hash CONTENTS, which a mode never changes.
+          chmod +x "$SHIM"/tools/*.sh
+          cp -R "$M/src/main/java" "$SHIM/src"
+          cp -R "$M/src/test/java" "$SHIM/test"
+          # The shim must hold the SAME harness bytes, or this job measures a
+          # copy of something else.
+          cmp "$M/tools/red_proofs.py" "$SHIM/tools/red_proofs.py"
+          cmp "$M/tools/run-tests.sh" "$SHIM/tools/run-tests.sh"
+          # And the layout the harness reaches for has to be there, by name,
+          # before a run is allowed to report anything.
+          test -d "$SHIM/src/app/daftar/offline"
+          test -d "$SHIM/test/app/daftar/offline"
+          echo "shim kernel files:  $(find "$SHIM/src" -name '*.kt' | wc -l)"
+          echo "shim test files:    $(find "$SHIM/test" -name '*.kt' | wc -l)"
+          echo "SHIM=$SHIM" >> "$GITHUB_ENV"
+
+      - name: Provision the Kotlin toolchain by verified digest, so the harness never downloads
+        run: |
+          set -euo pipefail
+          # WHY THIS STEP EXISTS, measured and not assumed. `tools/toolchain.sh`
+          # at lines 24-25 fetches with
+          #     curl ... --cacert /root/.ccr/ca-bundle.crt
+          # a path that exists on no runner, and not on the authoring host
+          # either -- measured, `~/.ccr` is absent there too -- so the fetch
+          # dies with `option --cacert: is badly used here` and the harness
+          # prints BASELINE IS NOT GREEN before one proof is read. Which is
+          # exactly what the first run of this job measured.
+          #
+          # That line is INHERITED, not introduced by this lane: `git log -S`
+          # over all refs puts it in 764671fd (2026-10-07), the Phase 7 prep
+          # commit, and 53349db1 only moved it. So the promotion stays a move.
+          #
+          # And it cannot be repaired in place: toolchain.sh is one of the 27
+          # sha256-pinned files (f002692b...) whose bytes ARE the proof that
+          # P7-01 moved this module rather than rewriting it. So the download
+          # is never REACHED instead. toolchain.sh skips its own fetch when
+          # $KOTLINC is executable and $JUNIT_JAR exists, both derived from
+          # P7_TOOLS_DIR, whose default is ${TMPDIR:-/tmp}/daftar-p7-kotlin --
+          # and the harness's own banner named /tmp/daftar-p7-kotlin, which is
+          # why that is the path provisioned here rather than a guessed one.
+          #
+          # This also CLOSES the no-checksum card rather than inheriting it:
+          # toolchain.sh verifies nothing it downloads, while every byte below
+          # is checked against a digest pinned in this file AND against the
+          # publisher's own sidecar read independently on this runner. A pin
+          # forged where it was written would disagree with the sidecar and
+          # fail here loudly, instead of being accepted in silence.
+          KOTLIN_SHA=0352c0a45bd22f80f6b26e485cd04da8047baa5de54865281fb9f89a4a7bcf2a
+          JUNIT_SHA=a1de557821293ce903c213c694165fff532cf92081bac4238b9e05b35f04f43f
+          D=/tmp/daftar-p7-kotlin
+          KZ=https://github.com/JetBrains/kotlin/releases/download/v2.0.21/kotlin-compiler-2.0.21.zip
+          JU=https://repo1.maven.org/maven2/org/junit/platform/junit-platform-console-standalone/1.10.2/junit-platform-console-standalone-1.10.2.jar
+          mkdir -p "$D/dl"
+          ZIP="$D/dl/kotlin-compiler-2.0.21.zip"
+          JAR="$D/dl/junit-platform-console-standalone-1.10.2.jar"
+          # Maven Central rate-limits (429 observed on this project before),
+          # so each fetch retries with backoff rather than being called
+          # unreachable on one answer.
+          get() { curl -sS -L --fail --retry 5 --retry-all-errors --retry-delay 3 -o "$1" "$2"; }
+          get "$ZIP" "$KZ"
+          get "$ZIP.sha256" "$KZ.sha256"
+          get "$JAR" "$JU"
+          get "$JAR.sha256" "$JU.sha256"
+
+          # Against the pins written above.
+          echo "$KOTLIN_SHA  $ZIP" | sha256sum -c -
+          echo "$JUNIT_SHA  $JAR" | sha256sum -c -
+          # And against each publisher's own digest, read here and now. An
+          # EMPTY sidecar is not agreement, so each is measured non-empty
+          # before it is compared -- a blank read would otherwise be trimmed
+          # to nothing and a `test` on nothing is how a probe passes vacuously.
+          kz=$(tr -d " \n\r" < "$ZIP.sha256" | cut -c1-64)
+          ju=$(tr -d " \n\r" < "$JAR.sha256" | cut -c1-64)
+          echo "publisher sidecars: kotlin=$kz junit=$ju"
+          test -n "$kz"
+          test -n "$ju"
+          test "$kz" = "$KOTLIN_SHA"
+          test "$ju" = "$JUNIT_SHA"
+
+          unzip -q -o "$ZIP" -d "$D"
+          # The five paths the harness probes BY NAME in its own banner, each
+          # readable before it runs. Named one by one, because a directory
+          # that exists says nothing about the file inside it.
+          for f in kotlinc/bin/kotlinc \
+                   kotlinc/lib/kotlin-stdlib.jar \
+                   kotlinc/lib/kotlin-test.jar \
+                   kotlinc/lib/kotlin-test-junit5.jar \
+                   dl/junit-platform-console-standalone-1.10.2.jar; do
+            test -r "$D/$f" || { echo "MISSING: $D/$f"; exit 1; }
+          done
+          test -x "$D/kotlinc/bin/kotlinc"
+          # A readable file is not a working compiler, and the JDK this job
+          # installed is not proven by its own install step either.
+          "$D/kotlinc/bin/kotlinc" -version
+      - name: Red proofs — the harness runs, and its own verdict is read
+        run: |
+          set -euo pipefail
+          cd "$SHIM/tools"
+          # `-I` is not optional: the harness refuses by name
+          # (REFUSED-P7-HARNESS-NOT-ISOLATED) when started without it, because
+          # it spawns copies of itself and a shared sys.path would let the
+          # subject of a measurement edit the measurer.
+          set +e
+          python3 -I red_proofs.py | tee /tmp/p7-red-proofs.log
+          rc=${PIPESTATUS[0]}
+          set -e
+          # The exit code is read from the PROCESS, never from the tail of the
+          # pipe, which is this programme's first binding rule.
+          echo "harness exit = $rc"
+          # Before the exit code is judged: the banner must not report an
+          # UNREADABLE tool. That is how the provisioned path is PROVEN to be
+          # the path this harness probes, instead of assumed from one earlier
+          # run's output -- and the banner line itself is required present, so
+          # a log that never printed it cannot read as agreement.
+          #
+          # The probe is the banner ROW, not the word. A bare `grep UNREADABLE`
+          # also matches proof [17]'s own name,
+          # P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED, which is how this guard
+          # failed run 41839813663 while the harness itself exited 0 and
+          # printed its verdict. The banner prints one row per file, two spaces
+          # then the absolute path, then either `sha256 <hex>` or
+          # `UNREADABLE (<reason>)`; and `P7 TOOLCHAIN UNDERIVABLE` is the
+          # second way the banner reports a toolchain it could not read at all.
+          grep -q "^P7 TOOLCHAIN (MEASURED" /tmp/p7-red-proofs.log
+          if grep -q "^P7 TOOLCHAIN UNDERIVABLE" /tmp/p7-red-proofs.log; then
+            echo "the harness could not name the files it compiled with:"
+            grep -n "^P7 TOOLCHAIN UNDERIVABLE" /tmp/p7-red-proofs.log
+            exit 1
+          fi
+          BANNER_UNREADABLE='^  /.* UNREADABLE \('
+          if grep -qE "$BANNER_UNREADABLE" /tmp/p7-red-proofs.log; then
+            echo "the harness probed a toolchain path this job did not provision:"
+            grep -nE "$BANNER_UNREADABLE" /tmp/p7-red-proofs.log
+            exit 1
+          fi
+          # A tightened matcher reading green must be proved able to read red,
+          # or the tightening is how the guard was disabled. Both arms, on
+          # files of this step's own making: the banner row it must catch, and
+          # the proof name it must not.
+          printf '%s\n' '  /tmp/daftar-p7-kotlin/kotlinc/bin/kotlinc UNREADABLE (No such file or directory)' \
+            > /tmp/p7-banner-arm-red.log
+          grep -qE "$BANNER_UNREADABLE" /tmp/p7-banner-arm-red.log
+          printf '%s\n' '  [17] P7-L14-AN-UNREADABLE-QUEUE-ROW-IS-REFUSED' \
+            > /tmp/p7-banner-arm-green.log
+          if grep -qE "$BANNER_UNREADABLE" /tmp/p7-banner-arm-green.log; then
+            echo "the row matcher still matches a proof NAME, so it is not a row matcher"
+            exit 1
+          fi
+          echo "banner matcher: armed on a row, blind to a proof name"
+          test "$rc" -eq 0
+
+          # An exit code is not a presence check. The verdict sentence is
+          # parsed, and the two totals it prints are compared against the
+          # numbers the committed inventory test derives from the harness's own
+          # source: 105 proofs, 102 guard branches. A harness that silently
+          # shrank its own table would still exit 0.
+          verdict=$(grep -oE 'ALL [0-9]+ RED PROOFS SATISFIED over a [0-9]+-case green baseline, with [0-9]+ of [0-9]+ guard branches armed\.' /tmp/p7-red-proofs.log)
+          test -n "$verdict"
+          echo "verdict: $verdict"
+          proofs=$(echo "$verdict" | sed -E 's/^ALL ([0-9]+) .*/\1/')
+          armed=$(echo "$verdict" | sed -E 's/.*with ([0-9]+) of ([0-9]+) guard branches armed\./\1 \2/')
+          echo "proofs=$proofs armed=$armed"
+          test "$proofs" = "105"
+          test "$armed" = "102 102"
+
+      - name: Negative control — break the detector 47 proofs rest on
+        run: |
+          set -euo pipefail
+          CTRL="$RUNNER_TEMP/p7-shim-broken"
+          rm -rf "$CTRL"
+          cp -R "$SHIM" "$CTRL"
+          TARGET="$CTRL/test/app/daftar/offline/QueueModelCheckTest.kt"
+
+          # WHICH suite, and why this one: every Proof plants a find/replace in
+          # a KERNEL source and names the sentence it expects to go red. The
+          # harness names `QueueModelCheckTest` 47 times -- measured -- more
+          # than every other suite in it put together, so it is the detector
+          # most of the table depends on. Neuter it and those proofs can no
+          # longer go red. A harness that still reports all 105 satisfied
+          # against a suite that cannot fail is not measuring the suite, and a
+          # green run of the step above would then prove nothing.
+          #
+          # DR-55: the plant is proven APPLIED before its result is read. A
+          # substitution that matched nothing would otherwise be read as a
+          # passing control -- worse than a failure, because it is read as a
+          # measurement.
+          # WHICH names, and why `fail` is NOT among them: the four assertion
+          # names are DETECTORS -- they read a value and refuse it -- so
+          # swallowing them hides a planted defect, which is the whole point.
+          # `fail(...)` is not a detector. It is an unconditional refusal
+          # reached only on a path the suite has already decided is wrong, and
+          # this suite deliberately exercises such a path: `judged()` at
+          # QueueModelCheckTest.kt:858 calls it, and an arm above the walk
+          # requires that refusal and catches its `AssertionError`. Swallowing
+          # it therefore does not blind anything -- it changes CONTROL FLOW.
+          # Measured on run 41897923336, where a sink that threw
+          # IllegalStateException escaped that arm and left the blinded
+          # baseline at 138 of 139: the control reported INCONCLUSIVE by its
+          # own second arm, which is the arm working. So `fail` stays live, by
+          # measurement rather than by omission -- the count below says so.
+          before=$(sha256sum "$TARGET" | cut -d' ' -f1)
+          sed -i -E 's/\b(assertEquals|assertNotEquals|assertTrue|assertFalse)\(/sank_\1(/g' "$TARGET"
+          after=$(sha256sum "$TARGET" | cut -d' ' -f1)
+          echo "plant: $before -> $after"
+          test "$before" != "$after"
+
+          # Applied by COUNT as well as by hash: the detector sites measured in
+          # this suite must all be gone and the sinks there in their place. A
+          # hash change on its own could come from the appended block below
+          # with every assertion left intact. The identity of the count, since
+          # `grep -c` counts LINES: 109 detector lines and 109 detector
+          # occurrences, 4 and 4 for `fail(` -- measured, and equal here, so
+          # the two readings cannot be confused for one another.
+          live=$(grep -cE '(^|[^_[:alnum:]])(assertEquals|assertNotEquals|assertTrue|assertFalse)\(' "$TARGET" || true)
+          sunk=$(grep -cE 'sank_(assertEquals|assertNotEquals|assertTrue|assertFalse)\(' "$TARGET" || true)
+          kept=$(grep -cE '(^|[^_[:alnum:]])fail\(' "$TARGET" || true)
+          echo "live detector lines after the plant = $live ; sink lines = $sunk ; fail() left live = $kept"
+          test "$live" -eq 0
+          test "$sunk" -gt 0
+          # Left live DELIBERATELY, and a plant that swallowed it too would be
+          # caught here rather than two arms later.
+          test "$kept" -gt 0
+
+          cat >> "$TARGET" <<'KOTLIN'
+
+          // Negative control only. Never committed to the module: this file lives in a
+          // throw-away copy under RUNNER_TEMP. These swallow what the suite used to
+          // assert, so a planted defect cannot turn it red.
+          //
+          // The signatures MIRROR kotlin.test's, parameter for parameter, and that
+          // is not tidiness. Written as `vararg ignored: Any?` they did not
+          // type-check: `assertEquals(emptyList(), offenders, "...")` has nothing
+          // to infer its element type from once the expected argument is widened
+          // to `Any?`, so run 41867258780 reported `P7 SUITE DID NOT COMPILE` and
+          // the harness refused at `BASELINE IS NOT GREEN` without reading one
+          // proof. That refusal is honest -- a harness must not call a tree it
+          // cannot compile green -- but it is NOT this control's claim. A control
+          // that passes by a route other than the property it names is read as a
+          // measurement of that property, which is the failure mode the arms
+          // below exist to refuse.
+          private fun <T> sank_assertEquals(expected: T, actual: T, message: String? = null) {}
+          private fun <T> sank_assertNotEquals(illegal: T, actual: T, message: String? = null) {}
+          private fun sank_assertTrue(actual: Boolean, message: String? = null) {}
+          private fun sank_assertFalse(actual: Boolean, message: String? = null) {}
+          KOTLIN
+
+          cd "$CTRL/tools"
+          set +e
+          python3 -I red_proofs.py > /tmp/p7-red-proofs-control.log 2>&1
+          rc=$?
+          set -e
+          echo "harness exit on the broken tree = $rc"
+          tail -40 /tmp/p7-red-proofs-control.log
+          if [ "$rc" -eq 0 ]; then
+            echo "NEGATIVE CONTROL FAILED: the harness stayed green with its main"
+            echo "detector neutered, so a green run of the step above proves nothing."
+            exit 1
+          fi
+
+          # A non-zero exit is necessary and NOT sufficient, measured: on run
+          # 41867258780 this step passed on `rc=1` produced by a COMPILE error,
+          # so the blinded suite never ran and no proof was ever asked to go
+          # red. The three arms below name the route the refusal has to take.
+          if grep -q "P7 SUITE DID NOT COMPILE" /tmp/p7-red-proofs-control.log; then
+            echo "NEGATIVE CONTROL INCONCLUSIVE: the plant broke the build, not the"
+            echo "detector, so this step measured the compiler and not the harness."
+            grep -n "P7 SUITE DID NOT COMPILE" -A 6 /tmp/p7-red-proofs-control.log
+            exit 1
+          fi
+          if grep -q "^BASELINE IS NOT GREEN" /tmp/p7-red-proofs-control.log; then
+            echo "NEGATIVE CONTROL INCONCLUSIVE: the harness refused before reading a"
+            echo "proof, so the blinded suite was never exercised."
+            exit 1
+          fi
+          grep -q "^BASELINE: exit 0" /tmp/p7-red-proofs-control.log
+          # And the refusal must be the one this control claims: proofs that can
+          # no longer go red, named as such by the harness itself.
+          grep -qE "^RED PROOFS FAILED \([0-9]+ of [0-9]+\):" /tmp/p7-red-proofs-control.log
+          grep -q "STAYED GREEN" /tmp/p7-red-proofs-control.log
+          echo "negative control: the blinded suite compiled, ran green, and the"
+          echo "harness refused it by name — $(grep -oE '^RED PROOFS FAILED \([0-9]+ of [0-9]+\)' /tmp/p7-red-proofs-control.log)"
+
+          # The subject tree is untouched by any of this -- the control ran on a
+          # copy -- and the pinned bytes are re-measured to say so rather than
+          # to assume it.
+          cd "$GITHUB_WORKSPACE/apps/android/offline-kernel"
+          sha256sum -c /tmp/p7-pins
