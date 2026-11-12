@@ -139,11 +139,16 @@ class Sneaky(private val db: Transactional) {
   it('the probe notices a declared name that stopped opening a transaction', () => {
     // Positive control for the OTHER direction, which containment would miss:
     // `purge` keeps its declaration but loses its transaction.
+    // Anchored on what is unique to `purge` (it deletes), not on its header: since
+    // P7-LINK-01B its transaction sits inside the write gate, so the line after the
+    // header is no longer `db.begin()`.
     const planted = persistence().replace(
-      `    fun purge(idempotencyKey: String) {
-        db.begin()`,
-      `    fun purge(idempotencyKey: String) {
-        db.markSuccessful()`,
+      `            db.begin()
+            try {
+                db.delete(idempotencyKey)`,
+      `            db.markSuccessful()
+            try {
+                db.delete(idempotencyKey)`,
     );
     expect(planted).not.toBe(persistence()); // the plant landed
     const declared = [...declaredWritePoints(planted)].sort();
@@ -168,6 +173,46 @@ class Sneaky(private val db: Transactional) {
       if (mark === -1 || lastWrite === -1 || mark < lastWrite) wrong.push(name);
     }
     expect(wrong).toEqual([]);
+  });
+
+  /**
+   * P7-LINK-01B. `Transactional` promises no isolation level, so a write point that
+   * reads, changes and writes a row with no lock can lose an update: two callers
+   * both read `attempts = n` and both write `n + 1`. Measured on the runner before
+   * the remedy (the Kotlin case in `UnserialisedWritePointsTest`). The gate must be
+   * taken BEFORE `db.begin()`, inline in the function that begins -- a helper would
+   * empty it of its transaction and weaken `ATOMIC_WRITE_POINTS` to containment.
+   */
+  it('takes the write gate before it begins, in every write point', () => {
+    const check = (source: string): { checked: number; ungated: string[] } => {
+      const declared = new Set(declaredWritePoints(source));
+      const points = functionBodies(source).filter(({ name }) => declared.has(name));
+      const ungated = points
+        .filter(({ body }) => {
+          const gate = body.indexOf('synchronized(WRITE_GATE)');
+          const begin = body.indexOf('db.begin()');
+          return gate === -1 || begin === -1 || gate > begin;
+        })
+        .map(({ name }) => name);
+      return { checked: points.length, ungated };
+    };
+
+    // Positive control FIRST: the probe must see all six declared points, or an empty
+    // `ungated` would mean it found nothing to look at.
+    const real = check(persistence());
+    expect(real.checked).toBe(6);
+    expect(real.ungated).toEqual([]);
+
+    // Negative control: the gate removed from ONE point is reported by name, and the
+    // plant is proved to have landed before its result is read.
+    const planted = persistence().replace(
+      `    fun recordSendAttempt(idempotencyKey: String): StoredRow {
+        return synchronized(WRITE_GATE) {`,
+      `    fun recordSendAttempt(idempotencyKey: String): StoredRow {
+        return run {`,
+    );
+    expect(planted).not.toBe(persistence());
+    expect(check(planted).ungated).toEqual(['recordSendAttempt']);
   });
 
   it('ends the transaction in a finally, in every write point', () => {

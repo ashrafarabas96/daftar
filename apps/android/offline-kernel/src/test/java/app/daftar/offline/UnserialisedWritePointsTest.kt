@@ -11,13 +11,14 @@ import kotlin.test.assertTrue
  * CARD P7-LINK-01B -- the write points that take no lock, and the attempt the
  * counter loses because of it.
  *
- * Why this suite exists, and why it is RED first. `EncryptedQueueStore` holds
- * exactly one lock: `synchronized(WRITE_GATE)` in `captureWithKey`. Measured,
- * not assumed -- `WRITE_GATE` appears on three lines of `Persistence.kt`, one
- * declaration and one use, and the third is the comment saying so. Five other
- * functions write: `markReleased`, `recordSendAttempt`, `recordOutcome`,
- * `recordProcessDeath` and `purge`. Each of them is a read-modify-write across
- * a transaction whose isolation `Transactional` never promised.
+ * Why this suite exists, and why it was RED first. Before the remedy,
+ * `EncryptedQueueStore` held exactly one lock: `synchronized(WRITE_GATE)` in
+ * `captureWithKey`. Measured, not assumed -- `WRITE_GATE` appeared at one use
+ * site in `Persistence.kt`. Five other functions write: `markReleased`,
+ * `recordSendAttempt`, `recordOutcome`, `recordProcessDeath` and `purge`. Each
+ * of them was a read-modify-write across a transaction whose isolation
+ * `Transactional` never promised. All six now take the gate; this suite is the
+ * outcome-level proof, and `p7-02-atomic-write-points` is the structural one.
  *
  * `recordSendAttempt` is where that costs a number the device acts on:
  *

@@ -301,18 +301,15 @@ class EncryptedQueueStore(
         // objects over one database are the same disk, and an instance lock
         // would serialise the wrong thing.
         //
-        // AND IT COVERS THIS WRITE POINT ONLY, measured: `WRITE_GATE` appears
-        // at one site in this file. `markReleased`, `recordSendAttempt`,
-        // `recordOutcome`, `recordProcessDeath` and `purge` do NOT take it, so
-        // they are still read-modify-writes resting on an isolation level
-        // `Transactional` does not promise -- `recordSendAttempt` most
-        // visibly, where two callers can both read `attempts = n` and both
-        // write `n + 1`, losing an attempt from the very counter the backoff
-        // table reads. That is card P7-LINK-01B, raised and not fixed here:
-        // widening the gate to every write point changes the kernel's
-        // concurrency shape well beyond one key's freeze, and this card's law
-        // is the freeze. Nothing in this comment should be read as ordering
-        // those points against this one; it does not.
+        // AND IT NOW COVERS EVERY WRITE POINT, which it did not when this
+        // comment was first written. Card P7-LINK-01B, measured on the runner
+        // before the remedy: `recordSendAttempt` read the row, added one to
+        // `attempts` and wrote it back with no lock, so two callers both read
+        // `attempts = n` and both wrote `n + 1`, losing an attempt from the
+        // very counter the backoff table reads. `markReleased`, `recordOutcome`,
+        // `recordProcessDeath` and `purge` had the same shape. All six now take
+        // this one gate, each inline, and `p7-02-atomic-write-points` asserts
+        // it for every declared point, with a plant that removes it from one.
         // And it is held INLINE, not in a helper. `ATOMIC_WRITE_POINTS` is
         // checked by equality against the functions that contain `begin()`, so
         // factoring this read-modify-write into a private helper would empty
@@ -358,7 +355,7 @@ class EncryptedQueueStore(
 
     private companion object {
         /**
-         * The process-wide capture gate. A plain object, because what is needed
+         * The process-wide write gate. A plain object, because what is needed
          * is mutual exclusion and nothing else: no fairness, no reentrancy
          * beyond the JVM monitor's own, and no timeout -- a capture that cannot
          * take the gate is waiting on another capture, which is microseconds of
@@ -369,15 +366,17 @@ class EncryptedQueueStore(
 
     /** Released by the merchant for sending: CAPTURED becomes QUEUED. */
     fun markReleased(idempotencyKey: String): StoredRow {
-        db.begin()
-        try {
-            val current = readUnderTransaction(idempotencyKey)
-            val next = current.copy(state = OperationState.QUEUED)
-            db.write(next)
-            db.markSuccessful()
-            return next
-        } finally {
-            db.end()
+        return synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                val current = readUnderTransaction(idempotencyKey)
+                val next = current.copy(state = OperationState.QUEUED)
+                db.write(next)
+                db.markSuccessful()
+                next
+            } finally {
+                db.end()
+            }
         }
     }
 
@@ -387,32 +386,36 @@ class EncryptedQueueStore(
      * retry the backoff schedule cannot account for.
      */
     fun recordSendAttempt(idempotencyKey: String): StoredRow {
-        db.begin()
-        try {
-            val current = readUnderTransaction(idempotencyKey)
-            val next = current.copy(
-                state = OperationState.IN_FLIGHT,
-                attempts = current.attempts + 1,
-            )
-            db.write(next)
-            db.markSuccessful()
-            return next
-        } finally {
-            db.end()
+        return synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                val current = readUnderTransaction(idempotencyKey)
+                val next = current.copy(
+                    state = OperationState.IN_FLIGHT,
+                    attempts = current.attempts + 1,
+                )
+                db.write(next)
+                db.markSuccessful()
+                next
+            } finally {
+                db.end()
+            }
         }
     }
 
     /** The server's truth, once there is one: SYNCED or NEEDS_ATTENTION. */
     fun recordOutcome(idempotencyKey: String, state: OperationState): StoredRow {
-        db.begin()
-        try {
-            val current = readUnderTransaction(idempotencyKey)
-            val next = current.copy(state = state)
-            db.write(next)
-            db.markSuccessful()
-            return next
-        } finally {
-            db.end()
+        return synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                val current = readUnderTransaction(idempotencyKey)
+                val next = current.copy(state = state)
+                db.write(next)
+                db.markSuccessful()
+                next
+            } finally {
+                db.end()
+            }
         }
     }
 
@@ -423,26 +426,30 @@ class EncryptedQueueStore(
      * other — which is exactly why it is in the declared list.
      */
     fun recordProcessDeath(idempotencyKey: String): StoredRow {
-        db.begin()
-        try {
-            val current = readUnderTransaction(idempotencyKey)
-            val next = current.copy(state = OperationState.UNKNOWN_OUTCOME)
-            db.write(next)
-            db.markSuccessful()
-            return next
-        } finally {
-            db.end()
+        return synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                val current = readUnderTransaction(idempotencyKey)
+                val next = current.copy(state = OperationState.UNKNOWN_OUTCOME)
+                db.write(next)
+                db.markSuccessful()
+                next
+            } finally {
+                db.end()
+            }
         }
     }
 
     /** Retention: a terminal row leaves disk, and that removal is atomic too. */
     fun purge(idempotencyKey: String) {
-        db.begin()
-        try {
-            db.delete(idempotencyKey)
-            db.markSuccessful()
-        } finally {
-            db.end()
+        synchronized(WRITE_GATE) {
+            db.begin()
+            try {
+                db.delete(idempotencyKey)
+                db.markSuccessful()
+            } finally {
+                db.end()
+            }
         }
     }
 
