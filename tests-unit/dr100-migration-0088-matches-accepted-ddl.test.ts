@@ -1087,8 +1087,7 @@ describe('DR-108-C — the fourth declared category is exactly the owner-decided
     const migration = readNormalized(MIGRATION_PATH);
     const executable = migration.replace(/--.*/g, '');
 
-    const COLUMN_SCOPED =
-      /GRANT UPDATE \(remaining_minor\) ON TABLE public\.platform_credit_grant_remainders TO daftar_accounting_internal;/g;
+    const COLUMN_SCOPED = /GRANT UPDATE \(remaining_minor\) ON TABLE public\.platform_credit_grant_remainders TO daftar_accounting_internal;/g;
     const BARE_UPDATE = /GRANT[^;]*\bUPDATE\b(?!\s*\()[^;]*ON TABLE/g;
     const WRITES_TENANT = /\bSET\s+tenant_id\b/g;
 
@@ -1096,7 +1095,9 @@ describe('DR-108-C — the fourth declared category is exactly the owner-decided
 
     const bare = executable.match(BARE_UPDATE) ?? [];
     expect(bare, `an UPDATE grant with no column list: ${bare.join(' | ')}`).toEqual([]);
-    expect(executable.match(WRITES_TENANT) ?? [], 'a statement now writes tenant_id, so the WITH CHECK half is live and needs a behavioural control').toEqual([]);
+    expect(executable.match(WRITES_TENANT) ?? [], 'a statement now writes tenant_id, so the WITH CHECK half is live and needs a behavioural control').toEqual(
+      [],
+    );
 
     // POSITIVE CONTROL: the tenant_id scanner does hit reads, so its zero above
     // is a measurement and not an empty-input artefact (RULE-11).
