@@ -193,6 +193,65 @@ function statementOffencesIn(openingMinor: bigint, rows: readonly StatementRow[]
   return offences;
 }
 
+/**
+ * THE CLOSURE LAW — "the statement is correct" in the only shape that is not
+ * a false red. Three parts, not a correspondence between two sets:
+ *
+ *   1. for every currency the receivable reports, the statement's last
+ *      running balance in that currency equals it EXACTLY;
+ *   2. for every currency in the statement that the receivable does NOT
+ *      report, that last running balance is exactly zero — a positive half
+ *      and not an exemption: a currency missing from the receivable whose
+ *      statement does not close at zero means one of the two is lying;
+ *   3. no currency the receivable reports is missing from the statement — a
+ *      debt no document explains is a financial defect, not a detail.
+ *
+ * WHY NOT A CORRESPONDENCE. The two sides disagree about the ZEROED currency
+ * ON PURPOSE: the AR function drops it (`HAVING sum(...) <> 0`, which is what
+ * arm B measures below), and the statement keeps it, because a currency that
+ * carries no debit still carries rows and closes at zero, and that is a fact
+ * and not an error. So `byCurrency.size === currencies(items).size`, or any
+ * other correspondence, would RED on a customer who paid one currency off in
+ * full — a correct server and a lawful arm. That shape of false red has now
+ * been caught four times in this flow, which is why the law is written as
+ * three one-directional halves instead.
+ *
+ * The receivable half of this law is already mounted and is asserted live
+ * below. Until the statement route exists, the statement half is this flow's
+ * own arithmetic; the day it lands, the route's rows replace that one
+ * argument and no part of this function moves.
+ */
+function closureOffencesIn(lastRunningByCurrency: ReadonlyMap<string, bigint>, byCurrency: ReadonlyMap<string, bigint>): string[] {
+  const offences: string[] = [];
+  for (const [ccy, owed] of byCurrency) {
+    const last = lastRunningByCurrency.get(ccy);
+    if (last === undefined) offences.push(`${ccy}: the customer owes ${owed} and the statement has no row in that currency to explain it`);
+    else if (last !== owed) offences.push(`${ccy}: the statement closes at ${last} and the receivable says ${owed}`);
+  }
+  for (const [ccy, last] of lastRunningByCurrency) {
+    if (!byCurrency.has(ccy) && last !== 0n) offences.push(`${ccy}: the receivable reports nothing outstanding and the statement closes at ${last}`);
+  }
+  return offences;
+}
+
+/**
+ * A flat statement, grouped into one window per currency — the step the
+ * statement's own shape makes necessary. Its rows arrive flat, each carrying
+ * its own currency, while `statementOffencesIn` refuses a window that mixes
+ * two: a mapper that fed the flat array in whole would red on a lawful
+ * two-currency statement. This is that mapper's grouping, measured now rather
+ * than written in a hurry the day the route lands.
+ */
+function windowsOf(rows: readonly StatementRow[]): ReadonlyMap<string, readonly StatementRow[]> {
+  const windows = new Map<string, StatementRow[]>();
+  for (const row of rows) {
+    const window = windows.get(row.currency);
+    if (window === undefined) windows.set(row.currency, [row]);
+    else window.push(row);
+  }
+  return windows;
+}
+
 // ── the flow, run once ────────────────────────────────────────────────────
 
 let w: SettlementWorld;
@@ -504,6 +563,88 @@ describe(CLAIM, () => {
     // `number` past 2^53 loses precision through `JSON.parse` and raises
     // nothing, so the type is a law here and not a style.
     expect(typeof only?.txnMinor, 'a money figure arrived as something other than a string').toBe('string');
+
+    // AND THE CLOSURE LAW ITSELF, with its receivable half LIVE and its
+    // statement half still this flow's own arithmetic. The day the route
+    // lands, the rows' last running balance replaces that one argument and
+    // nothing else here moves.
+    const live = new Map(observedByCurrency.map((e) => [e.currency, BigInt(e.txnMinor)]));
+    expect(live.size, 'the live half of the closure law is empty, so it would close onto nothing').toBe(1);
+    const predicted = new Map([[invoiceCurrency, BigInt(invoice.totalTxnMinor) - collectedMinor]]);
+    expect(closureOffencesIn(predicted, live), 'the closure law fails between the flow and the receivable the server derives').toStrictEqual([]);
+  });
+
+  it('THE CLOSURE LAW — each of its three halves is seen to say no, and a correspondence would red on a lawful arm', () => {
+    const A = 'ILS';
+    const B = 'USD';
+    const owed = new Map([[A, 700n]]);
+
+    // The planted agreement must be silent, or every red below says nothing.
+    expect(closureOffencesIn(new Map([[A, 700n]]), owed)).toStrictEqual([]);
+
+    // Half 1 — the figures disagree.
+    expect(closureOffencesIn(new Map([[A, 699n]]), owed).some((o) => o.includes('the statement closes at'))).toBe(true);
+
+    // Half 2 — a currency the receivable does not report, whose statement
+    // does NOT close at zero. One of the two sides is lying, and this is the
+    // only half that can say so.
+    const stray = closureOffencesIn(
+      new Map([
+        [A, 700n],
+        [B, 40n],
+      ]),
+      owed,
+    );
+    expect(stray.some((o) => o.includes('reports nothing outstanding'))).toBe(true);
+    expect(stray.length, 'the stray-currency plant broke more than the half it is for').toBe(1);
+
+    // Half 3 — a debt the statement has no row to explain.
+    expect(closureOffencesIn(new Map(), owed).some((o) => o.includes('no row in that currency'))).toBe(true);
+
+    // AND THE OTHER DIRECTION, which is the whole reason the law is not a
+    // correspondence: a currency PAID OFF IN FULL is absent from the
+    // receivable and present in the statement, closing at zero. It is a
+    // lawful arm, and it must be silent. A `byCurrency.size ===
+    // currencies(items).size` would have reddened exactly here.
+    expect(
+      closureOffencesIn(
+        new Map([
+          [A, 700n],
+          [B, 0n],
+        ]),
+        owed,
+      ),
+      'a currency paid off in full was read as an offence',
+    ).toStrictEqual([]);
+  });
+
+  it('A FLAT STATEMENT IS GROUPED BEFORE IT IS JUDGED, or the currency law reds on a lawful page', () => {
+    const A = 'ILS';
+    const B = 'USD';
+    const flat: readonly StatementRow[] = [
+      { what: 'a sale in A', currency: A, debitMinor: 500n, creditMinor: 0n, runningMinor: 500n },
+      { what: 'a sale in B', currency: B, debitMinor: 300n, creditMinor: 0n, runningMinor: 300n },
+      { what: 'a collection applied in A', currency: A, debitMinor: 0n, creditMinor: 200n, runningMinor: 300n },
+    ];
+    // The grouping is real: two windows, and the A window keeps BOTH its rows
+    // in the order they arrived — a grouping that dropped one would make
+    // every recurrence below pass on a shorter page.
+    const windows = windowsOf(flat);
+    expect([...windows.keys()].sort(), 'the flat page did not group into one window per currency').toStrictEqual([A, B].sort());
+    expect(windows.get(A)?.length, 'the A window lost a row').toBe(2);
+    expect(windows.get(B)?.length, 'the B window lost a row').toBe(1);
+
+    // Grouped, each window is lawful.
+    expect(statementOffencesIn(0n, windows.get(A) ?? [], 300n), 'the A window contradicts itself').toStrictEqual([]);
+    expect(statementOffencesIn(0n, windows.get(B) ?? [], 300n), 'the B window contradicts itself').toStrictEqual([]);
+
+    // AND THE CONTROL THAT MAKES THE GROUPING NECESSARY: the same rows fed in
+    // WHOLE are refused, because a window may not mix two currencies. So a
+    // mapper that skipped this step would red on a lawful two-currency page.
+    expect(
+      statementOffencesIn(0n, flat, 300n).some((o) => o.includes('mixes')),
+      'the ungrouped page was accepted, so the grouping above is not load-bearing',
+    ).toBe(true);
   });
 
   it('3b. A REPLAY IS NOT MONEY: the same collection sent twice is answered as a replay, and the balance does not move', () => {
@@ -583,6 +724,17 @@ describe(CLAIM, () => {
     // false red as a floor on the balance.
     expect(otherByCurrency, 'arm B never read the second receivable').not.toBeNull();
     expect(otherByCurrency ?? [], 'a customer who owes exactly nothing still carries a per-currency row').toStrictEqual([]);
+    // AND THIS IS THE CLOSURE LAW'S SECOND HALF, measured in the wild rather
+    // than planted: the currency is absent from the receivable and its
+    // statement closes at zero, so the law must be silent — while the same
+    // currency closing at anything else would be an offence. This arm is the
+    // live case that a correspondence between the two sides would have
+    // reddened.
+    expect(closureOffencesIn(new Map([[invoiceCurrency, 0n]]), new Map()), 'a settled currency was read as an offence').toStrictEqual([]);
+    expect(
+      closureOffencesIn(new Map([[invoiceCurrency, 1n]]), new Map()).length,
+      'a settled currency whose statement does not close at zero was accepted',
+    ).toBe(1);
     // AND THE SAME CLAIM THROUGH THE NAMED CHECKER, so the figure above is not
     // the only thing standing between a netted surplus and a green suite.
     const movements: readonly Movement[] = [
