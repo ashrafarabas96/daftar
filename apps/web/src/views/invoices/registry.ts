@@ -105,7 +105,6 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     // than asserted from the catalogue alone.
     'four invoices: open, draft, cancelled and one in another currency': list({}),
     'one invoice, no further page': list({ invoices: [OPEN_INVOICE], hasMore: false }),
-    loading: list({ invoices: null, hasMore: false }),
     'no invoices at all': list({ invoices: [], hasMore: false }),
     // The state the PAGE actually produces after a refused "show more": the
     // rows stay, the refusal sits above them, and "show more" STAYS too. The

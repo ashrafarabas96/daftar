@@ -245,8 +245,7 @@ describe('the invoice list', () => {
     expect(buttons(render(INVOICE_VIEWS, 'InvoiceListView', 'one invoice, no further page'))).not.toContain(en['common.loadMore']);
   });
 
-  it('shows the loading and the empty state, and the empty one leads to selling', () => {
-    expect(text(render(INVOICE_VIEWS, 'InvoiceListView', 'loading'))).toContain(en['common.loading']);
+  it('shows the empty state, and it leads to selling', () => {
     const empty = render(INVOICE_VIEWS, 'InvoiceListView', 'no invoices at all');
     expect(text(empty)).toContain(en['invoices.list.empty']);
     expect(buttons(empty)).toContain(en['invoices.list.sellSomething']);
@@ -283,6 +282,11 @@ describe('the invoice list', () => {
     expect(tried, 'positive control: the try block advances the cursor').toContain('setCursor(');
     expect(caught).toContain('setErrorKey(');
     expect(caught, 'the catch must leave the cursor alone, so "show more" stays').not.toContain('setCursor(');
+    // ...and the button's visibility must be derived from the cursor alone, or a
+    // refusal could hide it some other way while the catch still looks innocent.
+    expect(page).toContain('hasMore={cursor !== null}');
+    // The view never receives a null list: the page shows ScreenState until ready.
+    expect(page).toMatch(/phase !== 'ready' \?\s*\(\s*<ScreenState/);
   });
 
   it('noComputedMoney: no figure appears that is a sum of two the server stated', () => {

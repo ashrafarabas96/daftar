@@ -47,15 +47,15 @@
  * **It never names a buyer.** Same T-12 rule; and a list answer carries an id
  * and no name in any case.
  */
-import { Badge, Button, EmptyState, List, Spinner } from '@daftar/design-system';
+import { Badge, Button, EmptyState, List } from '@daftar/design-system';
 import type { InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
 import { rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { CivilDate, Code, Money } from '@/views/common/primitives';
 import { Notice, STACK, ScreenTitle } from '@/views/stock/parts';
 
 export interface InvoiceListViewProps {
-  /** Null while the first page loads. */
-  invoices: readonly InvoiceSummaryDto[] | null;
+  /** The page renders this view only once the first read has landed (`ScreenState` covers loading), so there is no null state. */
+  invoices: readonly InvoiceSummaryDto[];
   hasMore: boolean;
   loadingMore: boolean;
   errorKey: string | null;
@@ -83,9 +83,7 @@ export function InvoiceListView(props: InvoiceListViewProps & ViewBaseProps) {
     <div style={STACK}>
       <ScreenTitle>{t('invoices.list.title')}</ScreenTitle>
       {props.errorKey !== null ? <Notice tone="error">{t(props.errorKey)}</Notice> : null}
-      {props.invoices === null ? (
-        <Spinner label={t('common.loading')} />
-      ) : props.invoices.length === 0 ? (
+      {props.invoices.length === 0 ? (
         // An empty list never arrives WITH an error on this page: a refused first
         // read renders `ScreenState` and never reaches this view, and "show more"
         // can only be refused while rows are already on screen. So there is no
