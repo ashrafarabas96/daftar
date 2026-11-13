@@ -99,6 +99,13 @@ function productionHttpConfig(): AppConfig {
     IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
     JWT_SECRET: 'production-secret-with-at-least-32-characters',
     REDIS_URL: 'redis://redis:6379',
+    // REL-10 (main, PR #88) made this a production REQUIREMENT that fails fast
+    // in `loadConfig`: a production process whose allowlist is absent or still
+    // the development default does not start. Without it this law dies in
+    // configuration validation before it can measure a store, which is a
+    // failure of the test's environment and not of either rule. The value is
+    // the shape `tests-unit/rel09-api-security-headers.test.ts` uses.
+    CORS_ORIGINS: 'https://app.example.com',
     ...KMS_BRIDGE,
   });
 }
