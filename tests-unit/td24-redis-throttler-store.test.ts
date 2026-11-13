@@ -387,31 +387,35 @@ describe('TD-24 — an outage degrades and says so, and never becomes "no limit"
     await evaluator.close?.();
   });
 
-  it.concurrent('TD24-REDIAL: the real client dials again after its retries are spent, so a replica can recover', async () => {
-    // TD24-RECOVER proves the FLAG clears, but it does so through a fake
-    // evaluator — which, as the second review said, is not a measurement of
-    // the real client. This case is: on a dead port ioredis spends its
-    // retries and lands in status `end`, where `sendCommand` rejects
-    // "Connection is closed." without dialling. If `ready()` did not clear a
-    // finished attempt and re-dial from `end`, the attempt count would stay
-    // at one for the life of the process and the replica would count per
-    // replica for ever — even after Redis came back.
-    const evaluator = createRedisEvaluator('redis://127.0.0.1:6399');
-    await evaluator.eval('return 1', [], []).catch(() => undefined);
-    const afterFirst = evaluator.dialAttempts?.() ?? 0;
-    await evaluator.eval('return 1', [], []).catch(() => undefined);
-    const afterSecond = evaluator.dialAttempts?.() ?? 0;
+  it.concurrent(
+    'TD24-REDIAL: the real client dials again after its retries are spent, so a replica can recover',
+    async () => {
+      // TD24-RECOVER proves the FLAG clears, but it does so through a fake
+      // evaluator — which, as the second review said, is not a measurement of
+      // the real client. This case is: on a dead port ioredis spends its
+      // retries and lands in status `end`, where `sendCommand` rejects
+      // "Connection is closed." without dialling. If `ready()` did not clear a
+      // finished attempt and re-dial from `end`, the attempt count would stay
+      // at one for the life of the process and the replica would count per
+      // replica for ever — even after Redis came back.
+      const evaluator = createRedisEvaluator('redis://127.0.0.1:6399');
+      await evaluator.eval('return 1', [], []).catch(() => undefined);
+      const afterFirst = evaluator.dialAttempts?.() ?? 0;
+      await evaluator.eval('return 1', [], []).catch(() => undefined);
+      const afterSecond = evaluator.dialAttempts?.() ?? 0;
 
-    expect(afterFirst).toBeGreaterThan(0); // the input was not empty
-    expect(afterSecond).toBeGreaterThan(afterFirst);
+      expect(afterFirst).toBeGreaterThan(0); // the input was not empty
+      expect(afterSecond).toBeGreaterThan(afterFirst);
 
-    // And a released client does NOT dial again: recovery must not outlive
-    // the application.
-    await evaluator.close?.();
-    const afterClose = evaluator.dialAttempts?.() ?? 0;
-    await expect(evaluator.eval('return 1', [], [])).rejects.toThrow(/released with the application/);
-    expect(evaluator.dialAttempts?.() ?? 0).toBe(afterClose);
-  }, 30_000);
+      // And a released client does NOT dial again: recovery must not outlive
+      // the application.
+      await evaluator.close?.();
+      const afterClose = evaluator.dialAttempts?.() ?? 0;
+      await expect(evaluator.eval('return 1', [], [])).rejects.toThrow(/released with the application/);
+      expect(evaluator.dialAttempts?.() ?? 0).toBe(afterClose);
+    },
+    30_000,
+  );
 
   it('TD24-DEGRADE-STORE: the fallback is the in-process store, not a third implementation', async () => {
     // The per-replica ceiling is the one the deployment had before this card
