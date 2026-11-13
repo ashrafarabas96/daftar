@@ -143,32 +143,79 @@ if [ "$P5_EXISTING_SERVER" = "1" ]; then
   # collation: a mismatch between the two invents a difference the cluster does
   # not have, and here that reads as a role leak. So every list is sorted with
   # LC_ALL=C, by the same rule on both sides.
-  ROLES_BEFORE=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+  # ONE reader, and ONE difference, shared by the control below and by the
+  # teardown itself. A control that exercises a COPY of the logic certifies the
+  # copy and not the guard, so both call these.
+  p5_roles_now() {
+    psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort
+  }
+  p5_roles_added() {
+    comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$1")
+  }
+
+  ROLES_BEFORE=$(p5_roles_now)
   if [ -z "$ROLES_BEFORE" ]; then
     echo "pg_roles answered nothing before the bootstrap; an empty probe is not a zero (RULE-18)."
     exit 1
   fi
   export P5_ROLES_BEFORE="$ROLES_BEFORE"
 
+  # POSITIVE CONTROL FOR THE GUARD BELOW -- and it is not optional.
+  #
+  # The teardown's green reads "no role leaked". That sentence is only worth
+  # something if the same difference would have SEEN a role that did leak:
+  # an always-empty difference prints the same green while certifying nothing
+  # (RULE-3 wants a positive control for every claimed absence, and RULE-27
+  # wants the plant proven applied before its result is read).
+  #
+  # So the lane plants one role of its own, asks the very same difference what
+  # it sees, and refuses to continue unless the answer is exactly that role.
+  # Then it drops it and checks the difference is empty again, so the control
+  # leaves the cluster as it found it. There is deliberately no env switch
+  # around this: a switch is a skip, and a skipped control rots unnoticed.
+  #
+  # The name carries this process's id, because a measuring tool two writers
+  # share reports on a third tree (RULE-17).
+  P5_CONTROL_ROLE="p5_teardown_control_$$"
+  if [ -n "$(p5_roles_added "$ROLES_BEFORE")" ]; then
+    echo "CONTROL FAILED (negative half): the difference is already non-empty before anything was created."
+    exit 1
+  fi
+  psql -tA "$ADMIN_URL" -c "CREATE ROLE \"$P5_CONTROL_ROLE\" NOLOGIN" > /dev/null 2>&1
+  CONTROL_SEEN=$(p5_roles_added "$(p5_roles_now)")
+  if [ "$CONTROL_SEEN" != "$P5_CONTROL_ROLE" ]; then
+    psql -tA "$ADMIN_URL" -c "DROP ROLE IF EXISTS \"$P5_CONTROL_ROLE\"" > /dev/null 2>&1
+    echo "CONTROL FAILED (positive half): planted $P5_CONTROL_ROLE, and the difference reported [$CONTROL_SEEN]."
+    echo "A probe that cannot see a role it was just handed cannot certify that none leaked (RULE-11)."
+    exit 1
+  fi
+  psql -tA "$ADMIN_URL" -c "DROP ROLE IF EXISTS \"$P5_CONTROL_ROLE\"" > /dev/null 2>&1
+  CONTROL_LEFT=$(p5_roles_added "$(p5_roles_now)")
+  if [ -n "$CONTROL_LEFT" ]; then
+    echo "CONTROL FAILED (restore half): the planted control survived its own drop: [$CONTROL_LEFT]."
+    exit 1
+  fi
+  echo "TEARDOWN CONTROL OK: the difference saw the planted $P5_CONTROL_ROLE and lost it again, so the guard can fire."
+
   p5_restore_cluster() {
     rc_keep=$?
     psql -tA "$ADMIN_URL" -c "DROP DATABASE IF EXISTS $P5_DB_NAME WITH (FORCE)" > /dev/null 2>&1
-    ROLES_NOW=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+    ROLES_NOW=$(p5_roles_now)
     if [ -z "$ROLES_NOW" ]; then
       echo "TEARDOWN UNVERIFIABLE: pg_roles answered nothing, so the restored role set is unknown (RULE-18)."
       exit 1
     fi
-    MINE=$(comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$ROLES_NOW"))
+    MINE=$(p5_roles_added "$ROLES_NOW")
     for r in $MINE; do
       psql -tA "$ADMIN_URL" -c "DROP OWNED BY \"$r\" CASCADE" > /dev/null 2>&1
       psql -tA "$ADMIN_URL" -c "DROP ROLE IF EXISTS \"$r\"" > /dev/null 2>&1
     done
-    ROLES_AFTER=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+    ROLES_AFTER=$(p5_roles_now)
     if [ -z "$ROLES_AFTER" ]; then
       echo "TEARDOWN UNVERIFIABLE: pg_roles answered nothing after the drops (RULE-18)."
       exit 1
     fi
-    LEFT=$(comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$ROLES_AFTER"))
+    LEFT=$(p5_roles_added "$ROLES_AFTER")
     if [ -n "$LEFT" ]; then
       echo "ROLE LEAK: this lane left principals behind in the shared cluster:"
       printf '  %s\n' $LEFT
