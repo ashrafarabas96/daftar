@@ -30,22 +30,106 @@ function remToPx(value: string): number {
 }
 export const TOUCH_MIN_PX = remToPx(TOUCH_TARGET);
 
-/** Ports inside the range the gate owns locally; CI may override them. */
+/** The three ports the gate's own stack listens on. `0` means "the operating system picks". */
 export interface Ports {
   readonly pg: number;
   readonly api: number;
   readonly web: number;
 }
 
+export type PortRole = keyof Ports;
+
+/**
+ * The ports as the environment asks for them: a pinned number, or `0`.
+ *
+ * IT USED TO BE THREE CONSTANTS — 56240/56245/56246 — AND THAT WAS THE DEFECT.
+ * Two gate runs on one machine both asked for 56246 and the second could not
+ * have it, so `P4-S1` went red on `port 56246 is already in use` with nothing
+ * wrong in the tree it was gating (run 43073393847, job 130706974448, step
+ * 40). A number written in the source is a claim that nothing else is using
+ * it, and the gate is not in a position to make that claim.
+ *
+ * So an unset variable now means `0`: ask the kernel at the moment the gate
+ * starts, through `reservePorts()` below. Pinning a port still works and is
+ * still honoured exactly — a caller that pins one is saying it will take care
+ * of the collision itself.
+ */
 export function portsFromEnv(): Ports {
-  const n = (name: string, fallback: number): number => {
+  const n = (name: string): number => {
     const raw = process.env[name];
-    if (raw === undefined || raw === '') return fallback;
+    if (raw === undefined || raw === '') return 0;
     const value = Number(raw);
     if (!Number.isInteger(value) || value <= 0 || value > 65535) throw new Error(`${name} is not a port: ${raw}`);
     return value;
   };
-  return { pg: n('BROWSER_PG_PORT', 56240), api: n('BROWSER_API_PORT', 56245), web: n('BROWSER_WEB_PORT', 56246) };
+  return { pg: n('BROWSER_PG_PORT'), api: n('BROWSER_API_PORT'), web: n('BROWSER_WEB_PORT') };
+}
+
+/**
+ * Ports taken from the operating system and HELD until their own server is
+ * about to bind.
+ *
+ * Holding is the whole point. Asking for a free port and then letting it go
+ * is a guess: between the question and the answer a concurrent run can be
+ * handed the same number. While this reservation's listener sits on a port,
+ * no other process on the machine — including another gate run allocating at
+ * the same moment — can be given it. Each role is released on its own, right
+ * before the server that needs it binds, so the other two stay protected for
+ * the whole of a startup that takes minutes.
+ *
+ * A pinned port is not held: the caller that pinned it means to bind it.
+ */
+export interface PortReservation {
+  readonly ports: Ports;
+  /** Free this role's port so its own server can bind it. Idempotent. */
+  release(role: PortRole): Promise<void>;
+  /** Free whatever is still held. Idempotent, and safe on a failure path. */
+  releaseAll(): Promise<void>;
+}
+
+export async function reservePorts(requested: Ports = portsFromEnv()): Promise<PortReservation> {
+  const { createServer } = await import('node:net');
+  const held = new Map<PortRole, import('node:net').Server>();
+  const resolved: { -readonly [K in PortRole]: number } = { pg: 0, api: 0, web: 0 };
+
+  const releaseOne = async (role: PortRole): Promise<void> => {
+    const server = held.get(role);
+    if (server === undefined) return;
+    held.delete(role);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
+
+  try {
+    for (const role of ['pg', 'api', 'web'] as const) {
+      const pinned = requested[role];
+      if (pinned > 0) {
+        resolved[role] = pinned;
+        continue;
+      }
+      const server = createServer();
+      await new Promise<void>((resolve, reject) => {
+        server.once('error', reject);
+        // `exclusive: true` so the kernel hands out a port nothing else holds,
+        // and `0.0.0.0` because that is the family the servers bind.
+        server.listen({ port: 0, host: '0.0.0.0', exclusive: true }, () => resolve());
+      });
+      const address = server.address();
+      if (address === null || typeof address === 'string') throw new Error(`the kernel gave the ${role} reservation no numeric port`);
+      resolved[role] = address.port;
+      held.set(role, server);
+    }
+  } catch (error) {
+    for (const role of ['pg', 'api', 'web'] as const) await releaseOne(role);
+    throw error;
+  }
+
+  return {
+    ports: resolved,
+    release: releaseOne,
+    releaseAll: async (): Promise<void> => {
+      for (const role of ['pg', 'api', 'web'] as const) await releaseOne(role);
+    },
+  };
 }
 
 /**
