@@ -368,33 +368,48 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // matches `PHASE4_SUITE_SLICED` and no foreign roster claims it, so
   // `unrosteredElsewhere` demands exactly this row.
   //
-  // The floor was measured from the tree by this gate's own instrument
-  // (`testTitles` after `stripTsProse`) and is EQUAL to the count today, so it
-  // becomes a floor as the suite grows. What a count cannot see is
-  // SUBSTITUTION, so the row also pins BY NAME the claims the slice promised
-  // out loud: creation at revision 1 with its replay, the update that states
-  // the whole customer and leaves `status` alone, the stale revision, the
-  // direct write refused for the role the API runs as, the EXECUTE matrix, the
-  // two halves of merchant isolation, the revision guard, the 0075 guards
-  // still triggered, and the migration applying upward both on a clean
-  // database and on one that already holds rows.
+  // The floor is EQUAL to the executable count in the tree, so it becomes a
+  // floor as the suite grows — and it was WRONG until now: it said 13 while
+  // the suite ran 15, with zero `.skip`, so two cases could have been deleted
+  // without this gate going red. The claim "measured by this gate's own
+  // instrument" was prose, not a measurement (RULE-3), and a floor below the
+  // tree is how a count stops being a guard.
+  //
+  // What a count cannot see is SUBSTITUTION, so the row also pins BY NAME
+  // every case the suite runs, all fifteen rather than a chosen ten: creation
+  // at revision 1 with its replay, the SAME id carrying a different statement
+  // refused as `customer.idempotency_conflict`, the update that states the
+  // whole customer and leaves `status` alone, the stale revision, a statement
+  // naming `contacts` refused rather than silently stored, the direct write
+  // refused for the role the API runs as, the EXECUTE matrix, BOTH halves of
+  // merchant isolation (B cannot reach A's row, and a member of A cannot act
+  // in B by presenting B's business id — the second half was the one the prose
+  // promised and the pin omitted), the revision guard, the 0075 guards still
+  // triggered, the worker refused 42501 with its claim proved able to fail,
+  // the head-migration predicate, and the migration applying upward both on a
+  // clean database and on one that already holds rows.
   {
     id: 'S1-CW-01',
     area: 'customer-write',
     runner: 'root',
     file: 'tests/integration/p4s1-customer-write-commands.test.ts',
-    cases: 13,
+    cases: 15,
     titles: [
       'creates at revision 1, active, with 201; and replays the same statement as 200',
+      'refuses the same id carrying a different statement with customer.idempotency_conflict',
       'updates the whole statement at the revision read: revision 2, an omitted optional field CLEARED, status untouched',
       'refuses a stale revision with customer.revision_changed, and leaves the row alone',
+      'refuses a statement that names contacts, rather than accepting it and storing none',
       'refuses INSERT, UPDATE, DELETE and TRUNCATE with 42501, while SELECT through the same connection succeeds',
       'grants the two routines to daftar_app and to nobody else, and no DML with them',
       'business B can neither read nor write business A customer, and A still sees it unchanged',
+      'a member of A cannot act in B by presenting B business id',
       'refuses a jumped revision, a rewritten identity and a DELETE, while a one-step change is admitted',
       'both 0075 guards are still triggered on the table after 0091',
       'applies from zero on a clean database, and leaves the asserted end state',
       'applies on a database already holding rows, and changes no table but the registry it writes',
+      'daftar_worker is refused 42501 by both routines, and the claim is proved able to fail',
+      'headMigration() is the migrations directory own highest file, and a short build fails the predicate',
     ],
   },
 ];
