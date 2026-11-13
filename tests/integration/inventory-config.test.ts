@@ -35,6 +35,7 @@ const INVENTORY = Buffer.alloc(32, 13).toString('base64');
 const MERCHANT_PROD: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   PROCESS_MODE: 'merchant-api',
+  CORS_ORIGINS: 'https://app.example.com', // REL-10: production names its browser origins explicitly
   APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar',
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
   RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:x@db/daftar',
@@ -57,6 +58,7 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
 const PLATFORM_PROD: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
   PROCESS_MODE: 'platform-api',
+  CORS_ORIGINS: 'https://app.example.com', // REL-10: production names its browser origins explicitly
   PLATFORM_DATABASE_URL: 'postgresql://daftar_platform:x@db/daftar',
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
   JWT_SECRET: 'production-secret-with-at-least-32-characters',
