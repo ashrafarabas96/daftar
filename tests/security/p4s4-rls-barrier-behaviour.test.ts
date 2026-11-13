@@ -86,7 +86,8 @@
  */
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createScratchDb, urlOf, type ScratchDb } from '../helpers/scratch-db';
+import { createScratchDb, headMigration, migrationFiles, urlOf, type ScratchDb } from '../helpers/scratch-db';
+import { scratchHeadProblem } from '../helpers/scratch-head';
 import { randomUUID } from 'node:crypto';
 
 /** The four relations `0086` names, and this file's whole subject. */
@@ -765,8 +766,15 @@ async function withPlant(c: Client, rel: Relation, plant: readonly string[], fn:
 
 beforeAll(async () => {
   db = await createScratchDb('daftar_p4s4_barrier');
-  const head = db.applied[db.applied.length - 1];
-  if (head === undefined || !head.startsWith('0086_')) throw new Error(`the scratch database was not built to 0086 but to ${String(head)}`);
+  // The claim is "built to the WHOLE migration set", and the head is read from
+  // the folder, not written here as a number: a literal stops being true the
+  // day a migration is added and reds this suite before one assertion runs
+  // (it did, when 0091 landed). A database built lower is still refused.
+  // A comparison against NOTHING passes vacuously, so the derivation has its
+  // own positive control: the folder it is derived from must hold files.
+  if (migrationFiles().length === 0) throw new Error('NO SUBJECT — no migration files on disk, so "built to the head" would compare against nothing');
+  const problem = scratchHeadProblem(db.applied, headMigration());
+  if (problem !== null) throw new Error(problem);
 }, 900_000);
 
 afterAll(async () => {
