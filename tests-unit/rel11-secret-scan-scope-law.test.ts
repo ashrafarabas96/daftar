@@ -359,10 +359,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
   });
 
   it('REL11-C (negative control): the reader reports the condition when that same step is gated', () => {
-    const gated = WORKFLOW.replace(
-      `      - name: ${SNAPSHOT_STEP}\n`,
-      `      - name: ${SNAPSHOT_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`,
-    );
+    const gated = WORKFLOW.replace(`      - name: ${SNAPSHOT_STEP}\n`, `      - name: ${SNAPSHOT_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`);
     expect(gated).not.toBe(WORKFLOW); // the seed landed; a no-op would pass vacuously
     const seeded = stepsOfJob(gated, 'hygiene');
     expect(conditionOf(seeded, SNAPSHOT_STEP)).toBe(PULL_REQUEST_ONLY);
@@ -447,10 +444,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // green while the loop never saw the second job. A multi-element BLOCK
     // list is the form `needs:` is normally written in, and nothing touched
     // this branch until now.
-    const twoNeeds = WORKFLOW.replace(
-      '  hygiene:\n    needs: workspaces\n',
-      '  hygiene:\n    needs:\n      - workspaces\n      - prep\n',
-    );
+    const twoNeeds = WORKFLOW.replace('  hygiene:\n    needs: workspaces\n', '  hygiene:\n    needs:\n      - workspaces\n      - prep\n');
     expect(twoNeeds).not.toBe(WORKFLOW);
     expect(neededJobs(twoNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
     // The flow form reads the same way. Anchored on `  hygiene:` because the
@@ -458,10 +452,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // string replace takes the first — which is another job's. This control
     // itself failed that way first: the same vacuity the review named, now
     // inside the seed instead of inside the assertion.
-    const flowNeeds = WORKFLOW.replace(
-      '  hygiene:\n    needs: workspaces\n',
-      "  hygiene:\n    needs: [workspaces, 'prep']\n",
-    );
+    const flowNeeds = WORKFLOW.replace('  hygiene:\n    needs: workspaces\n', "  hygiene:\n    needs: [workspaces, 'prep']\n");
     expect(flowNeeds).not.toBe(WORKFLOW);
     expect(neededJobs(flowNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
 
@@ -478,10 +469,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // lines. The point is not that it is parsed — it is that the result does
     // not quietly equal the pinned text, so REL11-B2's pin reddens by name
     // rather than the list arriving short. Fail closed, not short.
-    const brokenFlow = WORKFLOW.replace(
-      '  hygiene:\n    needs: workspaces\n',
-      '  hygiene:\n    needs: [workspaces,\n      prep]\n',
-    );
+    const brokenFlow = WORKFLOW.replace('  hygiene:\n    needs: workspaces\n', '  hygiene:\n    needs: [workspaces,\n      prep]\n');
     expect(brokenFlow).not.toBe(WORKFLOW);
     expect(jobKey(brokenFlow, 'hygiene', 'needs')).not.toBe('workspaces');
   });
@@ -491,10 +479,10 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // depth, a gated job BEHIND `workspaces` emptied the coverage claim while
     // every assertion stayed green. Seeded here at depth two, which is where
     // a real `needs:` edit would put it.
-    const deep = WORKFLOW.replace(
-      '  workspaces:\n',
-      `  workspaces:\n    needs: prep\n`,
-    ).replace('  hygiene:\n', `  prep:\n    if: ${PULL_REQUEST_ONLY}\n    runs-on: ubuntu-latest\n  hygiene:\n`);
+    const deep = WORKFLOW.replace('  workspaces:\n', `  workspaces:\n    needs: prep\n`).replace(
+      '  hygiene:\n',
+      `  prep:\n    if: ${PULL_REQUEST_ONLY}\n    runs-on: ubuntu-latest\n  hygiene:\n`,
+    );
     expect(deep).not.toBe(WORKFLOW);
     // The traversal reaches it...
     expect(jobChain(deep, 'hygiene')).toEqual(['hygiene', 'workspaces', 'prep']);
@@ -508,18 +496,12 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // Treating finding 4's brittleness must not buy a false green: a
     // block-style `branches-ignore:` would otherwise be read as a pushed
     // branch, and REL11-E would swear `main` is pushed while it is excluded.
-    const ignored = WORKFLOW.replace(
-      "    branches: [main, 'phase/**']\n",
-      '    branches:\n      - phase/x\n    branches-ignore:\n      - main\n',
-    );
+    const ignored = WORKFLOW.replace("    branches: [main, 'phase/**']\n", '    branches:\n      - phase/x\n    branches-ignore:\n      - main\n');
     expect(ignored).not.toBe(WORKFLOW);
     expect(pushBranches(ignored)).toEqual(['phase/x']);
     expect(pushBranches(ignored)).not.toContain('main');
     // And the block form of `branches:` itself is read, which is finding 4.
-    const blockForm = WORKFLOW.replace(
-      "    branches: [main, 'phase/**']\n",
-      "    branches:\n      - main\n      - 'phase/**'\n",
-    );
+    const blockForm = WORKFLOW.replace("    branches: [main, 'phase/**']\n", "    branches:\n      - main\n      - 'phase/**'\n");
     expect(pushBranches(blockForm)).toEqual(['main', 'phase/**']);
   });
 });
