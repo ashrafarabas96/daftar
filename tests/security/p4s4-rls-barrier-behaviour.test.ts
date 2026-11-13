@@ -86,7 +86,7 @@
  */
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createScratchDb, headMigration, urlOf, type ScratchDb } from '../helpers/scratch-db';
+import { createScratchDb, urlOf, type ScratchDb } from '../helpers/scratch-db';
 import { randomUUID } from 'node:crypto';
 
 /** The four relations `0086` names, and this file's whole subject. */
@@ -766,13 +766,7 @@ async function withPlant(c: Client, rel: Relation, plant: readonly string[], fn:
 beforeAll(async () => {
   db = await createScratchDb('daftar_p4s4_barrier');
   const head = db.applied[db.applied.length - 1];
-  // The head is DERIVED from the migrations directory, not pinned to a number:
-  // a literal goes stale the next time a migration lands, which is what
-  // `0091` just did to `'0086_'`. Deriving is right HERE — and was wrong for
-  // the schema floor — because the source of truth is the migrations
-  // directory, so this does not assert the thing under test against itself.
-  if (head === undefined || head !== headMigration())
-    throw new Error(`the scratch database was not built to the migrations directory's head ${headMigration()} but to ${String(head)}`);
+  if (head === undefined || !head.startsWith('0086_')) throw new Error(`the scratch database was not built to 0086 but to ${String(head)}`);
 }, 900_000);
 
 afterAll(async () => {
