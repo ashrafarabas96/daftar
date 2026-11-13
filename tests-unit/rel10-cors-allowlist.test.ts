@@ -187,16 +187,43 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // must never fail in. (Review of this PR, finding 1.)
     const call = /app\.enableCors\(([\s\S]*?)\n\s*\}\);/.exec(main);
     expect(call, 'the enableCors call could not be located to read its argument').not.toBeNull();
-    const options = call?.[1] ?? '';
-    expect(options).not.toBe('');
-    // And the located text really is the argument, not the whole file: the
-    // allowlist parse lives inside it, and the file's other content does not.
-    expect(options).toContain('parseCorsOrigins');
-    expect(options.length).toBeLessThan(main.length);
+    const raw = call?.[1] ?? '';
+    expect(raw).not.toBe('');
 
+    // COMMENTS ARE STRIPPED BEFORE THE CLAIM. Narrowing to the argument shrank
+    // the false green; it did not close it. Two routes survived and were
+    // measured: a comment INSIDE the options object saying `credentials: false`
+    // above a value read from the environment, and — if the call is ever
+    // reformatted onto one line, losing the `\n });` this capture ends at — an
+    // over-capture running to the next `});` in the file, where any later
+    // mention of `credentials: false` in a comment would do. Stripping closes
+    // both, because only code can satisfy the claim now.
+    // (Second review of this PR, finding 2.)
+    const options = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    expect(options).not.toBe('');
+
+    // The located text really is this call's argument:
+    //  - the allowlist parse lives inside it, and nothing else in the file
+    //    calls `parseCorsOrigins`;
+    //  - and it is SHORT. An absolute bound is the one that can fail: a
+    //    successful capture is shorter than the file by construction, so
+    //    comparing it to the file's length asserted nothing at all, and the
+    //    comment that claimed otherwise was wrong. (Second review, finding 1.)
+    expect(options).toContain('parseCorsOrigins');
+    expect(options.length).toBeLessThan(400);
+
+    // Exactly one `credentials:` key, so a second mention cannot mask the one
+    // that counts.
+    expect([...options.matchAll(/credentials\s*:/g)]).toHaveLength(1);
     expect(options).toContain('credentials: false');
     expect(options).not.toContain('credentials: true');
 
+    // AND ONE MORE CONSEQUENCE, named because it is the one that produced the
+    // over-capture above: reformatting the call onto a single line makes this
+    // case fail, since the capture ends at `\n });`. That is failing closed,
+    // and the answer is to move this expectation with the reformat — never to
+    // widen the pattern until it matches whatever the file now says.
+    //
     // CONSEQUENCE, named here because whoever it reddens reads this file and
     // not a card: moving these options into a constant or another module makes
     // this case fail for a reason that is not a security relaxation. That is
