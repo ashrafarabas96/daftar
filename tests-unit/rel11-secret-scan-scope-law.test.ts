@@ -168,6 +168,14 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(names.length).toBeGreaterThanOrEqual(5);
     expect(names).toContain(SNAPSHOT_STEP);
     expect(names).toContain(RANGE_STEP);
+    // The floor above used to be ten, and that count was quietly doing a
+    // second job: it was what reddened when the reader opened a step only on
+    // `- name:`. Lowering it to survive a legitimate removal cost that catch,
+    // so the mechanism is asserted directly instead of being inferred from a
+    // number: `hygiene` really does contain steps that open with `- uses:` or
+    // `- run:`, and a reader that skipped them would attribute their `if:` to
+    // whichever step came before.
+    expect(names.filter((n) => n.startsWith('uses:') || n.startsWith('run:')).length).toBeGreaterThanOrEqual(1);
   });
 
   it('REL11-B: the snapshot scan has no event condition, so a push to main is secret-scanned', () => {
