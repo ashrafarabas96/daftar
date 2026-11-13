@@ -14,16 +14,35 @@
  *     `AppModule` (`tests/helpers/test-app.ts`), and asserts the headers on
  *     live 200 and 401 responses. Dropping the registration there was red
  *     before this law existed.
- *   - `merchant-api.module.ts` and `platform-api.module.ts` were NOT. No test
- *     reached either composition, so a refactor that dropped the line from
- *     one of them — or a fourth HTTP module added without it — would have
- *     served a surface with no security headers and nothing would have gone
- *     red.
+ *   - `merchant-api.module.ts` and `platform-api.module.ts` were NOT. Several
+ *     suites DO import and compose them — `tests/integration/process-composition`,
+ *     `runtime-isolation`, `inventory-config`, `tests/security/phase4-route-surface`
+ *     — but none runs `configure()` or an HTTP pipeline through them, and no
+ *     gate mentions the middleware (the static-guards script only requires the
+ *     module NAMES to appear in `main.ts`). So dropping the registration
+ *     from either reddened nothing, and a fourth HTTP module added without it
+ *     would have served a surface with no security headers in silence.
+ *     (Corrected after the second review: "no test reached either" was wider
+ *     than the tree — they are reached, just never exercised over HTTP.)
  * So this law's subject is those two compositions and the claim that the set
  * is exactly three; `app.module.ts` is held here as well, cheaply, but it is
  * not where the gap was.
  *
  * This is a source-text law: it needs no database and no application.
+ *
+ * FORMS PINNED BY TEXT, AND WHAT TO DO WHEN ONE REDDENS. This law holds these
+ * spellings, and a legitimate change to any of them fails it for a reason that
+ * is not a security relaxation: `forRoutes('*')` in single quotes; the
+ * `configure(consumer: MiddlewareConsumer)` signature; `createApplicationContext`
+ * appearing exactly twice; `const module =` sitting immediately above
+ * `NestFactory.create(`; and a composition class whose name ends in `Module`.
+ * In every one of those cases the answer is to MOVE THIS LAW in the same
+ * commit — never to loosen the pattern until it matches whatever the file now
+ * says. Two limits are known and stated rather than hidden: a fourth HTTP
+ * composition whose class does not end in `Module` would not be caught by the
+ * identifier match, and an identifier merely MENTIONED in the selection
+ * expression (in a comment, or in a `satisfies` clause) reddens it without a
+ * reach problem. (Second review, finding 4.)
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
@@ -113,8 +132,12 @@ describe('API security-header middleware reach', () => {
     };
     walk(join(ROOT, 'apps', 'api', 'src'));
     expect(sources.length).toBeGreaterThan(20); // positive control: the walk found the tree
+    // `\.create\s*[<(]` and not `\.create\(`: the generic form
+    // `NestFactory.create<NestExpressApplication>(` is the common way to write
+    // this, and a second entrypoint using it would have passed a scan that
+    // required the open parenthesis immediately. (Second review, finding 3.)
     const creators = sources
-      .filter((p) => /NestFactory\.create\(/.test(read(p)))
+      .filter((p) => /NestFactory\s*\.\s*create\s*[<(]/.test(read(p)))
       .map((p) => relative(ROOT, p).split(sep).join('/'))
       .sort();
     expect(creators).toEqual(['apps/api/src/main.ts']);
