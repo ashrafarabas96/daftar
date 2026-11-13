@@ -23,10 +23,14 @@ import { describe, expect, it } from 'vitest';
  * So what is asserted here is the SCOPE of the two gates, not a fix:
  *
  *   REL11-A  POSITIVE CONTROL. The reader finds both steps, by name, in the
- *            real workflow. Asserted FIRST, because every claim below is
+ *            real workflow, and really does read steps that open with
+ *            `- uses:`/`- run:`. Asserted FIRST, because every claim below is
  *            vacuously true against a file in which nothing was found.
  *   REL11-B  THE CLAIM. The snapshot scan carries no event condition => the
  *            push path to `main` is secret-scanned at all.
+ *   REL11-B2 AND NOTHING ABOVE IT switches that step off: neither `hygiene`
+ *            nor the jobs its own `needs:` names carry an event condition.
+ *            Without this, B is a claim about one line and not about coverage.
  *   REL11-C  NEGATIVE CONTROL. On a fixture in which that same step IS gated
  *            on `pull_request`, the reader reports the condition => B can fail,
  *            and this is the red proof of a guard that reads a file it must not
@@ -34,10 +38,24 @@ import { describe, expect, it } from 'vitest';
  *   REL11-D  THE RECORDED GAP. The range scan IS gated on `pull_request`. This
  *            case PINS the gap so it cannot change unnoticed in either
  *            direction. When L2 closes REL-11, this case must be updated in
- *            the SAME commit — exactly as the schema floor and REL-09's policy
- *            text are moved by whoever changes their subject.
+ *            the SAME commit — exactly as `dr71-schema-floor-guard` tells
+ *            whoever adds a migration to move the constant with it.
  *   REL11-E  SCOPE. The workflow's push trigger really does include `main`, so
  *            the gap is in the step's condition and not in the trigger.
+ *   REL11-F  NEGATIVE CONTROL. A missing job and a renamed step are reported;
+ *            `undefined` (no such step) is kept apart from `null` (a step with
+ *            no condition).
+ *   REL11-G  NEGATIVE CONTROL. Removing the range gate is reported, so D is
+ *            not true by construction.
+ *   REL11-H  MECHANISM. Adjacent steps keep their own conditions, and the
+ *            neighbour is taken by POSITION, not by action prefix.
+ *   REL11-I  MECHANISM. A job-level condition is found wherever YAML allows it
+ *            to be written — above `steps:` and below it.
+ *   REL11-J  NEGATIVE CONTROL. A key that is not `branches:` does not feed the
+ *            scope claim, so E cannot go green on an excluded branch.
+ *
+ * This index is part of the file's claim, not decoration: a case added without
+ * a line here is a claim nobody can find. (Second review, finding 5.)
  */
 
 const REPO_ROOT = resolve(__dirname, '..');
@@ -97,57 +115,104 @@ export function conditionOf(steps: readonly WorkflowStep[], stepName: string): s
 }
 
 /**
- * The same, for a step this file can only name through the action it runs.
- * Matched by PREFIX on purpose: pinning `@v4` would make a routine bump of an
- * unrelated action redden a security law, with a message naming an action
- * version instead of a change of scope. (Review of this PR, finding 3.)
+ * One of a job's OWN keys, at four spaces inside that job's block.
+ * `undefined` means no such job, `null` means the job has no such key.
+ *
+ * It deliberately does NOT stop at `steps:`. An earlier version did, and that
+ * made a job whose `if:` is written AFTER `steps:` — a form YAML permits, since
+ * mapping key order carries no meaning — read as `null`, that is, as "not
+ * gated": green in the wrong direction. Step conditions live at eight spaces,
+ * so scanning the whole block costs nothing. (Second review, finding 2.)
  */
-export function conditionOfActionStep(
-  steps: readonly WorkflowStep[],
-  actionPrefix: string,
-): string | null | undefined {
-  const hit = steps.find((s) => s.name.startsWith(`uses:${actionPrefix}`));
-  return hit === undefined ? undefined : hit.condition;
-}
-
-/**
- * A job's own `if:`, at four spaces — the condition that decides whether any of
- * its steps run at all. Reading only the step's condition left this law's
- * coverage claim half-measured: a job-level gate would switch the whole scan
- * off while every step-level assertion stayed green. (Review, finding 1.)
- */
-export function jobCondition(yamlText: string, jobName: string): string | null | undefined {
+export function jobKey(yamlText: string, jobName: string, key: string): string | null | undefined {
   const lines = yamlText.replace(/\r\n?/g, '\n').split('\n');
   const jobAt = lines.findIndex((l) => l === `  ${jobName}:`);
   if (jobAt === -1) return undefined;
+  const want = new RegExp(`^ {4}${key}:(.*)$`);
+  const found: string[] = [];
   for (let i = jobAt + 1; i < lines.length; i += 1) {
     const line = lines[i];
-    if (/^ {2}\S/.test(line)) break;
-    if (/^ {4}steps:/.test(line)) break; // past the job's own keys
-    const cond = /^ {4}if: (.*)$/.exec(line);
-    if (cond !== null) return cond[1].trim();
+    if (/^ {2}\S/.test(line)) break; // the next job
+    const hit = want.exec(line);
+    if (hit !== null) found.push(hit[1].trim());
+    else if (found.length > 0 && /^ {6}- /.test(line) && found[found.length - 1] === '') {
+      // a block list belonging to the key just seen
+      found[found.length - 1] = `${found[found.length - 1]}${line.replace(/^ {6}- /, '')},`;
+    }
   }
-  return null;
+  return found.length === 0 ? null : found[0];
 }
 
-/** The branches the `push:` trigger names, in flow or block style. */
+export function jobCondition(yamlText: string, jobName: string): string | null | undefined {
+  const v = jobKey(yamlText, jobName, 'if');
+  return v === undefined ? undefined : v === null || v === '' ? null : v;
+}
+
+/**
+ * The jobs a job hangs from, read from ITS OWN `needs:` key.
+ *
+ * The first version asserted `toContain('    needs: workspaces')` against the
+ * whole file. That text appears FIVE times in this workflow, so the assertion
+ * passed on four other jobs and could not fail however `hygiene`'s own `needs:`
+ * changed — the same vacuity this file guards against, one layer further up.
+ * (Second review, finding 1.)
+ */
+export function neededJobs(yamlText: string, jobName: string): readonly string[] {
+  const raw = jobKey(yamlText, jobName, 'needs');
+  if (raw === undefined || raw === null || raw === '') return [];
+  return raw
+    .replace(/^\[|\]$/g, '')
+    .split(',')
+    .map((j) => j.trim().replace(/^['"]|['"]$/g, ''))
+    .filter((j) => j !== '');
+}
+
+/**
+ * The branches the `push:` trigger names, in flow or block style — read from
+ * the `branches:` key only.
+ *
+ * The first version collected every six-space list item under `push:`, so a
+ * block-style `branches-ignore:` or `paths:` would have fed the result: the
+ * case would then have gone GREEN swearing `main` is pushed while the workflow
+ * excluded it by name. Treating a brittle red is no excuse for inventing a
+ * false green. (Second review, finding 3.)
+ */
 export function pushBranches(yamlText: string): readonly string[] {
   const lines = yamlText.replace(/\r\n?/g, '\n').split('\n');
   const pushAt = lines.findIndex((l) => /^ {2}push:/.test(l));
   if (pushAt === -1) return [];
   const out: string[] = [];
+  let inBranches = false;
   for (let i = pushAt + 1; i < lines.length; i += 1) {
     const line = lines[i];
-    if (/^ {0,2}\S/.test(line)) break;
-    const flow = /^ {4}branches: \[(.*)\]$/.exec(line);
-    if (flow !== null) {
-      out.push(...flow[1].split(',').map((b) => b.trim().replace(/^['"]|['"]$/g, '')));
+    if (/^ {0,2}\S/.test(line)) break; // the next trigger
+    const key = /^ {4}([A-Za-z_-]+):(.*)$/.exec(line);
+    if (key !== null) {
+      inBranches = key[1] === 'branches';
+      if (!inBranches) continue;
+      const flow = /^\s*\[(.*)\]\s*$/.exec(key[2]);
+      if (flow !== null) {
+        out.push(...flow[1].split(',').map((b) => b.trim().replace(/^['"]|['"]$/g, '')));
+      }
       continue;
     }
+    if (!inBranches) continue;
     const item = /^ {6}- (.*)$/.exec(line);
     if (item !== null) out.push(item[1].trim().replace(/^['"]|['"]$/g, ''));
   }
   return out;
+}
+
+/**
+ * The step immediately after the named one. REL11-H is a claim about the
+ * NEIGHBOUR of the range scan, and matching that neighbour by action prefix
+ * found the FIRST `upload-artifact` step instead — so a second upload step
+ * added above would have been measured in its place. Position is what the
+ * claim is about. (Second review, finding 4.)
+ */
+export function stepAfter(steps: readonly WorkflowStep[], stepName: string): WorkflowStep | undefined {
+  const at = steps.findIndex((s) => s.name === stepName);
+  return at === -1 || at + 1 >= steps.length ? undefined : steps[at + 1];
 }
 
 const WORKFLOW = readFileSync(CI_WORKFLOW_PATH, 'utf8');
@@ -192,8 +257,14 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // If L2 ever does gate one of these, this case reddens and the coverage
     // claim in REL11-B must be re-examined in the SAME commit, not silenced.
     expect(jobCondition(WORKFLOW, 'hygiene')).toBeNull();
-    expect(WORKFLOW).toContain('    needs: workspaces'); // the chain this job hangs from
-    expect(jobCondition(WORKFLOW, 'workspaces')).toBeNull();
+    // Read from `hygiene`'s OWN `needs:` key, and then every job it names is
+    // checked. Asserting the text `    needs: workspaces` against the whole
+    // file could not fail: it occurs five times.
+    const needed = neededJobs(WORKFLOW, 'hygiene');
+    expect(needed).toEqual(['workspaces']);
+    for (const job of needed) {
+      expect(jobCondition(WORKFLOW, job), `${job} gates the chain hygiene hangs from`).toBeNull();
+    }
   });
 
   it('REL11-C (negative control): the reader reports the condition when that same step is gated', () => {
@@ -244,19 +315,51 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // opened a step only on `- name:` attributed that condition to the range
     // scan. Both are pinned here, by value, so the misreading cannot return.
     expect(conditionOf(HYGIENE_STEPS, RANGE_STEP)).toBe(PULL_REQUEST_ONLY);
-    expect(conditionOfActionStep(HYGIENE_STEPS, 'actions/upload-artifact')).toBe(
-      `always() && ${PULL_REQUEST_ONLY}`,
-    );
+    // The claim is about the step that FOLLOWS the range scan, so it is taken
+    // by position. Its action is asserted too, so the case says plainly which
+    // step it measured and fails by name if the order changes.
+    const neighbour = stepAfter(HYGIENE_STEPS, RANGE_STEP);
+    expect(neighbour?.name).toBe('uses:actions/upload-artifact@v4');
+    expect(neighbour?.condition).toBe(`always() && ${PULL_REQUEST_ONLY}`);
   });
 
-  it('REL11-I (mechanism): the job reader stops at the job it was asked for', () => {
-    // `jobCondition` must not wander into the next job and report ITS `if:`,
-    // which is the same misreading `stepsOfJob` first made one level down.
+  it('REL11-I (mechanism): a job-level condition is found wherever YAML allows it to be written', () => {
     expect(jobCondition(WORKFLOW, 'no-such-job')).toBeUndefined();
-    const gatedJob = WORKFLOW.replace('  hygiene:\n', `  hygiene:\n    if: ${PULL_REQUEST_ONLY}\n`);
-    expect(gatedJob).not.toBe(WORKFLOW);
-    expect(jobCondition(gatedJob, 'hygiene')).toBe(PULL_REQUEST_ONLY);
-    // And a condition belonging to a LATER job is not attributed to this one.
     expect(jobCondition(WORKFLOW, 'hygiene')).toBeNull();
+    // Above `steps:` -- the form that is actually used in this workflow.
+    const gatedAbove = WORKFLOW.replace('  hygiene:\n', `  hygiene:\n    if: ${PULL_REQUEST_ONLY}\n`);
+    expect(gatedAbove).not.toBe(WORKFLOW);
+    expect(jobCondition(gatedAbove, 'hygiene')).toBe(PULL_REQUEST_ONLY);
+    // And BELOW `steps:`, which YAML permits because key order carries no
+    // meaning. The first reader broke at `steps:` and reported `null` here --
+    // "not gated" for a job that is gated, which is the one direction a
+    // security law must never be wrong in.
+    const hygieneSteps = /( {2}hygiene:[\s\S]*?\n) {4}steps:\n/.exec(WORKFLOW);
+    expect(hygieneSteps).not.toBeNull();
+    const gatedBelow = WORKFLOW.replace(
+      `${hygieneSteps?.[1]}    steps:\n`,
+      `${hygieneSteps?.[1]}    steps:\n    if: ${PULL_REQUEST_ONLY}\n`,
+    );
+    expect(gatedBelow).not.toBe(WORKFLOW);
+    expect(jobCondition(gatedBelow, 'hygiene')).toBe(PULL_REQUEST_ONLY);
+  });
+
+  it('REL11-J (negative control): a branch key that is not `branches:` does not feed the scope claim', () => {
+    // Treating finding 4's brittleness must not buy a false green: a
+    // block-style `branches-ignore:` would otherwise be read as a pushed
+    // branch, and REL11-E would swear `main` is pushed while it is excluded.
+    const ignored = WORKFLOW.replace(
+      "    branches: [main, 'phase/**']\n",
+      '    branches:\n      - phase/x\n    branches-ignore:\n      - main\n',
+    );
+    expect(ignored).not.toBe(WORKFLOW);
+    expect(pushBranches(ignored)).toEqual(['phase/x']);
+    expect(pushBranches(ignored)).not.toContain('main');
+    // And the block form of `branches:` itself is read, which is finding 4.
+    const blockForm = WORKFLOW.replace(
+      "    branches: [main, 'phase/**']\n",
+      "    branches:\n      - main\n      - 'phase/**'\n",
+    );
+    expect(pushBranches(blockForm)).toEqual(['main', 'phase/**']);
   });
 });
