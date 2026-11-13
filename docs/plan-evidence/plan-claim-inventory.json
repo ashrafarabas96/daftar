@@ -1812,7 +1812,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 169,
+      "line": 200,
       "phase": "cross-phase",
       "signals": ["explain", "explain-analyze", "query-plan-json"],
       "kind": "mention",
@@ -1820,7 +1820,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 193,
+      "line": 224,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1828,7 +1828,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 202,
+      "line": 233,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1836,7 +1836,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 213,
+      "line": 244,
       "phase": "cross-phase",
       "signals": ["explain"],
       "kind": "mention",
@@ -1844,7 +1844,7 @@
     },
     {
       "file": "scripts/plan-evidence/discover-plan-claims.ts",
-      "line": 215,
+      "line": 246,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
