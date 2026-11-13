@@ -78,6 +78,22 @@ const CLAIM = "the pilot's trial flow: a customer is sold to on account, pays pa
  */
 const STATEMENT_PATH: ((customerId: string) => string) | null = null;
 
+/**
+ * The customer write route, once the lane that owns deferred selling mounts
+ * it. `path` is `null` for the same reason `STATEMENT_PATH` is: it is the
+ * measured state of this base, not a placeholder to be tidied away.
+ *
+ * The rest is the contract that lane reported to this one — `POST
+ * /v1/customers`, permission `customers.manage`, a strict body of
+ * `{ customerId, name, phone?, email?, notes? }` where `customerId` is the
+ * CALLER's document UUID and therefore the idempotency key, answering `201`
+ * on the first send and `200` with `replayed` on a replay. It is recorded
+ * here so the day the route lands this file changes in one place, and it is
+ * recorded as REPORTED: I have not measured it, because it does not exist on
+ * this base to measure (RULE-2).
+ */
+const CUSTOMER_CREATE: { readonly path: string | null; readonly permission: string } = { path: null, permission: 'customers.manage' };
+
 // ── the laws ──────────────────────────────────────────────────────────────
 
 /** One movement on the customer's account, in the account's own currency. */
@@ -107,9 +123,20 @@ function receivableOffencesIn(movements: readonly Movement[], observedMinor: big
   return offences;
 }
 
-/** One row of a customer statement, as any statement of an account is shaped. */
+/**
+ * One row of a customer statement.
+ *
+ * The field names of the real row are `debit_txn_minor`, `credit_txn_minor`,
+ * `currency_code` and `running_balance_txn_minor`, in minor units as `BIGINT`,
+ * with the debt the customer owes POSITIVE — reported to this lane by the lane
+ * that owns `0092`, and therefore NOT measured by me (RULE-2): the mapping from
+ * that row to this shape is the second thing that changes the day the route
+ * lands, and the laws below do not move when it does.
+ */
 interface StatementRow {
   readonly what: string;
+  /** The window is partitioned by currency, so a row carries the one it belongs to. */
+  readonly currency: string;
   readonly debitMinor: bigint;
   readonly creditMinor: bigint;
   /** The balance AFTER this row, as the statement itself prints it. */
@@ -117,28 +144,46 @@ interface StatementRow {
 }
 
 /**
- * Every way a statement contradicts itself, as prose. Four laws, and the
- * fourth is deliberately redundant with the third:
+ * Every way a statement contradicts itself, as prose. Five laws, and the fifth
+ * is deliberately redundant with the fourth:
  *
  *   1. a row moves in ONE direction, and neither side is negative;
- *   2. the running balance is a recurrence from the opening balance;
- *   3. the closing balance is the last row's running balance;
- *   4. the closing balance is also the opening balance plus the movements.
+ *   2. every row of one window carries the SAME currency;
+ *   3. the running balance is a recurrence from the opening balance;
+ *   4. the closing balance is the last row's running balance;
+ *   5. the closing balance is also the opening balance plus the movements.
  *
- * Law 4 restates law 3 by a different path ON PURPOSE. A generator that
+ * Law 5 restates law 4 by a different path ON PURPOSE. A generator that
  * computes the closing figure from its own query rather than from the rows it
  * printed satisfies one of them and not the other, and that is precisely the
  * statement a merchant cannot reconcile.
+ *
+ * A SIDELESS ROW IS LAWFUL, AND SAYING OTHERWISE WAS A FALSE RED THIS CHECKER
+ * CARRIED UNTIL NOW. An earlier draft reported "a row that moves nothing is
+ * not a row", which would have reddened a CORRECT statement: the lane that
+ * owns `0092` reports that a collection received and a held credit balance are
+ * rows with NO side at all, and that this is a fact rather than an error,
+ * because unapplied money must not be counted twice and a credit does not net
+ * off a debt (DR-114). That claim is theirs and not my measurement (RULE-2),
+ * and it is exactly the kind of claim worth taking before CI rather than after
+ * it. The law such a row still owes is law 3, which it meets by leaving the
+ * running balance where it was — so no law was dropped to make room for it.
+ *
+ * Law 2 exists because the window is partitioned by currency: a sum taken
+ * across two currencies is a number with no unit, and a running balance that
+ * carried one would be the one figure on the page a merchant could not
+ * reconcile with anything.
  */
 function statementOffencesIn(openingMinor: bigint, rows: readonly StatementRow[], closingMinor: bigint): string[] {
   const offences: string[] = [];
+  const currencies = [...new Set(rows.map((r) => r.currency))];
+  if (currencies.length > 1) offences.push(`the window mixes ${currencies.join(' and ')}, so its running balance is a sum with no unit`);
   let running = openingMinor;
   for (const row of rows) {
     if (row.debitMinor < 0n || row.creditMinor < 0n)
       offences.push(`${row.what}: a statement row carries no negative side (${row.debitMinor}/${row.creditMinor})`);
     if (row.debitMinor !== 0n && row.creditMinor !== 0n)
       offences.push(`${row.what}: a row moves in one direction, not both (${row.debitMinor}/${row.creditMinor})`);
-    if (row.debitMinor === 0n && row.creditMinor === 0n) offences.push(`${row.what}: a row that moves nothing is not a row`);
     running += row.debitMinor - row.creditMinor;
     if (row.runningMinor !== running) offences.push(`${row.what}: the row prints ${row.runningMinor} and the recurrence gives ${running}`);
   }
@@ -157,6 +202,11 @@ let firstCollectionMinor: bigint;
 let secondCollectionMinor: bigint;
 /** The two collections together — what the customer has paid against the invoice. */
 let collectedMinor: bigint;
+/** The status of each collection the first time it was sent. */
+const firstSendStatuses: number[] = [];
+/** The status and the `replayed` flag of the second collection sent AGAIN, byte for byte. */
+let replayStatus: number | null = null;
+let replayFlag: unknown = undefined;
 let observedBalanceMinor: bigint;
 let invoiceCurrency: string;
 let businessBaseCurrency: string;
@@ -205,31 +255,57 @@ beforeAll(async () => {
     { amount: firstCollectionMinor, releasedBefore: 0n },
     { amount: secondCollectionMinor, releasedBefore: firstCollectionMinor },
   ];
-  for (const [i, leg] of legs.entries()) {
-    const collected = await collectPayment(w.t, w.headers, {
-      paymentId: randomUUID(),
-      customerId,
-      paymentMethodId: w.paymentMethodId,
-      paymentDate: w.day,
-      amountMinor: leg.amount.toString(),
-      allocations: [
-        {
-          invoiceId: invoice.invoiceId,
-          appliedMinor: leg.amount.toString(),
-          // The chain position the suite PREDICTS and the server derives.
-          // A wrong prediction here is refused by the command rather than
-          // absorbed, which is why it is stated rather than omitted.
-          releasedBeforeMinor: leg.releasedBefore.toString(),
-          invoiceTotalTxnMinor: invoice.totalTxnMinor,
-          invoiceTotalBaseMinor: invoice.totalBaseMinor,
-        },
-      ],
-    });
+  // The input of each leg is built ONCE and kept, because the replay below has
+  // to be the SAME command and not a second command that looks like it: the
+  // collection is idempotent on the caller-supplied document UUID plus the
+  // stored intent digest, so a replay that minted a fresh id would be a new
+  // payment and would prove nothing about replay at all.
+  const inputs = legs.map((leg) => ({
+    paymentId: randomUUID(),
+    customerId,
+    paymentMethodId: w.paymentMethodId,
+    paymentDate: w.day,
+    amountMinor: leg.amount.toString(),
+    allocations: [
+      {
+        invoiceId: invoice.invoiceId,
+        appliedMinor: leg.amount.toString(),
+        // The chain position the suite PREDICTS and the server derives.
+        // A wrong prediction here is refused by the command rather than
+        // absorbed, which is why it is stated rather than omitted.
+        releasedBeforeMinor: leg.releasedBefore.toString(),
+        invoiceTotalTxnMinor: invoice.totalTxnMinor,
+        invoiceTotalBaseMinor: invoice.totalBaseMinor,
+      },
+    ],
+  }));
+  for (const [i, input] of inputs.entries()) {
+    const collected = await collectPayment(w.t, w.headers, input);
     if (collected.status >= 300) {
-      refusedAt = `step 3 — collection ${i + 1} of ${legs.length} was refused with ${collected.status}: ${JSON.stringify(collected.body)}`;
+      refusedAt = `step 3 — collection ${i + 1} of ${inputs.length} was refused with ${collected.status}: ${JSON.stringify(collected.body)}`;
       return;
     }
+    firstSendStatuses.push(collected.status);
   }
+
+  step = 'step 3b — the SAME second collection again, byte for byte';
+  // The merchant's till loses its connection and the cashier presses collect
+  // twice. If the second request is taken as new money, the customer is shown
+  // a debt smaller than it is, and the statement balances perfectly around a
+  // payment that never arrived. So the replay is driven, and what it must NOT
+  // do is the law: it must not move the balance read in step 4.
+  const lastInput = inputs.at(-1);
+  if (lastInput === undefined) {
+    refusedAt = 'step 3b — no collection was built, so there is nothing to replay';
+    return;
+  }
+  const replay = await collectPayment(w.t, w.headers, lastInput);
+  if (replay.status >= 300) {
+    refusedAt = `step 3b — the replay was refused with ${replay.status}: ${JSON.stringify(replay.body)}`;
+    return;
+  }
+  replayStatus = replay.status;
+  replayFlag = (replay.body as { replayed?: unknown }).replayed;
 
   step = LAST_STEP;
   const read = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
@@ -258,13 +334,33 @@ function flowMovements(): readonly Movement[] {
   ];
 }
 
-/** The same three movements as a statement would print them, with its running balance. */
+/**
+ * The statement this flow SHOULD produce, row by row, with the shape the lane
+ * that owns `0092` reports: a collection received is a row with **no side**,
+ * and the credit side carries the amount APPLIED to the document. So each
+ * collection here is two rows, not one — the money arriving, which moves no
+ * balance, and the application, which moves it.
+ *
+ * This builder is the expected statement, and it is what exercises the laws
+ * until the route exists. The day it does, the route's own rows are mapped
+ * here instead and every law above stays exactly as it is.
+ */
 function flowStatementRows(): readonly StatementRow[] {
   const sale = BigInt(invoice.totalTxnMinor);
+  const ccy = invoiceCurrency;
+  const afterFirst = sale - firstCollectionMinor;
   return [
-    { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale },
-    { what: 'the first collection', debitMinor: 0n, creditMinor: firstCollectionMinor, runningMinor: sale - firstCollectionMinor },
-    { what: 'the second collection', debitMinor: 0n, creditMinor: secondCollectionMinor, runningMinor: sale - collectedMinor },
+    { what: 'the sale on account', currency: ccy, debitMinor: sale, creditMinor: 0n, runningMinor: sale },
+    { what: 'the first collection, received', currency: ccy, debitMinor: 0n, creditMinor: 0n, runningMinor: sale },
+    { what: 'the first collection, applied to the invoice', currency: ccy, debitMinor: 0n, creditMinor: firstCollectionMinor, runningMinor: afterFirst },
+    { what: 'the second collection, received', currency: ccy, debitMinor: 0n, creditMinor: 0n, runningMinor: afterFirst },
+    {
+      what: 'the second collection, applied to the invoice',
+      currency: ccy,
+      debitMinor: 0n,
+      creditMinor: secondCollectionMinor,
+      runningMinor: sale - collectedMinor,
+    },
   ];
 }
 
@@ -305,6 +401,34 @@ describe(CLAIM, () => {
     );
   });
 
+  it('3b. A REPLAY IS NOT MONEY: the same collection sent twice is answered as a replay, and the balance does not move', () => {
+    expect(refusedAt).toBeNull();
+    // POSITIVE CONTROL ON THE REPLAY ITSELF. A `201` from the second send
+    // would mean a second payment was created, and the balance law would then
+    // be measuring a flow of three collections rather than a replay of two —
+    // which is the failure this case exists to catch, read as a pass.
+    expect(firstSendStatuses, 'the two collections were not both accepted as NEW payments').toStrictEqual([201, 201]);
+    expect(replayStatus, 'the replay was answered as a new payment rather than as a replay').toBe(200);
+    expect(replayFlag, 'the answer did not say it was a replay').toBe(true);
+    // AND THE MONEY, which is what this case is actually for: the balance of
+    // step 4 is read AFTER the replay, so the flow's own law already covers
+    // it. Stated again here because a status code is not a figure.
+    expect(receivableOffencesIn(flowMovements(), observedBalanceMinor), 'the replay moved the customer balance').toStrictEqual([]);
+  });
+
+  it('OWED BY THE SELLING LANE — the customer is created through its own route once it is mounted', () => {
+    // RED ON PURPOSE, like the statement case below. The route's contract is
+    // recorded on `CUSTOMER_CREATE`, so the day the migration that carries it
+    // merges, step 1 stops being a seeded fixture and becomes the merchant's
+    // own command — with the replay law above applied to it unchanged: the
+    // same `customerId` sent twice must answer `200`, say `replayed`, and
+    // leave ONE customer.
+    expect(
+      CUSTOMER_CREATE.path,
+      'the customer write route is not mounted on this base: the four customer.* operation codes it needs do not exist yet, and this suite seeds the customer rather than pretending the route is there',
+    ).not.toBeNull();
+  });
+
   it('NEGATIVE CONTROL — a balance one minor unit out is reported by the same checker the live case used', () => {
     expect(refusedAt).toBeNull();
     const wrong = receivableOffencesIn(flowMovements(), observedBalanceMinor + 1n);
@@ -329,47 +453,87 @@ describe(CLAIM, () => {
     // THREE rows, so the recurrence has a middle: a two-row statement cannot
     // distinguish "each row adds its own movement" from "the last row prints
     // the closing figure", and the middle row is the only place that can.
+    // FIVE rows, so the recurrence has a middle: a two-row statement cannot
+    // distinguish "each row adds its own movement" from "the last row prints
+    // the closing figure", and a middle row is the only place that can. Two of
+    // the five carry NO side, which is the shape the real statement has.
     expect(rows.length, 'no middle row was stated, so the recurrence would pass on its endpoints').toBeGreaterThan(2);
+    expect(
+      rows.filter((r) => r.debitMinor === 0n && r.creditMinor === 0n).length,
+      'no sideless row was stated, so the law that they are lawful would pass on nothing',
+    ).toBe(2);
     expect(statementOffencesIn(0n, rows, sale - collectedMinor), 'a statement built from the flow that actually ran contradicts itself').toStrictEqual([]);
     // No false red on the empty statement of a customer who owes nothing.
     expect(statementOffencesIn(0n, [], 0n)).toStrictEqual([]);
   });
 
-  it('NEGATIVE CONTROL — each of the four statement laws is seen to say no, and law 4 catches what law 3 cannot', () => {
+  it('NEGATIVE CONTROL — each of the five statement laws is seen to say no, and law 5 catches what law 4 cannot', () => {
     const sale = 1_500n;
     const paid = 400n;
+    const CCY = 'ILS';
     const right: readonly StatementRow[] = [
-      { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale },
-      { what: 'the collection', debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
+      { what: 'the sale on account', currency: CCY, debitMinor: sale, creditMinor: 0n, runningMinor: sale },
+      { what: 'the collection, received', currency: CCY, debitMinor: 0n, creditMinor: 0n, runningMinor: sale },
+      { what: 'the collection, applied', currency: CCY, debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
     ];
     expect(statementOffencesIn(0n, right, sale - paid), 'the planted RIGHT statement must be silent, or the reds below say nothing').toStrictEqual([]);
 
     // Law 1 — two directions in one row.
-    const bothWays = [{ what: 'a row that moves both ways', debitMinor: sale, creditMinor: paid, runningMinor: sale - paid }];
+    const bothWays = [{ what: 'a row that moves both ways', currency: CCY, debitMinor: sale, creditMinor: paid, runningMinor: sale - paid }];
     expect(statementOffencesIn(0n, bothWays, sale - paid).some((o) => o.includes('one direction, not both'))).toBe(true);
 
-    // Law 2 — the recurrence is broken in the MIDDLE, where a closing-balance
+    // Law 2 — one window, two currencies. The arithmetic of the rows is
+    // internally consistent here, so every other law is satisfied and this is
+    // the only one that can object.
+    const mixed: readonly StatementRow[] = [
+      { what: 'a sale in the base currency', currency: CCY, debitMinor: sale, creditMinor: 0n, runningMinor: sale },
+      { what: 'a collection applied in another currency', currency: 'USD', debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
+    ];
+    const mixedOffences = statementOffencesIn(0n, mixed, sale - paid);
+    expect(mixedOffences.some((o) => o.includes('mixes'))).toBe(true);
+    expect(mixedOffences.length, 'the mixed window broke more than the currency law, so this plant proves the wrong thing').toBe(1);
+
+    // Law 3 — the recurrence is broken in the MIDDLE, where a closing-balance
     // check alone would still agree with the final row.
     const brokenMiddle: readonly StatementRow[] = [
-      { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale + 1n },
-      { what: 'the collection', debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
+      { what: 'the sale on account', currency: CCY, debitMinor: sale, creditMinor: 0n, runningMinor: sale + 1n },
+      { what: 'the collection, applied', currency: CCY, debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
     ];
     expect(statementOffencesIn(0n, brokenMiddle, sale - paid).some((o) => o.includes('the recurrence gives'))).toBe(true);
 
-    // Law 3 — the closing figure disagrees with the rows that were printed.
+    // Law 3 again, on a SIDELESS row: it is lawful, but it owes the balance it
+    // was given. A row that moves nothing and yet moves the running balance is
+    // money appearing from nowhere, and this is the case that keeps "sideless
+    // rows are lawful" from becoming "sideless rows are unchecked".
+    const sidelessMoved: readonly StatementRow[] = [
+      { what: 'the sale on account', currency: CCY, debitMinor: sale, creditMinor: 0n, runningMinor: sale },
+      { what: 'a collection received that moved the balance anyway', currency: CCY, debitMinor: 0n, creditMinor: 0n, runningMinor: sale - paid },
+    ];
+    expect(statementOffencesIn(0n, sidelessMoved, sale - paid).some((o) => o.includes('the recurrence gives'))).toBe(true);
+
+    // Law 4 — the closing figure disagrees with the rows that were printed.
     expect(statementOffencesIn(0n, right, sale - paid + 7n).some((o) => o.includes("the last row's running balance"))).toBe(true);
 
-    // Law 4 — the opening balance is dropped on the way to the closing figure.
-    // Law 3 is SILENT here, because the rows and the closing figure agree with
-    // each other and both forgot the opening balance. This is the one case
-    // that makes law 4 earn its place rather than restate law 3.
+    // Law 5 — the customer OPENED the window owing something, and the page
+    // was printed as though it opened at zero: every running balance, and the
+    // closing figure with them, forgot the opening balance.
+    //
+    // Law 4 is SILENT here, and that silence is the whole point: the rows and
+    // the closing figure agree with EACH OTHER. Only the second path to the
+    // closing figure — the opening balance plus the movements — can see that
+    // both of them are short by the same amount. The silence is asserted and
+    // not described, because a law claimed to catch what another cannot is a
+    // claim about the other one too.
     const openedOwing = 900n;
-    const forgotOpening: readonly StatementRow[] = [
-      { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale },
-      { what: 'the collection', debitMinor: 0n, creditMinor: paid, runningMinor: sale - paid },
-    ];
-    const lawThreeAndFour = statementOffencesIn(openedOwing, forgotOpening, sale - paid);
-    expect(lawThreeAndFour.some((o) => o.includes('plus the movements is'))).toBe(true);
+    const forgotOpening = statementOffencesIn(openedOwing, right, sale - paid);
+    expect(
+      forgotOpening.some((o) => o.includes('plus the movements is')),
+      'law 5 did not see a dropped opening balance',
+    ).toBe(true);
+    expect(
+      forgotOpening.some((o) => o.includes("the last row's running balance")),
+      'law 4 spoke here, so this case does not show that law 5 catches anything law 4 cannot',
+    ).toBe(false);
   });
 
   it('OWED BY THE SELLING LANE — the per-customer statement route is read through this file once it is mounted', () => {
