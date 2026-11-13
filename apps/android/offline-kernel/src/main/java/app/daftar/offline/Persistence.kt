@@ -306,10 +306,18 @@ class EncryptedQueueStore(
         // before the remedy: `recordSendAttempt` read the row, added one to
         // `attempts` and wrote it back with no lock, so two callers both read
         // `attempts = n` and both wrote `n + 1`, losing an attempt from the
-        // very counter the backoff table reads. `markReleased`, `recordOutcome`,
-        // `recordProcessDeath` and `purge` had the same shape. All six now take
-        // this one gate, each inline, and `p7-02-atomic-write-points` asserts
-        // it for every declared point, with a plant that removes it from one.
+        // very counter the backoff table reads. `markReleased`, `recordOutcome`
+        // and `recordProcessDeath` had the same read-modify-write shape, and
+        // `purge` is a blind delete with no read, gated so it cannot interleave
+        // with them. All six now take this one gate, each inline, and
+        // `p7-02-atomic-write-points` asserts it for every declared point,
+        // with a plant that removes it from one.
+        //
+        // LOCK ORDER, a contract nothing enforces yet: always this gate first,
+        // then whatever lock the engine takes. A caller that already holds an
+        // engine transaction of its own and then calls a write point would
+        // invert that order. No production caller does today; the first one
+        // that binds `SupportSQLiteDatabase` must not.
         // And it is held INLINE, not in a helper. `ATOMIC_WRITE_POINTS` is
         // checked by equality against the functions that contain `begin()`, so
         // factoring this read-modify-write into a private helper would empty
@@ -357,9 +365,10 @@ class EncryptedQueueStore(
         /**
          * The process-wide write gate. A plain object, because what is needed
          * is mutual exclusion and nothing else: no fairness, no reentrancy
-         * beyond the JVM monitor's own, and no timeout -- a capture that cannot
-         * take the gate is waiting on another capture, which is microseconds of
-         * disk work, and a timeout here would turn contention into a lost sale.
+         * beyond the JVM monitor's own, and no timeout -- a write that cannot
+         * take the gate is waiting on another write, which is short disk work
+         * but not microseconds now that every write point shares the gate, and
+         * a timeout here would turn contention into a lost write.
          */
         private val WRITE_GATE = Any()
     }

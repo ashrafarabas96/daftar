@@ -183,36 +183,64 @@ class Sneaky(private val db: Transactional) {
    * taken BEFORE `db.begin()`, inline in the function that begins -- a helper would
    * empty it of its transaction and weaken `ATOMIC_WRITE_POINTS` to containment.
    */
-  it('takes the write gate before it begins, in every write point', () => {
+  it('takes the write gate around begin and end, in every write point', () => {
+    // Comments removed first: a sentence that merely says `synchronized(WRITE_GATE)` is not a gate.
+    const code = (text: string): string =>
+      text
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .map((line) => line.split('//')[0] ?? '')
+        .join('\n');
+    const encloses = (body: string): boolean => {
+      const src = code(body);
+      const gate = src.indexOf('synchronized(WRITE_GATE)');
+      if (gate === -1) return false;
+      const open = src.indexOf('{', gate);
+      if (open === -1) return false;
+      let depth = 0;
+      let close = -1;
+      for (let i = open; i < src.length; i += 1) {
+        if (src[i] === '{') depth += 1;
+        else if (src[i] === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            close = i;
+            break;
+          }
+        }
+      }
+      if (close === -1) return false;
+      const begin = src.indexOf('db.begin()');
+      const end = src.lastIndexOf('db.end()');
+      return begin > open && begin < close && end > open && end < close;
+    };
     const check = (source: string): { checked: number; ungated: string[] } => {
       const declared = new Set(declaredWritePoints(source));
       const points = functionBodies(source).filter(({ name }) => declared.has(name));
-      const ungated = points
-        .filter(({ body }) => {
-          const gate = body.indexOf('synchronized(WRITE_GATE)');
-          const begin = body.indexOf('db.begin()');
-          return gate === -1 || begin === -1 || gate > begin;
-        })
-        .map(({ name }) => name);
-      return { checked: points.length, ungated };
+      return { checked: points.length, ungated: points.filter(({ body }) => !encloses(body)).map(({ name }) => name) };
     };
 
-    // Positive control FIRST: the probe must see all six declared points, or an empty
+    // Positive control FIRST: the probe sees all six declared points, or an empty
     // `ungated` would mean it found nothing to look at.
     const real = check(persistence());
     expect(real.checked).toBe(6);
     expect(real.ungated).toEqual([]);
 
-    // Negative control: the gate removed from ONE point is reported by name, and the
-    // plant is proved to have landed before its result is read.
-    const planted = persistence().replace(
-      `    fun recordSendAttempt(idempotencyKey: String): StoredRow {
-        return synchronized(WRITE_GATE) {`,
-      `    fun recordSendAttempt(idempotencyKey: String): StoredRow {
-        return run {`,
-    );
-    expect(planted).not.toBe(persistence());
-    expect(check(planted).ungated).toEqual(['recordSendAttempt']);
+    // Negative controls, each proved to have landed before its result is read. A gate
+    // absent, a gate that sits BEFORE begin but encloses nothing, and a gate named only
+    // in a comment must each be reported by name.
+    const header = '    fun recordSendAttempt(idempotencyKey: String): StoredRow {\n';
+    const gateLine = '        return synchronized(WRITE_GATE) {\n';
+    const plants: Array<[string, string]> = [
+      ['absent', header + '        return run {\n'],
+      ['empty block before begin', header + '        synchronized(WRITE_GATE) { }\n        return run {\n'],
+      ['named in a comment only', header + '        // synchronized(WRITE_GATE)\n        return run {\n'],
+    ];
+    for (const [label, replacement] of plants) {
+      const planted = persistence().replace(header + gateLine, replacement);
+      expect(planted, `the ${label} plant did not land`).not.toBe(persistence());
+      expect(check(planted).ungated, `the ${label} plant was not reported`).toEqual(['recordSendAttempt']);
+    }
   });
 
   it('ends the transaction in a finally, in every write point', () => {

@@ -33,8 +33,12 @@ import kotlin.test.assertTrue
  * schedule does not know happened.
  *
  * WHAT THIS SUITE ASSERTS: two recorded attempts leave `attempts == 2`, and
- * both writes reach the engine. Today the second write overwrites the first
- * with the same value and the counter ends at 1: that is the red.
+ * both writes reach the engine. Before the remedy the second write overwrote
+ * the first with the same value and the counter ended at 1: that was the red.
+ * A run whose two threads did not enter together is refused as INCONCLUSIVE,
+ * not passed: a second thread that began after the rendezvous's wait would read
+ * a row the first had already written, and the case would be green on a kernel
+ * that still loses the update.
  *
  * WHY THE LAW IS STATED ON THE OUTCOME AND NOT ON THE OVERLAP. A rendezvous
  * that forces the interleave would, once the fix serialises these callers,
@@ -147,9 +151,12 @@ class UnserialisedWritePointsTest {
                 "forced to overlap and this case would pass on a kernel that loses the update",
         )
 
+        val writesBefore = disk.writes.get()
+        val entered = java.util.concurrent.atomic.AtomicLongArray(2)
         val failures = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
-        val threads = (1..2).map {
+        val threads = (0..1).map { index ->
             Thread {
+                entered.set(index, System.nanoTime())
                 try {
                     store.recordSendAttempt(key)
                 } catch (thrown: Throwable) {
@@ -164,6 +171,17 @@ class UnserialisedWritePointsTest {
             emptyList(),
             failures.toList(),
             "recording a send attempt threw, so the counter was never the subject",
+        )
+        assertEquals(
+            2,
+            disk.writes.get() - writesBefore,
+            "both recordings must reach the engine's write, or the counter below says nothing",
+        )
+        val gapMillis = Math.abs(entered.get(0) - entered.get(1)) / 1_000_000
+        assertTrue(
+            gapMillis < 1_000,
+            "INCONCLUSIVE, not a pass: the two threads entered $gapMillis ms apart, so the second " +
+                "may have read a row the first had already written",
         )
         assertEquals(
             2,
