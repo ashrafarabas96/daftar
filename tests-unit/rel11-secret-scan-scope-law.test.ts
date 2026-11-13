@@ -53,6 +53,9 @@ import { describe, expect, it } from 'vitest';
  *            to be written — above `steps:` and below it.
  *   REL11-J  NEGATIVE CONTROL. A key that is not `branches:` does not feed the
  *            scope claim, so E cannot go green on an excluded branch.
+ *   REL11-K  NEGATIVE CONTROL. A `needs:` written as a multi-element list,
+ *            block or flow, is read WHOLE — so B2's loop checks every job it
+ *            names and not just the first.
  *
  * This index is part of the file's claim, not decoration: a case added without
  * a line here is a claim nobody can find. (Second review, finding 5.)
@@ -129,18 +132,33 @@ export function jobKey(yamlText: string, jobName: string, key: string): string |
   const jobAt = lines.findIndex((l) => l === `  ${jobName}:`);
   if (jobAt === -1) return undefined;
   const want = new RegExp(`^ {4}${key}:(.*)$`);
-  const found: string[] = [];
+  let value: string | null = null;
+  // Set when the key was seen with an EMPTY inline value, so the six-space
+  // items that follow are ITS block list. A previous version tested the
+  // accumulated value instead, which stopped being empty after the first item
+  // and so dropped every element after it — silently, and in the direction
+  // that keeps an assertion green while it checks less than it names.
+  // (Third review, finding 1.)
+  let collecting = false;
   for (let i = jobAt + 1; i < lines.length; i += 1) {
     const line = lines[i];
     if (/^ {2}\S/.test(line)) break; // the next job
     const hit = want.exec(line);
-    if (hit !== null) found.push(hit[1].trim());
-    else if (found.length > 0 && /^ {6}- /.test(line) && found[found.length - 1] === '') {
-      // a block list belonging to the key just seen
-      found[found.length - 1] = `${found[found.length - 1]}${line.replace(/^ {6}- /, '')},`;
+    if (hit !== null) {
+      if (value !== null) continue; // a duplicate key: the first one wins
+      value = hit[1].trim();
+      collecting = value === '';
+      continue;
     }
+    if (!collecting) continue;
+    const item = /^ {6}- (.*)$/.exec(line);
+    if (item !== null) {
+      value = value === '' ? item[1].trim() : `${value},${item[1].trim()}`;
+      continue;
+    }
+    if (/^ {4}\S/.test(line)) collecting = false; // the key's list ended
   }
-  return found.length === 0 ? null : found[0];
+  return value;
 }
 
 export function jobCondition(yamlText: string, jobName: string): string | null | undefined {
@@ -213,6 +231,26 @@ export function pushBranches(yamlText: string): readonly string[] {
 export function stepAfter(steps: readonly WorkflowStep[], stepName: string): WorkflowStep | undefined {
   const at = steps.findIndex((s) => s.name === stepName);
   return at === -1 || at + 1 >= steps.length ? undefined : steps[at + 1];
+}
+
+/**
+ * Put a line at the END of a job's block — after its last step — so a seeded
+ * job key lands in text a workflow could actually have.
+ */
+export function insertAtEndOfJob(yamlText: string, jobName: string, line: string): string {
+  const lines = yamlText.replace(/\r\n?/g, '\n').split('\n');
+  const jobAt = lines.findIndex((l) => l === `  ${jobName}:`);
+  if (jobAt === -1) return yamlText;
+  let end = lines.length;
+  for (let i = jobAt + 1; i < lines.length; i += 1) {
+    if (/^ {2}\S/.test(lines[i])) {
+      end = i;
+      break;
+    }
+  }
+  // Step back over trailing blank lines so the key stays inside the block.
+  while (end > jobAt + 1 && lines[end - 1].trim() === '') end -= 1;
+  return [...lines.slice(0, end), line, ...lines.slice(end)].join('\n');
 }
 
 const WORKFLOW = readFileSync(CI_WORKFLOW_PATH, 'utf8');
@@ -319,7 +357,11 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // by position. Its action is asserted too, so the case says plainly which
     // step it measured and fails by name if the order changes.
     const neighbour = stepAfter(HYGIENE_STEPS, RANGE_STEP);
-    expect(neighbour?.name).toBe('uses:actions/upload-artifact@v4');
+    // Named by action PREFIX, not by version: the claim is about which step
+    // this is and what condition it carries, and the action's version is no
+    // part of it. Pinning `@v4` would make a routine bump redden a security
+    // law for a reason unrelated to scope. (Third review, finding 3.)
+    expect(neighbour?.name).toMatch(/^uses:actions\/upload-artifact(@|$)/);
     expect(neighbour?.condition).toBe(`always() && ${PULL_REQUEST_ONLY}`);
   });
 
@@ -330,18 +372,45 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     const gatedAbove = WORKFLOW.replace('  hygiene:\n', `  hygiene:\n    if: ${PULL_REQUEST_ONLY}\n`);
     expect(gatedAbove).not.toBe(WORKFLOW);
     expect(jobCondition(gatedAbove, 'hygiene')).toBe(PULL_REQUEST_ONLY);
-    // And BELOW `steps:`, which YAML permits because key order carries no
-    // meaning. The first reader broke at `steps:` and reported `null` here --
-    // "not gated" for a job that is gated, which is the one direction a
+    // And AFTER the step list, which YAML permits because mapping key order
+    // carries no meaning. The first reader broke at `steps:` and reported
+    // `null` here -- "not gated" for a job that is gated, the one direction a
     // security law must never be wrong in.
-    const hygieneSteps = /( {2}hygiene:[\s\S]*?\n) {4}steps:\n/.exec(WORKFLOW);
-    expect(hygieneSteps).not.toBeNull();
-    const gatedBelow = WORKFLOW.replace(
-      `${hygieneSteps?.[1]}    steps:\n`,
-      `${hygieneSteps?.[1]}    steps:\n    if: ${PULL_REQUEST_ONLY}\n`,
-    );
+    //
+    // The gate goes after the job's LAST step, not immediately after the
+    // `steps:` key: inserting it there would orphan the six-space sequence
+    // items onto `if:` and produce text YAML cannot parse, so the case would
+    // have been proving the reader against an input no workflow could have.
+    // (Third review, finding 2.)
+    const gatedBelow = insertAtEndOfJob(WORKFLOW, 'hygiene', `    if: ${PULL_REQUEST_ONLY}`);
     expect(gatedBelow).not.toBe(WORKFLOW);
+    expect(gatedBelow).toContain(`\n    if: ${PULL_REQUEST_ONLY}\n`);
     expect(jobCondition(gatedBelow, 'hygiene')).toBe(PULL_REQUEST_ONLY);
+  });
+
+  it('REL11-K (negative control): a block-style `needs:` is read whole, so B2 checks every job it names', () => {
+    // The hole the third review found inside the cure for finding 1: the
+    // collector dropped every element after the first, so `toEqual` stayed
+    // green while the loop never saw the second job. A multi-element BLOCK
+    // list is the form `needs:` is normally written in, and nothing touched
+    // this branch until now.
+    const twoNeeds = WORKFLOW.replace(
+      '  hygiene:\n    needs: workspaces\n',
+      '  hygiene:\n    needs:\n      - workspaces\n      - prep\n',
+    );
+    expect(twoNeeds).not.toBe(WORKFLOW);
+    expect(neededJobs(twoNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
+    // The flow form reads the same way. Anchored on `  hygiene:` because the
+    // line `    needs: workspaces` occurs FIVE times in this workflow and a
+    // string replace takes the first — which is another job's. This control
+    // itself failed that way first: the same vacuity the review named, now
+    // inside the seed instead of inside the assertion.
+    const flowNeeds = WORKFLOW.replace(
+      '  hygiene:\n    needs: workspaces\n',
+      "  hygiene:\n    needs: [workspaces, 'prep']\n",
+    );
+    expect(flowNeeds).not.toBe(WORKFLOW);
+    expect(neededJobs(flowNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
   });
 
   it('REL11-J (negative control): a branch key that is not `branches:` does not feed the scope claim', () => {
