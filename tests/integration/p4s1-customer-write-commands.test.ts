@@ -39,6 +39,7 @@
  * run at all. It never reports a pass without one.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { PERMISSIONS } from '../../packages/domain-core/src/permissions';
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asMember, onboardS3Business, registerActor, type HttpActor } from '../helpers/inventory-commands';
@@ -685,5 +686,80 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       // `beforeAll` performs, and on a short build it must not hold.
       expect(appliedHead === base(headMigration()), 'a database below the complete set does NOT satisfy the derived-head guard').toBe(false);
     }, 420_000);
+  });
+
+  // ── (h) the permission bit is load-bearing ─────────────────────────────
+  //
+  // Proved able to fail, and the planting measured WHERE the refusal lives.
+  // Weakening `@phase4Permission('customers.manage')` on one route, on the
+  // other, or on both leaves this test GREEN: a second gate refuses as well —
+  // `OPERATION_AUTHORITY` in apps/api/src/modules/inventory/
+  // inventory-authorization.ts maps `customer.create` and `customer.update` to
+  // `customers.manage`, and customer.service.ts calls it. The test goes RED
+  // only when BOTH are weakened: measured on this file's own tree, the route
+  // then answered 201 and this `it` failed on
+  // `expected 201 to be 403`. Both files were restored byte-for-byte
+  // afterwards (git hash-object equal to the pre-plant blobs).
+  //
+  // So what this group defends is the ROUTE's refusal, not one decorator. A
+  // future change that drops only the decorator will not be caught here — it
+  // will be caught by that second gate, and if someone ever deletes the gate
+  // too, this test is what goes red.
+  describe('(h) the permission bit itself is load-bearing on both write routes', () => {
+    it('refuses POST /v1/customers and PUT /v1/customers/:id for a member holding every permission but customers.manage, while the same member still reads', async () => {
+      // A custom role = every permission the owner holds EXCEPT the one under
+      // proof. The owner holds all of them, so the delegation ceiling lets the
+      // role through; any other refusal would then be about the fixture.
+      const without = PERMISSIONS.filter((p) => p !== 'customers.manage');
+      expect(without.length, 'the stripped set is the full set minus exactly one key').toBe(PERMISSIONS.length - 1);
+      expect(without, 'customers.view stays: it is the positive control').toContain('customers.view');
+
+      const role = await t.request
+        .post('/v1/businesses/current/roles')
+        .set(asMember(ownerA, bizA.businessId))
+        .send({ key: 'no-cust-manage', name: 'No customers.manage', permissions: without });
+      expect(role.status, `create the stripped role: ${JSON.stringify(role.body)}`).toBe(201);
+
+      // Self-contained: the owner (who DOES hold customers.manage) creates the
+      // customer under test, so this group does not lean on (a)'s state.
+      const targetId = randomUUID();
+      const seeded = await t.request.post('/v1/customers').set(asMember(ownerA, bizA.businessId)).send({ customerId: targetId, name: 'Permission Target' });
+      expect(seeded.status, `owner seeds the target customer: ${JSON.stringify(seeded.body)}`).toBe(201);
+
+      const member = await registerActor(t, 'L3 stripped member');
+      const add = await t.request
+        .post('/v1/businesses/current/members')
+        .set(asMember(ownerA, bizA.businessId))
+        .send({ email: member.email, roleKey: 'no-cust-manage' });
+      expect(add.status, `add the member to the stripped role: ${JSON.stringify(add.body)}`).toBe(201);
+      const h = asMember(member, bizA.businessId);
+
+      // POSITIVE CONTROL: the same caller, token and business succeed on a
+      // route it does hold, and see the customer the owner seeded.
+      const read = await t.request.get('/v1/customers').set(h);
+      expect(read.status, `positive control, GET /v1/customers by the stripped member: ${JSON.stringify(read.body)}`).toBe(200);
+      const one = await t.request.get(`/v1/customers/${targetId}`).set(h);
+      expect(one.status, `positive control, GET the customer by id: ${JSON.stringify(one.body)}`).toBe(200);
+
+      const newId = randomUUID();
+      const post = await t.request.post('/v1/customers').set(h).send({ customerId: newId, name: 'Should Not Exist' });
+      expect(post.status, `POST /v1/customers without customers.manage must be refused 403: ${JSON.stringify(post.body)}`).toBe(403);
+      const put = await t.request.put(`/v1/customers/${targetId}`).set(h).send({ expectedRevision: 1, name: 'Should Not Change' });
+      expect(put.status, `PUT /v1/customers/:id without customers.manage must be refused 403: ${JSON.stringify(put.body)}`).toBe(403);
+      for (const [route, res] of [
+        ['POST', post],
+        ['PUT', put],
+      ] as const) {
+        expect(JSON.stringify(res.body), `${route} refusal names the missing permission`).toContain('customers.manage');
+      }
+
+      // The refusal wrote nothing: the owner still sees the seeded state, and the
+      // refused create left no row.
+      const after = await t.request.get(`/v1/customers/${targetId}`).set(asMember(ownerA, bizA.businessId));
+      expect(after.body.name, 'a refused PUT changed nothing').toBe('Permission Target');
+      expect(after.body.revision, 'a refused PUT advanced nothing').toBe(1);
+      const ghost = await t.request.get(`/v1/customers/${newId}`).set(asMember(ownerA, bizA.businessId));
+      expect(ghost.status, 'a refused POST created no customer').toBe(404);
+    }, 120_000);
   });
 });
