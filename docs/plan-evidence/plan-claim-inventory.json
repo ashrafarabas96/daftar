@@ -88,7 +88,7 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 431,
+    "hits": 432,
     "planGates": 120,
     "assertions": 31,
     "files": 55
