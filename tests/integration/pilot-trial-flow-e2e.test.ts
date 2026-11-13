@@ -170,19 +170,28 @@ interface StatementRow {
 }
 
 /**
- * Every way a statement contradicts itself, as prose. Five laws, and the fifth
- * is deliberately redundant with the fourth:
+ * Every way a statement contradicts itself, as prose. Five laws:
  *
  *   1. a row moves in ONE direction, and neither side is negative;
  *   2. every row of one window carries the SAME currency;
- *   3. the running balance is a recurrence from the opening balance;
- *   4. the closing balance is the last row's running balance;
- *   5. the closing balance is also the opening balance plus the movements.
+ *   3. each row's running balance follows the recurrence from the opening
+ *      balance;
+ *   4. the closing balance equals what the last row PRINTS;
+ *   5. the closing balance equals the opening balance plus the movements.
  *
- * Law 5 restates law 4 by a different path ON PURPOSE. A generator that
- * computes the closing figure from its own query rather than from the rows it
- * printed satisfies one of them and not the other, and that is precisely the
- * statement a merchant cannot reconcile.
+ * Laws 4 and 5 are two paths to the closing figure, and the difference
+ * between them is the word PRINTS. A generator that computes its closing
+ * figure from its own query rather than from the rows it printed satisfies one
+ * and not the other, and that is precisely the statement a merchant cannot
+ * reconcile.
+ *
+ * AN EARLIER VERSION OF LAW 4 COMPARED AGAINST THE RECURRENCE INSTEAD, AND CI
+ * CAUGHT IT. A recurrence total IS `opening + movements`, so that version
+ * compared the closing figure against the same number twice: law 5 was not
+ * redundant-on-purpose, it was identical, and the case claiming "law 5 catches
+ * what law 4 cannot" was FALSE — law 4 spoke in every plant law 5 did. Reading
+ * the printed figure makes the two independent, and the case that asserts law
+ * 4's silence is what proves it.
  *
  * A SIDELESS ROW IS LAWFUL, AND SAYING OTHERWISE WAS A FALSE RED THIS CHECKER
  * CARRIED UNTIL NOW. An earlier draft reported "a row that moves nothing is
@@ -213,9 +222,15 @@ function statementOffencesIn(openingMinor: bigint, rows: readonly StatementRow[]
     running += row.debitMinor - row.creditMinor;
     if (row.runningMinor !== running) offences.push(`${row.what}: the row prints ${row.runningMinor} and the recurrence gives ${running}`);
   }
-  if (closingMinor !== running) offences.push(`the closing balance is ${closingMinor} and the last row's running balance is ${running}`);
-  const byMovement = rows.reduce((acc, r) => acc + r.debitMinor - r.creditMinor, openingMinor);
-  if (closingMinor !== byMovement) offences.push(`the closing balance is ${closingMinor} and the opening balance plus the movements is ${byMovement}`);
+  // Law 4 reads the balance the page PRINTS on its last row — not the one the
+  // recurrence just computed. That distinction is the whole of law 4's
+  // independence, and getting it wrong is what made law 5 a duplicate: a
+  // recurrence total IS `opening + movements`, so comparing the closing
+  // figure against the recurrence and then against the movements compares it
+  // twice against the same number. CI caught that claim being false.
+  const printed = rows.length === 0 ? openingMinor : (rows[rows.length - 1]?.runningMinor ?? openingMinor);
+  if (closingMinor !== printed) offences.push(`the closing balance is ${closingMinor} and the last row prints ${printed}`);
+  if (closingMinor !== running) offences.push(`the closing balance is ${closingMinor} and the opening balance plus the movements is ${running}`);
   return offences;
 }
 
@@ -319,14 +334,25 @@ let businessBaseCurrency: string;
 /** Where the flow was REFUSED, which is a result to be read and not a failure to be hidden. */
 let refusedAt: string | null = null;
 /**
- * The last step the flow reaches when nothing refused it. Asserted below as a
- * POSITIVE CONTROL on the flow itself: an early `return` out of `beforeAll`
- * leaves the four figures at their initial values, and a suite that only
- * compared those figures with each other would be green about a flow that
- * never ran.
+ * The step the flow is in, kept so a refusal can say WHERE it happened.
+ *
+ * IT IS A TRACE AND NOT A CONTROL, and an earlier version of this suite got
+ * that wrong: it asserted `step === LAST_STEP`, which CI reddened at once,
+ * because the arms below run AFTER the balance is read and leave their own
+ * label behind. The assertion was false by construction — the flow is
+ * SUPPOSED to continue past that point — and it would have gone on being
+ * false however correct the server was.
+ *
+ * The control the suite actually needs is `balanceWasRead`: an early `return`
+ * out of `beforeAll` leaves every figure at its initial value, and a suite
+ * comparing those figures with each other would be green about a flow that
+ * never ran. A boolean set at the moment of the read says that and nothing
+ * else.
  */
 const LAST_STEP = 'step 4 — the balance the server derives on read';
 let step = 'before step 0';
+/** True once the receivable read landed — the positive control on the flow. */
+let balanceWasRead = false;
 
 beforeAll(async () => {
   step = 'step 0 — ensurePostgres, resetData and the settlement world';
@@ -422,6 +448,7 @@ beforeAll(async () => {
   const readBody = read.body as ReceivableBody;
   observedBalanceMinor = BigInt(readBody.baseMinor);
   observedByCurrency = readBody.byCurrency;
+  balanceWasRead = true;
 
   // ── the two arms, driven AFTER the flow's own figure is read ─────────────
   // Nothing below may disturb the flow above: the zero collection is refused
@@ -534,7 +561,7 @@ function flowStatementRows(): readonly StatementRow[] {
 describe(CLAIM, () => {
   it('HAS A SUBJECT — the flow ran, the invoice carries value, and the collection is neither nothing nor the whole of it', () => {
     expect(refusedAt, `THE FLOW WAS REFUSED, which is a result and not a failure: ${refusedAt}`).toBeNull();
-    expect(step, `the flow stopped at "${step}", so the figures below are not the figures of a flow that ran`).toBe(LAST_STEP);
+    expect(balanceWasRead, `the flow stopped at "${step}" before reading the balance, so the figures below are not the figures of a flow that ran`).toBe(true);
     expect(BigInt(invoice.totalTxnMinor) > 0n, `NO SUBJECT — the invoice totals ${invoice.totalTxnMinor}, so every figure below would compare 0 with 0`).toBe(
       true,
     );
@@ -915,7 +942,7 @@ describe(CLAIM, () => {
     expect(statementOffencesIn(0n, sidelessMoved, sale - paid).some((o) => o.includes('the recurrence gives'))).toBe(true);
 
     // Law 4 — the closing figure disagrees with the rows that were printed.
-    expect(statementOffencesIn(0n, right, sale - paid + 7n).some((o) => o.includes("the last row's running balance"))).toBe(true);
+    expect(statementOffencesIn(0n, right, sale - paid + 7n).some((o) => o.includes('the last row prints'))).toBe(true);
 
     // Law 5 — the customer OPENED the window owing something, and the page
     // was printed as though it opened at zero: every running balance, and the
@@ -934,7 +961,7 @@ describe(CLAIM, () => {
       'law 5 did not see a dropped opening balance',
     ).toBe(true);
     expect(
-      forgotOpening.some((o) => o.includes("the last row's running balance")),
+      forgotOpening.some((o) => o.includes('the last row prints')),
       'law 4 spoke here, so this case does not show that law 5 catches anything law 4 cannot',
     ).toBe(false);
   });
