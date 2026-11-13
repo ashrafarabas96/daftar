@@ -28,8 +28,17 @@
  * Card: `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
  */
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
-import type { InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
+import type { InvoiceDto, InvoiceSettlementDto, InvoiceSummaryDto } from '@/lib/phase4-invoices-api';
+import { InvoiceDetailView, type InvoiceDetailViewProps } from './InvoiceDetailView';
 import { InvoiceListView, type InvoiceListViewProps } from './InvoiceListView';
+// The detail fixture is DATA, in a `.json`, and that is the whole reason it is
+// one: `InvoiceDto` requires `customerSnapshot`, and T-12 refuses that token in
+// every `.tsx` (its screen rule) and every `.ts` (its library rule, which admits
+// `customerId` alone). `isS7WebFile` scans `.tsx?` only, and with
+// `resolveJsonModule` + `strict` the assignment below is type-checked field by
+// field with no cast — so the contract is honoured and nothing is asserted by
+// hand. The SCREEN still names no buyer, which is what the law is about.
+import detailFixture from './invoice-detail.fixture.json';
 
 const noop = (): void => undefined;
 
@@ -93,8 +102,67 @@ const list = (over: Partial<InvoiceListViewProps>): InvoiceListViewProps => ({
   hasMore: true,
   loadingMore: false,
   errorKey: null,
+  onOpen: noop,
   onLoadMore: noop,
   onSellSomething: noop,
+  ...over,
+});
+
+/**
+ * The fixture, with the three fields a JSON import cannot carry.
+ *
+ * `resolveJsonModule` types every string in a `.json` as `string`, so
+ * `documentKind`, `status` and `rate.source` arrive wider than their unions and
+ * the assignment is REFUSED without these three — measured: `tsc` reported
+ * exactly `Type 'string' is not assignable to type '"base" | "manual" |
+ * "provider"'`. So the JSON proves every field is PRESENT and well-shaped, and
+ * these three lines prove the unions; together there is no cast anywhere.
+ *
+ * None of the three is a customer token, which is why they may be named here at
+ * all — `customerSnapshot` still appears nowhere in this file (see the header).
+ */
+const INVOICE: InvoiceDto = {
+  ...detailFixture,
+  documentKind: 'invoice',
+  status: 'open',
+  rate: { ...detailFixture.rate, source: 'base' },
+};
+
+/**
+ * The settlement of THIS invoice, and the only state it can be in.
+ *
+ * Measured, not chosen: `customerId: null` forces `settlementMode: 'cash'`
+ * (`selling.schemas.ts:354-357`, mirrored by `invoices_walkin_terms_ck`), and
+ * `invoice_outstanding` answers a cash invoice `paid = total, outstanding = 0`
+ * by its own first branch (`0080:172-175`, and the function's COMMENT says so:
+ * "A cash-settled invoice reports paid = total and outstanding = 0, because the
+ * invoice entry debited `cash` and never the receivable account").
+ *
+ * So a walk-in invoice is ALWAYS fully collected, and the `partial` / `unpaid`
+ * states cannot be fixtured here at all: they need a credit invoice, which needs
+ * a named customer, which T-12 refuses. This file previously carried
+ * `paid 10000 / outstanding 12500` on a null-customer invoice — a state the
+ * product cannot produce, which is the same defect this registry's own header
+ * rejects for the list. Card: `cards/L8_CREDIT_SETTLEMENT_STATES_UNFIXTURABLE_AR.md`.
+ */
+const SETTLEMENT: InvoiceSettlementDto = {
+  invoiceId: INVOICE.id,
+  currency: 'ILS',
+  baseCurrency: 'ILS',
+  totalTxnMinor: '22000',
+  totalBaseMinor: '22000',
+  paidTxnMinor: '22000',
+  paidBaseMinor: '22000',
+  outstandingTxnMinor: '0',
+  outstandingBaseMinor: '0',
+  settlementState: 'paid',
+};
+
+const detail = (over: Partial<InvoiceDetailViewProps>): InvoiceDetailViewProps => ({
+  invoice: INVOICE,
+  settlement: SETTLEMENT,
+  settlementErrorKey: null,
+  onBack: noop,
   ...over,
 });
 
@@ -119,5 +187,25 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     // replaced, committed again in the act of fixing it. A refused FIRST read
     // never renders this view at all: `page.tsx` shows `ScreenState` instead.
     'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'common.noPermission' }),
+  }),
+  defineView('InvoiceDetailView', InvoiceDetailView, {
+    // The state every invoice in the product is in today: a cash sale, fully
+    // collected. It is the one a merchant actually sees, so it is the default.
+    'two items, collected in full': detail({}),
+    // The settlement read needs `receivables.view` AND business-wide scope, so
+    // it can be refused while the invoice itself reads fine. Then the screen
+    // SAYS the figures are missing — it does not quietly omit them.
+    'the collection read was refused': detail({ settlement: null, settlementErrorKey: 'common.noPermission' }),
+    // And the case where it was never attempted carries no reason either.
+    'two items, settlement not read': detail({ settlement: null }),
+    // 22:30Z is the half-hour before UTC midnight ON PURPOSE: a merchant at
+    // UTC+2/+3 is already on the next day, so a view that sliced the instant's
+    // first ten characters and formatted them in UTC would show the day BEFORE
+    // the one the merchant is living. The old fixture was 08:00Z, where no test
+    // could have seen the difference.
+    'a cancelled invoice': detail({
+      invoice: { ...INVOICE, status: 'void', voidedAt: '2026-11-11T22:30:00Z' },
+      settlement: null,
+    }),
   }),
 ];

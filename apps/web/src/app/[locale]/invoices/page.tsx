@@ -73,6 +73,7 @@ export default function InvoicesPage({ params }: { params: Promise<{ locale: Loc
           hasMore={cursor !== null}
           loadingMore={loadingMore}
           errorKey={errorKey}
+          onOpen={(invoiceId) => router.push(`/${locale}/invoices/${encodeURIComponent(invoiceId)}`)}
           onLoadMore={() => void loadMore()}
           onSellSomething={() => router.push(`/${locale}/pos`)}
         />

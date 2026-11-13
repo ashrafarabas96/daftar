@@ -16,18 +16,15 @@
  * Authorization, business scope, language and idempotency headers are set by
  * `apiFetch` and by nothing here.
  *
- * `GET /v1/invoices/:invoiceId` and `GET …/settlement` are deliberately NOT
- * declared yet. Both answered live on this commit (the run-verification
- * record, `.local-context/evidence/MVP01_RUN_VERIFY_2026-11-11_AR.md` §3), and
- * the screen that reads them is blocked by T-12 rather than by the server —
- * so declaring a function no screen may call would be dead code with a
- * plausible name. The card carries the detail:
- * `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
+ * `getInvoiceSettlement` is a SEPARATE read on purpose: it needs
+ * `receivables.view` and business-wide branch scope, so it can be refused
+ * while `getInvoice` answers. A caller treats that refusal as "no collection
+ * figures", never as a failed screen.
  */
-import type { InvoicePageDto, InvoiceSummaryDto } from '@daftar/shared-contracts';
+import type { InvoiceDto, InvoiceItemDto, InvoicePageDto, InvoiceSettlementDto, InvoiceSummaryDto } from '@daftar/shared-contracts';
 import { apiFetch } from './client';
 
-export type { InvoicePageDto, InvoiceSummaryDto };
+export type { InvoiceDto, InvoiceItemDto, InvoicePageDto, InvoiceSettlementDto, InvoiceSummaryDto };
 
 const BFF = '/api/proxy';
 
@@ -63,3 +60,8 @@ function read<T>(path: string): Promise<T> {
 }
 
 export const listInvoices = (q: InvoicesQuery = {}) => read<InvoicePageDto>(`${BFF}/invoices${qs({ ...q })}`);
+
+const seg = (id: string): string => encodeURIComponent(id);
+
+export const getInvoice = (invoiceId: string) => read<InvoiceDto>(`${BFF}/invoices/${seg(invoiceId)}`);
+export const getInvoiceSettlement = (invoiceId: string) => read<InvoiceSettlementDto>(`${BFF}/invoices/${seg(invoiceId)}/settlement`);
