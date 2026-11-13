@@ -91,7 +91,10 @@ export function stepsOfJob(yamlText: string, jobName: string): readonly Workflow
   const steps: { name: string; condition: string | null }[] = [];
   let current: { name: string; condition: string | null } | null = null;
   for (let i = jobAt + 1; i < lines.length; i += 1) {
-    const line = lines[i];
+    // `?? ''` only narrows the type: `i < lines.length`, so the element is
+    // there. `noUncheckedIndexedAccess` is on, and a non-null assertion would
+    // hide exactly the class of mistake this file exists to catch.
+    const line = lines[i] ?? '';
     // A new top-level job begins: two spaces, a name, a colon, nothing else.
     if (/^ {2}\S/.test(line) && line !== `  ${jobName}:`) break;
 
@@ -104,15 +107,15 @@ export function stepsOfJob(yamlText: string, jobName: string): readonly Workflow
     const opener = /^ {6}- (name|uses|run): ?(.*)$/.exec(line);
     if (opener !== null) {
       if (current !== null) steps.push(current);
-      const [, key, value] = opener;
+      const [, key = '', value = ''] = opener;
       current = { name: key === 'name' ? value.trim() : `${key}:${value.trim()}`, condition: null };
       continue;
     }
     if (current === null) continue;
     const named = /^ {8}name: (.*)$/.exec(line);
-    if (named !== null && current.name.startsWith('uses:')) current.name = named[1].trim();
+    if (named !== null && current.name.startsWith('uses:')) current.name = (named[1] ?? '').trim();
     const cond = /^ {8}if: (.*)$/.exec(line);
-    if (cond !== null) current.condition = cond[1].trim();
+    if (cond !== null) current.condition = (cond[1] ?? '').trim();
   }
   if (current !== null) steps.push(current);
   return steps;
@@ -147,19 +150,20 @@ export function jobKey(yamlText: string, jobName: string, key: string): string |
   // (Third review, finding 1.)
   let collecting = false;
   for (let i = jobAt + 1; i < lines.length; i += 1) {
-    const line = lines[i];
+    const line = lines[i] ?? '';
     if (/^ {2}\S/.test(line)) break; // the next job
     const hit = want.exec(line);
     if (hit !== null) {
       if (value !== null) continue; // a duplicate key: the first one wins
-      value = hit[1].trim();
+      value = (hit[1] ?? '').trim();
       collecting = value === '';
       continue;
     }
     if (!collecting) continue;
     const item = /^ {6}- (.*)$/.exec(line);
     if (item !== null) {
-      value = value === '' ? item[1].trim() : `${value},${item[1].trim()}`;
+      const got = (item[1] ?? '').trim();
+      value = value === '' ? got : `${value},${got}`;
       continue;
     }
     // Only a real KEY ends the list. A comment is free to sit at any indent in
@@ -233,21 +237,21 @@ export function pushBranches(yamlText: string): readonly string[] {
   const out: string[] = [];
   let inBranches = false;
   for (let i = pushAt + 1; i < lines.length; i += 1) {
-    const line = lines[i];
+    const line = lines[i] ?? '';
     if (/^ {0,2}\S/.test(line)) break; // the next trigger
     const key = /^ {4}([A-Za-z_-]+):(.*)$/.exec(line);
     if (key !== null) {
       inBranches = key[1] === 'branches';
       if (!inBranches) continue;
-      const flow = /^\s*\[(.*)\]\s*$/.exec(key[2]);
+      const flow = /^\s*\[(.*)\]\s*$/.exec(key[2] ?? '');
       if (flow !== null) {
-        out.push(...flow[1].split(',').map((b) => b.trim().replace(/^['"]|['"]$/g, '')));
+        out.push(...(flow[1] ?? '').split(',').map((b) => b.trim().replace(/^['"]|['"]$/g, '')));
       }
       continue;
     }
     if (!inBranches) continue;
     const item = /^ {6}- (.*)$/.exec(line);
-    if (item !== null) out.push(item[1].trim().replace(/^['"]|['"]$/g, ''));
+    if (item !== null) out.push((item[1] ?? '').trim().replace(/^['"]|['"]$/g, ''));
   }
   return out;
 }
@@ -274,13 +278,13 @@ export function insertAtEndOfJob(yamlText: string, jobName: string, line: string
   if (jobAt === -1) return yamlText;
   let end = lines.length;
   for (let i = jobAt + 1; i < lines.length; i += 1) {
-    if (/^ {2}\S/.test(lines[i])) {
+    if (/^ {2}\S/.test(lines[i] ?? '')) {
       end = i;
       break;
     }
   }
   // Step back over trailing blank lines so the key stays inside the block.
-  while (end > jobAt + 1 && lines[end - 1].trim() === '') end -= 1;
+  while (end > jobAt + 1 && (lines[end - 1] ?? '').trim() === '') end -= 1;
   return [...lines.slice(0, end), line, ...lines.slice(end)].join('\n');
 }
 
