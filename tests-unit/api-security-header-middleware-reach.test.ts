@@ -14,10 +14,13 @@
  *     `AppModule` (`tests/helpers/test-app.ts`), and asserts the headers on
  *     live 200 and 401 responses. Dropping the registration there was red
  *     before this law existed.
- *   - `merchant-api.module.ts` and `platform-api.module.ts` were NOT. Several
- *     suites DO import and compose them — `tests/integration/process-composition`,
- *     `runtime-isolation`, `inventory-config`, `tests/security/phase4-route-surface`
- *     — but none runs `configure()` or an HTTP pipeline through them, and no
+ *   - `merchant-api.module.ts` and `platform-api.module.ts` were NOT. Suites DO
+ *     import and compose them — `tests/integration/process-composition`,
+ *     `runtime-isolation` and `inventory-config` compose BOTH, and
+ *     `tests/security/phase4-route-surface` composes the merchant one only
+ *     (corrected after the third review: "four suites compose them" was true
+ *     of three) — but none runs `configure()` or an HTTP pipeline through
+ *     them, and no
  *     gate mentions the middleware (the static-guards script only requires the
  *     module NAMES to appear in `main.ts`). So dropping the registration
  *     from either reddened nothing, and a fourth HTTP module added without it
@@ -43,6 +46,14 @@
  * identifier match, and an identifier merely MENTIONED in the selection
  * expression (in a comment, or in a `satisfies` clause) reddens it without a
  * reach problem. (Second review, finding 4.)
+ *
+ * A THIRD LIMIT, stated with them: the entrypoint scan walks `apps/api/src`,
+ * so an HTTP application created OUTSIDE that tree — a `bin/` script, another
+ * workspace — is not seen; and the scan matches `NestFactory.create` with an
+ * open parenthesis or a type argument, so `NestFactory['create'](`, a
+ * destructured `const { create } = NestFactory`, or a re-exported wrapper
+ * would pass it. Those are the shapes this law does not cover, named so that
+ * nobody reads its green as covering them. (Third review, finding 2.)
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
