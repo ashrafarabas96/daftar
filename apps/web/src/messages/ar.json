@@ -913,5 +913,9 @@
   "error.invoice_settlement.settlement_inconsistent": "حدث خطأ من جهتنا ولم يُحفظ شيء. أعد المحاولة، وأخبرنا إن تكرّر الأمر.",
   "error.customer_payment.arithmetic_invalid": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
   "error.customer_payment.registry_incomplete": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
-  "pos.search.narrow": "نعرض أقرب النتائج. تابع الكتابة لتضييق البحث."
+  "pos.search.narrow": "نعرض أقرب النتائج. تابع الكتابة لتضييق البحث.",
+  "nav.customers": "العملاء",
+  "customers.list.title": "العملاء",
+  "customers.list.empty": "لا يوجد عملاء بعد",
+  "customers.list.contact": "جهة الاتصال: {name}"
 }

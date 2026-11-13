@@ -16,6 +16,10 @@ const NAV = [
   // the POS pages enforce `pos.sell` themselves and show `common.noPermission`
   // without trying a command.
   { key: 'pos', path: 'pos' },
+  // MVP-02: the customers list. Behind no `requires` for the same reason `pos` is not: the
+  // read names `customers.view`, a Phase 4 key this header's Phase 3 grants cannot express, so
+  // the page asks the server and renders `common.noPermission` on a 403.
+  { key: 'customers', path: 'customers' },
   { key: 'catalog', path: 'catalog' },
   // P3-S7 (A-11): shown only to a member holding the matching view permission.
   { key: 'stock', path: 'stock', requires: 'inventory.view' },

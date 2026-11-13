@@ -913,5 +913,9 @@
   "error.invoice_settlement.settlement_inconsistent": "Something went wrong on our side. Nothing was saved. Please try again, and tell us if it keeps happening.",
   "error.customer_payment.arithmetic_invalid": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
   "error.customer_payment.registry_incomplete": "Something went wrong on our side. Nothing was saved. Try again; if it keeps happening, contact support.",
-  "pos.search.narrow": "Showing the closest matches. Keep typing to narrow it down."
+  "pos.search.narrow": "Showing the closest matches. Keep typing to narrow it down.",
+  "nav.customers": "Customers",
+  "customers.list.title": "Customers",
+  "customers.list.empty": "No customers yet",
+  "customers.list.contact": "Contact: {name}"
 }
