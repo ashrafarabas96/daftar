@@ -1,14 +1,14 @@
 {
   "tool": "scripts/invariant-live-rejection.ts",
-  "at": "2026-11-11T22:53:52.326Z",
+  "at": "2026-11-13T01:12:51.485Z",
   "node": "v24.20.0",
   "platform": "linux-x64",
   "cluster": "7706536532177609331 invariant_probe",
   "source": "daftar",
   "target": "invariant_probe",
   "migrationsApplied": 87,
-  "cases": 32,
-  "passed": 32,
+  "cases": 33,
+  "passed": 33,
   "failed": 0,
   "notRun": 0,
   "selfCheck": false,
@@ -461,6 +461,20 @@
       "controlOutcome": "accepted",
       "controlMessage": "",
       "detail": "the plant was rejected and the control was accepted (control ended in commit)"
+    },
+    {
+      "id": "INV-ACC-04-no-installment-identity-guard",
+      "label": "down payment plus instalments = invoice total has no guard in the database — the gap, probed with a control",
+      "mechanism": "the absence of installment_schedule_verify in pg_proc, against the presence of payment_allocation_guard; the guard exists only in infrastructure/database/specifications/p4s7-installment-aging.spec.sql, not in a migration",
+      "expect": "accept",
+      "status": "PASS",
+      "plantOutcome": "accepted",
+      "controlEnds": "commit",
+      "sqlstate": "",
+      "message": "",
+      "controlOutcome": "accepted",
+      "controlMessage": "",
+      "detail": "the plant was accepted and the control was accepted (control ended in commit)"
     }
   ],
   "verdict": "PASS"

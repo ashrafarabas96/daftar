@@ -713,5 +713,17 @@
     ],
     "deferred": true,
     "notes": "The header says its total value is nought while its one movement carries one. The control is the same document with both at nought. A non-zero total would need the accounting binding and its entry, which is the other arm and is not planted here."
+  },
+  {
+    "id": "INV-ACC-04-no-installment-identity-guard",
+    "label": "down payment plus instalments = invoice total has no guard in the database — the gap, probed with a control",
+    "mechanism": "the absence of installment_schedule_verify in pg_proc, against the presence of payment_allocation_guard; the guard exists only in infrastructure/database/specifications/p4s7-installment-aging.spec.sql, not in a migration",
+    "plant": "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'installment_schedule_verify') THEN RAISE EXCEPTION 'installment_schedule_verify exists after all'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'payment_allocation_guard') THEN RAISE EXCEPTION 'the probe cannot see a routine that does exist'; END IF; END $$"
+    ],
+    "deferred": false,
+    "notes": "Same shape as INV-ACC-18: the plant RAISES if the routine exists, so its acceptance is the absence, and the control RAISES if the probe cannot see a routine known to exist. This probes the migrated database only (87 migrations); it says nothing about the spec file's own trigger, which CI exercises at ci.yml:887. When a migration that installs the function lands, this case fails on purpose and must be re-cut as a refusal."
   }
 ]
