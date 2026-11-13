@@ -918,7 +918,7 @@
   "invoices.list.title": "الفواتير",
   "invoices.list.empty": "لا توجد فواتير بعد",
   "invoices.list.sellSomething": "أنشئ عملية بيع",
-  "invoices.list.issued": "صدرت في {date}",
+  "invoices.list.dated": "بتاريخ {date}",
   "invoices.status.draft": "لم تُصدر بعد",
   "invoices.status.open": "صادرة",
   "invoices.status.void": "ملغاة"

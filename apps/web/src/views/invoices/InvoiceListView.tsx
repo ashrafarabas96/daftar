@@ -86,16 +86,19 @@ export function InvoiceListView(props: InvoiceListViewProps & ViewBaseProps) {
       {props.invoices === null ? (
         <Spinner label={t('common.loading')} />
       ) : props.invoices.length === 0 ? (
-        // A refused read also arrives as an empty list: the refusal is already on screen, so no "nothing yet" beside it.
-        props.errorKey === null ? (
-          <EmptyState title={t('invoices.list.empty')} actionLabel={t('invoices.list.sellSomething')} onAction={props.onSellSomething} />
-        ) : null
+        // An empty list never arrives WITH an error on this page: a refused first
+        // read renders `ScreenState` and never reaches this view, and "show more"
+        // can only be refused while rows are already on screen. So there is no
+        // branch for "empty beside a refusal" — it used to be here, under a
+        // comment that said a refused read "also arrives as an empty list", which
+        // was false.
+        <EmptyState title={t('invoices.list.empty')} actionLabel={t('invoices.list.sellSomething')} onAction={props.onSellSomething} />
       ) : (
         <List
           items={props.invoices.map((invoice) => ({
             key: invoice.id,
             primary: <Code>{invoice.documentNumber}</Code>,
-            secondary: rich(t('invoices.list.issued'), { date: <CivilDate iso={invoice.issueDate} locale={locale} /> }),
+            secondary: rich(t('invoices.list.dated'), { date: <CivilDate iso={invoice.issueDate} locale={locale} /> }),
             trailing: (
               <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.25rem' }}>
                 <Money amountMinor={invoice.totalTxnMinor} currency={invoice.currency} locale={locale} />

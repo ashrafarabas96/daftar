@@ -918,7 +918,7 @@
   "invoices.list.title": "Invoices",
   "invoices.list.empty": "No invoices yet",
   "invoices.list.sellSomething": "Make a sale",
-  "invoices.list.issued": "Issued {date}",
+  "invoices.list.dated": "Dated {date}",
   "invoices.status.draft": "Not issued yet",
   "invoices.status.open": "Issued",
   "invoices.status.void": "Cancelled"

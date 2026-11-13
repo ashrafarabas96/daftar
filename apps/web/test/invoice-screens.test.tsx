@@ -98,6 +98,14 @@ describe('the invoice view registry', () => {
 describe('the invoice list', () => {
   const r = render(INVOICE_VIEWS, 'InvoiceListView', ALL);
 
+  // The words that would make this list claim collection. One list, used by BOTH
+  // the assertion and its control below — so emptying it breaks the control.
+  const COLLECTION_WORDS: Record<Locale, readonly string[]> = {
+    en: ['open', 'paid', 'unpaid', 'collected', 'outstanding', 'remaining', 'due', 'overdue', 'settled', 'balance', 'owing'],
+    ar: ['مفتوح', 'مدفوع', 'مسدد', 'مسدَّد', 'محصَّل', 'محصل', 'متبقي', 'المتبقي', 'تستحق', 'متأخر', 'رصيد', 'دين'],
+    tr: ['açık', 'ödendi', 'ödenmedi', 'tahsil', 'kalan', 'vadesi', 'gecikmiş', 'bakiye', 'borç'],
+  };
+
   it('shows each document by its number', () => {
     expect(text(r)).toContain('INV-2026-000002');
     expect(text(r)).toContain('INV-2026-000006');
@@ -192,11 +200,6 @@ describe('the invoice list', () => {
     // claim. `Open` / `مفتوحة` / `Açık` on an INVOICE is read as "not paid yet",
     // and because they were absent the test stayed green on labels that made
     // exactly the claim it was written to forbid. They are the first entries now.
-    const COLLECTION_WORDS: Record<Locale, readonly string[]> = {
-      en: ['open', 'paid', 'unpaid', 'collected', 'outstanding', 'remaining', 'due', 'overdue', 'settled', 'balance', 'owing'],
-      ar: ['مفتوح', 'مدفوع', 'مسدد', 'مسدَّد', 'محصَّل', 'محصل', 'متبقي', 'المتبقي', 'تستحق', 'متأخر', 'رصيد', 'دين'],
-      tr: ['açık', 'ödendi', 'ödenmedi', 'tahsil', 'kalan', 'vadesi', 'gecikmiş', 'bakiye', 'borç'],
-    };
     for (const locale of LOCALES) {
       const shown = text(render(INVOICE_VIEWS, 'InvoiceListView', ALL, locale)).toLowerCase();
       for (const word of COLLECTION_WORDS[locale]) expect(shown, `${locale}: ${word}`).not.toContain(word.toLowerCase());
@@ -208,13 +211,12 @@ describe('the invoice list', () => {
     // thing that would is what this screen said yesterday. Without this control
     // a future edit could quietly empty the list above and nothing would notice.
     const RETIRED = { en: 'Open', ar: 'مفتوحة', tr: 'Açık' } as const;
-    const DENIED = {
-      en: ['open', 'paid'],
-      ar: ['مفتوح', 'مدفوع'],
-      tr: ['açık', 'ödendi'],
-    } as const;
+    //
+    // It reads the REAL list. An earlier draft compared a private `DENIED` copy
+    // against these literals and never referred to `COLLECTION_WORDS`, so
+    // emptying the real list left it green while its comment claimed otherwise.
     for (const locale of LOCALES) {
-      const tripped = DENIED[locale].some((w) => RETIRED[locale].toLowerCase().includes(w.toLowerCase()));
+      const tripped = COLLECTION_WORDS[locale].some((w) => RETIRED[locale].toLowerCase().includes(w.toLowerCase()));
       expect(tripped, `${locale}: "${RETIRED[locale]}" must trip the denylist`).toBe(true);
       // And the retired label is genuinely gone from the shipped catalogue.
       expect(Object.values(onlyNewKeys(CATALOGS[locale])), locale).not.toContain(RETIRED[locale]);
@@ -260,8 +262,27 @@ describe('the invoice list', () => {
     expect(text(refused)).not.toContain(en['invoices.list.empty']);
     // The rows survive the refusal.
     expect(text(refused)).toContain('INV-2026-000002');
-    // And "show more" is gone, because the server gave no further cursor.
-    expect(buttons(refused)).not.toContain(en['common.loadMore']);
+    // And "show more" STAYS. The page's `catch` sets `errorKey` and leaves the
+    // cursor alone (`page.tsx`, `loadMore`), so the merchant can try again. The
+    // first version of this assertion said the button was GONE "because the
+    // server gave no cursor" — the opposite of what the page does.
+    expect(buttons(refused)).toContain(en['common.loadMore']);
+  });
+
+  it('the refused "show more" fixture is what the PAGE does: its catch keeps the cursor', () => {
+    // The fixture above says "show more" stays after a refusal. That is a claim
+    // about `page.tsx`, and a fixture can only assert what it was written to say —
+    // it cannot notice the page change. This is the tie: the page's `loadMore`
+    // catch must set the refusal and must NOT clear the cursor, while its try
+    // block does set it (the positive control, so "absent" is a measurement).
+    const page = stripTsComments(readFileSync(join(__dirname, '..', 'src', 'app', '[locale]', 'invoices', 'page.tsx'), 'utf8'));
+    const body = /async function loadMore\(\)[\s\S]*?try \{([\s\S]*?)\} catch \(error\) \{([\s\S]*?)\} finally/.exec(page);
+    expect(body, 'could not find loadMore with a try/catch/finally in page.tsx').not.toBeNull();
+    const tried = body?.[1] ?? '';
+    const caught = body?.[2] ?? '';
+    expect(tried, 'positive control: the try block advances the cursor').toContain('setCursor(');
+    expect(caught).toContain('setErrorKey(');
+    expect(caught, 'the catch must leave the cursor alone, so "show more" stays').not.toContain('setCursor(');
   });
 
   it('noComputedMoney: no figure appears that is a sum of two the server stated', () => {

@@ -107,11 +107,18 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'one invoice, no further page': list({ invoices: [OPEN_INVOICE], hasMore: false }),
     loading: list({ invoices: null, hasMore: false }),
     'no invoices at all': list({ invoices: [], hasMore: false }),
-    // The state the PAGE can actually reach: a refused "show more" keeps the
-    // rows already on screen and puts the refusal above them. A refused FIRST
-    // read never renders this view at all — `page.tsx` shows `ScreenState` for
-    // `denied`/`failed` — so an empty list beside a refusal was a fixture of a
-    // state the product cannot produce, and a test over it proved nothing.
-    'show more was refused, with the rows still on screen': list({ hasMore: false, errorKey: 'common.noPermission' }),
+    // The state the PAGE actually produces after a refused "show more": the
+    // rows stay, the refusal sits above them, and "show more" STAYS too. The
+    // page's `catch` in `loadMore` sets `errorKey` and nothing else — it never
+    // touches `cursor`, so `hasMore` is still true — which is also the right
+    // behaviour: the merchant can simply try again.
+    //
+    // This fixture first said `hasMore: false`, "because the server gave no
+    // cursor". That is a state the page cannot reach (a refusal does not clear
+    // the cursor it was refused WITH), and the test beside it asserted the button
+    // was gone — the same defect as the empty-list-beside-a-refusal fixture it
+    // replaced, committed again in the act of fixing it. A refused FIRST read
+    // never renders this view at all: `page.tsx` shows `ScreenState` instead.
+    'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'common.noPermission' }),
   }),
 ];
