@@ -110,34 +110,6 @@ const SELLING_STATUS = {
   'customer.aging_bucket_mapping_invalid': 500,
   /** A read that sums across branches, asked by an actor limited to some of them. */
   'customer.business_wide_scope_required': 403,
-  /**
-   * L3 / P4-S1 (`0092`): the statement cursor did not decode to the ordering
-   * triple this server issues.
-   *
-   * A NAMED 400 and not a generic validation failure, because the two have
-   * different merchant meanings: a generic `VALIDATION_FAILED` says "your
-   * query was malformed", while this says "the page you asked to continue
-   * from is not one I handed out". And a refusal rather than a silent
-   * fallback to page one: a dropped cursor would serve the FIRST page to a
-   * caller who asked for the fifth, and the caller would read a
-   * correct-looking statement that had quietly repeated every row it already
-   * had. A corrupt cursor coerced to a default date would skip rows instead.
-   * A refusal is the only outcome that cannot be mistaken for data.
-   */
-  'customer.statement_cursor_invalid': 400,
-  /**
-   * L3 / P4-S1 (`0092`): a statement row whose `running_balance_txn_minor` is
-   * NULL, which the reader's cumulative window cannot produce.
-   *
-   * A 500, and a REFUSAL rather than a substitution, for the reason
-   * `customer.aging_bucket_mapping_invalid` above is one: the alternative is
-   * to print `'0'` where the database failed to state a balance, and that
-   * error direction UNDERSTATES A DEBT — it tells the merchant the customer
-   * owes nothing. Understating a receivable is the one direction the
-   * receivable and aging rules forbid, so the row is refused and no page is
-   * served at all.
-   */
-  'customer.statement_row_unplaceable': 500,
 
   // ── Invoices ────────────────────────────────────────────────────────────
   'invoice.not_found': 404,

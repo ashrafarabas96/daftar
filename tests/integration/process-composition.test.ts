@@ -153,9 +153,6 @@ const INTENDED: Readonly<Record<string, readonly string[]>> = Object.freeze({
   PaymentMethodDefaultsController: MERCHANT,
   // P4-S1 / P4-S2.
   CustomersController: MERCHANT,
-  // L3 / P4-S1: GET /v1/customers/:customerId/statement, its own controller so
-  // the customer read file stays single-writer while another lane edits it.
-  CustomerStatementController: MERCHANT,
   InvoicesController: MERCHANT,
   SalesController: MERCHANT,
   // P4-S3 — the POS till surface.

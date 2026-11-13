@@ -1,6 +1,5 @@
 import type { Provider } from '@nestjs/common';
 import { CustomerReadService } from './customer-reads';
-import { CustomerStatementReadService } from './customer-statement-reads';
 import { InvoiceReadService } from './invoice-reads';
 import { SaleCommitService } from './sale-commit.service';
 import { SaleReadService } from './sale-reads';
@@ -22,7 +21,7 @@ import { SaleReadService } from './sale-reads';
  * a route that cannot be tested. Both are registered.
  */
 export function sellingProviders(): Provider[] {
-  return [CustomerReadService, CustomerStatementReadService, InvoiceReadService, SaleCommitService, SaleReadService];
+  return [CustomerReadService, InvoiceReadService, SaleCommitService, SaleReadService];
 }
 
 /**
