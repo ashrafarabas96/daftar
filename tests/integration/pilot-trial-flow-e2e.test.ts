@@ -153,6 +153,9 @@ function statementOffencesIn(openingMinor: bigint, rows: readonly StatementRow[]
 let w: SettlementWorld;
 let customerId: string;
 let invoice: OpenInvoice;
+let firstCollectionMinor: bigint;
+let secondCollectionMinor: bigint;
+/** The two collections together — what the customer has paid against the invoice. */
 let collectedMinor: bigint;
 let observedBalanceMinor: bigint;
 let invoiceCurrency: string;
@@ -186,32 +189,46 @@ beforeAll(async () => {
   invoiceCurrency = invoice.currencyCode;
   businessBaseCurrency = await baseCurrency(w);
 
-  step = 'step 3 — the collection, a fraction of the invoice and not a round figure of my choosing';
-  collectedMinor = BigInt(invoice.totalTxnMinor) / 3n;
-  const collected = await collectPayment(w.t, w.headers, {
-    paymentId: randomUUID(),
-    customerId,
-    paymentMethodId: w.paymentMethodId,
-    paymentDate: w.day,
-    amountMinor: collectedMinor.toString(),
-    allocations: [
-      {
-        invoiceId: invoice.invoiceId,
-        appliedMinor: collectedMinor.toString(),
-        // The chain position the suite PREDICTS and the server derives: this
-        // is the first collection against a freshly committed invoice, so
-        // nothing has been released against it yet. A wrong prediction here is
-        // refused by the command rather than absorbed, which is why it is
-        // stated rather than omitted.
-        releasedBeforeMinor: '0',
-        invoiceTotalTxnMinor: invoice.totalTxnMinor,
-        invoiceTotalBaseMinor: invoice.totalBaseMinor,
-      },
-    ],
-  });
-  if (collected.status >= 300) {
-    refusedAt = `step 3 — the collection was refused with ${collected.status}: ${JSON.stringify(collected.body)}`;
-    return;
+  step = 'step 3 — the collections, fractions of the invoice and not round figures of my choosing';
+  // TWO collections and not one, because the second is where the arithmetic
+  // can go wrong in a way one collection cannot show: `releasedBeforeMinor`
+  // is the invoice's own CHAIN POSITION, and the release of a leg is a
+  // difference of two cumulative roundings of the invoice's stored originals
+  // rather than a function of the previous leg's already-rounded release. A
+  // suite that collected once would pass with the chain position pinned at
+  // zero forever, and the statement below would have one movement instead of
+  // a running balance.
+  firstCollectionMinor = BigInt(invoice.totalTxnMinor) / 3n;
+  secondCollectionMinor = BigInt(invoice.totalTxnMinor) / 4n;
+  collectedMinor = firstCollectionMinor + secondCollectionMinor;
+  const legs: readonly { readonly amount: bigint; readonly releasedBefore: bigint }[] = [
+    { amount: firstCollectionMinor, releasedBefore: 0n },
+    { amount: secondCollectionMinor, releasedBefore: firstCollectionMinor },
+  ];
+  for (const [i, leg] of legs.entries()) {
+    const collected = await collectPayment(w.t, w.headers, {
+      paymentId: randomUUID(),
+      customerId,
+      paymentMethodId: w.paymentMethodId,
+      paymentDate: w.day,
+      amountMinor: leg.amount.toString(),
+      allocations: [
+        {
+          invoiceId: invoice.invoiceId,
+          appliedMinor: leg.amount.toString(),
+          // The chain position the suite PREDICTS and the server derives.
+          // A wrong prediction here is refused by the command rather than
+          // absorbed, which is why it is stated rather than omitted.
+          releasedBeforeMinor: leg.releasedBefore.toString(),
+          invoiceTotalTxnMinor: invoice.totalTxnMinor,
+          invoiceTotalBaseMinor: invoice.totalBaseMinor,
+        },
+      ],
+    });
+    if (collected.status >= 300) {
+      refusedAt = `step 3 — collection ${i + 1} of ${legs.length} was refused with ${collected.status}: ${JSON.stringify(collected.body)}`;
+      return;
+    }
   }
 
   step = LAST_STEP;
@@ -227,6 +244,30 @@ afterAll(async () => {
   await resetData();
 });
 
+/**
+ * The three movements the flow actually drove, in the order it drove them, as
+ * ONE declaration. Three copies of this list in three cases is three places a
+ * later edit can disagree with itself, and the disagreement would read as a
+ * failure of the server rather than of the suite.
+ */
+function flowMovements(): readonly Movement[] {
+  return [
+    { what: 'the sale on account', signedMinor: BigInt(invoice.totalBaseMinor) },
+    { what: 'the first collection', signedMinor: -firstCollectionMinor },
+    { what: 'the second collection', signedMinor: -secondCollectionMinor },
+  ];
+}
+
+/** The same three movements as a statement would print them, with its running balance. */
+function flowStatementRows(): readonly StatementRow[] {
+  const sale = BigInt(invoice.totalTxnMinor);
+  return [
+    { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale },
+    { what: 'the first collection', debitMinor: 0n, creditMinor: firstCollectionMinor, runningMinor: sale - firstCollectionMinor },
+    { what: 'the second collection', debitMinor: 0n, creditMinor: secondCollectionMinor, runningMinor: sale - collectedMinor },
+  ];
+}
+
 describe(CLAIM, () => {
   it('HAS A SUBJECT — the flow ran, the invoice carries value, and the collection is neither nothing nor the whole of it', () => {
     expect(refusedAt, `THE FLOW WAS REFUSED, which is a result and not a failure: ${refusedAt}`).toBeNull();
@@ -234,7 +275,14 @@ describe(CLAIM, () => {
     expect(BigInt(invoice.totalTxnMinor) > 0n, `NO SUBJECT — the invoice totals ${invoice.totalTxnMinor}, so every figure below would compare 0 with 0`).toBe(
       true,
     );
-    expect(collectedMinor > 0n, `NO SUBJECT — the collection is ${collectedMinor}, so the statement would have one movement and not two`).toBe(true);
+    expect(
+      firstCollectionMinor > 0n && secondCollectionMinor > 0n,
+      `NO SUBJECT — the collections are ${firstCollectionMinor} and ${secondCollectionMinor}: a collection of nothing leaves the chain position where it started`,
+    ).toBe(true);
+    expect(
+      secondCollectionMinor !== firstCollectionMinor,
+      `NO SUBJECT — two equal collections of ${firstCollectionMinor} cannot tell a running balance from a doubled one`,
+    ).toBe(true);
     expect(
       collectedMinor < BigInt(invoice.totalTxnMinor),
       `NO SUBJECT — the collection ${collectedMinor} settles the whole invoice ${invoice.totalTxnMinor}, so a closed balance of zero would be read as a correct remainder`,
@@ -250,22 +298,16 @@ describe(CLAIM, () => {
     expect(invoice.totalBaseMinor, `the invoice's base total and its transaction total, at one currency`).toBe(invoice.totalTxnMinor);
   });
 
-  it('1-4. THE FLOW: what the customer owes after the sale and the collection is what the server says, to the minor unit', () => {
+  it('1-4. THE FLOW: what the customer owes after the sale and the two collections is what the server says, to the minor unit', () => {
     expect(refusedAt).toBeNull();
-    const movements: readonly Movement[] = [
-      { what: 'the sale on account', signedMinor: BigInt(invoice.totalBaseMinor) },
-      { what: 'the collection', signedMinor: -collectedMinor },
-    ];
-    expect(receivableOffencesIn(movements, observedBalanceMinor), 'the balance the server derives disagrees with the flow that was driven').toStrictEqual([]);
+    expect(receivableOffencesIn(flowMovements(), observedBalanceMinor), 'the balance the server derives disagrees with the flow that was driven').toStrictEqual(
+      [],
+    );
   });
 
   it('NEGATIVE CONTROL — a balance one minor unit out is reported by the same checker the live case used', () => {
     expect(refusedAt).toBeNull();
-    const movements: readonly Movement[] = [
-      { what: 'the sale on account', signedMinor: BigInt(invoice.totalBaseMinor) },
-      { what: 'the collection', signedMinor: -collectedMinor },
-    ];
-    const wrong = receivableOffencesIn(movements, observedBalanceMinor + 1n);
+    const wrong = receivableOffencesIn(flowMovements(), observedBalanceMinor + 1n);
     expect(wrong.length, `a balance of ${observedBalanceMinor + 1n} was read as correct, so the live case above proves nothing`).toBe(1);
     expect(wrong[0]).toContain('the movements sum to');
 
@@ -281,14 +323,14 @@ describe(CLAIM, () => {
   });
 
   it('the STATEMENT laws hold on a statement that is right, and this statement has rows to be right about', () => {
-    const opening = 0n;
+    expect(refusedAt).toBeNull();
     const sale = BigInt(invoice.totalTxnMinor);
-    const rows: readonly StatementRow[] = [
-      { what: 'the sale on account', debitMinor: sale, creditMinor: 0n, runningMinor: sale },
-      { what: 'the collection', debitMinor: 0n, creditMinor: collectedMinor, runningMinor: sale - collectedMinor },
-    ];
-    expect(rows.length, 'no row was stated, so these laws would pass on nothing').toBeGreaterThan(1);
-    expect(statementOffencesIn(opening, rows, sale - collectedMinor), 'a statement built from the flow that actually ran contradicts itself').toStrictEqual([]);
+    const rows = flowStatementRows();
+    // THREE rows, so the recurrence has a middle: a two-row statement cannot
+    // distinguish "each row adds its own movement" from "the last row prints
+    // the closing figure", and the middle row is the only place that can.
+    expect(rows.length, 'no middle row was stated, so the recurrence would pass on its endpoints').toBeGreaterThan(2);
+    expect(statementOffencesIn(0n, rows, sale - collectedMinor), 'a statement built from the flow that actually ran contradicts itself').toStrictEqual([]);
     // No false red on the empty statement of a customer who owes nothing.
     expect(statementOffencesIn(0n, [], 0n)).toStrictEqual([]);
   });
