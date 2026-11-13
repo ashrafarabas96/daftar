@@ -326,7 +326,11 @@ function aggregateProblems(ciText: string): string[] {
   if (!/^ {4}if: always\(\)$/m.test(text)) {
     problems.push(`C-9: \`${AGG_JOB}\` has no \`if: always()\` — a skipped part would skip it, and a skipped required check reads as green`);
   }
-  const needs = /^ {4}needs: \[(.*)\]$/m.exec(text)?.[1]?.split(',').map((s) => s.trim()) ?? [];
+  const needs =
+    /^ {4}needs: \[(.*)\]$/m
+      .exec(text)?.[1]
+      ?.split(',')
+      .map((s) => s.trim()) ?? [];
   for (const part of PARTS) {
     if (!needs.includes(part)) problems.push(`C-9: \`${AGG_JOB}\` does not \`need\` \`${part}\` — that part can fail while \`${CHECK_NAME}\` stays green`);
   }
@@ -557,7 +561,10 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED (behaviour): one part is simply not read by the script', () => {
-    const planted = ci.replace('for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do', 'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2; do');
+    const planted = ci.replace(
+      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do',
+      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2; do',
+    );
     expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
     expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
   });
