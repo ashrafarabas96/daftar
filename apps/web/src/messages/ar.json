@@ -942,13 +942,15 @@
   "customers.collect.restHeld": "باقي هذه الدفعة يبقى محفوظًا للعميل.",
   "customers.collect.over": "مجموع ما وُضع على الفواتير أكبر من المبلغ المستلم. خفّضه، وإلا فلن تُحفظ الدفعة.",
   "customers.collect.submit": "احفظ الدفعة",
-  "customers.collect.startOver": "ابدأ دفعة جديدة",
   "customers.collect.done": "حُفظت الدفعة",
   "customers.collect.alreadySaved": "كانت هذه الدفعة محفوظة من قبل، ولم تُحفظ مرتين.",
   "customers.collect.doneAmount": "استُلم {amount} من {name}",
   "customers.collect.doneInvoicesNone": "لم توضع على أي فاتورة",
   "customers.collect.doneInvoicesOne": "وُضعت على فاتورة واحدة",
-  "customers.collect.doneInvoices": "وُضعت على {n} فواتير",
+  "customers.collect.doneInvoices": "عدد الفواتير التي وُضعت عليها: {n}",
   "customers.collect.doneHeld": "{amount} محفوظ للعميل",
-  "customers.collect.another": "اقبض دفعة أخرى"
+  "customers.collect.another": "اقبض دفعة أخرى",
+  "customers.collect.alreadyRecorded": "هذه الدفعة مسجّلة من قبل. هذا ما حُفظ؛ لا تُدخلها مرة أخرى.",
+  "customers.collect.storedUnreadable": "قد تكون هذه الدفعة محفوظة من قبل، ولم نتمكّن من عرضها. لا تُدخلها مرة أخرى: اعرضها أولًا.",
+  "customers.collect.readAgain": "اعرض الدفعة المحفوظة"
 }

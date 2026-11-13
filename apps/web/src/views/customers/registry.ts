@@ -19,6 +19,7 @@ import type { CustomerPaymentResultDto, PaymentMethodDto } from '@daftar/shared-
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
 import { CollectPaymentView, type CollectPaymentViewProps } from './CollectPaymentView';
 import { surplusOf, type CollectFormModel, type CollectRowModel } from './collect-payment';
+import { afterOutcome, type CollectScreenState } from './collect-flow';
 
 const noop = (): void => undefined;
 
@@ -128,7 +129,9 @@ const view = (over: Partial<Omit<CollectPaymentViewProps, 'surplus'>> = {}): Col
     busy: false,
     errorKey: null,
     result: null,
-    on: { onField: noop, onRowAmount: noop, onLoadMore: noop, onSubmit: noop, onStartOver: noop },
+    stored: null,
+    storedUnread: false,
+    on: { onField: noop, onRowAmount: noop, onLoadMore: noop, onSubmit: noop, onRereadStored: noop, onStartOver: noop },
     ...over,
     form: f,
     rows,
@@ -168,6 +171,20 @@ const SAVED: CustomerPaymentResultDto = {
   replayed: false,
 };
 
+/** The stored payment as `GET /v1/customer-payments/:paymentId` returns it: the result without `replayed`. */
+const { replayed: _replayed, ...STORED_BASE } = SAVED;
+void _replayed;
+
+/** A screen state the flow folds an outcome into, as the page holds it. */
+const screen = (over: { form: CollectFormModel; rows: CollectRowModel[] }): CollectScreenState => ({
+  ...over,
+  busy: true,
+  errorKey: null,
+  result: null,
+  stored: null,
+  storedUnread: false,
+});
+
 export const VIEW_REGISTRY: readonly ViewEntry[] = [
   defineView('CollectPaymentView', CollectPaymentView, {
     'fresh form, three open invoices': view(),
@@ -193,7 +210,15 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'refused twice: another payment was recorded first': view({ ...TYPED_OVER_DUE, errorKey: 'error.customer_payment.settlement_changed' }),
     'refused: the invoices and amounts are not valid': view({ ...TYPED_OVER_DUE, errorKey: 'error.customer_payment.allocations_invalid' }),
     'refused: no permission to receive payments': view({ ...TYPED_OVER_DUE, errorKey: 'error.FORBIDDEN' }),
-    'refused: already sent with other figures': view({ ...TYPED_OVER_DUE, errorKey: 'error.customer_payment.idempotency_conflict' }),
+    // The first send was saved but its answer lost; the merchant changed 900.00 to 950.00 and sent again.
+    // The flow reads the stored payment and the screen shows IT, not the edited form.
+    'already recorded: the stored payment is shown': view(
+      afterOutcome(screen({ form: form({ amount: '950.00' }), rows: [{ ...OLDEST, amount: '150' }] }), {
+        kind: 'alreadySaved',
+        payment: { ...STORED_BASE, amountMinor: '90000', credit: null },
+      }),
+    ),
+    'already recorded, but it could not be read': view(afterOutcome(screen(TYPED_OVER_DUE), { kind: 'storedUnread' })),
     'no answer: the figures are kept for a retry': view({ ...TYPED_OVER_DUE, errorKey: 'error.fallback' }),
     'server failure: the figures are kept for a retry': view({ ...TYPED_OVER_DUE, errorKey: 'error.INTERNAL_ERROR' }),
     'saved, with the rest held for the customer': view({ result: SAVED }),

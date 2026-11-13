@@ -18,7 +18,7 @@
  * forbids the accounting words for it.
  */
 import { Button, Select, TextField } from '@daftar/design-system';
-import type { CustomerPaymentResultDto, CustomerStatusDto, PaymentMethodDto } from '@daftar/shared-contracts';
+import type { CustomerPaymentDto, CustomerPaymentResultDto, CustomerStatusDto, PaymentMethodDto } from '@daftar/shared-contracts';
 import { Ltr, rich, type ViewBaseProps } from '@/lib/phase3-format';
 import { RefusalNotice } from '../common/feedback';
 import { activeMethodChoices } from '../common/payment-methods';
@@ -26,9 +26,6 @@ import { CivilDate, Heading, Inline, Money, Muted, Notice, Panel, Stack, Text, T
 import { heldOnRow, isAllocatable, type CollectFormModel, type CollectRowModel, type Surplus } from './collect-payment';
 
 export type CollectFormField = 'methodId' | 'currency' | 'amount' | 'date' | 'reference';
-
-/** The refusal after which this form's ids can never be saved again: only a new form helps. */
-export const START_OVER_KEY = 'error.customer_payment.idempotency_conflict';
 
 export interface CollectPaymentViewProps {
   customer: { name: string; status: CustomerStatusDto };
@@ -42,11 +39,17 @@ export interface CollectPaymentViewProps {
   busy: boolean;
   errorKey: string | null;
   result: CustomerPaymentResultDto | null;
+  /** A payment already stored under this form's id, as the server read it back (`collect-flow.ts`). */
+  stored: CustomerPaymentDto | null;
+  /** This form's payment may be stored but could not be read: no form and no new form, only "read again". */
+  storedUnread: boolean;
   on: {
     onField: (field: CollectFormField, value: string) => void;
     onRowAmount: (invoiceId: string, value: string) => void;
     onLoadMore: () => void;
     onSubmit: () => void;
+    onRereadStored: () => void;
+    /** A new form with new ids. Offered only beside a saved or an already-stored payment. */
     onStartOver: () => void;
   };
 }
@@ -58,7 +61,8 @@ function invoicesKey(count: number): 'customers.collect.doneInvoicesNone' | 'cus
 
 export function CollectPaymentView(props: CollectPaymentViewProps & ViewBaseProps) {
   const { t, locale } = props;
-  if (props.result) return <Saved {...props} result={props.result} />;
+  if (props.result) return <Saved {...props} payment={props.result} replayed={props.result.replayed} />;
+  if (props.stored) return <Saved {...props} payment={props.stored} replayed={false} alreadyRecorded />;
   return (
     <Stack>
       <Title>{t('customers.collect.title')}</Title>
@@ -66,11 +70,11 @@ export function CollectPaymentView(props: CollectPaymentViewProps & ViewBaseProp
         <bdi>{props.customer.name}</bdi>
       </Text>
       {props.customer.status === 'inactive' ? <Notice tone="warning">{t('customers.collect.customerInactive')}</Notice> : null}
-      <PaymentForm {...props} />
+      {props.storedUnread ? null : <PaymentForm {...props} />}
       <RefusalNotice t={t} locale={locale} errorKey={props.errorKey} />
-      {props.errorKey === START_OVER_KEY ? (
-        <Button variant="secondary" fullWidth onClick={props.on.onStartOver}>
-          {t('customers.collect.startOver')}
+      {props.storedUnread ? (
+        <Button fullWidth loading={props.busy} disabled={props.busy} onClick={props.on.onRereadStored}>
+          {t('customers.collect.readAgain')}
         </Button>
       ) : null}
     </Stack>
@@ -182,15 +186,19 @@ function InvoiceRow(props: CollectPaymentViewProps & ViewBaseProps & { row: Coll
   );
 }
 
-function Saved(props: CollectPaymentViewProps & ViewBaseProps & { result: CustomerPaymentResultDto }) {
-  const { t, locale, result } = props;
+/**
+ * A payment the server has: just saved (or replayed), or already stored under this form's id. Every figure
+ * is the server's. An already-stored payment says so first, so it is not entered a second time.
+ */
+function Saved(props: CollectPaymentViewProps & ViewBaseProps & { payment: CustomerPaymentDto; replayed: boolean; alreadyRecorded?: boolean }) {
+  const { t, locale, payment: result } = props;
   return (
     <Stack>
       <Title>{t('customers.collect.title')}</Title>
       <Notice tone="success">
         <Stack gap={2}>
-          <Text strong>{t('customers.collect.done')}</Text>
-          {result.replayed ? <Text>{t('customers.collect.alreadySaved')}</Text> : null}
+          <Text strong>{props.alreadyRecorded ? t('customers.collect.alreadyRecorded') : t('customers.collect.done')}</Text>
+          {props.replayed ? <Text>{t('customers.collect.alreadySaved')}</Text> : null}
           <Text>
             {rich(t('customers.collect.doneAmount'), {
               amount: <Money amountMinor={result.amountMinor} currency={result.currencyCode} locale={locale} />,

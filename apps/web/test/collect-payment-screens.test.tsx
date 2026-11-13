@@ -7,6 +7,7 @@ import type { ViewFixture } from '@/lib/phase3-format';
 import { refusalKey } from '@/lib/phase3-errors';
 import { VIEW_REGISTRY } from '@/views/customers/registry';
 import type { CollectPaymentViewProps } from '@/views/customers/CollectPaymentView';
+import { STORED_UNREADABLE_KEY } from '@/views/customers/collect-flow';
 import { stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { LOCALES, elements, renderFixture, textOf, type ElementNode, type Rendered } from './helpers/render';
 
@@ -46,7 +47,9 @@ describe('the registry holds only states the page can reach', () => {
    */
   const reachable = new Set<string>([
     refusalKey(new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.amount_exceeds_outstanding' })),
-    refusalKey(new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.idempotency_conflict' })),
+    // `idempotency_conflict` never reaches the screen as text: the flow reads the stored payment instead,
+    // and when that read fails the flow's own key is shown.
+    STORED_UNREADABLE_KEY,
     refusalKey(new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.settlement_changed' })),
     refusalKey(new ApiError(400, 'VALIDATION_FAILED', { receivablesCode: 'customer_payment.allocations_invalid' })),
     refusalKey(new ApiError(403, 'FORBIDDEN')),
@@ -111,10 +114,34 @@ describe('Receive a payment — the form', () => {
     expect(inputValues(r)).toContain(propsOf('refused: no permission to receive payments').form.amount);
   });
 
-  it('a payment sent twice with different figures offers a fresh form', () => {
-    const r = render('refused: already sent with other figures');
-    expect(text(r)).toContain(tr('en', 'error.customer_payment.idempotency_conflict'));
-    expect(all(r, 'button').map(textOf)).toContain(tr('en', 'customers.collect.startOver'));
+  it('a payment already stored under this form is shown with its saved figures, not a fresh form', () => {
+    for (const locale of LOCALES) {
+      const r = render('already recorded: the stored payment is shown', locale);
+      expect(text(r)).toContain(tr(locale, 'customers.collect.alreadyRecorded'));
+      // The stored figures (900.00), not the edited ones still in the form (950.00).
+      expect(all(r, 'bdi').map(textOf).join(' ')).toMatch(/900[.,]00/);
+      expect(text(r)).not.toMatch(/950[.,]00/);
+      expect(all(r, 'input')).toEqual([]);
+      expect(text(r)).not.toContain(tr(locale, 'error.customer_payment.idempotency_conflict'));
+    }
+  });
+
+  it('when the stored payment cannot be read, no new form is offered: only reading it again', () => {
+    const r = render('already recorded, but it could not be read');
+    expect(text(r)).toContain(tr('en', 'customers.collect.storedUnreadable'));
+    const labels = all(r, 'button').map(textOf);
+    expect(labels).toContain(tr('en', 'customers.collect.readAgain'));
+    expect(labels).not.toContain(tr('en', 'customers.collect.another'));
+    expect(labels).not.toContain(tr('en', 'customers.collect.submit'));
+  });
+
+  it('no fixture offers a new form while a form is on screen', () => {
+    const entry = VIEW_REGISTRY.find((e) => e.name === 'CollectPaymentView');
+    for (const f of entry?.fixtures ?? []) {
+      const p = f.props as CollectPaymentViewProps;
+      if (p.result !== null || p.stored !== null) continue;
+      expect(all(renderFixture(f, 'en'), 'button').map(textOf), f.name).not.toContain(tr('en', 'customers.collect.another'));
+    }
   });
 
   it('says the rest is held for the customer when the invoices take less than was received', () => {
@@ -162,6 +189,12 @@ describe('Receive a payment — the answer, as the server states it', () => {
     expect(text(r)).not.toContain(tr('en', 'error.fallback'));
   });
 
+  it('the invoice count is never a bare Arabic plural after a number (wrong for 1, 2 and 11+)', () => {
+    const template = tr('ar', 'customers.collect.doneInvoices');
+    expect(template).toContain('{n}');
+    expect(template).not.toMatch(/\{n\}\s*(?:فواتير|فاتورة)/);
+  });
+
   it('a replay is a success, not an error', () => {
     for (const locale of LOCALES) {
       const r = render('saved earlier: the same payment sent again', locale);
@@ -189,6 +222,7 @@ describe('the screen does no number arithmetic on money', () => {
   const FILES = [
     'src/lib/phase4-collect-payment-api.ts',
     'src/views/customers/collect-payment.ts',
+    'src/views/customers/collect-flow.ts',
     'src/views/customers/CollectPaymentView.tsx',
     'src/views/customers/registry.ts',
     'src/app/[locale]/customers/[customerId]/collect/page.tsx',

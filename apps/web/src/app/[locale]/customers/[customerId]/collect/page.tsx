@@ -4,40 +4,32 @@
  *
  * The page reads the customer, the payment methods and the customer's open
  * invoices (oldest first, as the server orders them), and sends what the
- * merchant typed. It does no money arithmetic of its own: the body is built by
- * `planCollectPayment`, and every figure after the send is the server's.
+ * merchant typed. It holds no send logic of its own: one `CollectFlow` per
+ * form (`views/customers/collect-flow.ts`) owns the ids, the double-click
+ * guard, the retry and the reading of an already-stored payment, and every
+ * outcome is folded into the screen by `afterOutcome`. Both are tested
+ * without React.
  *
- * - The payment, credit and allocation ids are minted ONCE per form
- *   (`mintCollectIds`) and re-sent unchanged on a retry, a retryable 409
- *   (`withConflictRetry`) and a double click (`createSubmitGuard`, plus the
- *   button disabled while in flight). A new form — after a saved payment, or
- *   "start a new payment" — re-reads everything and mints new ids.
- * - A refusal sets the refusal text and nothing else: the form keeps every
- *   figure typed.
- * - A replayed answer (200, `replayed: true`) is a success and is shown as one.
+ * - The ids are minted when the flow is created, i.e. once per form. A new
+ *   flow — a new form, new ids — is created only by a fresh load, which the
+ *   view offers only beside a saved or an already-stored payment.
+ * - A refusal sets the refusal text and nothing else.
  * - A 403 on load renders the permission state; on send, the refusal text.
  */
 import { use, useCallback, useEffect, useRef, useState } from 'react';
 import { notFound } from 'next/navigation';
-import type { CustomerDto, CustomerPaymentResultDto, PaymentMethodDto } from '@daftar/shared-contracts';
+import type { CustomerDto, PaymentMethodDto } from '@daftar/shared-contracts';
 import { makeT, type Locale } from '@/lib/i18n';
 import { isUuid } from '@/lib/route-ids';
 import { listPaymentMethods } from '@/lib/phase3-api';
-import { refusalKey, withConflictRetry } from '@/lib/phase3-errors';
+import { refusalKey } from '@/lib/phase3-errors';
 import { localDateIso } from '@/lib/phase3-format';
-import { collectPayment, getCustomer, listOpenInvoices, type CustomerOpenInvoiceDto } from '@/lib/phase4-collect-payment-api';
+import { collectPayment, getCustomer, getStoredPayment, listOpenInvoices, type CustomerOpenInvoiceDto } from '@/lib/phase4-collect-payment-api';
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
 import { activeMethodChoices } from '@/views/common/payment-methods';
 import { CollectPaymentView, type CollectFormField } from '@/views/customers/CollectPaymentView';
-import {
-  createSubmitGuard,
-  mintCollectIds,
-  planCollectPayment,
-  surplusOf,
-  type CollectFormErrors,
-  type CollectFormModel,
-  type CollectRowModel,
-} from '@/views/customers/collect-payment';
+import { afterOutcome, beforeSend, createCollectFlow, type CollectFlow, type CollectOutcome, type CollectScreenState } from '@/views/customers/collect-flow';
+import { planCollectPayment, surplusOf, type CollectFormErrors, type CollectRowModel } from '@/views/customers/collect-payment';
 import { PageShell } from '../../../AppHeader';
 import { OPEN_INVOICES_PAGE, loadFailureStatus, useCollectSession } from './collect-page-kit';
 
@@ -47,6 +39,8 @@ const toRow = (invoice: CustomerOpenInvoiceDto): CollectRowModel => ({ ...invoic
 function currencyOptions(rows: readonly CollectRowModel[], baseCurrency: string): string[] {
   return [...new Set([...rows.filter((r) => !r.isCredit).map((r) => r.currency), baseCurrency])];
 }
+
+const newFlow = (): CollectFlow => createCollectFlow({ send: collectPayment, readStored: getStoredPayment });
 
 export default function CollectPaymentPage({ params }: { params: Promise<{ locale: Locale; customerId: string }> }) {
   const { locale, customerId } = use(params);
@@ -58,17 +52,12 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
   const [loadStatus, setLoadStatus] = useState<PageStatus | 'ready'>('loading');
   const [customer, setCustomer] = useState<CustomerDto | null>(null);
   const [methods, setMethods] = useState<PaymentMethodDto[]>([]);
-  const [rows, setRows] = useState<CollectRowModel[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [asOf, setAsOf] = useState('');
   const [loadingMore, setLoadingMore] = useState(false);
-  const [form, setForm] = useState<CollectFormModel | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [errorKey, setErrorKey] = useState<string | null>(null);
-  const [result, setResult] = useState<CustomerPaymentResultDto | null>(null);
-  // One set of ids per form, kept across every retry (A-12(4)); one send at a time.
-  const ids = useRef(mintCollectIds());
-  const guard = useRef(createSubmitGuard());
+  const [screen, setScreen] = useState<CollectScreenState | null>(null);
+  // One flow — one set of ids — per form, created by a fresh load and by nothing else.
+  const flow = useRef<CollectFlow | null>(null);
 
   useEffect(() => {
     if (session.status !== 'ready' || session.baseCurrency === null) return;
@@ -87,23 +76,28 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
         const loaded = open.items.map(toRow);
         const options = currencyOptions(loaded, baseCurrency);
         const active = activeMethodChoices(pm.items, locale, makeT(locale));
-        ids.current = mintCollectIds();
+        flow.current = newFlow();
         setCustomer(c);
         setMethods(pm.items);
-        setRows(loaded);
         setCursor(open.nextCursor);
         setAsOf(today);
-        setForm({
-          methodId: active[0]?.paymentMethodId ?? '',
-          currency: options[0] ?? baseCurrency,
-          currencyOptions: options,
-          amount: '',
-          date: today,
-          reference: '',
-          errors: {},
+        setScreen({
+          form: {
+            methodId: active[0]?.paymentMethodId ?? '',
+            currency: options[0] ?? baseCurrency,
+            currencyOptions: options,
+            amount: '',
+            date: today,
+            reference: '',
+            errors: {},
+          },
+          rows: loaded,
+          busy: false,
+          errorKey: null,
+          result: null,
+          stored: null,
+          storedUnread: false,
         });
-        setResult(null);
-        setErrorKey(null);
         setLoadStatus('ready');
       } catch (error) {
         if (live) setLoadStatus(loadFailureStatus(error));
@@ -114,47 +108,39 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
     };
   }, [session.status, session.baseCurrency, customerId, locale]);
 
-  /** A fresh form: everything re-read, new ids. */
+  /** A fresh form: everything re-read, a new flow, new ids. */
   const startOver = useCallback(() => setAttempt((n) => n + 1), []);
 
   async function loadMore() {
-    if (cursor === null || !form) return;
+    if (cursor === null || !screen) return;
     setLoadingMore(true);
-    setErrorKey(null);
+    setScreen((s) => (s ? { ...s, errorKey: null } : s));
     try {
       const page = await listOpenInvoices(customerId, { asOf, cursor, limit: OPEN_INVOICES_PAGE });
-      // The button is disabled while this read is in flight, so `rows` is the list on screen.
-      const next = [...rows, ...page.items.map(toRow)];
-      setRows(next);
-      setForm((f) => (f ? { ...f, currencyOptions: currencyOptions(next, session.baseCurrency ?? f.currency) } : f));
+      setScreen((s) => {
+        if (!s) return s;
+        const rows = [...s.rows, ...page.items.map(toRow)];
+        return { ...s, rows, form: { ...s.form, currencyOptions: currencyOptions(rows, session.baseCurrency ?? s.form.currency) } };
+      });
       setCursor(page.nextCursor);
     } catch (error) {
-      setErrorKey(refusalKey(error));
+      setScreen((s) => (s ? { ...s, errorKey: refusalKey(error) } : s));
     } finally {
       setLoadingMore(false);
     }
   }
 
+  function settle(pending: Promise<CollectOutcome> | null | undefined) {
+    if (!pending) return;
+    setScreen((s) => (s ? beforeSend(s) : s));
+    void pending.then((outcome) => setScreen((s) => (s ? afterOutcome(s, outcome) : s)));
+  }
+
   function submit() {
-    if (!form) return;
+    if (!screen) return;
+    const { form, rows } = screen;
     const method = activeMethodChoices(methods, locale, t).find((m) => m.paymentMethodId === form.methodId);
-    const planned = planCollectPayment({ customerId, form, rows, method, ids: ids.current });
-    if (!planned.ok) {
-      const invalid = new Set(planned.invalidRows);
-      setForm({ ...form, errors: planned.errors });
-      setRows((current) => current.map((r) => ({ ...r, invalid: invalid.has(r.invoiceId) })));
-      return;
-    }
-    const sent = guard.current.run(() => withConflictRetry(() => collectPayment(planned.body)));
-    if (sent === null) return;
-    setForm({ ...form, errors: {} });
-    setBusy(true);
-    setErrorKey(null);
-    sent
-      .then((answer) => setResult(answer))
-      // The form is left exactly as typed: only the refusal is set.
-      .catch((error: unknown) => setErrorKey(refusalKey(error)))
-      .finally(() => setBusy(false));
+    settle(flow.current?.submit((ids) => planCollectPayment({ customerId, form, rows, method, ids })));
   }
 
   const onField = (field: CollectFormField, value: string) => {
@@ -165,16 +151,23 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
       date: 'date',
       reference: 'reference',
     };
-    setForm((f) => (f ? { ...f, [field]: value, errors: { ...f.errors, [errorOf[field]]: false } } : f));
+    setScreen((s) => (s ? { ...s, form: { ...s.form, [field]: value, errors: { ...s.form.errors, [errorOf[field]]: false } } } : s));
   };
 
   const onRowAmount = (invoiceId: string, value: string) => {
-    setRows((current) => current.map((r) => (r.invoiceId === invoiceId ? { ...r, amount: value, invalid: false } : r)));
-    setForm((f) => (f ? { ...f, errors: { ...f.errors, rows: false, tooMany: false } } : f));
+    setScreen((s) =>
+      s
+        ? {
+            ...s,
+            rows: s.rows.map((r) => (r.invoiceId === invoiceId ? { ...r, amount: value, invalid: false } : r)),
+            form: { ...s.form, errors: { ...s.form.errors, rows: false, tooMany: false } },
+          }
+        : s,
+    );
   };
 
   const status = session.status !== 'ready' ? session.status : loadStatus;
-  if (status !== 'ready' || !customer || !form) {
+  if (status !== 'ready' || !customer || !screen) {
     return (
       <PageShell locale={locale} active="customers">
         <PageStateView t={t} locale={locale} status={status === 'ready' ? 'loading' : status} onRetry={startOver} />
@@ -189,15 +182,24 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
         locale={locale}
         customer={{ name: customer.name, status: customer.status }}
         methods={methods}
-        form={form}
-        rows={rows}
+        form={screen.form}
+        rows={screen.rows}
         hasMore={cursor !== null}
         loadingMore={loadingMore}
-        surplus={surplusOf(form, rows)}
-        busy={busy}
-        errorKey={errorKey}
-        result={result}
-        on={{ onField, onRowAmount, onLoadMore: () => void loadMore(), onSubmit: submit, onStartOver: startOver }}
+        surplus={surplusOf(screen.form, screen.rows)}
+        busy={screen.busy}
+        errorKey={screen.errorKey}
+        result={screen.result}
+        stored={screen.stored}
+        storedUnread={screen.storedUnread}
+        on={{
+          onField,
+          onRowAmount,
+          onLoadMore: () => void loadMore(),
+          onSubmit: submit,
+          onRereadStored: () => settle(flow.current?.rereadStored()),
+          onStartOver: startOver,
+        }}
       />
     </PageShell>
   );

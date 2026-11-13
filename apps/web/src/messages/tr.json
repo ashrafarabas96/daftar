@@ -942,7 +942,6 @@
   "customers.collect.restHeld": "Bu ödemenin kalanı müşteri adına tutulur.",
   "customers.collect.over": "Faturalara konan tutarların toplamı alınan tutardan fazla. Azaltın, aksi halde ödeme kaydedilmez.",
   "customers.collect.submit": "Ödemeyi kaydet",
-  "customers.collect.startOver": "Yeni bir ödeme başlat",
   "customers.collect.done": "Ödeme kaydedildi",
   "customers.collect.alreadySaved": "Bu ödeme daha önce kaydedilmişti. İki kez kaydedilmedi.",
   "customers.collect.doneAmount": "{name} müşterisinden {amount} alındı",
@@ -950,5 +949,8 @@
   "customers.collect.doneInvoicesOne": "Bir faturaya kondu",
   "customers.collect.doneInvoices": "{n} faturaya kondu",
   "customers.collect.doneHeld": "{amount} müşteri adına tutuluyor",
-  "customers.collect.another": "Başka bir ödeme al"
+  "customers.collect.another": "Başka bir ödeme al",
+  "customers.collect.alreadyRecorded": "Bu ödeme zaten kaydedilmişti. Kaydedilen bu; tekrar girmeyin.",
+  "customers.collect.storedUnreadable": "Bu ödeme zaten kaydedilmiş olabilir ve gösteremedik. Tekrar girmeyin: önce yeniden gösterin.",
+  "customers.collect.readAgain": "Kaydedilen ödemeyi göster"
 }

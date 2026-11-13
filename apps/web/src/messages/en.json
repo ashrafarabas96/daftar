@@ -942,7 +942,6 @@
   "customers.collect.restHeld": "The rest of this payment will be held for the customer.",
   "customers.collect.over": "The amounts put against the invoices add up to more than the amount received. Lower them, or the payment will not be saved.",
   "customers.collect.submit": "Save the payment",
-  "customers.collect.startOver": "Start a new payment",
   "customers.collect.done": "Payment saved",
   "customers.collect.alreadySaved": "This payment had already been saved. It was not saved twice.",
   "customers.collect.doneAmount": "{amount} received from {name}",
@@ -950,5 +949,8 @@
   "customers.collect.doneInvoicesOne": "Put against one invoice",
   "customers.collect.doneInvoices": "Put against {n} invoices",
   "customers.collect.doneHeld": "{amount} is held for the customer",
-  "customers.collect.another": "Receive another payment"
+  "customers.collect.another": "Receive another payment",
+  "customers.collect.alreadyRecorded": "This payment was already recorded. Here is what was saved; do not enter it again.",
+  "customers.collect.storedUnreadable": "This payment may already have been saved, and we could not show it. Do not enter it again: read it again first.",
+  "customers.collect.readAgain": "Show the saved payment"
 }

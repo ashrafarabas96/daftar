@@ -21,10 +21,10 @@
  *
  * Authorization, business scope and language headers are set by `apiFetch`.
  */
-import type { CustomerDto, CustomerOpenInvoiceDto, CustomerOpenInvoicesDto, CustomerPaymentResultDto } from '@daftar/shared-contracts';
+import type { CustomerDto, CustomerOpenInvoiceDto, CustomerOpenInvoicesDto, CustomerPaymentDto, CustomerPaymentResultDto } from '@daftar/shared-contracts';
 import { apiFetch } from './client';
 
-export type { CustomerDto, CustomerOpenInvoiceDto, CustomerOpenInvoicesDto, CustomerPaymentResultDto };
+export type { CustomerDto, CustomerOpenInvoiceDto, CustomerOpenInvoicesDto, CustomerPaymentDto, CustomerPaymentResultDto };
 
 const BFF = '/api/proxy';
 
@@ -74,6 +74,13 @@ export const getCustomer = (id: string) => apiFetch<CustomerDto>(`${BFF}/custome
 /** `GET /v1/customers/:id/open-invoices` — oldest first, `receivables.view`, business-wide callers only. */
 export const listOpenInvoices = (id: string, q: OpenInvoicesQuery) =>
   apiFetch<CustomerOpenInvoicesDto>(`${BFF}/customers/${encodeURIComponent(id)}/open-invoices${qs({ ...q })}`, { cache: 'no-store' });
+
+/**
+ * `GET /v1/customer-payments/:paymentId` — a stored payment (`receivables.view`, the key the open-invoice
+ * read already needs). Read when a send is refused as already stored under the same id.
+ */
+export const getStoredPayment = (paymentId: string) =>
+  apiFetch<CustomerPaymentDto>(`${BFF}/customer-payments/${encodeURIComponent(paymentId)}`, { cache: 'no-store' });
 
 /** `POST /v1/customer-payments` — 201 first time, 200 with `replayed: true` for the identical re-send. */
 export const collectPayment = (body: CollectPaymentRequestDto) =>
