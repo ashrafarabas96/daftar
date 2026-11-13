@@ -54,6 +54,6 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     'four customers: with phone and contact, inactive, and one with no contact details': list({}),
     'one customer, no further page': list({ customers: [WITH_CONTACT], hasMore: false }),
     'no customers at all': list({ customers: [], hasMore: false }),
-    'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'common.noPermission' }),
+    'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'error.FORBIDDEN' }),
   }),
 ];
