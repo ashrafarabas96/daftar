@@ -113,36 +113,65 @@ describe('the canonical currency set', () => {
   });
 });
 
+/**
+ * Every place in `sources` where money is scaled by a power of ten, as
+ * `file: scales by <literal>`. The live scan and its witness both read
+ * THIS function, so a change to either pattern cannot leave the witness
+ * passing on a copy of the old one — which is what it did until this
+ * round: the witness spelled both regexes again inside itself.
+ */
+function scaleOffencesIn(sources: ReadonlyArray<readonly [string, string]>): string[] {
+  const offences: string[] = [];
+  for (const [file, source] of sources) {
+    const code = blankOut(source);
+    // A power-of-ten literal next to a `/` or `*` is what a hidden
+    // precision looks like in this package: there is no other reason to
+    // scale an integer in minor units.
+    // `**` is excluded deliberately: `10n ** 18n` in `types.ts` is the
+    // MONEY CAP, an upper bound on an amount, not a scale between a
+    // major and a minor unit. Excluding the exponent operator is the
+    // narrowest exclusion that admits it, and the witness below proves
+    // the scan still sees a real `*` and `/`.
+    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) offences.push(`${file}: scales by ${m[1]}`);
+    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) offences.push(`${file}: scales by ${m[1]}`);
+  }
+  return offences;
+}
+
 describe('this package assumes no currency precision', () => {
   it('divides by no power of ten and multiplies by none', () => {
-    const offences: string[] = [];
-    for (const file of readdirSync(SRC).filter((f) => f.endsWith('.ts'))) {
-      const code = blankOut(readFileSync(join(SRC, file), 'utf8'));
-      // A power-of-ten literal next to a `/` or `*` is what a hidden
-      // precision looks like in this package: there is no other reason to
-      // scale an integer in minor units.
-      // `**` is excluded deliberately: `10n ** 18n` in `types.ts` is the
-      // MONEY CAP, an upper bound on an amount, not a scale between a
-      // major and a minor unit. Excluding the exponent operator is the
-      // narrowest exclusion that admits it, and the witness below proves
-      // the scan still sees a real `*` and `/`.
-      for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) offences.push(`${file}: scales by ${m[1]}`);
-      for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) offences.push(`${file}: scales by ${m[1]}`);
-    }
-    expect(offences, 'a file in src/ scales money by a power of ten, which is a currency precision in disguise').toStrictEqual([]);
+    // The corpus is this package's own `src/`, read through the checker above.
+    const sources = readdirSync(SRC)
+      .filter((f) => f.endsWith('.ts'))
+      .map((f) => [f, readFileSync(join(SRC, f), 'utf8')] as const);
+    expect(sources.length, 'no source file was read, so this prohibition would pass on nothing').toBeGreaterThan(3);
+    expect(scaleOffencesIn(sources), 'a file in src/ scales money by a power of ten, which is a currency precision in disguise').toStrictEqual([]);
   });
 
   it('proves that scan can see a power of ten at all', () => {
     // The scan above is a prohibition, so it passes loudest when it is
-    // broken. This is its non-vacuity witness: the same patterns, on text
-    // that does scale, must find it.
-    const planted = 'const major = amountMinor / 100n;\nconst back = major * 1000;\n';
-    const found = [...blankOut(planted).matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].map((m) => m[1]);
-    // And the exclusion is narrow: an exponent is not a scale, but a
-    // division by a power of ten right after one still is.
-    expect([...blankOut('const cap = 10n ** 18n;\n').matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].length).toBe(0);
-    expect(found).toStrictEqual(['100n', '1000']);
+    // broken. This is its non-vacuity witness, and it now goes through the
+    // SAME checker rather than through a second copy of the two patterns.
+    const divides = scaleOffencesIn([['planted.ts', 'const major = amountMinor / 100n;' + '\n']]);
+    expect(divides, 'the checker missed a division by a power of ten').toStrictEqual(['planted.ts: scales by 100n']);
+
+    // The other order, which had no witness of its own: the literal FIRST.
+    const multiplies = scaleOffencesIn([['planted.ts', 'const back = 1000 * majorUnits;' + '\n']]);
+    expect(multiplies, 'the checker missed a literal-first scale').toStrictEqual(['planted.ts: scales by 1000']);
+
+    // AND THE OTHER DIRECTION: the exclusion is narrow. The money cap is an
+    // exponent, not a scale, and a comment or a string that spells a scale is
+    // not program.
+    expect(scaleOffencesIn([['cap.ts', 'const cap = 10n ** 18n;' + '\n']]), 'the money cap was read as a scale').toStrictEqual([]);
+    expect(
+      scaleOffencesIn([
+        ['prose.ts', '// never write amountMinor / 100n here' + '\n'],
+        ['literal.ts', 'const s = "x / 100n";' + '\n'],
+      ]),
+      'a comment or a string literal was read as code',
+    ).toStrictEqual([]);
+
     // And the literals are literals, not something the lexer blanked away.
-    expect(numericLiteralsOf(planted)).toStrictEqual(['100n', '1000']);
+    expect(numericLiteralsOf('const major = amountMinor / 100n;' + '\n')).toStrictEqual(['100n']);
   });
 });
