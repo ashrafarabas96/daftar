@@ -134,6 +134,12 @@ export async function startOrReuse(): Promise<void> {
       password: PG_PASSWORD,
       port: PG_PORT,
       persistent: true,
+      // MEASURED: with no flag, `initdb` takes the HOST's code page, and on an
+      // Arabic Windows that is `Arabic_Palestinian Authority.1256`, so the
+      // cluster is built WIN1256. It STARTS fine; `applyBootstrap` is what dies,
+      // on the box-drawing characters in the bootstrap SQL. `--locale=C` keeps
+      // collation host-independent so a local ORDER BY cannot disagree with CI's.
+      initdbFlags: ['--encoding=UTF8', '--locale=C'],
       postgresFlags: PRELOAD_STAT_STATEMENTS ? ['-c', 'shared_preload_libraries=pg_stat_statements', '-c', 'pg_stat_statements.track=top'] : [],
     });
     if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
