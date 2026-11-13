@@ -12,6 +12,7 @@ const KMS_BRIDGE = {
 
 const PROD_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
+  CORS_ORIGINS: 'https://app.example.com', // REL-10: production names its browser origins explicitly
   APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar',
   PLATFORM_DATABASE_URL: 'postgresql://daftar_platform:x@db/daftar',
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
@@ -165,6 +166,13 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
   });
 
   it('worker: requires worker DB + key ring + SMTP; REJECTS merchant/platform DB URLs and JWT', () => {
+    // KEPT ON PURPOSE, and labelled so it is not mistaken for the JWT check:
+    // this pattern is GENERAL. `PROD_ENV` carries the merchant and platform
+    // database URLs, so APP_DATABASE_URL alone satisfies it and it would stay
+    // green with no JWT denial anywhere — which is exactly how this test's
+    // title claimed a denial that did not exist. It still earns its place as
+    // the "every forbidden variable is refused" arm. The JWT-specific
+    // assertions are the two below, and they name the variable.
     expect(() => loadConfig({ ...PROD_ENV, PROCESS_MODE: 'worker' })).toThrow(/must NOT be set in PROCESS_MODE=worker/);
     const workerEnv: NodeJS.ProcessEnv = {
       NODE_ENV: 'production',
@@ -176,6 +184,18 @@ describe('process-level secret separation (§XXV–XXXI)', () => {
       SMTP_FROM: 'no-reply@daftar.example',
     };
     expect(() => loadConfig(workerEnv)).not.toThrow();
+    // SEC-01. This test's title has said "and JWT" since Phase 2 and nothing
+    // measured it: the assertion on the first line matches a GENERAL pattern
+    // that APP_DATABASE_URL alone already satisfies, and the correct worker
+    // environment above never carried a JWT variable at all. So the suite was
+    // green and the denial did not exist. It does now, and the throw must name
+    // the variable — in every environment, which `sec01-worker-jwt-deny` in
+    // the no-database lane covers for NODE_ENV outside production.
+    const SESSION_SECRET = 'production-secret-with-at-least-32-characters';
+    expect(() => loadConfig({ ...workerEnv, JWT_SECRET: SESSION_SECRET })).toThrow(/JWT_SECRET.*must NOT be set in PROCESS_MODE=worker/s);
+    expect(() => loadConfig({ ...workerEnv, JWT_KEYS: JSON.stringify([{ kid: 'k1', secret: SESSION_SECRET, status: 'active' }]) })).toThrow(
+      /JWT_KEYS.*must NOT be set in PROCESS_MODE=worker/s,
+    );
     const { WORKER_DATABASE_URL: _w, ...noDb } = workerEnv;
     expect(() => loadConfig(noDb)).toThrow(/WORKER_DATABASE_URL/);
     const { CREDENTIAL_PAYLOAD_KEY: _k, ...noKey } = workerEnv;

@@ -14,6 +14,123 @@ import { hmacKeysEquivalent } from '@daftar/accounting';
  * - Production FAILS CLOSED: local storage, log delivery, memory rate limiter
  *   or a missing platform URL are startup errors, never silent fallbacks.
  */
+
+/**
+ * REL-10: the development allowlist, named once so the production gate can
+ * recognise "still the default" and say so, rather than refusing for the
+ * incidental reason that the default happens to be loopback http.
+ */
+const DEV_CORS_ORIGINS = 'http://localhost:3001';
+
+/**
+ * REL-10: the browser allowlist, parsed in ONE place.
+ *
+ * `main.ts` used to run its own `CORS_ORIGINS.split(',').map(trim)` next to the
+ * validation below. Two parses of one value is exactly how a gate and the
+ * server it guards come to disagree — the gate approves what it split, the
+ * server enables what it split, and nobody compares them. There is now one
+ * function, `main.ts` calls it, and `tests-unit/rel10-cors-allowlist.test.ts`
+ * fails if that stops being true.
+ *
+ * It deliberately does NOT drop empty entries. `'a,,b'` is an operator mistake,
+ * and silently discarding the gap would hide it; `corsOriginProblem` refuses it
+ * by name instead.
+ */
+export function parseCorsOrigins(raw: string): readonly string[] {
+  return raw.split(',').map((o) => o.trim());
+}
+
+/**
+ * Why `origin` is not something a browser can ever match — in ANY environment —
+ * or `null` if it is a well-formed origin.
+ *
+ * Every case here is a value that is BROKEN rather than merely permissive, so
+ * none of them is a production-only concern:
+ *
+ *  - `''`: `enableCors` would hold an empty string in its allowlist, which
+ *    matches no `Origin` header, while the comma that produced it reads as a
+ *    second origin.
+ *  - `'*'`: `enableCors` receives an ARRAY here, and `cors` compares array
+ *    members for EQUALITY. `'*'` in a list therefore does not mean "any
+ *    origin"; it means an origin spelled `*`, which no browser sends. It reads
+ *    as "wide open" and behaves as "nothing" — the one combination worth
+ *    refusing outright. (A deliberately open API would pass `origin: true`,
+ *    which is a different decision, in a different place, and is not this
+ *    value.)
+ *  - anything that is not exactly scheme + host + optional port: a trailing
+ *    slash, a path, a query, a fragment, embedded credentials, or a bare host.
+ *    A browser's `Origin` header carries none of those, so such an entry never
+ *    matches and fails SILENTLY — a CORS error in a merchant's browser weeks
+ *    later, with nothing in any log to name the cause.
+ */
+function corsOriginProblem(origin: string): string | null {
+  if (origin === '') return 'an empty entry is not an origin (check for a stray or trailing comma in CORS_ORIGINS)';
+  if (origin === '*') {
+    return '\'*\' is refused: the allowlist is a LIST and members are compared for equality, so \'*\' matches no Origin any browser sends — it reads as "open" and behaves as "nothing"';
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return `${JSON.stringify(origin)} is not an absolute origin; a browser Origin is scheme://host[:port]`;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return `${JSON.stringify(origin)} is not an http(s) origin`;
+  }
+  if (origin !== parsed.origin) {
+    return `${JSON.stringify(origin)} must be written exactly as ${parsed.origin} — a browser Origin header carries no trailing slash, path, query, fragment or credentials, so anything else silently matches nothing`;
+  }
+  return null;
+}
+
+/**
+ * Why a well-formed `origin` is not acceptable IN PRODUCTION, or `null`.
+ *
+ * Only called for an origin `corsOriginProblem` has already accepted, so the
+ * `new URL` here cannot throw.
+ */
+function productionCorsOriginProblem(origin: string): string | null {
+  const parsed = new URL(origin);
+  if (parsed.protocol !== 'https:') {
+    return `${origin} is not https: a production browser origin is served over TLS, and an http origin in the allowlist invites the downgrade it would accept`;
+  }
+  if (isLocalHost(parsed.hostname)) {
+    return `${origin} is a loopback or all-interfaces origin: production names the real web origins it serves`;
+  }
+  return null;
+}
+
+/**
+ * Does `hostname` — as the URL parser normalised it — name only this machine?
+ *
+ * REL-10 review, finding 3. The first form of this check listed four spellings
+ * (`localhost`, `*.localhost`, `127.0.0.1`, `::1`) and so READ as "no loopback
+ * in production" while MEANING "not those four". Measured as passing before
+ * this: `https://127.0.0.2` (the rest of 127.0.0.0/8), `https://0.0.0.0` and
+ * `https://[::]` (every interface, which includes the loopback one), and
+ * `https://[::ffff:7f00:1]`. A rule that reads wider than it acts is the kind
+ * that gets trusted for what it says.
+ *
+ * It matches the PARSED host, not the operator's text, because the parser folds
+ * the short and numeric spellings first (measured: `https://127.1` and
+ * `https://2130706433` both normalise to `127.0.0.1`, and
+ * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
+ * the IPv6 forms, whose `hostname` keeps the brackets.
+ */
+function isLocalHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
+  if (host === 'localhost' || host.endsWith('.localhost')) return true;
+  // The whole loopback block, not only its first address.
+  if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return true;
+  // Not loopback, but "every interface on this machine" — never an origin a
+  // merchant's browser can send.
+  if (host === '0.0.0.0' || host === '::') return true;
+  if (host === '::1') return true;
+  // IPv4-mapped loopback, in the hex form the parser produces.
+  if (/^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(host)) return true;
+  return false;
+}
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -111,7 +228,7 @@ const EnvSchema = z
     SMTP_URL: z.string().optional(),
     SMTP_FROM: z.string().email().optional(),
     DEV_MAILBOX_FILE: z.string().min(1).default('./var/dev-mailbox.log'),
-    CORS_ORIGINS: z.string().default('http://localhost:3001'),
+    CORS_ORIGINS: z.string().default(DEV_CORS_ORIGINS),
     // §11 (Final Enforcement): support session lifetime is capped SERVER-SIDE.
     // Arbitrary far-future expiry is rejected; default maximum is 4 hours.
     SUPPORT_SESSION_MAX_MINUTES: z.coerce
@@ -171,7 +288,97 @@ const EnvSchema = z
       fail('RECONCILER_DATABASE_URL', `must NOT be set in PROCESS_MODE=${mode} (only the reconciler process holds reconciliation authority)`);
     }
 
+    // ── SEC-01: the worker is denied the SESSION signing key, in EVERY
+    // environment ────────────────────────────────────────────────────────
+    // `JWT_SECRET`/`JWT_KEYS` are the ring that mints access tokens. The
+    // worker has no session authority — it delivers credentials and
+    // publishes the outbox — and `TokenService` is provided only in
+    // `identityProviders`, never in the worker's container. That is not
+    // enough. The ring is a VALUE on the configuration object that every
+    // worker provider receives ('APP_CONFIG'), and `parseKeyRing` is a
+    // top-level export, so a worker that merely RECEIVES the secret can mint
+    // a token for any user and any session by constructing TokenService by
+    // hand. Measured before this block existed: it did, and the merchant
+    // API's own verifier accepted the token
+    // (`tests-unit/sec01-worker-jwt-deny.test.ts`).
+    //
+    // Like the reconciler block above, this is therefore a property of the
+    // MODE rather than of NODE_ENV: a staging box or a laptop is exactly
+    // where the habit — and then the adapter that uses it — gets written. So
+    // it sits BEFORE the production gate below, and a test that only proves
+    // the production case proves nothing about the denial.
+    //
+    // It is deliberately an INDEPENDENT `if`, NOT an arm chained onto the
+    // reconciler's `if/else if`: that chain's `else` arm is the converse
+    // control that denies RECONCILER_DATABASE_URL to every OTHER mode, and a
+    // worker arm inside it would exempt the worker from that control —
+    // opening a wider hole than this one closes.
+    if (mode === 'worker') {
+      for (const n of ['JWT_SECRET', 'JWT_KEYS'] as const) {
+        if (c[n]) {
+          fail(
+            n,
+            'must NOT be set in PROCESS_MODE=worker (the session signing key mints an access token for any user; the worker holds no session authority — SEC-01)',
+          );
+        }
+      }
+    }
+
+    // ── REL-10: the browser allowlist, checked in EVERY environment ─────────
+    // Only the BROKEN cases live here (see `corsOriginProblem`): an empty
+    // entry, `*`, and anything that is not exactly an origin. A development
+    // box is where such a value is typed, and a value that matches nothing is
+    // no more acceptable there than in production — it just costs an afternoon
+    // instead of a launch. The production-only rules (https, no loopback) are
+    // below the gate, because dev needs their opposite.
+    for (const origin of parseCorsOrigins(c.CORS_ORIGINS)) {
+      const problem = corsOriginProblem(origin);
+      if (problem !== null) fail('CORS_ORIGINS', problem);
+    }
+
     if (c.NODE_ENV !== 'production') return;
+    // REL-10: production names its browser origins explicitly, or does not
+    // start. The default is loopback http, so a process that never sets
+    // CORS_ORIGINS would already be refused by the two rules below — but it
+    // would be refused for the incidental reason that the DEFAULT is loopback,
+    // with a message about TLS, and the operator's actual mistake (they never
+    // set the variable) would be left to be inferred. So that case is named.
+    // Only a process that SERVES HTTP has a browser allowlist: the worker and
+    // the reconciler create an application context with no HTTP server
+    // (`main.ts`), so `enableCors` is never called for them and demanding
+    // origins of them would be a requirement with no subject — the same
+    // reasoning the blocks above already apply to those modes' credentials.
+    //
+    // The condition NAMES THE HTTP MODES rather than excluding the other two,
+    // and that is not a stylistic choice. `scripts/phase2-s8-gate.ts` holds a
+    // structural law (§8, `s8-process`) that refuses this file if the text
+    // `mode === 'reconciler'` appears anywhere AFTER the production gate
+    // above: it is how that law detects a reconciler secret refusal that has
+    // been made production-only. Written the other way, this CORS requirement
+    // — which refuses no secret and says nothing about the reconciler — turns
+    // that law red. Measured: `npm run gate:phase2:s8` EXIT 1 with
+    // `FAIL [s8-process] config.ts refuses the other processes' secrets only
+    // in production`, and EXIT 0 as written here. The positive form is also
+    // the more honest one: the subject of the rule is a process that serves
+    // browsers, so the rule should say so.
+    const servesBrowsers = mode === 'merchant-api' || mode === 'platform-api' || mode === 'all';
+    if (servesBrowsers) {
+      if (c.CORS_ORIGINS === DEV_CORS_ORIGINS) {
+        fail(
+          'CORS_ORIGINS',
+          `production requires an explicit browser allowlist: CORS_ORIGINS is still the development default ${JSON.stringify(DEV_CORS_ORIGINS)} (comma-separated https origins, e.g. https://app.example.com)`,
+        );
+      } else {
+        for (const origin of parseCorsOrigins(c.CORS_ORIGINS)) {
+          // Already reported by the all-environment pass above; `new URL`
+          // inside the production check would throw on it rather than explain
+          // it.
+          if (corsOriginProblem(origin) !== null) continue;
+          const problem = productionCorsOriginProblem(origin);
+          if (problem !== null) fail('CORS_ORIGINS', problem);
+        }
+      }
+    }
     // §10 (Stabilization): PROCESS_MODE=all is a dev/test convenience ONLY —
     // production must deploy the separated runtimes.
     if (mode === 'all') fail('PROCESS_MODE', 'PROCESS_MODE=all is forbidden in production (dev/test only)');
