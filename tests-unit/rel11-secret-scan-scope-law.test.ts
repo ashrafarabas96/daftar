@@ -96,6 +96,60 @@ export function conditionOf(steps: readonly WorkflowStep[], stepName: string): s
   return hit === undefined ? undefined : hit.condition;
 }
 
+/**
+ * The same, for a step this file can only name through the action it runs.
+ * Matched by PREFIX on purpose: pinning `@v4` would make a routine bump of an
+ * unrelated action redden a security law, with a message naming an action
+ * version instead of a change of scope. (Review of this PR, finding 3.)
+ */
+export function conditionOfActionStep(
+  steps: readonly WorkflowStep[],
+  actionPrefix: string,
+): string | null | undefined {
+  const hit = steps.find((s) => s.name.startsWith(`uses:${actionPrefix}`));
+  return hit === undefined ? undefined : hit.condition;
+}
+
+/**
+ * A job's own `if:`, at four spaces — the condition that decides whether any of
+ * its steps run at all. Reading only the step's condition left this law's
+ * coverage claim half-measured: a job-level gate would switch the whole scan
+ * off while every step-level assertion stayed green. (Review, finding 1.)
+ */
+export function jobCondition(yamlText: string, jobName: string): string | null | undefined {
+  const lines = yamlText.replace(/\r\n?/g, '\n').split('\n');
+  const jobAt = lines.findIndex((l) => l === `  ${jobName}:`);
+  if (jobAt === -1) return undefined;
+  for (let i = jobAt + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^ {2}\S/.test(line)) break;
+    if (/^ {4}steps:/.test(line)) break; // past the job's own keys
+    const cond = /^ {4}if: (.*)$/.exec(line);
+    if (cond !== null) return cond[1].trim();
+  }
+  return null;
+}
+
+/** The branches the `push:` trigger names, in flow or block style. */
+export function pushBranches(yamlText: string): readonly string[] {
+  const lines = yamlText.replace(/\r\n?/g, '\n').split('\n');
+  const pushAt = lines.findIndex((l) => /^ {2}push:/.test(l));
+  if (pushAt === -1) return [];
+  const out: string[] = [];
+  for (let i = pushAt + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^ {0,2}\S/.test(line)) break;
+    const flow = /^ {4}branches: \[(.*)\]$/.exec(line);
+    if (flow !== null) {
+      out.push(...flow[1].split(',').map((b) => b.trim().replace(/^['"]|['"]$/g, '')));
+      continue;
+    }
+    const item = /^ {6}- (.*)$/.exec(line);
+    if (item !== null) out.push(item[1].trim().replace(/^['"]|['"]$/g, ''));
+  }
+  return out;
+}
+
 const WORKFLOW = readFileSync(CI_WORKFLOW_PATH, 'utf8');
 const HYGIENE_STEPS = stepsOfJob(WORKFLOW, 'hygiene');
 
@@ -103,15 +157,35 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
   it('REL11-A (positive control): the reader finds both secret-scan steps, by name, in the real workflow', () => {
     expect(HYGIENE_STEPS.length).toBeGreaterThan(0);
     const names = HYGIENE_STEPS.map((s) => s.name);
-    // Named floor: `hygiene` carries many steps, and a reader that returned a
-    // handful would be reading the wrong block while still "finding" two names.
-    expect(names.length).toBeGreaterThanOrEqual(10);
+    // Named floor, deliberately BELOW the current count. `hygiene` carries ten
+    // steps today, and a floor of ten would make a legitimate removal by the
+    // workflow's owner — the work-folder cleanup, whose stated reason (the
+    // self-hosted runner) `ci.yml` says DR-48 undid — fail THIS law with a
+    // message accusing L4's reader instead of naming L2's edit. Five is enough
+    // for its only purpose: proving the reader found a block of steps rather
+    // than one stray list item. The two names below are the real claim.
+    // (Review of this PR, finding 2.)
+    expect(names.length).toBeGreaterThanOrEqual(5);
     expect(names).toContain(SNAPSHOT_STEP);
     expect(names).toContain(RANGE_STEP);
   });
 
   it('REL11-B: the snapshot scan has no event condition, so a push to main is secret-scanned', () => {
     expect(conditionOf(HYGIENE_STEPS, SNAPSHOT_STEP)).toBeNull();
+  });
+
+  it('REL11-B2: and nothing above the step switches it off — neither `hygiene` nor the job it needs is gated on an event', () => {
+    // Without this, B is a claim about one line and not about coverage: a
+    // job-level `if: github.event_name == 'pull_request'`, or the same on the
+    // job `hygiene` needs, would stop the scan running on a push while every
+    // step-level assertion here stayed green. (Review of this PR, finding 1 —
+    // the vacuity this file guarded against in the step and forgot in the job.)
+    //
+    // If L2 ever does gate one of these, this case reddens and the coverage
+    // claim in REL11-B must be re-examined in the SAME commit, not silenced.
+    expect(jobCondition(WORKFLOW, 'hygiene')).toBeNull();
+    expect(WORKFLOW).toContain('    needs: workspaces'); // the chain this job hangs from
+    expect(jobCondition(WORKFLOW, 'workspaces')).toBeNull();
   });
 
   it('REL11-C (negative control): the reader reports the condition when that same step is gated', () => {
@@ -133,7 +207,10 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
   });
 
   it('REL11-E (scope): the workflow really does run on a push to main, so the gap is the condition and not the trigger', () => {
-    expect(WORKFLOW).toContain("    branches: [main, 'phase/**']");
+    // By MEANING, not by the line's spelling: `branches:` written as a block
+    // list is the same trigger, and a security law must not redden because an
+    // equivalent YAML form was chosen. (Review of this PR, finding 4.)
+    expect(pushBranches(WORKFLOW)).toContain('main');
   });
 
   it('REL11-F (negative control): a missing job and a renamed step are reported, not silently passed', () => {
@@ -159,8 +236,19 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // opened a step only on `- name:` attributed that condition to the range
     // scan. Both are pinned here, by value, so the misreading cannot return.
     expect(conditionOf(HYGIENE_STEPS, RANGE_STEP)).toBe(PULL_REQUEST_ONLY);
-    expect(conditionOf(HYGIENE_STEPS, 'uses:actions/upload-artifact@v4')).toBe(
+    expect(conditionOfActionStep(HYGIENE_STEPS, 'actions/upload-artifact')).toBe(
       `always() && ${PULL_REQUEST_ONLY}`,
     );
+  });
+
+  it('REL11-I (mechanism): the job reader stops at the job it was asked for', () => {
+    // `jobCondition` must not wander into the next job and report ITS `if:`,
+    // which is the same misreading `stepsOfJob` first made one level down.
+    expect(jobCondition(WORKFLOW, 'no-such-job')).toBeUndefined();
+    const gatedJob = WORKFLOW.replace('  hygiene:\n', `  hygiene:\n    if: ${PULL_REQUEST_ONLY}\n`);
+    expect(gatedJob).not.toBe(WORKFLOW);
+    expect(jobCondition(gatedJob, 'hygiene')).toBe(PULL_REQUEST_ONLY);
+    // And a condition belonging to a LATER job is not attributed to this one.
+    expect(jobCondition(WORKFLOW, 'hygiene')).toBeNull();
   });
 });
