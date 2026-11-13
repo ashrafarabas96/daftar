@@ -53,7 +53,9 @@ export const ACCOUNT_AGING_BUCKET_DAYS = '0,30,60,90';
  * it under a guess.
  */
 export const AGE_BAND_KEYS: Readonly<Record<string, string>> = {
-  'not-due': 'customers.account.age.notDue',
+  // The first band holds every row up to and including its due date, "due today" among them,
+  // so it is worded "not late": "not due" would contradict a row in it.
+  'not-due': 'customers.account.age.notLate',
   '1-30': 'customers.account.age.band',
   '31-60': 'customers.account.age.band',
   '61-90': 'customers.account.age.band',

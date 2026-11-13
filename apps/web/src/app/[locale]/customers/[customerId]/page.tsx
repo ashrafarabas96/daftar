@@ -59,7 +59,7 @@ export default function CustomerAccountPage({ params }: { params: Promise<{ loca
     ])
       .then(([customer, receivable, aging, open, credits]) => {
         if (!live) return;
-        if (unreadableAccount({ receivable, aging, openInvoices: open.items, credits }, asOf).length > 0) {
+        if (unreadableAccount({ receivable, aging, openInvoices: open.items, openInvoicesAsOf: open.asOf, credits }, asOf).length > 0) {
           setPhase('failed');
           return;
         }
@@ -85,7 +85,8 @@ export default function CustomerAccountPage({ params }: { params: Promise<{ loca
     try {
       const page = await listCustomerOpenInvoices(customerId, { asOf, cursor, limit: OPEN_INVOICE_PAGE_SIZE });
       // A page this screen cannot place is refused like any failed read: the rows on screen and the cursor stay.
-      if (unreadableAccount({ ...account, openInvoices: page.items }, asOf).length > 0) throw new Error('unreadable open-invoices page');
+      if (unreadableAccount({ ...account, openInvoices: page.items, openInvoicesAsOf: page.asOf }, asOf).length > 0)
+        throw new Error('unreadable open-invoices page');
       setInvoices((current) => [...current, ...page.items]);
       setCursor(page.nextCursor);
     } catch (error) {

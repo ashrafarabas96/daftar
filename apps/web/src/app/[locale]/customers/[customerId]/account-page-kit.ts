@@ -8,8 +8,9 @@
  * And one rule that page does not need: **an answer this screen cannot place is
  * refused, not shown under a guess.** `unreadableAccount` names every amount
  * that is not minor-unit text, every age band outside the 0,30,60,90 set, a
- * band list of the wrong length, a held amount below zero and an as-of date
- * that is not the one asked for. The page treats any finding as a failed load.
+ * band list of the wrong length, a held amount below zero, and an as-of date
+ * — on the aging answer or on the open-invoices answer — that is not the one
+ * asked for. The page treats any finding as a failed load.
  */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -63,7 +64,10 @@ export function phaseOfFailure(error: unknown): 'denied' | 'failed' | 'missing' 
   return isPermissionRefusal(error) ? 'denied' : 'failed';
 }
 
-type Answers = Pick<CustomerAccountViewProps, 'receivable' | 'aging' | 'openInvoices' | 'credits'>;
+type Answers = Pick<CustomerAccountViewProps, 'receivable' | 'aging' | 'openInvoices' | 'credits'> & {
+  /** The `asOf` the open-invoices answer echoes (`CustomerOpenInvoicesDto.asOf`). */
+  openInvoicesAsOf: string;
+};
 
 /** The band tokens of the offered set, in the server's order. */
 const BAND_ORDER = Object.keys(AGE_BAND_KEYS);
@@ -77,6 +81,7 @@ export function unreadableAccount(answers: Answers, asOf: string): string[] {
   amount('receivable.baseMinor', answers.receivable.baseMinor);
   answers.receivable.byCurrency.forEach((line, i) => amount(`receivable.byCurrency[${i}].txnMinor`, line.txnMinor));
   if (answers.aging.asOf !== asOf) out.push('aging.asOf');
+  if (answers.openInvoicesAsOf !== asOf) out.push('openInvoices.asOf');
   if (answers.aging.buckets.length !== BAND_ORDER.length) out.push('aging.buckets');
   answers.aging.buckets.forEach((bucket, i) => {
     if (bucket.label !== BAND_ORDER[i]) out.push(`aging.buckets[${i}].label`);

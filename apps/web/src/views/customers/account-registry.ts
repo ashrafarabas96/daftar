@@ -247,6 +247,17 @@ const CAPPED_CREDITS: Credit[] = Array.from({ length: 200 }, (_, i) => {
   return credit(`c4ed1700-0007-4000-8000-000000000${n}`, 'ILS', `${n}00`, '2026-11-01');
 });
 
+/**
+ * 200 held amounts, newest first, EVERY ONE used up (`"0"`). The read returns
+ * exhausted rows too, so this is a real answer — and it says nothing about the
+ * older rows past the cut, some of which may still hold money. The notice must
+ * survive it (DR-114(b): the held balance is never dropped silently).
+ */
+const SPENT_CREDITS: Credit[] = Array.from({ length: 200 }, (_, i) => {
+  const n = String(i + 1).padStart(3, '0');
+  return credit(`c4ed1700-0008-4000-8000-000000000${n}`, 'ILS', '0', '2026-11-01');
+});
+
 export const CUSTOMER_ACCOUNT_VIEW: ViewEntry = defineView('CustomerAccountView', CustomerAccountView, {
   'owes in one currency, with open invoices and a further page': account({}),
   'money held for the customer: the balance is below zero': HELD,
@@ -255,4 +266,5 @@ export const CUSTOMER_ACCOUNT_VIEW: ViewEntry = defineView('CustomerAccountView'
   'an amount beyond 2^53': HUGE,
   'show more was refused, with the rows still on screen': account({ errorKey: 'error.FORBIDDEN' }),
   'more held amounts than one read returns': account({ credits: CAPPED_CREDITS, creditsCapped: true, hasMore: false }),
+  'the read returned its full 200 held amounts and every one is used up': account({ credits: SPENT_CREDITS, creditsCapped: true, hasMore: false }),
 });

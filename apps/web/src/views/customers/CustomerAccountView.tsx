@@ -15,11 +15,14 @@
  * the total the merchant reads, and two totals that differ by the money not
  * yet on an open invoice would be a puzzle this screen cannot explain.
  *
- * ── A NEGATIVE AMOUNT IS MONEY HELD FOR THE CUSTOMER ────────────────────
+ * ── A NEGATIVE AMOUNT IS A BALANCE IN THE CUSTOMER'S FAVOUR ─────────────
  * The balance MAY come back below zero (L3 contract note §6: the ledger reader
- * has no zero floor). It is then worded as money held for the customer, with
- * its magnitude taken off the TEXT by `splitMinorSign` — never "we owe the
- * customer", and never a minus sign in front of a figure.
+ * has no zero floor). It is then worded "{amount} in the customer's favour",
+ * with its magnitude taken off the TEXT by `splitMinorSign` — never "we owe the
+ * customer", and never a minus sign in front of a figure. That sentence is NOT
+ * the held-amounts section's: the two come from two reads and DR-114(b) keeps
+ * them apart. All three wordings are PROVISIONAL pending the owner (DR-35 and
+ * DR-114(b) name «رصيد دائن», which the merchant-language guard refuses).
  *
  * ── THE HELD-MONEY SECTION COMES FROM THE HELD AMOUNTS, NOT THE SIGN ─────
  * A surplus payment does not push the balance below zero: it is kept as a held
@@ -27,8 +30,9 @@
  * section is shown when such an amount has something left, whatever the
  * balance says, and each one is its own line in its own currency. An exhausted
  * one (`"0"`) holds nothing and is not listed. That read returns at most 200
- * rows with no cursor, so when it returns 200 the view says older ones may be
- * missing rather than implying the list is complete.
+ * rows with no cursor, exhausted ones included, so when it returns 200 the view
+ * says older ones may be missing — whether or not any returned row holds money —
+ * rather than implying the list is complete.
  *
  * There is no credit limit (`OD-P4-03` OPTION A): nothing here mentions one.
  */
@@ -97,16 +101,20 @@ export function CustomerAccountView(props: CustomerAccountViewProps & ViewBasePr
         ) : null}
       </section>
 
-      {held.length > 0 ? (
+      {held.length > 0 || props.creditsCapped ? (
+        // Shown when something is held OR the read may have cut older rows off: the read returns
+        // exhausted rows too, so 200 used-up rows say nothing about the older ones (DR-114(b)).
         <section style={STACK}>
           <SectionTitle>{t('customers.account.heldMoney.title')}</SectionTitle>
-          <List
-            items={held.map((credit) => ({
-              key: credit.creditId,
-              primary: <Money amountMinor={credit.remainingAmountMinor} currency={credit.currencyCode} locale={locale} />,
-              secondary: rich(t('customers.account.heldMoney.since'), { date: <CivilDate iso={credit.creditDate} locale={locale} /> }),
-            }))}
-          />
+          {held.length > 0 ? (
+            <List
+              items={held.map((credit) => ({
+                key: credit.creditId,
+                primary: <Money amountMinor={credit.remainingAmountMinor} currency={credit.currencyCode} locale={locale} />,
+                secondary: rich(t('customers.account.heldMoney.since'), { date: <CivilDate iso={credit.creditDate} locale={locale} /> }),
+              }))}
+            />
+          ) : null}
           {props.creditsCapped ? (
             <Notice tone="info">{rich(t('customers.account.heldMoney.capped'), { count: <Ltr>{String(CREDITS_READ_CAP)}</Ltr> })}</Notice>
           ) : null}

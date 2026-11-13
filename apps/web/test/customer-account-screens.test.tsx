@@ -53,7 +53,8 @@ const F_ZERO = 'nothing owed and nothing open';
 const F_HUGE = 'an amount beyond 2^53';
 const F_REFUSED = 'show more was refused, with the rows still on screen';
 const F_CAPPED = 'more held amounts than one read returns';
-const FIXTURES = [F_OWES, F_HELD, F_MULTI, F_ZERO, F_HUGE, F_REFUSED, F_CAPPED];
+const F_CAPPED_SPENT = 'the read returned its full 200 held amounts and every one is used up';
+const FIXTURES = [F_OWES, F_HELD, F_MULTI, F_ZERO, F_HUGE, F_REFUSED, F_CAPPED, F_CAPPED_SPENT];
 
 const entry = (): ViewEntry => {
   const found = CUSTOMER_VIEWS.find((e) => e.name === VIEW);
@@ -342,12 +343,33 @@ describe('a negative balance is money held for the customer', () => {
   });
 });
 
+describe('two sources, two sentences (DR-114(b))', () => {
+  it('a figure below zero (the receivable read) and the held-amounts section (the credits read) never share a sentence', () => {
+    for (const locale of LOCALES) {
+      const c = CATALOGS[locale];
+      const below = (c['customers.account.held'] as string).replace('{amount}', '').trim();
+      const section = c['customers.account.heldMoney.title'] as string;
+      expect(below, locale).not.toEqual(section);
+      expect(section.includes(below) || below.includes(section), `${locale}: one is not a part of the other`).toBe(false);
+    }
+    // F_HELD: below zero, nothing held. The figure is worded; the section is absent.
+    expect(text(render(F_HELD))).toContain(en['customers.account.held'].replace('{amount}', '').trim());
+    expect(text(render(F_HELD))).not.toContain(en['customers.account.heldMoney.title']);
+  });
+
+  it('the credit-bearing invoice row keeps DR-35’s shape: a balance, on an invoice N days old', () => {
+    expect(ar['customers.account.invoices.heldOnInvoice']).toBe('رصيد للعميل على فاتورة عمرها {days} يومًا');
+    expect(en['customers.account.invoices.heldOnInvoice']).toMatch(/^Balance .* on an invoice \{days\} days old$/);
+    expect(tr['customers.account.invoices.heldOnInvoice']).toMatch(/bakiye/i);
+  });
+});
+
 describe('money held for the customer comes from the held amounts, not from the sign of the balance', () => {
   const heading = (name: string, locale: Locale = 'en'): boolean =>
     text(render(name, locale)).includes(CATALOGS[locale]['customers.account.heldMoney.title'] as string);
 
-  it('shows the held-money section exactly when a held amount has something left', () => {
-    for (const name of FIXTURES) expect(heading(name), name).toBe(heldCredits(propsOf(name)).length > 0);
+  it('shows the held-money section exactly when a held amount has something left, or older ones may be missing', () => {
+    for (const name of FIXTURES) expect(heading(name), name).toBe(heldCredits(propsOf(name)).length > 0 || propsOf(name).creditsCapped);
   });
 
   it('is not derived from the balance: a negative balance with nothing held has no section, a positive one with held money has it', () => {
@@ -379,7 +401,18 @@ describe('money held for the customer comes from the held amounts, not from the 
     const capped = en['customers.account.heldMoney.capped'].replace('{count}', String(CREDITS_READ_CAP));
     expect(CREDITS_READ_CAP).toBe(200);
     expect(text(render(F_CAPPED))).toContain(capped);
-    for (const name of FIXTURES.filter((n) => n !== F_CAPPED)) expect(text(render(name)), name).not.toContain(capped);
+    for (const name of FIXTURES.filter((n) => n !== F_CAPPED && n !== F_CAPPED_SPENT)) expect(text(render(name)), name).not.toContain(capped);
+  });
+
+  it('keeps that notice when the newest 200 are all used up: older ones with money left may exist (DR-114(b), no silent omission)', () => {
+    const p = propsOf(F_CAPPED_SPENT);
+    expect(p.credits.length).toBe(CREDITS_READ_CAP);
+    expect(heldCredits(p), 'every returned held amount is used up').toEqual([]);
+    expect(p.creditsCapped).toBe(true);
+    for (const locale of LOCALES) {
+      const capped = (CATALOGS[locale]['customers.account.heldMoney.capped'] as string).replace('{count}', String(CREDITS_READ_CAP));
+      expect(text(render(F_CAPPED_SPENT, locale)), locale).toContain(capped);
+    }
   });
 
   it('never renders a held amount’s id', () => {
@@ -410,12 +443,21 @@ describe('the open invoices and the age bands', () => {
     expect(text(render(F_OWES))).toContain(en['customers.account.invoices.noDueDate']);
   });
 
+  it('the first band holds rows due today, so it never says "not due" (it says "not late")', () => {
+    const key = AGE_BAND_KEYS['not-due'] as string;
+    expect(en[key as keyof typeof en]).not.toMatch(/not due/i);
+    expect(ar[key as keyof typeof ar]).not.toMatch(/لم يحن/);
+    expect(tr[key as keyof typeof tr]).not.toMatch(/vadesi/i);
+    // And it is not the row sentence for a day count below zero either.
+    for (const locale of LOCALES) expect(CATALOGS[locale][key], locale).not.toEqual(CATALOGS[locale]['customers.account.invoices.notDueYet']);
+  });
+
   it('shows the five bands of the 0,30,60,90 set, including the empty ones, with the server’s own day bounds', () => {
     expect(Object.keys(AGE_BAND_KEYS)).toEqual(['not-due', '1-30', '31-60', '61-90', 'over-90']);
     for (const locale of LOCALES) {
       const r = render(F_ZERO, locale);
       const shown = text(r);
-      expect(shown, locale).toContain(CATALOGS[locale]['customers.account.age.notDue']);
+      expect(shown, locale).toContain(CATALOGS[locale][AGE_BAND_KEYS['not-due'] as string]);
       for (const bucket of propsOf(F_ZERO).aging.buckets.slice(1)) {
         const key = AGE_BAND_KEYS[bucket.label] as string;
         const sentence = (CATALOGS[locale][key] as string).replace('{from}', String(bucket.fromDays)).replace('{to}', String(bucket.toDays));
@@ -525,10 +567,16 @@ describe('the page, its kit and its client', () => {
   it('refuses an answer it cannot place, naming what is wrong, and passes a readable one', () => {
     for (const name of FIXTURES) {
       const p = propsOf(name);
-      expect(unreadableAccount({ receivable: p.receivable, aging: p.aging, openInvoices: p.openInvoices, credits: p.credits }, p.aging.asOf), name).toEqual([]);
+      expect(
+        unreadableAccount(
+          { receivable: p.receivable, aging: p.aging, openInvoices: p.openInvoices, openInvoicesAsOf: p.aging.asOf, credits: p.credits },
+          p.aging.asOf,
+        ),
+        name,
+      ).toEqual([]);
     }
     const p = propsOf(F_MULTI);
-    const good = { receivable: p.receivable, aging: p.aging, openInvoices: p.openInvoices, credits: p.credits };
+    const good = { receivable: p.receivable, aging: p.aging, openInvoices: p.openInvoices, openInvoicesAsOf: p.aging.asOf, credits: p.credits };
     expect(unreadableAccount({ ...good, credits: p.credits.map((c, n) => (n === 1 ? { ...c, remainingAmountMinor: '-5' } : c)) }, p.aging.asOf)).toEqual([
       'credits[1].remainingAmountMinor',
     ]);
@@ -541,7 +589,8 @@ describe('the page, its kit and its client', () => {
     expect(unreadableAccount({ ...good, aging: { ...p.aging, buckets: p.aging.buckets.slice(0, 4) } }, p.aging.asOf)).toEqual(['aging.buckets']);
     const unbounded = { ...p.aging, buckets: p.aging.buckets.map((b, i) => (i === 2 ? { ...b, toDays: null } : i === 4 ? { ...b, fromDays: null } : b)) };
     expect(unreadableAccount({ ...good, aging: unbounded }, p.aging.asOf)).toEqual(['aging.buckets[2].days', 'aging.buckets[4].days']);
-    expect(unreadableAccount(good, '2026-11-12')).toEqual(['aging.asOf']);
+    expect(unreadableAccount(good, '2026-11-12')).toEqual(['aging.asOf', 'openInvoices.asOf']);
+    expect(unreadableAccount({ ...good, openInvoicesAsOf: '2026-11-12' }, p.aging.asOf)).toEqual(['openInvoices.asOf']);
     const badRow = p.openInvoices.map((i, n) => (n === 0 ? { ...i, outstandingTxnMinor: String(Number.MAX_SAFE_INTEGER + 2) + '.0' } : i));
     expect(unreadableAccount({ ...good, openInvoices: badRow }, p.aging.asOf)).toEqual(['openInvoices[0].outstandingTxnMinor']);
   });
