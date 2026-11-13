@@ -357,7 +357,14 @@ describe('TD-24 — an outage degrades and says so, and never becomes "no limit"
     expect(closed).toBe(1);
   });
 
-  it('TD24-HANDSHAKE: the real evaluator awaits the connection instead of failing the first command', async () => {
+  // CONCURRENT, and only these two: each builds its own evaluator against a
+  // dead port and shares nothing with the file, and each spends ~1.2s waiting
+  // out the REAL client's retry budget (200+400+600ms). Run side by side they
+  // cost one wait instead of two. Nothing here is shortened: the budget, the
+  // handshake wait and every assertion are untouched — only the waiting
+  // overlaps. Any case that touches the file's shared state must NOT join
+  // them.
+  it.concurrent('TD24-HANDSHAKE: the real evaluator awaits the connection instead of failing the first command', async () => {
     // The measurement this case pins: with `lazyConnect` and no offline
     // queue, `sendCommand` computes `writable` before the stream exists
     // (ioredis `built/Redis.js:327-366`) and rejects with "Stream isn't
@@ -380,7 +387,7 @@ describe('TD-24 — an outage degrades and says so, and never becomes "no limit"
     await evaluator.close?.();
   });
 
-  it('TD24-REDIAL: the real client dials again after its retries are spent, so a replica can recover', async () => {
+  it.concurrent('TD24-REDIAL: the real client dials again after its retries are spent, so a replica can recover', async () => {
     // TD24-RECOVER proves the FLAG clears, but it does so through a fake
     // evaluator — which, as the second review said, is not a measurement of
     // the real client. This case is: on a dead port ioredis spends its
