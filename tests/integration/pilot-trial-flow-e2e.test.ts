@@ -507,11 +507,26 @@ describe(CLAIM, () => {
     // that is a result worth reading rather than a test to be relaxed.
     expect(overpaidStatus, `the overpayment was refused: ${overpaidBody}`).toBeLessThan(300);
     expect(overpaidReadStatus, 'the second receivable could not be read').toBe(200);
-    // THE LAW. A credit does not net off a debt: the surplus is money the
-    // customer has paid that nobody owes yet, so the receivable floors at
-    // zero. A server that netted it would answer a NEGATIVE receivable, and
-    // the merchant would read "we owe the customer" off a page that should
-    // say "nothing is outstanding, and there is money on account".
+    // THE LAW, AND ITS EXACT SCOPE. A credit does not net off a debt: the
+    // surplus is money the customer has paid that nobody owes yet, so an
+    // UNALLOCATED surplus moves the receivable no further than the
+    // allocations do — here, to exactly zero. A server that netted it would
+    // answer a NEGATIVE receivable, and the merchant would read "we owe the
+    // customer" off a page that should say "nothing is outstanding, and there
+    // is money on account".
+    //
+    // This is NOT a claim that the receivable can never go negative, and the
+    // difference is measured rather than argued: the one definition of the
+    // settlement sum computes `total_txn_minor - coalesce(paid_txn, 0)` with
+    // NO `GREATEST(0, …)` (`0084`, the set-based `invoice_outstanding`), and
+    // `customer_ar_outstanding` sums it with `HAVING sum <> 0`, so a negative
+    // row survives the sum. The probe is sighted: the same expression DOES
+    // carry an explicit floor for a document that is not open
+    // (`CASE WHEN i.status <> 'open' THEN 0::BIGINT`), so the absence of the
+    // other floor is a measurement and not a blind zero. A negative
+    // receivable is reachable here through a credit document or an
+    // over-application, and a law that reddened every negative balance would
+    // be a false red about a lawful state.
     expect(otherBalanceMinor, `the receivable after an overpayment of ${surplus} over ${outstanding}`).toBe(0n);
     // AND THE SAME CLAIM THROUGH THE NAMED CHECKER, so the figure above is not
     // the only thing standing between a netted surplus and a green suite.
@@ -572,6 +587,28 @@ describe(CLAIM, () => {
     expect(statementOffencesIn(0n, rows, sale - collectedMinor), 'a statement built from the flow that actually ran contradicts itself').toStrictEqual([]);
     // No false red on the empty statement of a customer who owes nothing.
     expect(statementOffencesIn(0n, [], 0n)).toStrictEqual([]);
+    // AND NO FALSE RED ON A NEGATIVE RUNNING BALANCE, which is a LAWFUL state
+    // and not an error: a credit document or an over-application can carry
+    // the balance below zero, the settlement sum computes the difference with
+    // no floor (`0084`'s set-based `invoice_outstanding`), and the sum over a
+    // customer keeps a negative row (`HAVING sum <> 0`). A floor planted in a
+    // statement alone would make the statement disagree with the reader of
+    // record, which is a financial defect rather than a tidier page. So this
+    // control is here to STOP a later edit from adding that floor: the law
+    // rejects a negative SIDE on a row, never a negative balance.
+    const ccy = invoiceCurrency;
+    const wentNegative: readonly StatementRow[] = [
+      { what: 'a sale on account', currency: ccy, debitMinor: 100n, creditMinor: 0n, runningMinor: 100n },
+      { what: 'a credit document larger than the debt', currency: ccy, debitMinor: 0n, creditMinor: 250n, runningMinor: -150n },
+    ];
+    expect(statementOffencesIn(0n, wentNegative, -150n), 'a negative running balance was reported as an offence, and it is a lawful state').toStrictEqual([]);
+    // The negative SIDE, by contrast, is still an offence — so the control
+    // above did not buy its silence by making the checker blind.
+    expect(
+      statementOffencesIn(0n, [{ what: 'a row with a negative debit', currency: ccy, debitMinor: -100n, creditMinor: 0n, runningMinor: -100n }], -100n).some(
+        (o) => o.includes('no negative side'),
+      ),
+    ).toBe(true);
   });
 
   it('NEGATIVE CONTROL — each of the five statement laws is seen to say no, and law 5 catches what law 4 cannot', () => {
