@@ -564,10 +564,16 @@ describe(CLAIM, () => {
     // row survives the sum. The probe is sighted: the same expression DOES
     // carry an explicit floor for a document that is not open
     // (`CASE WHEN i.status <> 'open' THEN 0::BIGINT`), so the absence of the
-    // other floor is a measurement and not a blind zero. A negative
-    // receivable is reachable here through a credit document or an
-    // over-application, and a law that reddened every negative balance would
-    // be a false red about a lawful state.
+    // other floor is a measurement and not a blind zero.
+    //
+    // Whether a negative balance can be REACHED is a different question from
+    // whether the arithmetic has a floor, and today it cannot be: a credit
+    // note is refused by `invoices_document_kind_ck` (`0075:250`) and an
+    // over-application by `invoice_settlement.settlement_inconsistent`
+    // (`0081:780-782`). So this zero is the only answer this arm can produce
+    // — and the law stays written as "an unallocated surplus moves it no
+    // further", not as "it is never negative", because the second one would
+    // pass today and go false the day either door opens.
     expect(otherBalanceMinor, `the receivable after an overpayment of ${surplus} over ${outstanding}`).toBe(0n);
     // AND THE PER-CURRENCY HALF IS EMPTY HERE, which is a measured property
     // of the AR function rather than an oversight: it ends in
@@ -636,21 +642,47 @@ describe(CLAIM, () => {
     expect(statementOffencesIn(0n, rows, sale - collectedMinor), 'a statement built from the flow that actually ran contradicts itself').toStrictEqual([]);
     // No false red on the empty statement of a customer who owes nothing.
     expect(statementOffencesIn(0n, [], 0n)).toStrictEqual([]);
-    // AND NO FALSE RED ON A NEGATIVE RUNNING BALANCE, which is a LAWFUL state
-    // and not an error: a credit document or an over-application can carry
-    // the balance below zero, the settlement sum computes the difference with
-    // no floor (`0084`'s set-based `invoice_outstanding`), and the sum over a
-    // customer keeps a negative row (`HAVING sum <> 0`). A floor planted in a
-    // statement alone would make the statement disagree with the reader of
-    // record, which is a financial defect rather than a tidier page. So this
-    // control is here to STOP a later edit from adding that floor: the law
-    // rejects a negative SIDE on a row, never a negative balance.
+    // AND NO FALSE RED ON A NEGATIVE RUNNING BALANCE. This is a law about THE
+    // CHECKER and not a claim about what the server can produce today, and
+    // the difference is measured rather than assumed:
+    //
+    //   — a negative balance is NOT reachable on this tree. A credit note
+    //     cannot exist, because `invoices.document_kind` carries
+    //     `CONSTRAINT invoices_document_kind_ck CHECK (document_kind =
+    //     'invoice')` (`0075:250`) and no later migration drops it; and an
+    //     over-application is refused by name, because the settlement
+    //     verifier raises `invoice_settlement.settlement_inconsistent` on
+    //     `v_sum > v_i.total_txn_minor` (`0081:780-782`). Both measured here,
+    //     on this branch's own base;
+    //   — but the SETTLEMENT SUM itself has no floor (`0084`'s set-based
+    //     `invoice_outstanding` computes the plain difference) and the sum
+    //     over a customer keeps a negative row (`HAVING sum <> 0`), so the
+    //     day a reducer or a document kind arrives, a negative balance is
+    //     what the reader of record will answer.
+    //
+    // So the checker must not reject one — a floor in the statement alone
+    // would make the statement disagree with the reader of record, which is a
+    // financial defect and not a tidier page. And the law is deliberately NOT
+    // written the other way round, as "the balance is never negative": that
+    // one would pass today and become FALSE the day a migration drops the
+    // constraint, which is how a test comes to explode a month later.
+    //
+    // The planted statement is a literal array handed straight to the
+    // checker, so there is no corpus it could fail to match — but it is still
+    // asserted to BE what it claims before its silence is read (RULE-27: a
+    // plant that matched nothing reads as a successful control and is
+    // nothing).
     const ccy = invoiceCurrency;
     const wentNegative: readonly StatementRow[] = [
       { what: 'a sale on account', currency: ccy, debitMinor: 100n, creditMinor: 0n, runningMinor: 100n },
-      { what: 'a credit document larger than the debt', currency: ccy, debitMinor: 0n, creditMinor: 250n, runningMinor: -150n },
+      { what: 'a reducer larger than the debt, which this tree cannot yet produce', currency: ccy, debitMinor: 0n, creditMinor: 250n, runningMinor: -150n },
     ];
-    expect(statementOffencesIn(0n, wentNegative, -150n), 'a negative running balance was reported as an offence, and it is a lawful state').toStrictEqual([]);
+    expect(wentNegative.length, 'the planted statement is empty, so its silence would be silence about nothing').toBe(2);
+    expect(wentNegative.at(-1)?.runningMinor, 'the planted statement does not actually go negative').toBe(-150n);
+    expect(
+      statementOffencesIn(0n, wentNegative, -150n),
+      'a negative running balance was reported as an offence, and the checker may not reject one',
+    ).toStrictEqual([]);
     // The negative SIDE, by contrast, is still an offence — so the control
     // above did not buy its silence by making the checker blind.
     expect(
