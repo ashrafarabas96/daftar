@@ -4,7 +4,8 @@
   "baseline": {
     "rev": "cd447421b407f2482c31b8ca181eee34f99ecbd8",
     "job": "backend",
-    "steps": 61
+    "steps": 61,
+    "namesSha256": "ce243f80140403c3ab23c9e51cc5808b49eacb7c95bd7791dccdea083c4d959e"
   },
   "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-golden"],
   "totals": {
@@ -75,5 +76,17 @@
     "Tampered-migration hard-fail proof": "backend-golden",
     "Typecheck": "backend-static",
     "Unit tests": "backend-static"
+  },
+  "p2TestFileOverlaps": {
+    "tests/integration/accounting-engine.test.ts": ["P2-S3", "P2-S4"],
+    "tests/integration/accounting-guards.test.ts": ["P2-S1", "P2-S7"],
+    "tests/integration/accounting-journal.test.ts": ["P2-S2", "P2-S4", "P2-S5", "P2-S6"],
+    "tests/integration/accounting-permissions.test.ts": ["P2-S1", "P2-S6"],
+    "tests/integration/migration-portability.test.ts": ["P2-S1", "P2-S2", "P2-S4", "P2-S5", "P2-S6"],
+    "tests/integration/migration-upgrade.test.ts": ["P2-S1", "P2-S2", "P2-S4", "P2-S5", "P2-S6"],
+    "tests/integration/process-composition.test.ts": ["P2-S4", "P2-S5", "P2-S6"],
+    "tests/integration/runner-exit-code.test.ts": ["P2-S7", "P2-S8"],
+    "tests/security/journal-privilege-matrix.test.ts": ["P2-S2", "P2-S5", "P2-S6"],
+    "tests/security/search-path-shadowing.test.ts": ["P2-S3", "P2-S8"]
   }
 }

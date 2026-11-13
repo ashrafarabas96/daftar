@@ -19,7 +19,7 @@
  *
  *   C-1  The register's arithmetic closes: every step of the pre-split job is
  *        either shared infrastructure or assigned to exactly one job, and
- *        `shared + assigned` equals the pre-split step count. 51 = 11 + 40,
+ *        `shared + assigned` equals the pre-split step count. 61 = 11 + 50,
  *        MEASURED on the baseline revision the register names.
  *   C-2  Every step the workflow runs in a job of the family is in the
  *        register — assigned to THAT job, or declared shared.
@@ -44,6 +44,7 @@
  * is not asserted here. The per-run test totals are the other half of the
  * conservation evidence and are read from the jobs' own Vitest summaries.
  */
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -55,7 +56,8 @@ const REGISTER_PATH = join(ROOT, 'docs', 'ci-speed', 'ci-job-conservation.json')
 const ci = readFileSync(CI_PATH, 'utf8');
 
 interface Register {
-  baseline: { rev: string; job: string; steps: number };
+  baseline: { rev: string; job: string; steps: number; namesSha256: string };
+  p2TestFileOverlaps: Record<string, string[]>;
   jobs: string[];
   totals: { shared: number; assigned: number };
   shared: string[];
@@ -121,6 +123,66 @@ function stepsOf(ciText: string, job: string): string[] {
     }
   }
   return out;
+}
+
+/**
+ * The text of each step of one job, keyed by the step identity `stepsOf`
+ * uses, in order. A step runs from its `      - ` dash to the next one.
+ */
+function stepBlocks(ciText: string, job: string): Array<{ name: string; text: string }> {
+  const names = stepsOf(ciText, job);
+  const lines = ciText.split('\n');
+  const start = lines.findIndex((l) => l === `  ${job}:`);
+  if (start < 0) return [];
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {2}[A-Za-z0-9_-]+:/.test(lines[i] ?? '')) {
+      end = i;
+      break;
+    }
+  }
+  const blocks: string[] = [];
+  for (let i = start + 1; i < end; i += 1) {
+    const line = lines[i] ?? '';
+    if (line.startsWith('      - ')) blocks.push(line);
+    else if (blocks.length > 0) blocks[blocks.length - 1] += `\n${line}`;
+  }
+  return blocks.map((text, i) => ({ name: names[i] ?? `#${i}`, text }));
+}
+
+/**
+ * A step that keeps its NAME but loses its work still passes C-1..C-4, so the
+ * law also requires every step to do something: a non-empty `run:` or a
+ * `uses:`, and no `if:` that is the literal `false`.
+ */
+function hollowProblems(ciText: string, reg: Register): string[] {
+  const problems: string[] = [];
+  for (const job of reg.jobs) {
+    for (const { name, text } of stepBlocks(ciText, job)) {
+      const hasWork = /(^|\n|- )\s*(run:\s*\S|uses:\s*\S)/.test(text);
+      if (!hasWork) problems.push(`C-8: \`${name}\` in \`${job}\` has no \`run:\` and no \`uses:\` — a step with a name and no work`);
+      if (/\n\s*if:\s*(false|'false'|"false"|\$\{\{\s*false\s*\}\})\s*(\n|$)/.test(text)) {
+        problems.push(`C-8: \`${name}\` in \`${job}\` carries \`if: false\` — it can never run`);
+      }
+    }
+  }
+  return problems;
+}
+
+/**
+ * The baseline fingerprint: the register may not be edited to forget a
+ * step. C-1 compares two numbers the register itself states; this compares
+ * the NAMES with a digest pinned in the same file, so removing a step from
+ * the workflow AND from the register AND lowering both counts still fails.
+ */
+function fingerprintProblems(reg: Register): string[] {
+  const names = [...reg.shared, ...Object.keys(reg.assignment)].sort();
+  const digest = createHash('sha256').update(names.join('\n'), 'utf8').digest('hex');
+  return digest === reg.baseline.namesSha256
+    ? []
+    : [
+        `C-7: the ${names.length} step names of the register hash to ${digest}, not the pinned baseline ${reg.baseline.namesSha256} — a step was added to or dropped from the register`,
+      ];
 }
 
 /** Everything wrong with `ciText` as judged against the committed register. */
@@ -190,7 +252,27 @@ function conservationProblems(ciText: string, reg: Register): string[] {
     }
   }
 
+  problems.push(...fingerprintProblems(reg), ...hollowProblems(ciText, reg));
   return problems;
+}
+
+const P2_GATES = [1, 2, 3, 4, 5, 6, 7, 8];
+
+/** The `P2_Sn_TESTS` rosters of the eight Phase 2 gate scripts, read from the files. */
+function p2Overlaps(): Record<string, string[]> {
+  const sets: Record<string, string[]> = {};
+  for (const n of P2_GATES) {
+    const text = readFileSync(join(ROOT, 'scripts', `phase2-s${n}-gate.ts`), 'utf8');
+    const m = new RegExp(`const P2_S${n}_TESTS = \\[([\\s\\S]*?)\\n\\]`).exec(text);
+    const body = (m?.[1] ?? '').replace(/\/\/[^\n]*/g, '');
+    sets[`P2-S${n}`] = [...new Set([...body.matchAll(/'([^']+\.test\.ts)'/g)].map((x) => x[1] as string))].sort();
+  }
+  const out: Record<string, string[]> = {};
+  for (const f of [...new Set(Object.values(sets).flat())].sort()) {
+    const gates = Object.keys(sets).filter((g) => (sets[g] as string[]).includes(f));
+    if (gates.length > 1) out[f] = gates;
+  }
+  return out;
 }
 
 describe('the job-conservation law (DR-105)', () => {
@@ -230,7 +312,7 @@ describe('the job-conservation law (DR-105)', () => {
   });
 
   it('RED: a step runs in two jobs while the register still claims one', () => {
-    const planted = ci.replace(/ {2}backend-golden:\n {4}needs: workspaces\n/, '  backend-golden:\n    needs: workspaces\n');
+    const planted = ci;
     // Duplicate the Lint step — assigned to `backend-static` — into `backend-golden`.
     const dup = planted.replace(
       / {6}- name: Tampered-migration hard-fail proof\n/,
@@ -249,6 +331,51 @@ describe('the job-conservation law (DR-105)', () => {
     expect(planted, 'the tamper step was not found to insert beside — update this proof').not.toBe(ci);
     const problems = conservationProblems(planted, register);
     expect(problems.join('\n')).toContain('`A step nobody registered` runs in backend-golden and is in neither list');
+  });
+
+  it('RED: a step keeps its name and loses its work, or can never run', () => {
+    const golden = /^ {6}- name: Golden regression suite\n {8}run: npm run test:golden\n/m;
+    const hollow = ci.replace(golden, '      - name: Golden regression suite\n        shell: bash\n');
+    expect(hollow, 'the golden step was not found to hollow out — update this proof').not.toBe(ci);
+    expect(conservationProblems(hollow, register).join('\n')).toContain('`Golden regression suite` in `backend-golden` has no `run:`');
+    const never = ci.replace(golden, '      - name: Golden regression suite\n        if: false\n        run: npm run test:golden\n');
+    expect(never, 'the golden step was not found to disable — update this proof').not.toBe(ci);
+    expect(conservationProblems(never, register).join('\n')).toContain('carries `if: false`');
+  });
+
+  it('RED: the register forgets a step and lowers both counts to match', () => {
+    const victim = Object.keys(register.assignment)[0] as string;
+    const rest = { ...register.assignment };
+    delete rest[victim];
+    const forged: Register = {
+      ...register,
+      assignment: rest,
+      totals: { ...register.totals, assigned: register.totals.assigned - 1 },
+      baseline: { ...register.baseline, steps: register.baseline.steps - 1 },
+    };
+    expect(fingerprintProblems(forged).join('\n')).toContain('C-7');
+    expect(fingerprintProblems(register)).toEqual([]);
+  });
+
+  /**
+   * C-6 — DR-105 accepts assignment BY GATE because the Phase 2 gates' file
+   * sets overlap, on the condition that the overlaps are measured and named
+   * file by file in the register. The register's list must equal the one
+   * recomputed from the eight gate scripts, so a roster that changes without
+   * the register fails here.
+   */
+  it('C-6: the register names every Phase 2 test-file overlap, file by file', () => {
+    const measured = p2Overlaps();
+    expect(Object.keys(measured).length, 'the probe found no overlap at all — it is blind, not the rosters disjoint').toBeGreaterThan(0);
+    expect(register.p2TestFileOverlaps).toEqual(measured);
+  });
+
+  it('RED: a roster gains an overlap the register does not name', () => {
+    const measured = p2Overlaps();
+    const [any] = Object.keys(measured);
+    const forged = { ...register.p2TestFileOverlaps };
+    delete forged[any as string];
+    expect(forged).not.toEqual(measured);
   });
 
   /**
