@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import ar from '@/messages/ar.json';
 import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
+import { ApiError } from '@/lib/client';
+import { refusalKey } from '@/lib/phase3-errors';
 import { formatCivilDate, formatMoney } from '@/lib/phase3-format';
 import type { ViewEntry } from '@/lib/phase3-format';
 import { VIEW_REGISTRY as INVOICE_VIEWS } from '@/views/invoices/registry';
@@ -256,7 +258,9 @@ describe('the invoice list', () => {
     // for `denied`/`failed`. The reachable refusal is the one on "show more",
     // and it must not take the rows away with it.
     const refused = render(INVOICE_VIEWS, 'InvoiceListView', 'show more was refused, with the rows still on screen');
-    expect(text(refused)).toContain(en['common.noPermission']);
+    // The key must be one the PAGE can produce: its catch sets `refusalKey(error)`, which only ever returns `error.<code>` or the fallback.
+    expect(refusalKey(new ApiError(403, 'FORBIDDEN')), 'what the page would set for a refused read').toBe('error.FORBIDDEN');
+    expect(text(refused)).toContain(en['error.FORBIDDEN']);
     expect(text(refused)).not.toContain('FORBIDDEN');
     expect(text(refused)).not.toContain(en['invoices.list.empty']);
     // The rows survive the refusal.

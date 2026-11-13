@@ -118,6 +118,6 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
     // was gone — the same defect as the empty-list-beside-a-refusal fixture it
     // replaced, committed again in the act of fixing it. A refused FIRST read
     // never renders this view at all: `page.tsx` shows `ScreenState` instead.
-    'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'common.noPermission' }),
+    'show more was refused, with the rows still on screen': list({ hasMore: true, errorKey: 'error.FORBIDDEN' }),
   }),
 ];
