@@ -51,11 +51,13 @@ import { describe, expect, it } from 'vitest';
  *            neighbour is taken by POSITION, not by action prefix.
  *   REL11-I  MECHANISM. A job-level condition is found wherever YAML allows it
  *            to be written — above `steps:` and below it.
+ *   REL11-K  NEGATIVE CONTROL. A `needs:` written as a multi-element list —
+ *            block, flow, or with a comment between items — is read WHOLE, so
+ *            B2's loop checks every job it names; and a form the reader does
+ *            NOT take whole does not quietly equal B2's pinned text, so the
+ *            pin reddens instead of the list arriving short.
  *   REL11-J  NEGATIVE CONTROL. A key that is not `branches:` does not feed the
  *            scope claim, so E cannot go green on an excluded branch.
- *   REL11-K  NEGATIVE CONTROL. A `needs:` written as a multi-element list,
- *            block or flow, is read WHOLE — so B2's loop checks every job it
- *            names and not just the first.
  *
  * This index is part of the file's claim, not decoration: a case added without
  * a line here is a claim nobody can find. (Second review, finding 5.)
@@ -156,7 +158,11 @@ export function jobKey(yamlText: string, jobName: string, key: string): string |
       value = value === '' ? item[1].trim() : `${value},${item[1].trim()}`;
       continue;
     }
-    if (/^ {4}\S/.test(line)) collecting = false; // the key's list ended
+    // Only a real KEY ends the list. A comment is free to sit at any indent in
+    // YAML, and treating one at four spaces as the end of the list truncated
+    // it — silently, since a short list still equals a short expectation.
+    // (Fourth review, finding 1.)
+    if (/^ {4}[A-Za-z_-]+:/.test(line)) collecting = false;
   }
   return value;
 }
@@ -298,6 +304,19 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // Read from `hygiene`'s OWN `needs:` key, and then every job it names is
     // checked. Asserting the text `    needs: workspaces` against the whole
     // file could not fail: it occurs five times.
+    // The RAW text of hygiene's own `needs:` is pinned beside the loop, and
+    // that is what closes the whole class of defects this law kept producing:
+    // every incomplete read SHORTENS the list, and a shortened list still
+    // equals a shortened expectation, so the deficiency arrived as green.
+    // Pinned, any rewrite into a form the reader does not take whole fails
+    // HERE, by name, instead of shrinking in silence.
+    //
+    // So this expectation is load-bearing, not decoration: if L2 legitimately
+    // changes what `hygiene` needs, this reddens — and it must, because the
+    // coverage claim in REL11-B depends on every job in that chain being
+    // ungated. Move it in the same commit, after re-reading the chain.
+    // (Fourth review, finding 1.)
+    expect(jobKey(WORKFLOW, 'hygiene', 'needs')).toBe('workspaces');
     const needed = neededJobs(WORKFLOW, 'hygiene');
     expect(needed).toEqual(['workspaces']);
     for (const job of needed) {
@@ -411,6 +430,26 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     );
     expect(flowNeeds).not.toBe(WORKFLOW);
     expect(neededJobs(flowNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
+
+    // A comment between two block items. YAML lets a comment sit at any
+    // indent, so one at four spaces must not be read as the end of the list.
+    const commented = WORKFLOW.replace(
+      '  hygiene:\n    needs: workspaces\n',
+      '  hygiene:\n    needs:\n      - workspaces\n    # the chain this job hangs from\n      - prep\n',
+    );
+    expect(commented).not.toBe(WORKFLOW);
+    expect(neededJobs(commented, 'hygiene')).toEqual(['workspaces', 'prep']);
+
+    // And a form the reader does NOT take whole: a flow list broken over two
+    // lines. The point is not that it is parsed — it is that the result does
+    // not quietly equal the pinned text, so REL11-B2's pin reddens by name
+    // rather than the list arriving short. Fail closed, not short.
+    const brokenFlow = WORKFLOW.replace(
+      '  hygiene:\n    needs: workspaces\n',
+      '  hygiene:\n    needs: [workspaces,\n      prep]\n',
+    );
+    expect(brokenFlow).not.toBe(WORKFLOW);
+    expect(jobKey(brokenFlow, 'hygiene', 'needs')).not.toBe('workspaces');
   });
 
   it('REL11-J (negative control): a branch key that is not `branches:` does not feed the scope claim', () => {
