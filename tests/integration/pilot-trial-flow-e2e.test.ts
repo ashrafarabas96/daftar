@@ -207,6 +207,15 @@ const firstSendStatuses: number[] = [];
 /** The status and the `replayed` flag of the second collection sent AGAIN, byte for byte. */
 let replayStatus: number | null = null;
 let replayFlag: unknown = undefined;
+/** Arm A: what the server answered a collection of nothing. */
+let zeroCollectionStatus: number | null = null;
+/** Arm B, on a customer of its own: the whole debt, the surplus over it, and what came back. */
+let otherOutstandingMinor: bigint | null = null;
+let surplusMinor: bigint | null = null;
+let overpaidStatus: number | null = null;
+let overpaidBody = '';
+let overpaidReadStatus: number | null = null;
+let otherBalanceMinor: bigint | null = null;
 let observedBalanceMinor: bigint;
 let invoiceCurrency: string;
 let businessBaseCurrency: string;
@@ -314,7 +323,62 @@ beforeAll(async () => {
     return;
   }
   observedBalanceMinor = BigInt((read.body as { baseMinor: string }).baseMinor);
-}, 180_000);
+
+  // ── the two arms, driven AFTER the flow's own figure is read ─────────────
+  // Nothing below may disturb the flow above: the zero collection is refused
+  // and writes nothing, and the surplus arm uses a SECOND customer with its
+  // own invoice. An arm that moved the first customer's balance would make
+  // every law above a law about a different flow.
+
+  step = 'arm A — a collection of nothing';
+  const zero = await collectPayment(w.t, w.headers, {
+    paymentId: randomUUID(),
+    customerId,
+    paymentMethodId: w.paymentMethodId,
+    paymentDate: w.day,
+    amountMinor: '0',
+    // `[]` is lawful and is a payment on account, so the ONLY thing wrong with
+    // this request is the figure. An arm that also broke the allocations would
+    // be refused for the other reason and prove nothing about the figure.
+    allocations: [],
+  });
+  zeroCollectionStatus = zero.status;
+
+  step = 'arm B — a collection LARGER than the debt, on a customer of its own';
+  const otherCustomerId = await newCustomer(w);
+  const otherInvoice = await sellOnCredit(w, otherCustomerId, '2');
+  otherOutstandingMinor = BigInt(otherInvoice.totalTxnMinor);
+  surplusMinor = otherOutstandingMinor / 5n + 1n;
+  const overpaid = await collectPayment(w.t, w.headers, {
+    paymentId: randomUUID(),
+    customerId: otherCustomerId,
+    paymentMethodId: w.paymentMethodId,
+    paymentDate: w.day,
+    // The whole debt AND MORE. There is no credit limit in this estate by
+    // architectural decision, so the surplus is not a refusal: it is money the
+    // customer has paid and nobody owes yet.
+    amountMinor: (otherOutstandingMinor + surplusMinor).toString(),
+    // The surplus's own document id travels with the request, because the
+    // command is idempotent on caller-supplied document UUIDs.
+    creditId: randomUUID(),
+    allocations: [
+      {
+        invoiceId: otherInvoice.invoiceId,
+        appliedMinor: otherOutstandingMinor.toString(),
+        releasedBeforeMinor: '0',
+        invoiceTotalTxnMinor: otherInvoice.totalTxnMinor,
+        invoiceTotalBaseMinor: otherInvoice.totalBaseMinor,
+      },
+    ],
+  });
+  overpaidStatus = overpaid.status;
+  overpaidBody = JSON.stringify(overpaid.body);
+  if (overpaid.status < 300) {
+    const otherRead = await w.t.request.get(`/v1/customers/${otherCustomerId}/receivable`).set(w.headers).send();
+    overpaidReadStatus = otherRead.status;
+    if (otherRead.status < 300) otherBalanceMinor = BigInt((otherRead.body as { baseMinor: string }).baseMinor);
+  }
+}, 240_000);
 
 afterAll(async () => {
   await resetData();
@@ -414,6 +478,49 @@ describe(CLAIM, () => {
     // step 4 is read AFTER the replay, so the flow's own law already covers
     // it. Stated again here because a status code is not a figure.
     expect(receivableOffencesIn(flowMovements(), observedBalanceMinor), 'the replay moved the customer balance').toStrictEqual([]);
+  });
+
+  it('ARM A — a collection of NOTHING is refused', () => {
+    expect(refusedAt).toBeNull();
+    // POSITIVE CONTROL: the same route, with a figure, was accepted twice a
+    // moment earlier — so a refusal here is about the figure and not about a
+    // route that refuses everything. (That `allocations: []` is lawful on its
+    // own — a payment on account — is this estate's contract as reported to
+    // this lane, not something I measured.)
+    expect(firstSendStatuses, 'the route refuses collections generally, so the refusal below says nothing').toStrictEqual([201, 201]);
+    expect(zeroCollectionStatus, 'a collection of zero was accepted, and a payment of nothing is a row with no money in it').toBe(400);
+  });
+
+  it('ARM B — a SURPLUS is held, never netted: paying more than the debt leaves the receivable at zero and never below it', () => {
+    expect(refusedAt).toBeNull();
+    const outstanding = otherOutstandingMinor;
+    const surplus = surplusMinor;
+    expect(outstanding, 'arm B never ran').not.toBeNull();
+    expect(surplus, 'arm B never ran').not.toBeNull();
+    if (outstanding === null || surplus === null) return;
+    // CORPUS CONTROL: both figures must be real, or "the balance is zero"
+    // would be true of a customer who was never sold to and never paid.
+    expect(outstanding > 0n, `the second invoice totals ${outstanding}`).toBe(true);
+    expect(surplus > 0n, `the surplus is ${surplus}, so this arm would be an exact settlement and not an overpayment`).toBe(true);
+    // There is no credit limit in this estate by architectural decision, so an
+    // overpayment is not a refusal. If it is refused, the body says why and
+    // that is a result worth reading rather than a test to be relaxed.
+    expect(overpaidStatus, `the overpayment was refused: ${overpaidBody}`).toBeLessThan(300);
+    expect(overpaidReadStatus, 'the second receivable could not be read').toBe(200);
+    // THE LAW. A credit does not net off a debt: the surplus is money the
+    // customer has paid that nobody owes yet, so the receivable floors at
+    // zero. A server that netted it would answer a NEGATIVE receivable, and
+    // the merchant would read "we owe the customer" off a page that should
+    // say "nothing is outstanding, and there is money on account".
+    expect(otherBalanceMinor, `the receivable after an overpayment of ${surplus} over ${outstanding}`).toBe(0n);
+    // AND THE SAME CLAIM THROUGH THE NAMED CHECKER, so the figure above is not
+    // the only thing standing between a netted surplus and a green suite.
+    const movements: readonly Movement[] = [
+      { what: 'the second sale on account', signedMinor: outstanding },
+      { what: 'the payment applied to it', signedMinor: -outstanding },
+    ];
+    expect(receivableOffencesIn(movements, 0n), 'the arm that settles exactly disagrees with its own movements').toStrictEqual([]);
+    expect(receivableOffencesIn(movements, -surplus).length, `a receivable of ${-surplus} was read as correct, so a netted surplus would pass`).toBe(1);
   });
 
   it('OWED BY THE SELLING LANE — the customer is created through its own route once it is mounted', () => {
