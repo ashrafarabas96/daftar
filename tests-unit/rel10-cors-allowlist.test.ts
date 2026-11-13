@@ -202,6 +202,27 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     const options = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     expect(options).not.toBe('');
 
+    // THE CAPTURE DID NOT RUN PAST THE CALL. Measured, the third review found
+    // the one route that stripping left open: reformat `enableCors` onto a
+    // single line and the capture, which ends at `\n });`, runs on to the next
+    // one in the file — 157 characters instead of 81 — carrying whatever lies
+    // between. These two assertions bound it by STRUCTURE, which the length
+    // bound below cannot do here: from the call to the end of the file is only
+    // 340 characters, under any length a growing options object could live
+    // with. What follows the call is the listen and the log line, so their
+    // absence is what proves the capture stopped where the call stops.
+    expect(options).not.toContain('app.listen');
+    expect(options).not.toContain('logger.');
+
+    // A SECOND `credentials:` KEY IS REFUSED IN THE RAW TEXT TOO, not only
+    // after stripping. The review measured the last route that stayed green: a
+    // duplicate key whose second — and at runtime winning — occurrence sits on
+    // a line carrying `//` inside a string literal such as 'https://ops…', so
+    // stripping removed the relaxation along with the rest of that line and
+    // left one `false` behind. Counting on the raw text closes it without
+    // leaning on `no-dupe-keys` in another gate to catch it for us.
+    expect([...raw.matchAll(/credentials\s*:/g)]).toHaveLength(1);
+
     // The located text really is this call's argument:
     //  - the allowlist parse lives inside it, and nothing else in the file
     //    calls `parseCorsOrigins`;
@@ -218,11 +239,15 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     expect(options).toContain('credentials: false');
     expect(options).not.toContain('credentials: true');
 
-    // AND ONE MORE CONSEQUENCE, named because it is the one that produced the
-    // over-capture above: reformatting the call onto a single line makes this
-    // case fail, since the capture ends at `\n });`. That is failing closed,
-    // and the answer is to move this expectation with the reformat — never to
-    // widen the pattern until it matches whatever the file now says.
+    // AND ONE MORE CONSEQUENCE. The sentence that stood here was WRONG, and
+    // the third review measured it: it said reformatting the call onto a
+    // single line makes this case fail. It did not — the capture simply ran
+    // past the call and stayed GREEN at 157 characters. It fails now, because
+    // the two structural assertions above refuse a capture that swallowed the
+    // listen and the log line. So the consequence is real only since those
+    // were added, and the answer to it is to move this expectation with the
+    // reformat — never to widen the pattern until it matches whatever the file
+    // now says.
     //
     // CONSEQUENCE, named here because whoever it reddens reads this file and
     // not a card: moving these options into a constant or another module makes
