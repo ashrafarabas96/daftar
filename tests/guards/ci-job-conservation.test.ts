@@ -44,6 +44,7 @@
  * is not asserted here. The per-run test totals are the other half of the
  * conservation evidence and are read from the jobs' own Vitest summaries.
  */
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -256,6 +257,119 @@ function conservationProblems(ciText: string, reg: Register): string[] {
   return problems;
 }
 
+const PARTS = ['backend', 'backend-static', 'backend-gates-p2', 'backend-golden'];
+const AGG_JOB = 'backend-required';
+const CHECK_NAME = 'backend';
+
+/** One top-level job's text, from its `  id:` line to the next job. */
+function jobText(ciText: string, job: string): string {
+  const lines = ciText.split('\n');
+  const start = lines.findIndex((l) => l === `  ${job}:`);
+  if (start < 0) return '';
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {2}[A-Za-z0-9_-]+:/.test(lines[i] ?? '')) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n');
+}
+
+/** The check-run name each job reports: its `name:` when it has one, else its id. */
+function checkNames(ciText: string): Map<string, string> {
+  const lines = ciText.split('\n');
+  const from = lines.findIndex((l) => l === 'jobs:');
+  const out = new Map<string, string>();
+  if (from < 0) return out;
+  for (let i = from + 1; i < lines.length; i += 1) {
+    const id = /^ {2}([A-Za-z0-9_-]+):$/.exec(lines[i] ?? '')?.[1];
+    if (id === undefined) continue;
+    const name = /^ {4}name:\s*(.+?)\s*$/m.exec(jobText(ciText, id))?.[1];
+    out.set(id, name ?? id);
+  }
+  return out;
+}
+
+/** The `run: |` script of the aggregate's only step, dedented. */
+function aggregateScript(text: string): string {
+  const lines = text.split('\n');
+  const at = lines.findIndex((l) => /^ {8}run: \|$/.test(l));
+  if (at < 0) return '';
+  const body: string[] = [];
+  for (let i = at + 1; i < lines.length; i += 1) {
+    const l = lines[i] ?? '';
+    if (l.trim() !== '' && !l.startsWith(' '.repeat(10))) break;
+    body.push(l.slice(10));
+  }
+  return body.join('\n');
+}
+
+/** part -> the env variable the aggregate reads its `needs.<part>.result` through. */
+function aggregateEnv(text: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of text.matchAll(/^ {10}([A-Z0-9_]+): \$\{\{ needs\.([A-Za-z0-9_-]+)\.result \}\}$/gm)) out.set(m[2] as string, m[1] as string);
+  return out;
+}
+
+/**
+ * C-9 / C-10 (DR-147/1, owner condition on #87): the required check named
+ * `backend` is a job that only reads the four parts. Text-level shape.
+ */
+function aggregateProblems(ciText: string): string[] {
+  const problems: string[] = [];
+  const text = jobText(ciText, AGG_JOB);
+  if (text === '') return [`C-9: there is no \`${AGG_JOB}\` job — nothing makes the required check \`${CHECK_NAME}\` depend on the parts`];
+  if (!new RegExp(`^ {4}name: ${CHECK_NAME}$`, 'm').test(text)) {
+    problems.push(`C-9: \`${AGG_JOB}\` is not named \`${CHECK_NAME}\` literally, so the required check \`${CHECK_NAME}\` is not this job`);
+  }
+  if (!/^ {4}if: always\(\)$/m.test(text)) {
+    problems.push(`C-9: \`${AGG_JOB}\` has no \`if: always()\` — a skipped part would skip it, and a skipped required check reads as green`);
+  }
+  const needs = /^ {4}needs: \[(.*)\]$/m.exec(text)?.[1]?.split(',').map((s) => s.trim()) ?? [];
+  for (const part of PARTS) {
+    if (!needs.includes(part)) problems.push(`C-9: \`${AGG_JOB}\` does not \`need\` \`${part}\` — that part can fail while \`${CHECK_NAME}\` stays green`);
+  }
+  for (const extra of needs.filter((n) => !PARTS.includes(n))) problems.push(`C-9: \`${AGG_JOB}\` needs \`${extra}\`, which is not a part of the family`);
+  if (/continue-on-error/.test(text)) problems.push(`C-9: \`${AGG_JOB}\` carries continue-on-error`);
+  const env = aggregateEnv(text);
+  for (const part of PARTS) {
+    if (!env.has(part)) problems.push(`C-9: \`${AGG_JOB}\` does not read \`needs.${part}.result\``);
+  }
+  const reporting = [...checkNames(ciText)].filter(([, name]) => name === CHECK_NAME).map(([id]) => id);
+  if (reporting.length !== 1 || reporting[0] !== AGG_JOB) {
+    problems.push(`C-10: ${reporting.length} job(s) report a check named \`${CHECK_NAME}\` (${reporting.join(', ')}); exactly one, \`${AGG_JOB}\`, may`);
+  }
+  return problems;
+}
+
+/**
+ * C-9, behaviour: run the aggregate's own script under bash with every
+ * combination of one part in a non-success state. A skipped or cancelled part
+ * must fail it exactly as a failed one does.
+ */
+function aggregateBehaviourProblems(ciText: string): string[] {
+  const text = jobText(ciText, AGG_JOB);
+  const script = aggregateScript(text);
+  const env = aggregateEnv(text);
+  if (script === '' || env.size === 0) return ['C-9: the aggregate has no script or no env to run'];
+  const run = (state: Record<string, string>) => {
+    const vars: Record<string, string> = {};
+    for (const [part, key] of env) vars[key] = state[part] ?? 'success';
+    return spawnSync('bash', ['-c', script], { env: { ...process.env, ...vars }, encoding: 'utf8' });
+  };
+  const problems: string[] = [];
+  const ok = run({});
+  if (ok.status !== 0) problems.push(`C-9: with every part \`success\` the aggregate exits ${String(ok.status)} (${ok.stderr.trim()})`);
+  for (const part of PARTS) {
+    for (const bad of ['failure', 'cancelled', 'skipped', '']) {
+      const r = run({ [part]: bad });
+      if (r.status === 0) problems.push(`C-9: \`${part}\` finished \`${bad === '' ? '(empty)' : bad}\` and the aggregate still exits 0`);
+    }
+  }
+  return problems;
+}
+
 const P2_GATES = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /** The `P2_Sn_TESTS` rosters of the eight Phase 2 gate scripts, read from the files. */
@@ -387,5 +501,64 @@ describe('the job-conservation law (DR-105)', () => {
    */
   it('the unplanted workflow has no conservation problem at all', () => {
     expect(conservationProblems(ci, register)).toEqual([]);
+  });
+});
+
+/**
+ * C-9 / C-10 — the REQUIRED check. DR-147/1, owner condition on #87: the
+ * required check named `backend` must still FAIL when any part of the family
+ * fails, is cancelled or is skipped. After the split the work job holds only
+ * part of the work, so the name `backend` is carried by a job that does none.
+ */
+describe('the required-check aggregate (DR-147/1)', () => {
+  it('the unplanted workflow has no C-9 / C-10 problem, in text or in behaviour', () => {
+    expect(aggregateProblems(ci)).toEqual([]);
+    expect(aggregateBehaviourProblems(ci)).toEqual([]);
+  });
+
+  it('RED: a part is dropped from `needs`', () => {
+    const planted = ci.replace('needs: [backend, backend-static, backend-gates-p2, backend-golden]', 'needs: [backend, backend-static, backend-gates-p2]');
+    expect(planted, 'the needs line was not found to shorten — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-golden`');
+  });
+
+  it('RED: `if: always()` is removed, so a skipped part would skip the aggregate', () => {
+    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n {4}needs: [^\n]*\n) {4}if: always\(\)\n/, '$1');
+    expect(planted, 'the if line was not found to remove — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('no `if: always()`');
+  });
+
+  it('RED: the aggregate stops carrying the required name', () => {
+    const planted = ci.replace(/(\n {2}backend-required:\n) {4}name: backend\n/, '$1    name: backend-gate\n');
+    expect(planted, 'the name line was not found to change — update this proof').not.toBe(ci);
+    const problems = aggregateProblems(planted).join('\n');
+    expect(problems).toContain('is not named `backend` literally');
+    expect(problems).toContain('C-10: 0 job(s) report a check named `backend`');
+  });
+
+  it('RED: the work job loses its distinct check name, so two check-runs are named `backend`', () => {
+    const planted = ci.replace('  backend:\n    name: backend-work\n', '  backend:\n');
+    expect(planted, 'the work job name line was not found to remove — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('C-10: 2 job(s) report a check named `backend` (backend, backend-required)');
+  });
+
+  it('RED: continue-on-error is added to the aggregate', () => {
+    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n)/, '$1    continue-on-error: true\n');
+    expect(planted, 'the aggregate was not found to extend — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('carries continue-on-error');
+  });
+
+  it('RED (behaviour): the script accepts a SKIPPED or CANCELLED part, as a check on `failure` alone would', () => {
+    const planted = ci.replace('if [ "$result" != "success" ]; then', 'if [ "$result" = "failure" ]; then');
+    expect(planted, 'the script test was not found to weaken — update this proof').not.toBe(ci);
+    const problems = aggregateBehaviourProblems(planted).join('\n');
+    expect(problems).toContain('`backend-golden` finished `skipped` and the aggregate still exits 0');
+    expect(problems).toContain('`backend` finished `cancelled` and the aggregate still exits 0');
+  });
+
+  it('RED (behaviour): one part is simply not read by the script', () => {
+    const planted = ci.replace('for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do', 'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2; do');
+    expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
+    expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
   });
 });

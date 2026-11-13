@@ -2,7 +2,7 @@
   "$schema": "daftar/ci-job-conservation/1",
   "law": "tests/guards/ci-job-conservation.test.ts",
   "baseline": {
-    "rev": "cd447421b407f2482c31b8ca181eee34f99ecbd8",
+    "rev": "912738e4b39648e66b83087a1e6fa007b73b7cfa",
     "job": "backend",
     "steps": 61,
     "namesSha256": "ce243f80140403c3ab23c9e51cc5808b49eacb7c95bd7791dccdea083c4d959e"
