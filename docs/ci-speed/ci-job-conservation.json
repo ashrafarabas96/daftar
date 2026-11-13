@@ -6,12 +6,7 @@
     "job": "backend",
     "steps": 61
   },
-  "jobs": [
-    "backend",
-    "backend-static",
-    "backend-gates-p2",
-    "backend-golden"
-  ],
+  "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-golden"],
   "totals": {
     "shared": 11,
     "assigned": 50
