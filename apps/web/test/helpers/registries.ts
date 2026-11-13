@@ -10,8 +10,17 @@ import { loadViewRegistries, type AreaRegistry } from './render';
 
 const WEB = join(__dirname, '..', '..');
 
-/** The merchant page areas (A-11, and P4-S3's POS screens) and the view area each renders through. */
-export const PAGE_AREAS: Readonly<Record<string, string>> = { stock: 'stock', purchases: 'purchases', suppliers: 'suppliers', pos: 'pos' };
+/**
+ * The merchant page areas (A-11, P4-S3's POS screens, and the credit sale's
+ * `customers/[customerId]/sell`) and the view area each renders through.
+ */
+export const PAGE_AREAS: Readonly<Record<string, string>> = {
+  stock: 'stock',
+  purchases: 'purchases',
+  suppliers: 'suppliers',
+  pos: 'pos',
+  customers: 'sales',
+};
 
 /** The page areas present on disk. */
 export function pageAreasOnDisk(): string[] {

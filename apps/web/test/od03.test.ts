@@ -213,10 +213,81 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
 
   const receivablesKey = (key: string): boolean => RECEIVABLES_CODES.some((code) => key === `error.${code}`);
 
+  /**
+   * THE CREDIT SALE (البيع بالدين, P4-S2's `settlementMode: 'credit'`). A sale on
+   * credit is owed by a named customer — `SaleCommitSchema` refuses one without
+   * (`a credit sale names the customer who owes it`) — so this screen is the one
+   * place outside the walk-in till that sends a REAL `customerId` to
+   * `POST /v1/sales`. The exemption is an EXACT allowlist of this slice's own
+   * files and keys, and nothing grows into it by prefix:
+   *   - files: the seven paths below, each by its full path;
+   *   - keys: the three `sales.credit.*` keys that say "customer" in words;
+   *   - `customerId` may, in these files only, also be set from the names in
+   *     `CREDIT_SALE_CUSTOMER_ID`: the request field's type, the plan's input,
+   *     and the registry's named fixture id.
+   * Every other assertion below is unchanged.
+   */
+  const CREDIT_SALE_FILES: readonly string[] = [
+    'apps/web/src/lib/phase4-credit-sale-api.ts',
+    'apps/web/src/views/sales/credit-sale.ts',
+    'apps/web/src/views/sales/credit-sale-flow.ts',
+    'apps/web/src/views/sales/CreditSaleView.tsx',
+    'apps/web/src/views/sales/registry.ts',
+    'apps/web/src/app/[locale]/customers/[customerId]/sell/page.tsx',
+  ];
+  const CREDIT_SALE_KEYS: readonly string[] = ['sales.credit.customerInactive', 'sales.credit.refusedInactive', 'sales.credit.refusedNotFound'];
+  const creditSaleFile = (path: string): boolean => CREDIT_SALE_FILES.includes(path);
+  const creditSaleKey = (key: string): boolean => CREDIT_SALE_KEYS.includes(key);
+  const CREDIT_SALE_CUSTOMER_ID = [...CUSTOMER_ID_ALLOWED, 'string', 'input.customerId', 'FIXTURE_CUSTOMER_ID'];
+  const customerIdAllowedIn = (path: string): readonly string[] => (creditSaleFile(path) ? CREDIT_SALE_CUSTOMER_ID : CUSTOMER_ID_ALLOWED);
+
+  it('the credit-sale exemption is exact and not vacuous', () => {
+    // Fires on what it must cover...
+    for (const path of CREDIT_SALE_FILES) expect(creditSaleFile(path), path).toBe(true);
+    for (const key of CREDIT_SALE_KEYS) expect(creditSaleKey(key), key).toBe(true);
+    // ...and on nothing else: not a neighbour, not a prefix, not a copy.
+    expect(creditSaleFile('apps/web/src/views/sales/Other.tsx')).toBe(false);
+    expect(creditSaleFile('apps/web/src/views/pos/PosView.tsx')).toBe(false);
+    expect(creditSaleFile('apps/web/src/lib/phase4-pos-api.ts')).toBe(false);
+    expect(creditSaleFile('apps/web/src/lib/phase4-credit-sale-api.ts.bak')).toBe(false);
+    expect(creditSaleFile('apps/web/src/app/[locale]/customers/[customerId]/sell/other.tsx')).toBe(false);
+    expect(creditSaleKey('sales.credit.title')).toBe(false);
+    expect(creditSaleKey('sales.credit.customerInactiveX')).toBe(false);
+    expect(creditSaleKey('pos.customer.pick')).toBe(false);
+    expect(creditSaleKey('error.sale.customer_inactive')).toBe(false);
+    // Every listed file exists, and the exemption is in use: the files really
+    // name a customer, the keys really exist and say it, so deleting either
+    // half would fail below.
+    const sources = s7Sources();
+    for (const path of CREDIT_SALE_FILES) expect(Object.keys(sources), path).toContain(path);
+    expect(CREDIT_SALE_FILES.filter((path) => /customer/i.test(stripTsComments(sources[path] ?? ''))).length).toBeGreaterThanOrEqual(4);
+    for (const key of CREDIT_SALE_KEYS) {
+      expect(isS7Key(key), key).toBe(true);
+      for (const catalog of [ar, en, tr]) expect(Object.keys(catalog), key).toContain(key);
+      expect(/customer/i.test(en[key as keyof typeof en] ?? ''), key).toBe(true);
+    }
+    // The customerId widening is used: the plan sends the route's customer.
+    const libraries = CREDIT_SALE_FILES.filter((path) => !path.endsWith('.tsx'));
+    expect(libraries.flatMap((path) => valuesUnder(sources[path] ?? '', 'customerId', CUSTOMER_ID_ALLOWED))).toContain('input.customerId');
+  });
+
+  it('the credit-sale customerId widening is a named list: a buyer put there any other way is still caught', () => {
+    expect(valuesUnder('const b = { customerId: chosen.id };', 'customerId', CREDIT_SALE_CUSTOMER_ID)).toEqual(['chosen.id']);
+    expect(valuesUnder("const b = { customerId: '7c1f0a52-3b7e-4d0a-9a53-0f2b6f1c7a01' };", 'customerId', CREDIT_SALE_CUSTOMER_ID)).toEqual([
+      "'7c1f0a52-3b7e-4d0a-9a53-0f2b6f1c7a01'",
+    ]);
+    expect(valuesUnder('const b = { customerId: input.customerId };', 'customerId', CREDIT_SALE_CUSTOMER_ID)).toEqual([]);
+    // Outside the slice the same spelling is a planted buyer.
+    expect(customerIdAllowedIn('apps/web/src/lib/phase4-pos-api.ts')).toBe(CUSTOMER_ID_ALLOWED);
+    expect(valuesUnder('const b = { customerId: input.customerId };', 'customerId', customerIdAllowedIn('apps/web/src/lib/phase4-pos-api.ts'))).toEqual([
+      'input.customerId',
+    ]);
+  });
+
   it('no S7 screen names a customer, and no S7 key does except to answer a receivables refusal', () => {
     const catalogHits = Object.entries({ ar, en, tr }).flatMap(([locale, catalog]) =>
       Object.entries(catalog)
-        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
+        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && !creditSaleKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
         .map(([key]) => `${locale}: ${key}`),
     );
     expect(catalogHits).toEqual([]);
@@ -229,7 +300,8 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // customers slice, and until then no merchant surface offers the idea.
     const screens = Object.entries(s7Sources()).filter(([path]) => path.endsWith('.tsx'));
     expect(screens.length).toBeGreaterThan(10);
-    expect(screens.filter(([, src]) => /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
+    // The credit sale's own two screens are the exact exception (see above).
+    expect(screens.filter(([path, src]) => !creditSaleFile(path) && /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
   });
 
   it('a client library may carry the walk-in customerId, and may set it from nothing but null', () => {
@@ -239,7 +311,8 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // till sale is. Any other value would be a POS screen naming a buyer,
     // which would also need `receivables.view` and a customer read that P4-S3
     // does not own.
-    const assigned = libraries.flatMap(([path, src]) => valuesUnder(src, 'customerId', CUSTOMER_ID_ALLOWED).map((value) => `${path}: ${value}`));
+    // In the credit sale's own files, and only there, the named widening applies.
+    const assigned = libraries.flatMap(([path, src]) => valuesUnder(src, 'customerId', customerIdAllowedIn(path)).map((value) => `${path}: ${value}`));
     expect(assigned).toEqual([]);
     // And no other customer vocabulary leaks into a library either: a name, a
     // balance, a credit limit or a list is the customers slice's, not this one's.
@@ -250,11 +323,15 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // `customerBalance` identifier, because the exemption is the exact
     // registered code strings and nothing else.
     const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
-    const other = libraries.flatMap(([path, src]) =>
-      [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
-        .map((m) => `${path}: ${m[0]}`)
-        .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
-    );
+    // The credit sale's own files name the customer it is sold to; the
+    // customerId check above still covered them.
+    const other = libraries
+      .filter(([path]) => !creditSaleFile(path))
+      .flatMap(([path, src]) =>
+        [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
+          .map((m) => `${path}: ${m[0]}`)
+          .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
+      );
     expect(other).toEqual([]);
   });
 
