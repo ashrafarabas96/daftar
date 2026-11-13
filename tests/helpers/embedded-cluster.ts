@@ -193,14 +193,26 @@ export async function startOrReuse(): Promise<void> {
     }
     try {
       await pg.start();
-      await assertServerEncodingUtf8();
-      return;
     } catch (e) {
       pg = null;
       // Lost the race against a concurrent start: settle and re-evaluate.
       if (!/postmaster\.pid|already (exists|running)/i.test(e instanceof Error ? e.message : String(e))) throw e;
       await delay(SETTLE_DELAY_MS);
+      continue;
     }
+    // The guard sits OUTSIDE the race handler above, on purpose: a wrong encoding is not
+    // a lost race and must never be retried. But the postmaster has started by now, and
+    // dropping the only handle to it (`pg = null`) before throwing orphaned it, still
+    // listening on the port. Stop it first, then let the error out; a failed stop must
+    // not replace the encoding error that explains what is wrong.
+    try {
+      await assertServerEncodingUtf8();
+    } catch (e) {
+      await pg.stop().catch(() => undefined);
+      pg = null;
+      throw e;
+    }
+    return;
   }
   throw new Error(`PostgreSQL at ${PG_DIR} (port ${PG_PORT}) did not become usable within ${(START_ATTEMPTS * SETTLE_DELAY_MS) / 1000}s`);
 }
