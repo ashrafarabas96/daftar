@@ -39,6 +39,34 @@
  * NOT_RUN does not count (DR-95 item 5). This file needs a real Postgres, so
  * it runs in CI's `backend` job after the fresh migrate, and nothing here is
  * measurable on the Windows host.
+ *
+ * WHAT CI TAUGHT THIS FILE, AND IT WAS MY DEFECT, NOT THE LEDGER'S. On run
+ * 43370481243 the positive control below (case 2) was REFUSED, and so its
+ * dependent counter (case 4) failed with it:
+ *
+ *     invoice <id> claims 0 of applied credit but its consumption rows sum
+ *     to 5000                       -- si_credit_agrees_with_ledger
+ *
+ * I had read that refusal, before measuring it, as the ledger's `invoice_id`
+ * invariant. It is a DIFFERENT and stricter one, and the two facts that make
+ * it are both in `0088` where I could have read them first:
+ *
+ *   - `si_credit_agrees_trg` and `pca_credit_agrees_trg` are CONSTRAINT
+ *     triggers, `DEFERRABLE INITIALLY DEFERRED` ⇒ they fire at COMMIT, not at
+ *     the statement. Each autocommitted INSERT was therefore its own
+ *     transaction, and at its commit the invoice still claimed 0 credit while
+ *     the consumption summed to 5000. An invoice and the consumption that
+ *     draws it down MUST be written in ONE transaction.
+ *   - `si_immutable()` lets `credit_minor` be written only on the
+ *     `draft -> open` transition (any later state change must leave credit and
+ *     total untouched) ⇒ the invoice is therefore seeded as a DRAFT, and case 2
+ *     opens it and inserts its consumption together.
+ *
+ * So the fixture is what changed, and no invariant was weakened to make a case
+ * pass: `si_credit_within_charge` and `si_total_is_charge_minus_credit` are
+ * both satisfied exactly (charge 6000, credit 5000, total 1000), and the two
+ * refusals this file is about (cases 1 and 3) are immediate CHECKs that passed
+ * on that same run and are untouched.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -119,11 +147,15 @@ async function seed(): Promise<Fixture> {
     if (businessId === undefined) throw new Error('no business was created');
     await c.query(`SELECT set_config('app.business_id', $1, false)`, [businessId]);
 
+    // A DRAFT, charged above the grant: `credit_minor` may only be written on
+    // the `draft -> open` transition (`si_immutable`), and it may not exceed
+    // the charge (`si_credit_within_charge`). Case 2 does both halves in one
+    // transaction, because the agreement triggers are deferred to commit.
     const invoiceId = randomUUID();
     await c.query(
       `INSERT INTO public.subscription_invoices
          (id, tenant_id, business_id, period_index, currency, charge_minor, credit_minor, tax_minor, total_minor, state, issued_at)
-       VALUES ($1, $2, $3, 0, $4, 1000, 0, 0, 1000, 'open', now())`,
+       VALUES ($1, $2, $3, 0, $4, 6000, 0, 0, 6000, 'draft', NULL)`,
       [invoiceId, tenantId, businessId, CURRENCY],
     );
 
@@ -194,6 +226,20 @@ describe('DR-97 criterion 5 — the write-off row against the live ledger', () =
     const f = fx();
     const c = await scoped(f);
     try {
+      // ONE transaction, because `si_credit_agrees_trg` and
+      // `pca_credit_agrees_trg` are deferred to COMMIT: the invoice's claimed
+      // credit and the consumption that draws it down have to agree AT THAT
+      // POINT, and two autocommitted statements can never agree at either of
+      // their commits.
+      await c.query('BEGIN');
+      const opened = await c.query(
+        `UPDATE public.subscription_invoices
+            SET state = 'open', issued_at = now(), credit_minor = $2::bigint, total_minor = charge_minor - $2::bigint
+          WHERE id = $1 AND state = 'draft'`,
+        [f.invoiceId, GRANT_MINOR.toString()],
+      );
+      expect(opened.rowCount, 'the draft invoice could not be opened with its credit, so case 2 would measure the fixture and not the ledger').toBe(1);
+
       const r = await c.query(CONSUMPTION_INSERT, [
         randomUUID(),
         f.tenantId,
@@ -206,6 +252,14 @@ describe('DR-97 criterion 5 — the write-off row against the live ledger', () =
         f.invoiceId,
       ]);
       expect(r.rowCount, 'the fixture cannot insert a consumption AT ALL, so the refusal above was not about the invoice').toBe(1);
+
+      // The commit is the measurement: every deferred invariant on both rows
+      // runs here, so a green case 2 means the ledger ACCEPTED the pair and
+      // not merely that two statements returned.
+      await c.query('COMMIT');
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      throw e;
     } finally {
       await c.end();
     }
