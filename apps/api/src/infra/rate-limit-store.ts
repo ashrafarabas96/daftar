@@ -169,13 +169,57 @@ export function rateLimitScopeSegment(scope: RateLimitScope): string {
 }
 
 /**
- * The Redis key a counter lives under: prefix, scope segment, then the key
- * the caller computed. The segments are joined with `:` and the scope comes
- * BEFORE the caller's key, so no caller-supplied text can reach across a
- * scope boundary by containing a separator.
+ * The Redis key a counter lives under: prefix, then a HASH TAG holding the
+ * scope segment and the key the caller computed. The segments are joined with
+ * `:` and the scope comes BEFORE the caller's key, so no caller-supplied text
+ * can reach across a scope boundary by containing a separator.
+ *
+ * ── WHY THE BRACES, AND WHY THEY ARE WHERE THEY ARE ──────────────────────
+ *
+ * `increment` runs ONE `EVAL` over TWO keys — this counter and its `:blocked`
+ * flag — and Redis Cluster refuses a command whose keys do not hash to the
+ * same slot: `CROSSSLOT Keys in request don't hash to the same slot`. Every
+ * `EVAL` would then fail, `increment` would fall through to the per-replica
+ * fallback, and the general allowance would be counted PER REPLICA again for
+ * the whole life of the deployment — TD-24 itself, reached through the fix
+ * for TD-24, with one log line and no visible failure.
+ *
+ * In cluster mode the slot is `CRC16(hash tag) mod 16384`, where the tag is
+ * what lies between the FIRST `{` and the first `}` after it. So the remedy
+ * is not a tag of some tenant's id — the general allowance has no verified
+ * tenant by construction (see the header) — but a tag over exactly the part
+ * the two keys of one request SHARE. The block key is this key plus a
+ * `:blocked` suffix (`increment`), so both carry the same first `{`…`}` and
+ * land in one slot BY CONSTRUCTION — the tag spans exactly the text the two
+ * keys have in common, and the suffix lies outside it.
+ *
+ * A `}` inside the caller's own key does NOT break that. The review of #77
+ * was right that the earlier wording here ("the tag ends before any of it")
+ * was false, so this is what was measured instead: such a brace TRUNCATES the
+ * tag at itself, identically for both keys, so the pair still shares a slot
+ * (`POST-/v1/x-}z` → tag `ip:default:POST-/v1/x-`, counter and flag both 8399).
+ * What it does cost is spread, not correctness: two different keys that agree
+ * up to their first `}` would then share one slot (`a}b}c` → tag
+ * `ip:default:a`). No caller reaches that today — the general allowance's key
+ * is a `sha256` from `throttler.guard.js`, which carries no brace — and it is
+ * written down because the next person will read this comment, not re-measure
+ * it.
+ *
+ * Measured, because the alternative was assuming: one constant tag for every
+ * key would also satisfy the cluster, by collapsing every allowance in the
+ * system into a single slot — a performance defect traded for a correctness
+ * one. The tag here varies with the scope and the caller's key, so slots stay
+ * spread (`rl:thr:v1:{ip:default:…}` and a tenant's key measured into 8558
+ * and 9439 of 16384). `tests-unit/td24-eval-hash-tag-law.test.ts` computes
+ * the slot of every key of one `EVAL` and asserts they match, with a negative
+ * control that an untagged pair does NOT.
+ *
+ * This file still does NOT claim to have measured Redis Cluster: nothing in
+ * CI or on a development host runs one. What is measured is slot equality,
+ * which is the cluster's own published condition.
  */
 export function rateLimitKey(scope: RateLimitScope, key: string): string {
-  return `${RATE_LIMIT_KEY_PREFIX}:${rateLimitScopeSegment(scope)}:${key}`;
+  return `${RATE_LIMIT_KEY_PREFIX}:{${rateLimitScopeSegment(scope)}:${key}}`;
 }
 
 /**
@@ -310,6 +354,11 @@ export class RedisThrottlerStorage implements ThrottlerStorage, OnApplicationShu
   async increment(key: string, ttl: number, limit: number, blockDuration: number, throttlerName: string): Promise<ThrottlerStorageRecord> {
     const scope = this.deps.scope ?? PRE_AUTH_SCOPE;
     const counterKey = rateLimitKey(scope, `${throttlerName}:${key}`);
+    // A SUFFIX of the counter key, and that is load-bearing rather than tidy:
+    // the two keys of this one `EVAL` therefore share their hash tag, so a
+    // cluster puts them in one slot instead of refusing the command with
+    // CROSSSLOT (see `rateLimitKey`). Anything that made this key diverge
+    // before the counter key's closing `}` would reopen TD-24 on a cluster.
     const blockKey = `${counterKey}:blocked`;
     // `blockDuration` is the guard's own default of `ttl` when a throttler
     // declares none (`dist/throttler.guard.js:83`); a zero would make the

@@ -247,7 +247,10 @@ describe('TD-24 — isolation is a property of the key (DR-90 §1)', () => {
 
   it('TD24-PRE: the pre-authentication scope is `ip`, and carries no tenant', () => {
     expect(rateLimitScopeSegment(PRE_AUTH_SCOPE)).toBe('ip');
-    expect(rateLimitKey(PRE_AUTH_SCOPE, 'k')).toBe(`${RATE_LIMIT_KEY_PREFIX}:ip:k`);
+    // The scope segment and the caller's key live INSIDE a hash tag, so the
+    // two keys of one `EVAL` share a cluster slot (TD-24-ق-8, pinned by
+    // `td24-eval-hash-tag-law.test.ts`). The order inside it is unchanged.
+    expect(rateLimitKey(PRE_AUTH_SCOPE, 'k')).toBe(`${RATE_LIMIT_KEY_PREFIX}:{ip:k}`);
     // A tenant-shaped scope with nothing in it is a refusal, not a default:
     // silently merging two tenants into one allowance is the defect the
     // segment exists to prevent.
