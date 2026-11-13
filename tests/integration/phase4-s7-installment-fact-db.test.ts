@@ -3006,10 +3006,22 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
    * that candidate, and an empty list reads as «nothing holds». That error was
    * made in this file's first instrumentation and is not repeated here.
    */
-  const truncationBlockers = async (relation: string, deleteXid: string): Promise<{ blockers: readonly Record<string, unknown>[]; error?: string }> => {
+  // ── `on` IS THE POOL THE READING IS TAKEN THROUGH, AND IT DEFAULTS TO
+  //    `sup` SO EVERY EXISTING CALLER IS UNCHANGED. It exists because
+  //    `a.datname = current_database()` and `$2::regclass` are both resolved
+  //    IN THE CONNECTION'S OWN DATABASE: a probe that has moved to a database
+  //    of its own (DR-101, below) read through `sup` would ask the WRONG
+  //    database about the WRONG relation and return `[]` -- which reads as
+  //    «nothing holds» and is the exact blindness this helper's own note
+  //    forbids.
+  const truncationBlockers = async (
+    relation: string,
+    deleteXid: string,
+    on: Pool = sup,
+  ): Promise<{ blockers: readonly Record<string, unknown>[]; error?: string }> => {
     try {
       const j = (
-        await sup.query<{ j: string }>(
+        await on.query<{ j: string }>(
           `SELECT coalesce(json_agg(s.x)::text, '[]') AS j FROM (
              SELECT json_build_object('kind','snapshot','pid',a.pid,'backend_type',a.backend_type,
                                       'backend_xmin',a.backend_xmin::text,'xmin_age',age(a.backend_xmin),
@@ -3684,26 +3696,99 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
     // stood here existed ONLY to prove the withdrawn repair's machinery, so
     // they went with it. What is left is the MECHANISM and its negative
     // control, which is what justifies logging the server's words at all.
+    /**
+     * ── THE PROBE RUNS IN A DATABASE OF ITS OWN, AND THAT MOVES WHERE THE
+     *    MEASUREMENT IS TAKEN WITHOUT MOVING WHAT IT CLAIMS ───────────────
+     *
+     * WHY: arm 1's claim is «with no older snapshot, a plain `VACUUM` DOES
+     * give the trailing pages back». «WITH NO OLDER SNAPSHOT» IS A PROPERTY
+     * OF A DATABASE, NOT OF THIS TREE, and it was measured FALSE on run
+     * `43398030298`: the server printed `removable cutoff: 230642` against
+     * the arm's own `delete_xid: 230644` and «4400 are dead but not yet
+     * removable», so truncation was never PERMITTED and the arm failed
+     * saying «this probe measures nothing». A law that reds on a premise it
+     * does not own is a false red.
+     *
+     * `removable cutoff` for a NON-SHARED relation is computed from the
+     * backends of the relation's OWN database (plus prepared transactions
+     * and replication slots, which this probe reads and asserts beside it).
+     * `daftar_s7f1_fact` is this suite's working database: it carries the
+     * whole migrated schema, its catalogues accumulate dead tuples, and the
+     * autovacuum daemon visits THEM -- the P4-S1 lane measured exactly that,
+     * an `autovacuum worker` on `pg_catalog.pg_attribute` carrying a live
+     * `backend_xmin`. `autovacuum_enabled = false` on the probe TABLE cannot
+     * stop a worker on a CATALOGUE of the same database, and `autovacuum` is
+     * a `SIGHUP` setting that cannot be set per database -- and no setting of
+     * this cluster is this file's to change.
+     *
+     * SO THE PROBE GETS A DATABASE CREATED AND DROPPED INSIDE THIS BLOCK:
+     * bare, with no schema, no migration and no other client, so the only
+     * backends whose `backend_xmin` can enter the cutoff are the probe's own
+     * two connections -- which is exactly the variable the two arms differ
+     * in. THIS IS A SMALLER SPOILER SET, NOT AN EMPTY ONE: a worker can still
+     * be launched in any database, so the arms RECORD who was there and the
+     * law reads the server's own cutoff. Whether that is enough is a number
+     * the ten consecutive executions of each control answer, not a claim
+     * made here.
+     *
+     * NOTHING ELSE MOVES. The relation, the 4400-row tail, the single
+     * `VACUUM`, the `REPEATABLE READ` holder, the assertions and the number
+     * of cases are unchanged; no limit, no timeout, no sample and no gate is
+     * touched. The probe never ran on `installment_plans` and still does not.
+     *
+     * AND THE DATABASE'S BIRTH AND DEATH ARE FINGERPRINTED, NOT INFERRED: a
+     * block that fails to drop its database poisons the cluster for the next
+     * execution, so the `oid` is read from `pg_database` after the `CREATE`
+     * and the catalogue is read again after the `DROP` and asserted EMPTY.
+     */
+    const PROBE_DB = 'daftar_s7f1_dr101probe';
+    const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
+    dbf['create_error'] = await (async (): Promise<string | null> => {
+      try {
+        // A database left behind by an execution that died is dropped first,
+        // the same way `createScratchDb` does it, so a stale one cannot be
+        // mistaken for this execution's.
+        await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+        await sup.query(`CREATE DATABASE ${PROBE_DB}`);
+        return null;
+      } catch (e) {
+        return err(e);
+      }
+    })();
+    dbf['created'] = ((
+      await sup.query<Record<string, unknown>>(
+        `SELECT d.oid::text AS oid, d.datname, pg_encoding_to_char(d.encoding) AS encoding, d.datallowconn
+             FROM pg_database d WHERE d.datname = $1`,
+        [PROBE_DB],
+      )
+    ).rows[0] ?? null) as Record<string, unknown> | null;
+    // The probe's pool tolerates idle-client errors for the same reason
+    // `scratchPool` does: the database is dropped `WITH (FORCE)` below, which
+    // terminates whatever is still attached. Every query is awaited, so a
+    // real failure still rejects.
+    const probe = new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 2 });
+    probe.on('error', () => undefined);
     type ArmOpts = { name: string; holder: 'none' | 'through' };
     const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
       const verbose: string[] = [];
       const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
         verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
       };
-      const size = async (): Promise<string> => String((await sup.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
-      // The holder gets a pool of its OWN rather than a third checkout of
-      // `sup` (`max: 3`): a probe that deadlocked on its own connection
+      const size = async (): Promise<string> =>
+        String((await probe.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
+      // The holder gets a pool of its OWN rather than a second checkout of
+      // `probe` (`max: 2`): a probe that deadlocked on its own connection
       // budget would read as the failure it is looking for.
-      const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(DB, 'postgres'), max: 1 });
+      const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
       let holder: PoolClient | undefined;
       let v: PoolClient | undefined;
       try {
-        await sup.query('DROP TABLE IF EXISTS public.dr101_probe');
-        await sup.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
-        await sup.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
-        await sup.query('VACUUM public.dr101_probe');
+        await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
+        await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
+        await probe.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
+        await probe.query('VACUUM public.dr101_probe');
         const base = await size();
-        await sup.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
+        await probe.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
         const inflated = await size();
         // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
         // the `DELETE`, which is the one ordering under which the 4400 tail
@@ -3722,7 +3807,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         // there is no longer a wait.
         const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
           try {
-            const r = await sup.query<{ xid: string; n: number }>(
+            const r = await probe.query<{ xid: string; n: number }>(
               `WITH d AS (DELETE FROM public.dr101_probe WHERE id > 1 RETURNING 1)
                SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
             );
@@ -3752,13 +3837,13 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         // mechanism is false» from «this execution could not ask», and arm 2
         // is the positive control that the reading is not blind (RULE-11).
         const blockersBefore =
-          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid);
+          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
         // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
         // wait on and nothing after it to re-issue; the arm's whole claim is
         // what the server says about that ONE command.
         const vacuum = await (async (): Promise<string | null> => {
           try {
-            v = await sup.connect();
+            v = await probe.connect();
             v.on('notice', onNotice);
             await v.query('VACUUM (VERBOSE) public.dr101_probe');
             return null;
@@ -3774,10 +3859,33 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
         })();
         const after = await size();
         const blockersAfter =
-          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid);
+          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
+        // WHO ELSE IS IN THE PROBE'S OWN DATABASE, BY PID AND BY
+        // `backend_type`. This is the fact the move is FOR, and it is
+        // recorded rather than asserted to be empty: the arm's own two
+        // connections are in it by construction, and a maintenance worker
+        // that appears here is the spoiler this measurement exists to count.
+        const occupants = await (async (): Promise<Record<string, unknown>> => {
+          try {
+            return {
+              list: (
+                await probe.query<{ j: string }>(
+                  `SELECT coalesce(json_agg(json_build_object('pid', pid, 'backend_type', backend_type, 'usename', usename,
+                                                              'backend_xmin', backend_xmin::text, 'state', state) ORDER BY pid)::text, '[]') AS j
+                     FROM pg_stat_activity WHERE datname = current_database()`,
+                )
+              ).rows[0]?.j,
+            };
+          } catch (e) {
+            return { error: err(e) };
+          }
+        })();
         return {
           arm: opts.name,
           holder: opts.holder,
+          probe_db: PROBE_DB,
+          occupants: occupants['list'] ?? null,
+          occupants_error: occupants['error'] ?? null,
           base,
           inflated,
           delete_error: deleted.error,
@@ -3799,10 +3907,10 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           holder.release();
         }
         if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
-        await sup.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
+        await probe.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
       }
     };
-    const all = {
+    const arms = {
       // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
       //    the pages back. Without this arm, arm 2 cannot be told from a
       //    probe that never truncates at all.
@@ -3820,11 +3928,29 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // in the file there is nothing for them to prove, and an arm kept past
       // its claim is an arm that will be read as a claim.
     };
+    // THE DATABASE IS CLOSED AND DROPPED HERE, AND ITS DEATH IS READ FROM
+    // THE CATALOGUE. The pool is ended first so the `DROP` has nothing to
+    // terminate; `WITH (FORCE)` is kept anyway, because a holder that failed
+    // to roll back would otherwise leave the database -- and the next
+    // execution would then measure a database this one built.
+    await probe.end().catch(() => undefined);
+    dbf['drop_error'] = await (async (): Promise<string | null> => {
+      try {
+        await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+        return null;
+      } catch (e) {
+        return err(e);
+      }
+    })();
+    dbf['remaining_after_drop'] = (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_database WHERE datname = $1`, [PROBE_DB])).rows[0]?.n;
     // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
     // that PASSES is the control, and a control whose text is never shown
-    // cannot be read against the arm that fails.
-    for (const [k, vrec] of Object.entries(all)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
-    return all;
+    // cannot be read against the arm that fails. The database's own record
+    // is printed beside them, since a drop that failed is a fact about the
+    // CLUSTER and the next execution inherits it.
+    for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
+    console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
+    return { ...arms, db: dbf };
   })();
 
   writeMeasurements(M);
@@ -5819,6 +5945,25 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     const p = (M['DR101_truncation_probe'] ?? {}) as Record<string, unknown>;
     const arms = ['no_holder', 'holder_no_wait'] as const;
     const a = Object.fromEntries(arms.map((k) => [k, (p[k] ?? {}) as Record<string, unknown>])) as Record<(typeof arms)[number], Record<string, unknown>>;
+    // ── THE PROBE'S OWN DATABASE IS PROVEN BORN AND PROVEN GONE, FROM
+    //    `pg_database` AND NOT BY INFERENCE (DR-101, the owner's second
+    //    condition). A block that fails to drop its database poisons the
+    //    cluster for the next execution, which would then measure a database
+    //    THIS one built -- so the drop is a fact of record, not a hope in a
+    //    `finally`.
+    const dbf = (p['db'] ?? {}) as Record<string, unknown>;
+    const born = (dbf['created'] ?? null) as Record<string, unknown> | null;
+    expect(dbf['create_error'], `the probe's own database could not be created: ${String(dbf['create_error'])}`).toBeNull();
+    expect(born, `nothing in pg_database answered for ${String(dbf['probe_db'])}, so the arms below did not run where they claim`).not.toBeNull();
+    expect(String(born?.['datname'] ?? ''), 'the catalogue named a different database than the probe asked for').toBe(String(dbf['probe_db']));
+    expect(String(born?.['oid'] ?? ''), 'the created database reported no oid, so its birth is an inference').not.toBe('');
+    // AND IT IS NOT THE SUITE'S OWN DATABASE, which is the whole point of the
+    // move: `daftar_s7f1_fact` carries the migrated schema whose CATALOGUES
+    // the autovacuum daemon visits, and a worker there held the horizon on
+    // run `43398030298`.
+    expect(String(dbf['probe_db']), "the probe measured in the suite's own database, so the horizon is not its own").not.toBe(String(dbf['suite_db']));
+    expect(dbf['drop_error'], `the probe's own database could not be dropped: ${String(dbf['drop_error'])}`).toBeNull();
+    expect(dbf['remaining_after_drop'], 'the probe database survived the block, so the next execution inherits this one').toBe(0);
     // BOTH ARMS RAN, DELETED, AND ACTUALLY INFLATED FIRST. A probe whose
     // relation never grew would pass arm 1 and fail arm 2 for no reason at
     // all.
@@ -5827,6 +5972,13 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       expect(a[k]['delete_error'], `arm ${k}'s DELETE failed: ${String(a[k]['delete_error'])}`).toBeNull();
       expect(String(a[k]['delete_xid']), `arm ${k} did not report its DELETE's xid, so its holder reading has no referent`).not.toBe('');
       expect(Number(a[k]['inflated']), `arm ${k} never inflated its relation`).toBeGreaterThan(Number(a[k]['base']));
+      // AND IT RAN WHERE IT SAYS IT RAN. Every reading below -- the cutoff,
+      // the blockers, the occupants -- is scoped to a connection's own
+      // database, so an arm that ran elsewhere would answer about a horizon
+      // it does not share with its own holder.
+      expect(a[k]['probe_db'], `arm ${k} did not report the database it ran in`).toBe(String(dbf['probe_db']));
+      expect(a[k]['occupants_error'], `arm ${k}'s occupant reading errored, so «who else was in the probe's database» is unanswered`).toBeNull();
+      expect(String(a[k]['occupants'] ?? ''), `arm ${k} read no occupant at all, not even itself, so the reading is blind`).not.toBe('[]');
       // AND EVERY `VACUUM` REPORTED SUCCESS, which is the whole point: the
       // return value does not distinguish any of the outcomes below.
       expect(a[k]['vacuum'], `arm ${k}'s VACUUM errored: ${String(a[k]['vacuum'])}`).toBeNull();
