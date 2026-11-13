@@ -55,6 +55,30 @@ function interfaceFields(source: string, name: string): Array<readonly [string, 
 
 const CONTEXT_FIELDS = interfaceFields(ERRORS, 'BillingErrorContext');
 
+/**
+ * A PLANTED declaration of the same interface, read by the SAME extractor the
+ * live cases use. Until this round the two absence laws below had no witness
+ * of their own: the name half was witnessed only against the regex, and the
+ * TYPE half against nothing at all, so a field list whose types came back
+ * empty — a change to the field regex, a `readonly x: bigint` spelled over
+ * two lines — would have left both laws green on a widened shape. The plant
+ * is a STRING: nothing is written into `src/`, so DR-09 is untouched.
+ *
+ * Its first line names two money fields in PROSE, which is the other half of
+ * the law: the blanker must keep them out of the field list.
+ */
+const PLANTED_CONTEXT = `// amountMinor and totalMinor are named in this comment, and a blanked scan must not read them as fields.
+export interface BillingErrorContext {
+  // readonly amountMinor: bigint; a COMMENTED-OUT field: program if the blanker is skipped, prose if it is not.
+  readonly businessId: string;
+  readonly lineNo: number;
+  readonly totalMinor: string;
+  readonly settledMinor?: bigint;
+}
+`;
+
+const PLANTED_FIELDS = interfaceFields(PLANTED_CONTEXT, 'BillingErrorContext');
+
 /** A name that denotes a value rather than an identifier. */
 const MONEY_NOUN = /(amount|price|minor|total|balance|charge|credit|tax|sum|value|payload|body|rate|fee|cost)/i;
 
@@ -73,11 +97,35 @@ describe('BillingErrorContext is a closed shape that holds no money', () => {
   it('has no field whose name denotes a value', () => {
     const offences = CONTEXT_FIELDS.filter(([n]) => MONEY_NOUN.test(n)).map(([n, t]) => `${n}: ${t}`);
     expect(offences, 'a field that denotes a value was added to the refusal context').toEqual([]);
+
+    // THE WITNESS, folded into this case because `tools/law-ran.py` pins this
+    // file at six cases. The planted declaration goes through the extractor
+    // above, so an empty live list is read as "nothing to report".
+    expect(
+      PLANTED_FIELDS.filter(([n]) => MONEY_NOUN.test(n)).map(([n]) => n),
+      'the name half missed a money-shaped field in a planted declaration',
+    ).toStrictEqual(['totalMinor', 'settledMinor']);
   });
 
   it('has no field typed bigint — in this package a bigint is minor units', () => {
     const offences = CONTEXT_FIELDS.filter(([, t]) => /\bbigint\b/.test(t)).map(([n, t]) => `${n}: ${t}`);
     expect(offences, 'a bigint reached the refusal context').toEqual([]);
+
+    // THE WITNESS for the TYPE half, which had none: a planted optional
+    // `bigint` field is reported with its type, so the type capture is read
+    // as working rather than assumed.
+    expect(
+      PLANTED_FIELDS.filter(([, t]) => /\bbigint\b/.test(t)).map(([n, t]) => `${n}: ${t}`),
+      'the type half missed a bigint field in a planted declaration',
+    ).toStrictEqual(['settledMinor: bigint']);
+
+    // AND THE OTHER DIRECTION: `string` and `number` fields are not reported,
+    // and the two money names in the plant's COMMENT are not fields — a law
+    // that read prose as program would red on the paragraph that states it.
+    expect(
+      PLANTED_FIELDS.map(([n]) => n),
+      'the blanker let prose into the field list',
+    ).toStrictEqual(['businessId', 'lineNo', 'totalMinor', 'settledMinor']);
   });
 
   it('matches its own noun pattern (the detector is live)', () => {
