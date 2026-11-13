@@ -116,6 +116,69 @@ if [ "$P5_EXISTING_SERVER" = "1" ]; then
   export P5_DB_STRANGER_URL="postgresql://p5_stranger:p5strangerpw@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
   export P5_DB_APP_URL="postgresql://p5_app:p5apppw@$P5_PG_HOST:$P5_PG_PORT/$P5_DB_NAME"
   echo "LANE=existing-server host=$P5_PG_HOST port=$P5_PG_PORT database=$P5_DB_NAME locale=$P5_LOCALE"
+
+  # ROLES ARE CLUSTER-GLOBAL, AND THIS LANE SHARES THE CLUSTER.
+  #
+  # Measured, not assumed: run 43398118385 failed at `Phase 4 slice gate --
+  # P4-S1`, and the cause was three extra runtime principals --
+  # `p5_app`, `p5_stranger`, `p5owner` -- seen by
+  # tests/security/phase3-s8-grant-matrix.test.ts (7 expected, 10 found) and by
+  # tests/integration/phase3-s8-rebuild-rehearsal.test.ts. `credit-ledger-bootstrap.sql`
+  # creates four roles; the fourth, `p5_invariants`, is NOLOGIN and the law
+  # counts LOGIN principals only, which is exactly why the surplus is 3 and not 4.
+  # A database of its own was never enough: CREATE ROLE is a cluster-wide act,
+  # so with P5_EXISTING_SERVER=1 this lane mutated the authority surface that
+  # Phase 3 locks at seven. The accepted law is right and this lane was wrong;
+  # nothing here relaxes it.
+  #
+  # So the lane restores the cluster's role set to what it found. The list is
+  # DERIVED from a before/after difference, not hardcoded, so a role added to
+  # the bootstrap tomorrow is cleaned up without editing this script.
+  #
+  # And the teardown proves itself: if any role this lane created is still
+  # there afterwards, the lane FAILS. A cleanup that silently did nothing is
+  # the false green we refuse (RULE-27), and an empty probe is not a zero
+  # (RULE-18), so a blank reading fails too.
+  # `comm` compares in BYTE order, while `ORDER BY 1` sorts in the database's
+  # collation: a mismatch between the two invents a difference the cluster does
+  # not have, and here that reads as a role leak. So every list is sorted with
+  # LC_ALL=C, by the same rule on both sides.
+  ROLES_BEFORE=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+  if [ -z "$ROLES_BEFORE" ]; then
+    echo "pg_roles answered nothing before the bootstrap; an empty probe is not a zero (RULE-18)."
+    exit 1
+  fi
+  export P5_ROLES_BEFORE="$ROLES_BEFORE"
+
+  p5_restore_cluster() {
+    rc_keep=$?
+    psql -tA "$ADMIN_URL" -c "DROP DATABASE IF EXISTS $P5_DB_NAME WITH (FORCE)" > /dev/null 2>&1
+    ROLES_NOW=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+    if [ -z "$ROLES_NOW" ]; then
+      echo "TEARDOWN UNVERIFIABLE: pg_roles answered nothing, so the restored role set is unknown (RULE-18)."
+      exit 1
+    fi
+    MINE=$(comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$ROLES_NOW"))
+    for r in $MINE; do
+      psql -tA "$ADMIN_URL" -c "DROP OWNED BY \"$r\" CASCADE" > /dev/null 2>&1
+      psql -tA "$ADMIN_URL" -c "DROP ROLE IF EXISTS \"$r\"" > /dev/null 2>&1
+    done
+    ROLES_AFTER=$(psql -tA "$ADMIN_URL" -c "SELECT rolname FROM pg_roles" | LC_ALL=C sort)
+    if [ -z "$ROLES_AFTER" ]; then
+      echo "TEARDOWN UNVERIFIABLE: pg_roles answered nothing after the drops (RULE-18)."
+      exit 1
+    fi
+    LEFT=$(comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$ROLES_AFTER"))
+    if [ -n "$LEFT" ]; then
+      echo "ROLE LEAK: this lane left principals behind in the shared cluster:"
+      printf '  %s\n' $LEFT
+      echo "Phase 3 locks the runtime principals at seven; a lane that adds to them breaks an accepted law."
+      exit 1
+    fi
+    echo "TEARDOWN OK: cluster role set restored; created-and-dropped = [$(printf '%s ' $MINE)]"
+    return $rc_keep
+  }
+  trap p5_restore_cluster EXIT
 fi
 
 if [ "$P5_EXISTING_SERVER" != "1" ] && ! id p5pg >/dev/null 2>&1; then
