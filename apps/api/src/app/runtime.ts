@@ -1,7 +1,7 @@
 import type { ExecutionContext, Provider, Type } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { AppError } from '@daftar/domain-core';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule, ThrottlerStorage, ThrottlerStorageService } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { Client } from 'pg';
 import { migrationOrdinal, REQUIRED_SCHEMA_MIGRATION, schemaFloor, type AppConfig } from '../config';
@@ -53,6 +53,7 @@ import {
 } from '../modules/accounting/accounting-reconciliation.service';
 import { AccountingReconciliationWorker } from '../modules/accounting/accounting-reconciliation.worker';
 import { InventoryAssertionMinterService } from '../modules/inventory/inventory-assertion.minter';
+import { createThrottlerStorage } from '../infra/rate-limit-store';
 
 /**
  * RUNTIME COMPOSITION (Phase 1 Completion Directive §15–20).
@@ -531,6 +532,37 @@ export function httpProviders(config: AppConfig, resolver: Type<MembershipResolv
       provide: 'RATE_LIMITER',
       useFactory: (): RateLimiter => (config.REDIS_URL ? new RedisRateLimiter(config) : new MemoryRateLimiter()),
     },
+    // TD-24 / DR-90: the store behind the GENERAL allowance (300 per route
+    // handler per client), which until this card was the library's own
+    // in-process `Map` in every environment — one allowance PER REPLICA.
+    //
+    // It is a provider HERE, in the module that also registers
+    // `ThrottlerGuard` below, because that is the injector the guard resolves
+    // from: measured, a module-local `ThrottlerStorage` provider is what a
+    // consumer in that module receives, even though `ThrottlerModule` is
+    // `@Global()` and `app.get()` on the ROOT still answers with the global
+    // one. Being a provider is what lets it hold the SAME `LOGGER` and
+    // `METRICS` the rest of the process uses; `forRoot({ storage })` is
+    // evaluated while module metadata is built, where neither exists.
+    //
+    // ABSENT, not defaulted, when no shared store is configured. A provider
+    // that answered with a fresh in-process store would give the guard a
+    // DIFFERENT instance from the one the global module exports — and
+    // `tests/performance/pos-s3-budgets.test.ts:549` clears the store it
+    // reads from the app root between two measurements, so the guard would
+    // keep counting in a Map nobody cleared and the budget suite would
+    // measure throttling instead of reads. Silently. That file belongs to
+    // another lane; leaving the token unprovided keeps its reset correct.
+    ...(config.REDIS_URL
+      ? [
+          {
+            provide: ThrottlerStorage,
+            useFactory: (logger: Logger, metrics: Metrics): ThrottlerStorage =>
+              createThrottlerStorage(config, { logger, metrics }) ?? new ThrottlerStorageService(),
+            inject: ['LOGGER', METRICS],
+          },
+        ]
+      : []),
     'useValue' in resolver ? { provide: MEMBERSHIP_RESOLVER, useValue: resolver.useValue } : { provide: MEMBERSHIP_RESOLVER, useExisting: resolver },
     { provide: APP_FILTER, useClass: GlobalExceptionFilter },
     { provide: APP_GUARD, useClass: ThrottlerGuard },

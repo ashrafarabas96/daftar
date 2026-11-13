@@ -219,6 +219,31 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 20
+      # TD-24 / DR-90 §5 — the narrow exception, authorised only after PR #44
+      # merged, and only here: this job and no other.
+      #
+      # WHY IT EXISTS. The shared rate-limit store is a Lua body that Redis
+      # runs, and the identity limiter's connection patch is ioredis handshake
+      # behaviour. Neither can be measured by a fake: `FakeRedis.eval` does
+      # not interpret Lua, and a fake that agreed with a wrong script would
+      # agree in silence. Without this container `tests/security/
+      # td24-redis-live.test.ts` cannot run, and TD-24's acceptance would rest
+      # on NOT_RUN — which is what the evidence said in those words until this
+      # line existed.
+      #
+      # The image is PINNED to a minor, like `postgres:16` above: a floating
+      # tag would make a later green run a statement about a different server
+      # than the one acceptance was read on.
+      #
+      # It changes nothing else: no step, no gate, no budget, no timeout, no
+      # `continue-on-error`, and no rate limit. A job that does not read
+      # `REDIS_URL` is unaffected by a container being up.
+      redis:
+        image: redis:7.2-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
     steps:
       # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
       # green run there also says the tree was clean. A self-hosted runner is
@@ -556,6 +581,15 @@ jobs:
         run: npm run test:integration
         env:
           PG_PORT: '5432'
+          # TD-24 / DR-90 §5. Without this the live suite skips and TD-24's
+          # acceptance would rest on NOT_RUN. It reaches the application
+          # through `createTestApp`'s existing `configOverrides` seam, so
+          # `tests/helpers/test-app.ts` — owned by PR #7 and frozen by DR-89 —
+          # is not touched. Only the two TD-24 suites read it; every other
+          # suite keeps the in-process store it had, which is the premise
+          # `tests/performance/pos-s3-budgets.test.ts` depends on and which
+          # this job does not run.
+          REDIS_URL: redis://localhost:6379
       - name: Golden regression suite
         run: npm run test:golden
         env:
