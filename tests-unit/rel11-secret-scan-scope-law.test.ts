@@ -28,9 +28,11 @@ import { describe, expect, it } from 'vitest';
  *            vacuously true against a file in which nothing was found.
  *   REL11-B  THE CLAIM. The snapshot scan carries no event condition => the
  *            push path to `main` is secret-scanned at all.
- *   REL11-B2 AND NOTHING ABOVE IT switches that step off: neither `hygiene`
- *            nor the jobs its own `needs:` names carry an event condition.
- *            Without this, B is a claim about one line and not about coverage.
+ *   REL11-B2 AND NOTHING ABOVE IT switches that step off: no job in the WHOLE
+ *            `needs:` chain of `hygiene`, at any depth, carries an event
+ *            condition, and each job's own `needs:` text is pinned so an
+ *            unread form at any level fails closed. Without this, B is a claim
+ *            about one line and not about coverage.
  *   REL11-C  NEGATIVE CONTROL. On a fixture in which that same step IS gated
  *            on `pull_request`, the reader reports the condition => B can fail,
  *            and this is the red proof of a guard that reads a file it must not
@@ -56,6 +58,8 @@ import { describe, expect, it } from 'vitest';
  *            B2's loop checks every job it names; and a form the reader does
  *            NOT take whole does not quietly equal B2's pinned text, so the
  *            pin reddens instead of the list arriving short.
+ *   REL11-L  NEGATIVE CONTROL. A gate two jobs deep in the chain is found and
+ *            not stepped over, so B2 cannot be satisfied by depth one alone.
  *   REL11-J  NEGATIVE CONTROL. A key that is not `branches:` does not feed the
  *            scope claim, so E cannot go green on an excluded branch.
  *
@@ -192,6 +196,27 @@ export function neededJobs(yamlText: string, jobName: string): readonly string[]
 }
 
 /**
+ * Every job a job depends on, TRANSITIVELY, including itself.
+ *
+ * Checking only what `hygiene`'s own `needs:` names measured the chain at one
+ * depth. Nothing would have reddened if `workspaces` later took
+ * `needs: prep` with `prep` gated on `pull_request`: the pin holds, the loop
+ * finds `workspaces` ungated, and the coverage claim empties with REL11-B2
+ * green — the same hole that was closed one layer down. (Fifth review.)
+ */
+export function jobChain(yamlText: string, start: string): readonly string[] {
+  const seen = new Set<string>();
+  const queue = [start];
+  while (queue.length > 0) {
+    const job = queue.shift() as string;
+    if (seen.has(job)) continue;
+    seen.add(job);
+    for (const next of neededJobs(yamlText, job)) queue.push(next);
+  }
+  return [...seen];
+}
+
+/**
  * The branches the `push:` trigger names, in flow or block style — read from
  * the `branches:` key only.
  *
@@ -316,10 +341,19 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // coverage claim in REL11-B depends on every job in that chain being
     // ungated. Move it in the same commit, after re-reading the chain.
     // (Fourth review, finding 1.)
-    expect(jobKey(WORKFLOW, 'hygiene', 'needs')).toBe('workspaces');
-    const needed = neededJobs(WORKFLOW, 'hygiene');
-    expect(needed).toEqual(['workspaces']);
-    for (const job of needed) {
+    // The WHOLE chain, at every depth, and the raw `needs:` of each job in it
+    // is pinned -- so an unread form at ANY level fails closed, not only at
+    // the first. Today the chain is two jobs deep; the map is the claim about
+    // its shape, and it reddens if that shape changes, which is the point.
+    expect(jobChain(WORKFLOW, 'hygiene')).toEqual(['hygiene', 'workspaces']);
+    const chainShape: Record<string, string | null | undefined> = {
+      hygiene: 'workspaces',
+      workspaces: null,
+    };
+    for (const [job, needs] of Object.entries(chainShape)) {
+      expect(jobKey(WORKFLOW, job, 'needs'), `${job}'s own needs: text`).toBe(needs);
+    }
+    for (const job of jobChain(WORKFLOW, 'hygiene')) {
       expect(jobCondition(WORKFLOW, job), `${job} gates the chain hygiene hangs from`).toBeNull();
     }
   });
@@ -450,6 +484,24 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     );
     expect(brokenFlow).not.toBe(WORKFLOW);
     expect(jobKey(brokenFlow, 'hygiene', 'needs')).not.toBe('workspaces');
+  });
+
+  it('REL11-L (negative control): a gate two jobs deep in the chain is found, not stepped over', () => {
+    // The hole the fifth review left open: with the chain measured at one
+    // depth, a gated job BEHIND `workspaces` emptied the coverage claim while
+    // every assertion stayed green. Seeded here at depth two, which is where
+    // a real `needs:` edit would put it.
+    const deep = WORKFLOW.replace(
+      '  workspaces:\n',
+      `  workspaces:\n    needs: prep\n`,
+    ).replace('  hygiene:\n', `  prep:\n    if: ${PULL_REQUEST_ONLY}\n    runs-on: ubuntu-latest\n  hygiene:\n`);
+    expect(deep).not.toBe(WORKFLOW);
+    // The traversal reaches it...
+    expect(jobChain(deep, 'hygiene')).toEqual(['hygiene', 'workspaces', 'prep']);
+    // ...and it is the gated one, so B2's loop over the chain would redden.
+    expect(jobCondition(deep, 'prep')).toBe(PULL_REQUEST_ONLY);
+    // And the depth-one reading, which this case exists to retire, saw nothing.
+    expect(neededJobs(deep, 'hygiene')).toEqual(['workspaces']);
   });
 
   it('REL11-J (negative control): a branch key that is not `branches:` does not feed the scope claim', () => {
