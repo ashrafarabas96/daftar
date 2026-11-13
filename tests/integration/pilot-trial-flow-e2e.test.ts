@@ -33,11 +33,15 @@
  *     (`customers.controller.ts:21-42`). So the customer of this flow is
  *     SEEDED, through the same fixture every settlement suite uses, and the
  *     HTTP create step stays owed rather than faked;
- *   — a per-customer STATEMENT route (`كشف حساب`) does not exist at all. The
- *     closest mounted read answers one number and no rows, so the row-level
- *     statement laws below are exercised on planted statements TODAY and on
- *     the real route the day it lands. `STATEMENT_PATH` is the one constant
- *     that changes then, and no assertion in this file moves.
+ *   — a per-customer STATEMENT route (`كشف حساب`) is not on THIS base, and the
+ *     scope of that is the whole claim: it is mounted on an open branch
+ *     (`l3/customer-statement` @ `8eeb3303`, measured), but that PR is
+ *     unmerged with changes requested and carries no running balance yet. The
+ *     closest read this base does mount answers one number and no rows, so
+ *     the row-level statement laws below are exercised on statements this
+ *     suite derives TODAY and on the route's own rows the day it is reachable.
+ *     `STATEMENT_PATH` is the one constant that changes then, and no assertion
+ *     in this file moves.
  *
  * ── WHY THE LAWS ARE NAMED CHECKERS AND NOT INLINE EXPECTATIONS ───────────
  *
@@ -71,10 +75,19 @@ import { collectPayment } from '../golden-regression/phase4-s4/settlement-path';
 const CLAIM = "the pilot's trial flow: a customer is sold to on account, pays part of it, and the statement says the right number";
 
 /**
- * The per-customer statement route, once the lane that owns deferred selling
- * mounts it. `null` is not a placeholder to be tidied away later: it is the
- * measured state of the estate, and the live statement case below is RED while
- * it holds, naming what is missing instead of passing on nothing.
+ * The per-customer statement route, once it reaches a tree this suite can run
+ * against. `null` is not a placeholder to be tidied away: it is the measured
+ * state of THIS base, and the owed case below is RED while it holds, naming
+ * what is missing instead of passing on nothing.
+ *
+ * "Not on this base" is the whole claim, and the scope matters: the route IS
+ * mounted on an open branch — `GET /v1/customers/:customerId/account-statement`
+ * (note `account-statement`, not `statement`), permission `receivables.view`,
+ * at `customers.controller.ts:118` on `l3/customer-statement` @ `8eeb3303`,
+ * measured by me there. That PR is unmerged and carries changes requested, so
+ * a request written against it from here would be red for a reason that is
+ * nobody's defect. What this suite waits for is the route on a tree it shares,
+ * not the route's existence.
  */
 const STATEMENT_PATH: ((customerId: string) => string) | null = null;
 
@@ -126,12 +139,25 @@ function receivableOffencesIn(movements: readonly Movement[], observedMinor: big
 /**
  * One row of a customer statement.
  *
- * The field names of the real row are `debit_txn_minor`, `credit_txn_minor`,
- * `currency_code` and `running_balance_txn_minor`, in minor units as `BIGINT`,
- * with the debt the customer owes POSITIVE — reported to this lane by the lane
- * that owns `0092`, and therefore NOT measured by me (RULE-2): the mapping from
- * that row to this shape is the second thing that changes the day the route
- * lands, and the laws below do not move when it does.
+ * The real row's own names, MEASURED on the open branch that mounts the route
+ * rather than taken from a spec: `currency` (not `currencyCode`),
+ * `debitTxnMinor | null` and `creditTxnMinor | null`, with the debt the
+ * customer owes POSITIVE. A `null` side is what a row carrying no side looks
+ * like on the wire, and the mapper's first obligation is to read it as ZERO
+ * rather than as a missing row.
+ *
+ * `runningMinor` has NO counterpart there yet, measured: that branch carries
+ * zero occurrences of a running balance in `apps/api/src` or in the shared
+ * contracts, and its own title says so — "no running balance, no migration".
+ * The probe is sighted, since it finds `debitTxnMinor` in the same tree. So
+ * the recurrence laws below run on statements this suite derives, and the day
+ * the running balance lands they run on the route's own figure; the laws
+ * themselves do not move either way.
+ *
+ * An earlier version of this comment named four `snake_case` columns and a
+ * running balance. That was a spec reported to this lane and since withdrawn
+ * by the lane that reported it, and I had repeated it without measuring —
+ * which is exactly why it is measured here now.
  */
 interface StatementRow {
   readonly what: string;
@@ -913,17 +939,26 @@ describe(CLAIM, () => {
     ).toBe(false);
   });
 
-  it('OWED BY THE SELLING LANE — the per-customer statement route is read through this file once it is mounted', () => {
+  it('OWED — the statement route is read through this file once it reaches a tree this suite shares', () => {
     // RED ON PURPOSE, and it is the schedule rather than an oversight: this
-    // lane's item is green on CI at the pilot's day 6-8, and the route it
-    // reads is built on day 3-5 by the lane that owns it. The assertion is
+    // lane's item is green on CI at the pilot's day 6-8. The assertion is
     // written against the route and not against a mock, so the day
-    // `STATEMENT_PATH` names the real path this case begins measuring the real
-    // statement through `statementOffencesIn` above — the same checker the
-    // planted witnesses just exercised in both directions.
+    // `STATEMENT_PATH` names a path this suite can reach, this case begins
+    // measuring the real statement through `windowsOf` and
+    // `statementOffencesIn` above — the same checkers the planted witnesses
+    // exercised in both directions — and through `closureOffencesIn`, whose
+    // receivable half is already live.
+    //
+    // What is owed is NOT the route's existence. It is mounted on an open
+    // branch, measured there: `GET /v1/customers/:customerId/account-statement`
+    // at `customers.controller.ts:118` on `l3/customer-statement` @
+    // `8eeb3303`, with `outstanding[]` carried inside the answer. Two things
+    // keep it out of reach from here: that PR is unmerged with changes
+    // requested, and it has no running balance yet, so the recurrence has
+    // nothing of its own to read.
     expect(
       STATEMENT_PATH,
-      'the per-customer statement route is not mounted yet: the customer statement and its migration are owed by the lane that owns deferred selling, and this suite does not fake it',
+      'the statement route is mounted on an open branch and not on this one, and it carries no running balance yet, so this suite neither reaches it nor fakes it',
     ).not.toBeNull();
   });
 });
