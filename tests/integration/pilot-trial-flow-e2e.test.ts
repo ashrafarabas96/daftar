@@ -319,6 +319,12 @@ interface ReceivableBody {
 /** The per-currency half of each receivable answer, kept for the laws below. */
 let observedByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] = [];
 let otherByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] | null = null;
+/** Arm C: what the server answered a sale on account that names nobody. */
+let creditWithNobodyStatus: number | null = null;
+let creditWithNobodyBody = '';
+/** Arm D: what the server answered a receivable read for a customer that does not exist. */
+let unknownCustomerStatus: number | null = null;
+let unknownCustomerBody = '';
 /** Arm A: what the server answered a collection of nothing. */
 let zeroCollectionStatus: number | null = null;
 /** Arm B, on a customer of its own: the whole debt, the surplus over it, and what came back. */
@@ -508,6 +514,34 @@ beforeAll(async () => {
       otherByCurrency = otherBody.byCurrency;
     }
   }
+  step = 'arm C — a sale ON ACCOUNT that names nobody';
+  // The body is built here in full rather than through the sale helper,
+  // because the helper cannot express this request: given a null customer it
+  // commits the WALK-IN arm, which is necessarily cash. The schema is
+  // `.strict()`, so every field is present and only ONE of them is wrong —
+  // otherwise the refusal could be about the shape instead of about the debt
+  // nobody owes.
+  const nobodyOwesIt = await w.t.request
+    .post('/v1/sales')
+    .set(w.headers)
+    .send({
+      saleId: randomUUID(),
+      settlementMode: 'credit',
+      customerId: null,
+      warehouseId: w.shop.w1,
+      documentDate: w.day,
+      dueDate: null,
+      taxMinor: '0',
+      notes: null,
+      lines: [{ lineId: randomUUID(), productId: w.shop.piece.productId, variantId: null, quantity: '1', discountMinor: '0' }],
+    });
+  creditWithNobodyStatus = nobodyOwesIt.status;
+  creditWithNobodyBody = JSON.stringify(nobodyOwesIt.body);
+
+  step = 'arm D — the receivable of a customer that does not exist';
+  const unknownCustomer = await w.t.request.get(`/v1/customers/${randomUUID()}/receivable`).set(w.headers).send();
+  unknownCustomerStatus = unknownCustomer.status;
+  unknownCustomerBody = JSON.stringify(unknownCustomer.body);
 }, 240_000);
 
 afterAll(async () => {
@@ -964,6 +998,34 @@ describe(CLAIM, () => {
       forgotOpening.some((o) => o.includes('the last row prints')),
       'law 4 spoke here, so this case does not show that law 5 catches anything law 4 cannot',
     ).toBe(false);
+  });
+
+  it('ARM C — a sale ON ACCOUNT that names nobody is refused, and that is what makes step 2 a credit sale', () => {
+    expect(refusedAt).toBeNull();
+    // THE POSITIVE CONTROL IS THE FLOW ITSELF: the same route, the same
+    // warehouse, the same product, one field different — and step 2 committed.
+    // So this refusal is about the debt nobody owes and not about a route
+    // that refuses sales. It is also what makes step 2 a CREDIT sale rather
+    // than a cash one that happened to name a customer: if the server did not
+    // require the customer, `settlementMode: 'credit'` would be decoration.
+    expect(invoice.saleId.length, 'step 2 did not commit, so this refusal is about nothing').toBeGreaterThan(0);
+    expect(creditWithNobodyStatus, `a credit sale with no customer was accepted: ${creditWithNobodyBody}`).toBe(400);
+    // And the refusal names the field, not just the request: a 400 that could
+    // be about any of the nine fields is not a law about this one.
+    expect(creditWithNobodyBody, 'the refusal does not name the customer').toContain('customerId');
+  });
+
+  it('ARM D — the receivable of a customer that does not exist is refused by name', () => {
+    expect(refusedAt).toBeNull();
+    // The read this flow's whole balance law rests on must distinguish "owes
+    // nothing" from "is not there". A read that answered zero for an unknown
+    // id would make every balance law in this file pass for a customer that
+    // was never created.
+    expect(unknownCustomerStatus, `an unknown customer was answered rather than refused: ${unknownCustomerBody}`).toBe(404);
+    expect(unknownCustomerBody, 'the refusal does not carry the code').toContain('customer.not_found');
+    // AND THE OTHER DIRECTION: the same route answered 200 for the customer
+    // of this flow a moment earlier, so the 404 is about the id.
+    expect(balanceWasRead, 'the same route never answered successfully, so the refusal says nothing').toBe(true);
   });
 
   it('OWED — the statement route is read through this file once it reaches a tree this suite shares', () => {
