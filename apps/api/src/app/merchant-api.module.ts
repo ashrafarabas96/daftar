@@ -45,6 +45,7 @@ import { SupplierBalancesController } from '../modules/purchasing/supplier-balan
 import { PaymentMethodDefaultsController, PaymentMethodDefaultsReadService } from '../modules/payment-methods/payment-method-defaults.controller';
 // P4-S1: the Phase 4 customer and invoice read surface.
 import { CustomersController } from '../modules/selling/customers.controller';
+import { CustomerStatementController } from '../modules/selling/customer-statement.controller';
 import { InvoicesController } from '../modules/selling/invoices.controller';
 import { SalesController } from '../modules/selling/sales.controller';
 import { sellingProviders } from '../modules/selling/selling.module';
@@ -98,6 +99,7 @@ export class MerchantApiModule implements NestModule {
         PaymentMethodDefaultsController,
         // P4-S1: the customer and invoice reads (GET only; the invoice's one writer is the sale command).
         CustomersController,
+        CustomerStatementController,
         InvoicesController,
         // P4-S2: the sale command and its read (POST /v1/sales, GET /v1/sales/:saleId).
         SalesController,

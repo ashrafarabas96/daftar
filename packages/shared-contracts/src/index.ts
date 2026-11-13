@@ -391,6 +391,8 @@ export * from './supplier-settlement';
 export * from './merchant-reads';
 // Phase 4 (P4-S1): the customer and invoice contract surface.
 export * from './customers';
+// L3 / P4-S1: the customer account statement and its running balance (0092).
+export * from './customer-statement';
 export * from './invoices';
 // Phase 4 (P4-S4): collecting a customer payment, and applying a customer credit.
 export * from './customer-settlement';
