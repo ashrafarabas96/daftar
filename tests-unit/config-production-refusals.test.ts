@@ -64,6 +64,12 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
   S3_BUCKET: 'daftar-media',
   S3_ACCESS_KEY_ID: 'AKIAEXAMPLE',
   S3_SECRET_ACCESS_KEY: 'secret',
+  // REL-10: a production surface that serves browsers does not start without an
+  // explicit allowlist, and the development default is refused BY NAME. So this
+  // belongs to "otherwise complete and correct" and not to this card — without
+  // it the three positive controls below fail for a reason this file is not
+  // about, which is exactly what happened when REL-10 landed on `main`.
+  CORS_ORIGINS: 'https://app.example.com',
 };
 
 /**
@@ -83,6 +89,12 @@ const PLATFORM_PROD: NodeJS.ProcessEnv = {
   REDIS_URL: 'redis://redis:6379',
   CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt',
   CREDENTIAL_KMS_TOKEN: 'kms-bridge-token-with-at-least-32-characters!!',
+  // REL-10 again: `platform-api` serves browsers too, so the same requirement
+  // applies to it. The `worker` fixture below deliberately does NOT carry this
+  // variable — the refusal is scoped to the modes that answer a browser, and a
+  // fixture that set it everywhere would hide that distinction rather than hold
+  // it.
+  CORS_ORIGINS: 'https://admin.example.com',
 };
 
 /** A worker that is otherwise complete and correct, in production. */
@@ -156,6 +168,31 @@ describe('config.ts: the database principals a production surface cannot start w
     expect(() => loadConfig({ ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(
       /PROVISIONER_DATABASE_URL.*must be a distinct role from APP\/PLATFORM/s,
     );
+  });
+});
+
+describe('config.ts: why these fixtures carry CORS_ORIGINS at all', () => {
+  it('DENY: a browser-serving surface with no CORS_ORIGINS does not start — both surfaces', () => {
+    // This is not a second home for REL-10 (`tests-unit/rel10-cors-allowlist.test.ts`
+    // holds that card). It is here so the fixtures' extra variable can never be
+    // tidied away as noise: if someone drops `CORS_ORIGINS` from the two
+    // production fixtures above, THIS case keeps naming the reason instead of
+    // three unrelated positive controls failing with a CORS message.
+    //
+    // Measured on the tree where REL-10 had just landed: the fixtures without it
+    // failed 3 of 21, and the three were "a complete merchant API starts",
+    // "a complete platform API starts" and the 32-byte boundary — none of which
+    // is about CORS.
+    expect(() => loadConfig(without(MERCHANT_PROD, 'CORS_ORIGINS'))).toThrow(/CORS_ORIGINS/);
+    expect(() => loadConfig(without(PLATFORM_PROD, 'CORS_ORIGINS'))).toThrow(/CORS_ORIGINS/);
+  });
+
+  it('ALLOW: a production worker needs none, because it answers no browser', () => {
+    // The negative control of the same rule: REL-10 is scoped to the modes that
+    // serve browsers, and a fixture carrying the variable everywhere would hide
+    // that scope rather than hold it.
+    expect(WORKER_PROD.CORS_ORIGINS).toBeUndefined();
+    expect(() => loadConfig(WORKER_PROD)).not.toThrow();
   });
 });
 
