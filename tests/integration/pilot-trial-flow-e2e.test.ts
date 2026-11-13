@@ -207,6 +207,18 @@ const firstSendStatuses: number[] = [];
 /** The status and the `replayed` flag of the second collection sent AGAIN, byte for byte. */
 let replayStatus: number | null = null;
 let replayFlag: unknown = undefined;
+/**
+ * The shape of the receivable answer this suite reads, with every money figure
+ * a STRING — which is the estate's own rule and not a preference: a `BIGINT`
+ * past 2^53 loses precision through `JSON.parse` without raising anything.
+ */
+interface ReceivableBody {
+  readonly baseMinor: string;
+  readonly byCurrency: readonly { readonly currency: string; readonly txnMinor: string }[];
+}
+/** The per-currency half of each receivable answer, kept for the laws below. */
+let observedByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] = [];
+let otherByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] | null = null;
 /** Arm A: what the server answered a collection of nothing. */
 let zeroCollectionStatus: number | null = null;
 /** Arm B, on a customer of its own: the whole debt, the surplus over it, and what came back. */
@@ -322,7 +334,9 @@ beforeAll(async () => {
     refusedAt = `step 4 — the receivable read was refused with ${read.status}: ${JSON.stringify(read.body)}`;
     return;
   }
-  observedBalanceMinor = BigInt((read.body as { baseMinor: string }).baseMinor);
+  const readBody = read.body as ReceivableBody;
+  observedBalanceMinor = BigInt(readBody.baseMinor);
+  observedByCurrency = readBody.byCurrency;
 
   // ── the two arms, driven AFTER the flow's own figure is read ─────────────
   // Nothing below may disturb the flow above: the zero collection is refused
@@ -376,7 +390,11 @@ beforeAll(async () => {
   if (overpaid.status < 300) {
     const otherRead = await w.t.request.get(`/v1/customers/${otherCustomerId}/receivable`).set(w.headers).send();
     overpaidReadStatus = otherRead.status;
-    if (otherRead.status < 300) otherBalanceMinor = BigInt((otherRead.body as { baseMinor: string }).baseMinor);
+    if (otherRead.status < 300) {
+      const otherBody = otherRead.body as ReceivableBody;
+      otherBalanceMinor = BigInt(otherBody.baseMinor);
+      otherByCurrency = otherBody.byCurrency;
+    }
   }
 }, 240_000);
 
@@ -465,6 +483,29 @@ describe(CLAIM, () => {
     );
   });
 
+  it('1-4b. THE PER-CURRENCY FIGURE — the half of the statement closure law that is already mounted', () => {
+    expect(refusedAt).toBeNull();
+    // MEASURED ON THIS BASE, not taken on report. The receivable read answers
+    // `byCurrency` straight out of the AR function — its SQL is
+    // `SELECT r.currency_code, r.txn_minor::text … FROM customer_ar_outstanding($1,$2) r`
+    // — so `byCurrency[].txnMinor` IS that function's `txn_minor` for the
+    // currency. The statement's closure law (per currency, the last running
+    // balance equals exactly that figure) therefore already has one of its
+    // two reads mounted, and this case is that read: asserted now, so that
+    // the day the statement lands the law is one comparison and not a new
+    // investigation.
+    expect(observedByCurrency.length, 'the per-currency half of the answer is empty while the customer still owes something').toBe(1);
+    const only = observedByCurrency[0];
+    expect(only?.currency, 'the per-currency figure is not in the invoice currency').toBe(invoiceCurrency);
+    expect(only?.txnMinor, 'the per-currency figure disagrees with the sale minus the collections').toBe(
+      (BigInt(invoice.totalTxnMinor) - collectedMinor).toString(),
+    );
+    // AND THE UNIT. A money figure crosses the wire as a decimal STRING: a
+    // `number` past 2^53 loses precision through `JSON.parse` and raises
+    // nothing, so the type is a law here and not a style.
+    expect(typeof only?.txnMinor, 'a money figure arrived as something other than a string').toBe('string');
+  });
+
   it('3b. A REPLAY IS NOT MONEY: the same collection sent twice is answered as a replay, and the balance does not move', () => {
     expect(refusedAt).toBeNull();
     // POSITIVE CONTROL ON THE REPLAY ITSELF. A `201` from the second send
@@ -528,6 +569,14 @@ describe(CLAIM, () => {
     // over-application, and a law that reddened every negative balance would
     // be a false red about a lawful state.
     expect(otherBalanceMinor, `the receivable after an overpayment of ${surplus} over ${outstanding}`).toBe(0n);
+    // AND THE PER-CURRENCY HALF IS EMPTY HERE, which is a measured property
+    // of the AR function rather than an oversight: it ends in
+    // `HAVING sum <> 0`, so a customer who owes exactly nothing has NO row at
+    // all instead of a row of zero. A suite that asserted one zero entry here
+    // would be red about a correct server — and that is the same class of
+    // false red as a floor on the balance.
+    expect(otherByCurrency, 'arm B never read the second receivable').not.toBeNull();
+    expect(otherByCurrency ?? [], 'a customer who owes exactly nothing still carries a per-currency row').toStrictEqual([]);
     // AND THE SAME CLAIM THROUGH THE NAMED CHECKER, so the figure above is not
     // the only thing standing between a netted surplus and a green suite.
     const movements: readonly Movement[] = [
