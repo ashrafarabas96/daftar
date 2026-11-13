@@ -179,7 +179,29 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // Positive control first: the probe is reading a bootstrap that configures
     // CORS at all, so a passing assertion below cannot be a missing file.
     expect(main).toContain('app.enableCors(');
-    expect(main).toContain('credentials: false');
-    expect(main).not.toContain('credentials: true');
+
+    // The claim is about the ARGUMENT of that call, not about the file's text.
+    // Read over the whole file, a comment mentioning `credentials: false`
+    // elsewhere would have kept this green above a real call passing a value
+    // from config — a false green, which is the one direction a security law
+    // must never fail in. (Review of this PR, finding 1.)
+    const call = /app\.enableCors\(([\s\S]*?)\n\s*\}\);/.exec(main);
+    expect(call, 'the enableCors call could not be located to read its argument').not.toBeNull();
+    const options = call?.[1] ?? '';
+    expect(options).not.toBe('');
+    // And the located text really is the argument, not the whole file: the
+    // allowlist parse lives inside it, and the file's other content does not.
+    expect(options).toContain('parseCorsOrigins');
+    expect(options.length).toBeLessThan(main.length);
+
+    expect(options).toContain('credentials: false');
+    expect(options).not.toContain('credentials: true');
+
+    // CONSEQUENCE, named here because whoever it reddens reads this file and
+    // not a card: moving these options into a constant or another module makes
+    // this case fail for a reason that is not a security relaxation. That is
+    // failing CLOSED, and it is deliberate — the claim is that the bootstrap's
+    // own call carries `credentials: false`. Whoever moves the options moves
+    // this expectation with them, in the same commit.
   });
 });
