@@ -725,5 +725,17 @@
     ],
     "deferred": false,
     "notes": "Same shape as INV-ACC-18: the plant RAISES if the routine exists, so its acceptance is the absence, and the control RAISES if the probe cannot see a routine known to exist. This probes the migrated database only (87 migrations); it says nothing about the spec file's own trigger, which CI exercises at ci.yml:887. When a migration that installs the function lands, this case fails on purpose and must be re-cut as a refusal."
+  },
+  {
+    "id": "INV-ACC-10-no-void-invoice-routine",
+    "label": "voiding a paid invoice has no atomic routine in the database — the gap, probed with a control",
+    "mechanism": "the absence of any routine whose name contains 'void' among the migrated functions, against the presence of payment_allocation_guard",
+    "plant": "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE '%void%') THEN RAISE EXCEPTION 'a routine with void in its name exists after all'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'payment_allocation_guard') THEN RAISE EXCEPTION 'the probe cannot see a routine that does exist'; END IF; END $$"
+    ],
+    "deferred": false,
+    "notes": "Wider than INV-ACC-18, which names three exact routines: this plant refuses ANY public routine with void in its name, so a differently named void routine would also trip it. Only the absence arm is measured. The other arm in the plan -- that a transition of a paid invoice to void is accepted by the table with nothing preventing it (0075:583-584) -- needs an invoice stack and stays NOT_RUN. When a void routine lands this case fails on purpose and must be re-cut."
   }
 ]
