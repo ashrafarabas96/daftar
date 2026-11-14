@@ -764,11 +764,17 @@ const READERS_OF_RECORD = readersOfRecord(join(__dirname, '..', '..'));
 const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\s*\\(`, 'i');
 // The removal of reader-of-record CALLS from a statement used to be a regular
 // expression here: `\(([^)]*)\)`. `[^)]*` stops at the FIRST `)`, so a call
-// whose own arguments carry a parenthesis — `invoice_outstanding(array_agg(id),
-// sum(x))` — was only partly removed and the remainder was read as this read's
-// own arithmetic: a FALSE RED on a compliant statement, which is how a law gets
-// disabled rather than obeyed (card P4PERF_AL07_STRIP_UNBALANCED_PARENS, handed
-// to this lane by L1-q-10). It is now a balanced scan in
+// whose own arguments carry a parenthesis is cut at the wrong place (card
+// P4PERF_AL07_STRIP_UNBALANCED_PARENS, handed to this lane by L1-q-10). A
+// CLAIM THAT USED TO STAND HERE WAS WRONG and is corrected rather than
+// deleted: it said the defect could only invent a FALSE RED on a compliant
+// statement. Measured, the graver direction is the opposite — on
+// `invoice_outstanding(coalesce(sum(a),0))` the old cut SWALLOWED `sum(a`
+// itself and the law passed a statement that sums money. It is now a balanced
+// scan that removes the call's NAME and parentheses and LEAVES the arguments
+// in view, because a statement that writes `sum(` into a reader's argument
+// list is summing money itself and reddened before this card — accepting it
+// would be a weakening of this law, not a repair. The scan lives in
 // `tests/helpers/reader-of-record-calls.ts`, which is unit-controlled in
 // `tests-unit/l3-reader-of-record-call-strip.test.ts` — including the old
 // expression, kept there as a failing case rather than as a comment — because
