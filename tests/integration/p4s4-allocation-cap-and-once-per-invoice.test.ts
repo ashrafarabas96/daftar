@@ -429,11 +429,21 @@ describe('P4-S4 — the allocation cap and the once-per-invoice rule of POST /v1
    * THIS case. That plant (blob `2c2f7e20`) disables only the FIRST disjunct,
    * because `&&` binds tighter than `||`: measured on it, the duplicate-INVOICE
    * shape still throws H2's sentence and only the duplicate-ALLOCATION-ID shape
-   * is accepted. So the red that was recorded — the refusal that came back with
-   * `customer_payment.allocations_invalid` and NO `details.reason` — belongs to
-   * the allocation-id arm, not to this one, and the H3 finding it produced is
-   * read off that arm's response. H3 itself is unchanged: the enumeration above
-   * was corrected from a real response, only the arm it is attributed to is.
+   * is accepted.
+   *
+   * AND THE CORRECTION ITSELF WAS HALF WRONG, so it is corrected again rather
+   * than deleted: it then attributed the recorded red — the refusal carrying
+   * `customer_payment.allocations_invalid` with NO `details.reason` — to the
+   * allocation-id arm. That arm cannot produce it, and the file says so three
+   * hundred lines down: two legs sharing one allocationId point at two
+   * DIFFERENT invoices, the invoice lookup answers first, and its recorded red
+   * is `404 / customer_payment.not_found`. The only shape that reaches the
+   * routine and comes back with `allocations_invalid` and no `reason` is one
+   * payment naming ONE real invoice twice — H3's own shape — which reaches the
+   * routine only under `if (false)`. So the red belongs to the duplicate-INVOICE
+   * shape under the whole-condition plant. H3 itself is unchanged in both
+   * corrections: the enumeration above was read off a real response, and only
+   * the arm it is attributed to moved.
    */
   it('refuses two allocations to the SAME invoice, while two DISTINCT invoices get past that rule', async () => {
     requireSubject(missing, CLAIM);
