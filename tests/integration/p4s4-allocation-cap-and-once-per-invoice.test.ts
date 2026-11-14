@@ -417,20 +417,23 @@ describe('P4-S4 — the allocation cap and the once-per-invoice rule of POST /v1
    * `assertAllocations` (`receivables-payload.ts:259-261`), H3 is the routine
    * (`0081:1957`), H4 is the two UNIQUE constraints (`0081:325-326`).
    *
-   * PLANT THAT MADE THIS RED: H2's uniqueness `if` disabled by `false &&` at
-   * `receivables-payload.ts:259`. Two `it`s went red together and the duplicate
-   * request came back
-   *   `{"error":{"code":"VALIDATION_FAILED","details":{"receivablesCode":
-   *     "customer_payment.allocations_invalid"}}}`
-   * — the same code, NO `details.reason` — so this failed:
-   *   `the duplicate-invoice refusal carries H2's own sentence: expected null
-   *    to be 'a payment allocates once to each invo…'`.
+   * PLANT THAT MAKES THIS RED: the whole uniqueness `if` disabled — `if (false)`
+   * at `receivables-payload.ts:259`, blob `6deac037` -> `2cc4343b`. Measured at
+   * the payload layer, by calling `customerCollectPaymentIntentSha256` directly
+   * (no cluster, no HTTP): on `6deac037` BOTH duplicate shapes throw H2's
+   * sentence and a clean pair is accepted, which is the positive control; on
+   * `2cc4343b` both duplicate shapes are ACCEPTED.
    *
-   * THAT IS WHERE H3 CAME FROM. Before the plant this file said the next gate
-   * was a UNIQUE constraint; the run says the next gate is the ROUTINE's own
-   * `0..50 distinct open invoices` law, which classifies its refusal and
-   * therefore never reaches H4. The enumeration was corrected from the
-   * measurement, not the other way round.
+   * A NOTE THAT USED TO STAND HERE WAS WRONG, and it is corrected rather than
+   * deleted. It named `false &&` at the same line as the plant that reddened
+   * THIS case. That plant (blob `2c2f7e20`) disables only the FIRST disjunct,
+   * because `&&` binds tighter than `||`: measured on it, the duplicate-INVOICE
+   * shape still throws H2's sentence and only the duplicate-ALLOCATION-ID shape
+   * is accepted. So the red that was recorded — the refusal that came back with
+   * `customer_payment.allocations_invalid` and NO `details.reason` — belongs to
+   * the allocation-id arm, not to this one, and the H3 finding it produced is
+   * read off that arm's response. H3 itself is unchanged: the enumeration above
+   * was corrected from a real response, only the arm it is attributed to is.
    */
   it('refuses two allocations to the SAME invoice, while two DISTINCT invoices get past that rule', async () => {
     requireSubject(missing, CLAIM);
