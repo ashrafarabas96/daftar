@@ -1,0 +1,244 @@
+/**
+ * Typed SaaS-billing errors — stable machine codes, never money.
+ *
+ * Phase 5 bills the PLATFORM's own subscriptions. It is financial code, so it
+ * follows the same refusal discipline the accounting authority follows
+ * (`packages/accounting/src/errors.ts`): one closed code union, a closed
+ * context shape, and a safe representation that carries identifiers only.
+ *
+ * Why a vocabulary of its own rather than `ApiErrorCode`:
+ * `packages/domain-core/src/errors.ts` holds the HTTP contract, whose code
+ * union is shared by every app and is owned outside this slice. A prepared,
+ * not-yet-promoted phase that widened it would be editing a shared file for
+ * work that is not canonical yet. So this package refuses in its own
+ * vocabulary; mapping `billing.*` onto one HTTP code is a promotion step and
+ * is recorded as a patch request, exactly as `accounting.*` is carried under
+ * `ACCOUNTING_REFUSED` today.
+ *
+ * Why no amount ever reaches a message: a refusal is read by logs, by support
+ * and by clients. A price, a proration, a balance or a provider's reference
+ * are facts about a merchant's commercial relationship, and the one place
+ * they belong is the record the command wrote — not the error it threw.
+ */
+
+/** Every refusal this slice can produce. One string, one meaning, forever. */
+export type BillingErrorCode =
+  // Payload (the same line accounting draws: a malformed command is not a
+  // business outcome, and the two must never share a code).
+  | 'billing.payload_invalid'
+  // Billing periods — the calendar, and only the calendar.
+  | 'billing.anchor_invalid'
+  | 'billing.interval_unsupported'
+  | 'billing.as_of_before_anchor'
+  | 'billing.as_of_required'
+  | 'billing.period_index_invalid'
+  | 'billing.period_range_invalid'
+  // Proration — a plan change inside a period.
+  | 'billing.proration_outside_period'
+  | 'billing.proration_currency_mismatch'
+  | 'billing.price_invalid'
+  // Add-ons.
+  | 'billing.addon_quantity_invalid'
+  | 'billing.addon_kind_unsupported'
+  /**
+   * `TL-P5-R5` (§21): an add-on that grants a limit key whose usage the live
+   * entitlement engine does not MEASURE may not be priced as an enforced
+   * metered limit. Refused, because "no customer can be charged for a meter
+   * the system does not measure" and a sold-but-unmeasured limit is
+   * indistinguishable, from the merchant's side, from one that is enforced.
+   */
+  | 'billing.addon_meter_unmeasured'
+  // Subscription invoice composition.
+  | 'billing.invoice_empty'
+  | 'billing.invoice_currency_mismatch'
+  | 'billing.invoice_line_zero'
+  | 'billing.invoice_total_negative'
+  /**
+   * Platform subscription tax is a POLICY the owner has not settled, and this
+   * slice will not guess one. `OD-03` settled sales tax for Phase 4 as a
+   * structural zero; nothing has settled tax on the PLATFORM's own invoices,
+   * which is a different question (the platform's own jurisdiction, not the
+   * merchant's). So a non-zero tax on a subscription invoice is REFUSED here
+   * rather than normalized, ignored, or posted as a line nobody authorized.
+   * The code names no jurisdiction and carries no rate.
+   */
+  | 'billing.subscription_tax_unsupported'
+  /**
+   * The platform billing credit (`TL-P5-R3`). A negative proration creates a
+   * credit, never an automatic cash refund, and the balance is a FOLD over
+   * immutable adjustments — so these five refusals are all about the LEDGER's
+   * integrity, never about an authorization to pay money out.
+   */
+  | 'billing.credit_adjustment_replayed'
+  | 'billing.credit_reason_required'
+  | 'billing.credit_currency_mismatch'
+  /**
+   * DR-97. A credit ledger is scoped to ONE currency, and this slice holds no
+   * rate, no expiry and no reversal — so a balance left behind by a currency
+   * change can never be spent. The owner's ruling is that the CHANGE is
+   * refused while such a balance exists, not that the balance is converted:
+   * there is no rate here that anyone authorized, and inventing one would be a
+   * second financial truth. The way out is an explicit audited administrative
+   * command (a refund, or a write-off with a mandatory reason), which is a
+   * card of its own.
+   *
+   * It is a business outcome and not a payload defect: the command is
+   * well-formed, and the answer is no.
+   */
+  | 'billing.subscription_currency_locked_by_credit'
+  | 'billing.credit_ledger_out_of_order'
+  /**
+   * `TL-P5-R5` (PART 25) — the credit APPLICATION law. One business only, no
+   * transfer between businesses, allocation oldest grant first, up to the
+   * invoice amount only, payable never negative, exact conservation.
+   */
+  | 'billing.credit_business_mismatch'
+  | 'billing.credit_grant_unknown'
+  /**
+   * A consumption drawing more than the grant it names still holds. Refused,
+   * never clamped to zero: clamping would spend credit that does not exist
+   * and leave a balance that looks correct.
+   *
+   * This is the ONLY overdraw refusal. A balance-level one existed until
+   * per-grant attribution arrived and made it unreachable — see the note at
+   * its site in `credit.ts`.
+   */
+  | 'billing.credit_grant_overdrawn'
+  | 'billing.credit_application_ids_exhausted'
+  /**
+   * `DR-97` item 2 — the AUDITED ADMINISTRATIVE WRITE-OFF. Both are about the
+   * ORDER, never about paying anything out: the write-off cancels a stranded
+   * balance where it already lives, and no money leaves this slice.
+   *
+   * `unauthorized`: the issuer the caller verified is not one this command
+   * accepts. It is deliberately NARROWER than the live holders of
+   * `billing.manage` — `platform_owner` only — because refusing a legitimate
+   * order is recoverable (the owner issues it) and permitting a non-owner to
+   * cancel a customer's money is not. Whether that narrowing is the owner's
+   * final policy is an accounting question raised for them, not settled here.
+   *
+   * `no_balance`: the target currency holds no unspent credit. A business
+   * outcome and not a payload defect — the command is well-formed, and the
+   * answer is that there is nothing to cancel. It REFUSES rather than
+   * succeeding over nothing, because a command that is silent about having
+   * had no work hides the defect that sent it (the wrong currency, the wrong
+   * business, or a balance somebody already cancelled).
+   */
+  | 'billing.credit_write_off_unauthorized'
+  | 'billing.credit_write_off_no_balance'
+  // Dunning — the retry/grace schedule.
+  | 'billing.dunning_policy_invalid'
+  | 'billing.dunning_attempt_out_of_order'
+  /**
+   * The COLLECTION ATTEMPT's identity (round 6, Master Continuous Mission V3
+   * §12). A collection attempt is named by the invoice it collects and its
+   * own ordinal, and nothing else — so these two refusals are about an
+   * attempt that cannot be named, and about naming a NEW attempt while an
+   * earlier one's verdict is still unknown. The second is the one that
+   * matters: a new key after a lost response is how a merchant is charged
+   * twice by a provider that already accepted the first request, and no
+   * uniqueness in this database can undo an external debit.
+   */
+  | 'billing.collection_identity_invalid'
+  | 'billing.collection_awaiting_reconciliation'
+  /**
+   * A charge was asked for when the schedule does not say to charge. Refused
+   * rather than allowed "just in case", because a caller that can charge off
+   * schedule is a caller whose retry count is its own.
+   */
+  | 'billing.collection_not_due'
+  /**
+   * The subscription invoice's LIFECYCLE (round 6). A transition the settled
+   * contract does not allow — `draft → open → paid | uncollectible | voided`
+   * and nothing else, never backwards, never from a settled state.
+   */
+  | 'billing.invoice_state_transition_invalid'
+  // The payment provider port.
+  | 'billing.provider_idempotency_key_invalid'
+  | 'billing.provider_idempotency_conflict'
+  | 'billing.provider_amount_invalid'
+  | 'billing.provider_unavailable'
+  /*
+   * There is deliberately no `billing.provider_declined`. A decline is a
+   * RESULT on `ChargeResult.outcome`, never an exception, so a refusal code
+   * for it had no raise site anywhere in this package — it was declared for a
+   * charge-orchestration layer that does not exist here yet, which makes it a
+   * dead constant authority (PART 17). `test/error-codes-are-live.test.ts`
+   * found it. The orchestration layer will need a refusal of its own when it
+   * is built, and `P5-S0-CONTRACT-PACK.md` records that under `P5-BIL-001`
+   * rather than reserving the word here.
+   */
+  // An invariant this package states about its OWN arithmetic. It is not a
+  // payload complaint and not a business outcome: it means a result this
+  // module computed violated a law this module promises, which a caller must
+  // never be allowed to carry forward as money.
+  | 'billing.invariant_violated';
+
+/**
+ * Safe identifiers that may accompany a refusal. Deliberately a closed shape:
+ * anything not named here cannot reach an error message. In particular there
+ * is no `amountMinor`, no `priceMinor` and no `providerPayload` field, so a
+ * later edit cannot widen a refusal into a money leak by adding one argument.
+ */
+export interface BillingErrorContext {
+  readonly businessId?: string;
+  readonly planKey?: string;
+  readonly planVersionId?: string;
+  readonly addOnKey?: string;
+  /** A limit key from `limit_definitions`. A key is not a quantity. */
+  readonly limitKey?: string;
+  /** A civil instant a refusal is about, ISO-8601. An instant is not a value. */
+  readonly at?: string;
+  /** Which period, counted from the anchor. An index is not a value. */
+  readonly periodIndex?: number;
+  /** A currency code. A code is not an amount. */
+  readonly currency?: string;
+  /** The line's position in the composed invoice, 1-based. */
+  readonly lineNo?: number;
+  /** The dunning attempt's ordinal, 1-based. A count is not a value. */
+  readonly attemptNo?: number;
+  /** The provider's own reference. An identifier, like every field here. */
+  readonly providerRef?: string;
+  /** Which law of this module was violated. A name, never the numbers. */
+  readonly invariant?: string;
+}
+
+export class BillingError extends Error {
+  readonly code: BillingErrorCode;
+  readonly context: BillingErrorContext;
+
+  constructor(code: BillingErrorCode, message: string, context: BillingErrorContext = {}) {
+    super(message);
+    this.name = 'BillingError';
+    this.code = code;
+    this.context = context;
+  }
+
+  /**
+   * The only representation that should ever be logged or returned. It carries
+   * the code and the safe identifiers, and nothing else — in particular not
+   * `message`, which a future edit could accidentally widen.
+   */
+  toSafeJSON(): { code: BillingErrorCode } & BillingErrorContext {
+    return { code: this.code, ...this.context };
+  }
+}
+
+/*
+ * There is deliberately no `billingError` factory beside `refuse`.
+ *
+ * One existed until round 4 and had ZERO callers — not in `src`, not in
+ * `test`, not anywhere in the repository. Nothing constructs a billing
+ * error without throwing it, which is what `refuse` is for, and
+ * `BillingError` is exported and directly constructible for the one case
+ * that genuinely needs a value. It was found by
+ * `test/coverage-truth.test.ts`'s law that every exported value is named
+ * by some test, and it is the same class of defect as the refusal code
+ * round 3 removed: a public symbol declared for a layer that never
+ * arrived. PART 17.
+ */
+
+/** Throwing helper, so a guard reads as one expression at the point of refusal. */
+export function refuse(code: BillingErrorCode, message: string, context: BillingErrorContext = {}): never {
+  throw new BillingError(code, message, context);
+}
