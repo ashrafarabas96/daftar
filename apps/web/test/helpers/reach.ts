@@ -13,6 +13,10 @@ import { MERCHANT_ROUTE_SEGMENTS } from '../../../../scripts/guards/merchant-jar
  * Sources are PARSED, not pattern-matched: an import is an import declaration,
  * an `export … from`, a dynamic `import()` or a `require()` call — never text
  * that merely looks like one inside a string or a comment.
+ *
+ * This is a STATIC module-graph law. What it cannot see, stated: `require.context`,
+ * middleware redirects and rewrites, `next.config` rewrites, and anything a
+ * server answers at run time.
  */
 
 const WEB_SRC = 'apps/web/src';
@@ -32,8 +36,15 @@ export const SOURCE_FILE = new RegExp(String.raw`\.${SOURCE_EXT}$`);
 const ENTRY_FILE = new RegExp(
   String.raw`(?:^|/)(?:page|layout|template|loading|error|global-error|not-found|global-not-found|forbidden|unauthorized|default|route|(?:opengraph-image|twitter-image|icon|apple-icon)\d*|sitemap|robots|manifest)\.${SOURCE_EXT}$`,
 );
-/** The files outside `app/` Next.js runs on its own: the middleware and the instrumentation hooks. */
-const ROOT_ENTRY = new RegExp(String.raw`^${WEB_SRC}/(?:middleware|instrumentation|instrumentation-client)\.${SOURCE_EXT}$`);
+/**
+ * The files outside `app/` Next.js runs on its own: the middleware, the
+ * instrumentation hooks and `mdx-components`; and EVERY file of the Pages
+ * Router (`src/pages/**`, `_app` and `_document` included), where each file is
+ * a route or the frame of one.
+ */
+const ROOT_ENTRY = new RegExp(
+  String.raw`^${WEB_SRC}/(?:(?:middleware|instrumentation|instrumentation-client|mdx-components)\.${SOURCE_EXT}|pages/.+\.${SOURCE_EXT})$`,
+);
 
 /**
  * A file under the `customers` route segment: anchored at `[locale]`, with one
@@ -52,7 +63,7 @@ if (!MERCHANT_ROUTE_SEGMENTS.includes('customers')) throw new Error('the S7 rout
 
 const isEntry = (path: string): boolean => (path.startsWith(`${WEB_SRC}/app/`) && ENTRY_FILE.test(path)) || ROOT_ENTRY.test(path);
 
-/** Every file the framework itself enters: the route and special files under `app/`, and the middleware. */
+/** Every file the framework itself enters: the route and special files under `app/`, every Pages Router file, the middleware and its siblings. */
 export function entryPoints(paths: readonly string[]): string[] {
   return paths.filter(isEntry).sort();
 }
@@ -62,7 +73,7 @@ export function isCustomersEntry(path: string): boolean {
   return CUSTOMERS_ROUTE.test(path) && !INTERCEPTING_SEGMENT.test(path);
 }
 
-/** The entries of the customers route subtree, and EVERY other entry of the app (S7 segment or not, middleware included). */
+/** The entries of the customers route subtree, and EVERY other entry of the app (S7 segment or not, middleware and Pages Router included). */
 export function splitEntryPoints(paths: readonly string[]): { customers: string[]; other: string[] } {
   const all = entryPoints(paths);
   return { customers: all.filter(isCustomersEntry), other: all.filter((path) => !isCustomersEntry(path)) };
@@ -72,57 +83,23 @@ export function splitEntryPoints(paths: readonly string[]): { customers: string[
 const PACKAGE = /^(?:[A-Za-z][\w.-]*|@[A-Za-z0-9][\w.-]*\/)/;
 const EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'];
 
-/** Everything one parse of one file tells the laws. */
-interface Parsed {
+interface Imports {
   /** Module specifiers of real imports (declarations, `export … from`, `import()`/`require()` of a literal). */
   readonly specifiers: string[];
   /** `import(expr)` / `require(expr)` whose argument is not a plain string: the target cannot be known. */
   readonly computed: string[];
-  /** Every string literal that could be a catalogue key (the text of each string / no-substitution template). */
-  readonly literals: string[];
-  /** Key prefixes a template (`` `error.${code}` ``) or concatenation (`'error.' + code`) builds at run time. */
-  readonly prefixes: string[];
-  /** Key-position arguments (`t(arg)`, `translate(locale, arg)`) and key constructions this file makes that no literal or prefix reads. */
-  readonly opaque: string[];
 }
 
-const KEY_PREFIX_ONLY = /^[A-Za-z][\w-]*(?:\.[\w-]+)*\.$/;
-const KEY_TAIL = /^\.[\w-]+(?:\.[\w-]+)*$/;
-const cache = new Map<string, Parsed>();
+const cache = new Map<string, Imports>();
 
 const isStringLike = (node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
   ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
 
-/** The leftmost operand of a `+` chain. */
-function leftmost(node: ts.Expression): ts.Expression {
-  let current = node;
-  while (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) current = current.left;
-  return current;
-}
-
-/**
- * Is a key-position argument something a literal or a leading prefix explains? A plain string; a template whose static head is a
- * key prefix (`` `error.${code}` ``); a concatenation that starts with one (`'error.' + code`); a conditional of such. Anything
- * else — an identifier, a call, a member, `'pos' + '.buyer'`, `` `${ns}.${leaf}` `` — is opaque.
- */
-function explained(node: ts.Expression): boolean {
-  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))
-    return explained(node.expression);
-  if (isStringLike(node)) return true;
-  if (ts.isTemplateExpression(node)) return KEY_PREFIX_ONLY.test(node.head.text);
-  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-    const head = leftmost(node);
-    return isStringLike(head) && KEY_PREFIX_ONLY.test(head.text);
-  }
-  if (ts.isConditionalExpression(node)) return explained(node.whenTrue) && explained(node.whenFalse);
-  return false;
-}
-
-function parse(path: string, source: string): Parsed {
+function parseImports(path: string, source: string): Imports {
   const cached = cache.get(`${path}\0${source}`);
   if (cached !== undefined) return cached;
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.ES2022, true);
-  const out = { specifiers: [], computed: [], literals: [], prefixes: [], opaque: [] } as { -readonly [K in keyof Parsed]: Parsed[K] };
+  const out: { specifiers: string[]; computed: string[] } = { specifiers: [], computed: [] };
   const visit = (node: ts.Node): void => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) out.specifiers.push(node.moduleSpecifier.text);
     else if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier))
@@ -131,31 +108,10 @@ function parse(path: string, source: string): Parsed {
       out.specifiers.push(node.moduleReference.expression.text);
     } else if (ts.isCallExpression(node)) {
       const callee = node.expression;
-      const first = node.arguments[0];
-      const loads = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === 'require');
-      if (loads) {
+      if (callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === 'require')) {
+        const first = node.arguments[0];
         if (first !== undefined && isStringLike(first)) out.specifiers.push(first.text);
         else out.computed.push(node.getText(file));
-      }
-      if (ts.isIdentifier(callee) && (callee.text === 't' || callee.text === 'translate')) {
-        const key = callee.text === 't' ? first : node.arguments[1];
-        if (key !== undefined && !explained(key)) out.opaque.push(`${callee.text}(${key.getText(file)})`);
-      }
-      // `[a, 'buyer'].join('.')` and `a.concat('.buyer')` build a key whatever calls them.
-      if (ts.isPropertyAccessExpression(callee) && first !== undefined && isStringLike(first)) {
-        if (callee.name.text === 'join' && first.text === '.') out.opaque.push(node.getText(file));
-        if (callee.name.text === 'concat' && KEY_TAIL.test(first.text)) out.opaque.push(node.getText(file));
-      }
-    } else if (isStringLike(node)) {
-      out.literals.push(node.text);
-    } else if (ts.isTemplateExpression(node)) {
-      if (KEY_PREFIX_ONLY.test(node.head.text)) out.prefixes.push(node.head.text);
-    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
-      const head = leftmost(node);
-      if (isStringLike(head) && KEY_PREFIX_ONLY.test(head.text)) out.prefixes.push(head.text);
-      // `x + '.buyer'`: a key tail on a non-literal head.
-      if (isStringLike(node.right) && KEY_TAIL.test(node.right.text) && !isStringLike(node.left) && !(isStringLike(head) && KEY_PREFIX_ONLY.test(head.text))) {
-        out.opaque.push(node.getText(file));
       }
     }
     ts.forEachChild(node, visit);
@@ -174,7 +130,7 @@ function parse(path: string, source: string): Parsed {
  */
 export function importsOf(path: string, source: string, files: Readonly<Record<string, string>>): { resolved: string[]; unresolved: string[] } {
   const resolved: string[] = [];
-  const parsed = parse(path, source);
+  const parsed = parseImports(path, source);
   const unresolved: string[] = [...parsed.computed];
   for (const spec of parsed.specifiers) {
     if (spec.endsWith('.json')) continue;
@@ -220,8 +176,8 @@ export function reachedFrom(files: Readonly<Record<string, string>>, entries: re
  * The files only the customers route subtree uses: reached from a customers
  * entry and from NO other entry of the app (any page, layout, route handler or
  * special file anywhere under `app/`, an intercepting route in the customers
- * folder, and the middleware). This is the one place a customer may be named,
- * derived from the import graph and not from any list.
+ * folder, a Pages Router file, and the middleware). This is the one place a
+ * customer may be named, derived from the import graph and not from any list.
  *
  * CONSUMERS. A file no entry reaches at all (a view registry, which
  * `loadViewRegistries` requires in every `views/<area>/` and no page imports; a
@@ -232,8 +188,8 @@ export function reachedFrom(files: Readonly<Record<string, string>>, entries: re
  * consumer too). It does NOT matter what else it imports: a registry imports
  * the shared `defineView` as well. An unreached file that imports NO
  * customers-only file stays out, however it names a customer: dead code is not
- * an exemption. RESIDUAL, stated: an otherwise-dead file that really imports a
- * customers-only file is excused with the slice.
+ * an exemption. RESIDUAL, stated: an otherwise-dead file (a library included)
+ * that really imports a customers-only file is excused with the slice.
  *
  * Monotone by construction: an entry that is not under `customers` can only
  * add to what "every other entry" reaches, so it can only shrink this set (the
@@ -257,36 +213,4 @@ export function customersOnly(files: Readonly<Record<string, string>>): Set<stri
     }
   }
   return only;
-}
-
-/**
- * The catalogue keys a set of sources refers to: every string that is a key,
- * and — unless `literalsOnly` — EVERY key under the prefix a template or
- * concatenation names (`` `error.${code}` ``, `'error.' + code`): the code
- * cannot be shown to avoid any member of it.
- *
- * `literalsOnly` is for the files that ask to be EXCUSED (the customers-only
- * ones): an excuse needs the specific key spelled out, never a whole prefix.
- */
-export function referencedKeys(sources: readonly string[], catalogKeys: readonly string[], options: { literalsOnly?: boolean } = {}): Set<string> {
-  const known = new Set(catalogKeys);
-  const out = new Set<string>();
-  sources.forEach((source, index) => {
-    const parsed = parse(`#${index}.tsx`, source);
-    for (const literal of parsed.literals) if (known.has(literal)) out.add(literal);
-    if (options.literalsOnly !== true) {
-      for (const prefix of parsed.prefixes) for (const key of catalogKeys) if (key.startsWith(prefix)) out.add(key);
-    }
-  });
-  return out;
-}
-
-/**
- * The key-position arguments and key constructions in `sources` that no literal
- * or leading prefix explains: `t(k)`, `t(a + b)`, `t('pos' + '.buyer')`,
- * `` t(`${ns}.${leaf}`) ``, `t(copy.key)`, `x + '.buyer'`, `.join('.')`. Any one
- * of them means the file could read ANY key, so no key may be excused.
- */
-export function opaqueKeyUses(sources: readonly string[]): string[] {
-  return sources.flatMap((source, index) => parse(`#${index}.tsx`, source).opaque);
 }

@@ -6,7 +6,7 @@ import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
 import { isS7Key, isS7WebFile, stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { REPO_ROOT } from './helpers/refusal-codes';
-import { SOURCE_FILE, customersOnly, entryPoints, importsOf, isCustomersEntry, opaqueKeyUses, reachedFrom, referencedKeys } from './helpers/reach';
+import { SOURCE_FILE, customersOnly, entryPoints, importsOf, isCustomersEntry, reachedFrom } from './helpers/reach';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
@@ -46,8 +46,10 @@ import { SOURCE_FILE, customersOnly, entryPoints, importsOf, isCustomersEntry, o
  *
  * WHAT IS NOT WEAKENED, and is now asserted where it was previously implied:
  *
- *   - no `.tsx` — no screen, no view — names a tax element or a customer, by
- *     exactly the rule that was there before;
+ *   - no `.tsx` — no screen, no view — names a tax element, by exactly the
+ *     rule that was there before; and none names a customer unless only the
+ *     customers route uses it (derived from the import graph, never listed: see
+ *     `THE CUSTOMER RULES, BY REACH` below);
  *   - no `.ts` client library names a tax RATE, EXEMPTION, THRESHOLD,
  *     JURISDICTION, REGISTRATION or INCLUSIVE/EXCLUSIVE spelling: the
  *     structural zero is a position, and a policy is what `OD-03` forbids;
@@ -217,55 +219,56 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   /**
    * ── THE CUSTOMER RULES, BY REACH ───────────────────────────────────────
    *
-   * This law used to say "no S7 `.tsx` names a customer, no S7 key names one,
-   * a library may set `customerId` from null only" over EVERY S7 file and key.
-   * That is a rule about WORDS and WHERE THEY LIVE; the behaviour it protects
-   * is that the till, stock, purchasing, suppliers and sales surfaces do not
-   * OFFER or NAME a customer. The customers slice is where that idea belongs,
-   * so a text rule over every S7 path fails the day the slice ships — and a
-   * law that fails for the right code is the law that gets disabled. DR-154/4
-   * forbids the exemption, so the one carve-out is DERIVED from the import
-   * graph, never listed, and nothing else is narrowed:
+   * This law used to say "no S7 `.tsx` names a customer, a library may set
+   * `customerId` from null only" over EVERY S7 file. That is a rule about WORDS
+   * and WHERE THEY LIVE; the behaviour it protects is that the till, stock,
+   * purchasing, suppliers and sales surfaces do not OFFER or NAME a customer.
+   * The customers slice is where that idea belongs, so a text rule over every
+   * S7 path fails the day the slice ships — and a law that fails for the right
+   * code is the law that gets disabled. DR-154/4 forbids the exemption, so the
+   * one carve-out is DERIVED from the import graph, never listed, and nothing
+   * else is narrowed:
    *
    *   - CUSTOMERS ENTRIES: page/layout/route/special files under the
-   *     `customers` route segment (anchored at `[locale]`);
+   *     `customers` route segment (anchored at `[locale]`, intercepting
+   *     segments excluded);
    *   - EVERY OTHER ENTRY: every other file Next.js enters — pages, layouts,
    *     route handlers and special files anywhere under `app/` (S7 segments
-   *     or not), and `src/middleware.ts` and the instrumentation hooks, in any
-   *     source extension (`tsconfig` has `allowJs`);
+   *     or not), every Pages Router file (`src/pages/**`), `src/middleware`,
+   *     the instrumentation hooks and `mdx-components`, in any source
+   *     extension (`tsconfig` has `allowJs`);
    *   - CUSTOMERS-ONLY FILES: reach(customers entries) minus reach(every other
    *     entry). A customers view a till page, the shared header or the
    *     middleware imports is NOT customers-only. To these join the CONSUMERS:
    *     a file no entry reaches at all (a `views/<area>/registry.ts`, which
    *     `loadViewRegistries` requires in every views folder and no page
-   *     imports) that imports at least one customers-only file, repeatedly;
-   *     what else it imports (the shared `defineView`) does not matter;
+   *     imports) that REALLY imports at least one customers-only file,
+   *     repeatedly; what else it imports (the shared `defineView`) does not
+   *     matter;
    *   - SCANNED FILES: every file `isS7WebFile` accepts (the existing
    *     definition, unchanged) except the customers-only ones. A file nothing
    *     imports and that imports no customers-only file is scanned, because
    *     dead code is not an exemption, wherever it lives;
-   *   - SCANNED KEYS: every `isS7Key` catalogue key except those referenced
-   *     ONLY by customers-only files. A reference is a string literal, or a
-   *     template / concatenation that builds a key under a prefix
-   *     (`error.${code}`, `nav.${item.key}`), which references EVERY key under
-   *     that prefix; the references of every file that is not customers-only
-   *     count, S7 or not. The excuse needs the SPECIFIC key spelled out as a
-   *     literal in a customers-only file (a prefix there excuses nothing) and it
-   *     FAILS CLOSED: if ANY file outside the customers-only set reads a key in a
-   *     way no literal and no leading prefix explains (`t(k)`, `t(a + b)`,
-   *     `t(copy.key)`, `${ns}.${leaf}`, `.join(...)`, `x + '.buyer'`), it could read any
-   *     key, so NOTHING is excused. Every locale of every scanned key is read.
-   *     MEASURED CONSEQUENCE: 16 files of the tree today pass a variable to
-   *     `t()` (`t(props.errorKey)` and the like), so no key is excused today;
-   *     the customers slice's own keys are scanned until those reads are made
-   *     explicit. That is the law being strict, not a bug to exempt by name.
+   *   - SCANNED KEYS: EVERY `isS7Key` catalogue key, in all three locales,
+   *     with the receivables refusal allowance exactly as on main. KEY
+   *     VOCABULARY IS NOT EXCUSED BY REACH: there is no key exemption. A
+   *     `customers.*` key naming a customer is scanned like any other, and the
+   *     slice must satisfy the key rule on its own.
    *
-   * RESIDUALS, stated: (1) an otherwise-dead file that REALLY imports a
-   * customers-only file is excused with the slice; (2) a key read through a
-   * function other than `t`/`translate`, or from data (an API answer), is not
-   * seen; (3) `.js` files are walked and can make a customers file reached, but
-   * are not themselves scanned for vocabulary (`isS7WebFile` is `.ts`/`.tsx` only);
-   * (4) Next intercepting routes under `customers` count as other entries.
+   * Reach decides which FILES are scanned, because a file's reach is something
+   * the import graph shows. It does not decide which KEYS are scanned, because
+   * who reads a key is not: `t(props.errorKey)`, `translate(locale, key)` and
+   * a catalogue read through any other function are invisible to a static
+   * walk, so any excuse built on them would be dead or would fail open.
+   *
+   * RESIDUALS, stated (a static module-graph law cannot see them):
+   * (1) an otherwise-dead file, a library included, that REALLY imports a
+   * customers-only file is excused with the slice; (2) `require.context`,
+   * middleware redirects and `next.config` rewrites change what is reached at
+   * run time and are invisible here; (3) `.js` files are walked and can make a
+   * customers file reached, but are not themselves scanned for vocabulary
+   * (`isS7WebFile` is `.ts`/`.tsx` only); (4) Next intercepting routes under
+   * `customers` count as other entries.
    *
    * Adding a page that is not under `customers` can only GROW the scanned set
    * (it adds to what "every other entry" reaches). Adding a customers page can
@@ -275,11 +278,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    * synthetic tree that has a customers route (main has none yet), and plants
    * on the repository itself.
    *
-   * KNOWN CONSEQUENCE, stated: the shared header builds `nav.${item.key}` and
-   * every merchant page renders it, so a `nav.customers` catalogue key IS
-   * scanned and, naming a customer, fails this law. That is the law working,
-   * not a bug to exempt by name; it is the coordinator's and the owner's open
-   * decision (see the PR notes), shown below on a synthetic catalogue.
+   * KNOWN CONSEQUENCE, stated: the catalogue keys `nav.customers` and
+   * `customers.*` are S7 keys naming a customer, so they fail this law, as they
+   * failed the rule on main. That is the law working, not a bug to exempt by
+   * name; it is the coordinator's and the owner's open decision (see the PR
+   * notes), shown below on a synthetic catalogue.
    */
   const CUSTOMER_WORD = /customer|عميل|عملاء|müşteri/i;
   const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
@@ -290,7 +293,6 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     readonly screens: string[];
     readonly libraries: string[];
     readonly s7Keys: string[];
-    readonly excludedKeys: string[];
     readonly keys: string[];
     readonly hits: string[];
   }
@@ -312,28 +314,15 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       }
     }
     const s7Keys = [...new Set(Object.values(catalogs).flatMap((catalog) => Object.keys(catalog)))].filter((key) => isS7Key(key)).sort();
-    // An EXCUSE needs the specific key spelled out in a customers-only file: a prefix (`pos.${x}`) there excuses nothing.
-    const fromCustomers = referencedKeys(
-      [...only].map((path) => files[path] ?? ''),
-      s7Keys,
-      { literalsOnly: true },
-    );
-    const restSources = Object.keys(files)
-      .filter((path) => !only.has(path))
-      .map((path) => files[path] ?? '');
-    const fromRest = referencedKeys(restSources, s7Keys);
-    // FAIL CLOSED: if ANY file outside the customers-only set reads a key in a way no literal and no leading prefix explains
-    // (`t(k)`, `t('pos' + '.buyer')`, `` t(`${ns}.${leaf}`) ``, `t(copy.key)`, `x + '.buyer'`, `.join('.')`), it could read any
-    // key, so NOTHING is excused.
-    const excludedKeys = opaqueKeyUses(restSources).length > 0 ? [] : [...fromCustomers].filter((key) => !fromRest.has(key)).sort();
-    const keys = s7Keys.filter((key) => !excludedKeys.includes(key));
+    // EVERY S7 key is scanned, in every locale: key vocabulary is not excused by reach.
+    const keys = s7Keys;
     for (const key of keys) {
       if (receivablesKey(key)) continue;
       for (const [locale, catalog] of Object.entries(catalogs)) {
         if (key in catalog && CUSTOMER_WORD.test(`${key} ${catalog[key]}`)) hits.push(`key ${locale}: ${key}`);
       }
     }
-    return { customersOnly: [...only].sort(), scanned, screens, libraries, s7Keys, excludedKeys, keys, hits };
+    return { customersOnly: [...only].sort(), scanned, screens, libraries, s7Keys, keys, hits };
   }
 
   function repositorySources(): Record<string, string> {
@@ -350,7 +339,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     return out;
   }
 
-  const SYNTHETIC_CATALOG = { en: { 'pos.title': 'Till', 'customers.title': 'Customers', 'stock.title': 'Stock' } };
+  const SYNTHETIC_CATALOG = { en: { 'pos.title': 'Till', 'stock.title': 'Stock' } };
   const A = 'apps/web/src/app/[locale]';
   const TILL = 'apps/web/src/views/pos/TillView.tsx';
   const HEADER = `${A}/AppHeader.tsx`;
@@ -407,7 +396,6 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     for (const path of [TILL, PANEL, 'apps/web/src/views/stock/StockView.tsx', 'apps/web/src/lib/phase4-pos-api.ts'])
       expect(clean.scanned, path).toContain(path);
     expect(clean.keys).toEqual(['pos.title', 'stock.title']);
-    expect(clean.excludedKeys).toEqual(['customers.title']);
     // NEGATIVE: a customer word planted in a till screen, in a shared view every page renders, in a stock screen.
     for (const path of [TILL, PANEL, 'apps/web/src/views/stock/StockView.tsx']) {
       expect(customerLaw(syntheticTree({ [path]: 'export const X = () => customer.name;' }), SYNTHETIC_CATALOG).hits, path).toEqual([`screen ${path}`]);
@@ -437,7 +425,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       [`${A}/pos/till/page.tsx`]: "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView;",
     });
     expect(direct.customersOnly).toEqual([`${A}/customers/page.tsx`]);
-    expect(direct.hits).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`, `screen ${CV}/CustomerListView.tsx`, 'key en: customers.title']));
+    expect(direct.hits).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`, `screen ${CV}/CustomerListView.tsx`]));
     // Through a shared S7 view, and through the (non-S7) shared header.
     expect(smuggled({ [PANEL]: `${importAccount}export const Panel = CustomerAccountView;` }).hits).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
     expect(smuggled({ [HEADER]: `${importAccount}export const PageShell = CustomerAccountView;` }).hits).toEqual([`screen ${ACCOUNT}`]);
@@ -451,54 +439,41 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(customerLaw(syntheticTree(), SYNTHETIC_CATALOG).hits).toEqual([]);
   });
 
-  it('REACH, unit level: keys — every S7 key is scanned, run-time prefixes cover their namespace, and only customers-only references excuse a key', () => {
+  it('REACH, unit level: key vocabulary is NOT excused by reach — every S7 key is scanned, whoever names it', () => {
     const catalog = {
       en: {
         ...SYNTHETIC_CATALOG.en,
         'error.sale.customer_required': 'Choose a customer',
         'common.buyerNote': 'Buyer: a customer',
         'pos.buyer': 'Choose a customer',
+        'customers.title': 'Customers',
+        'common.cancel': 'Cancel',
       },
     };
-    // A key nothing names is still scanned: an unreferenced key is not an exemption.
-    expect(customerLaw(syntheticTree(), catalog).hits).toEqual(['key en: common.buyerNote', 'key en: error.sale.customer_required', 'key en: pos.buyer']);
-    // A key referenced ONLY by a customers-only file is the customers slice's...
-    const onlyCustomers = customerLaw(syntheticTree({ [ACCOUNT]: "export const CustomerAccountView = () => t('common.buyerNote');" }), catalog);
-    expect(onlyCustomers.excludedKeys).toEqual(['common.buyerNote', 'customers.title']);
-    expect(onlyCustomers.hits).toEqual(['key en: error.sale.customer_required', 'key en: pos.buyer']);
-    // ...and the day any other file names it, it is not.
-    const both = customerLaw(
+    const keyHits = ['key en: common.buyerNote', 'key en: customers.title', 'key en: error.sale.customer_required', 'key en: pos.buyer'];
+    // A key nothing names is scanned: an unreferenced key is not an exemption.
+    expect(customerLaw(syntheticTree(), catalog).hits).toEqual(keyHits);
+    // A key only a customers-only file names is scanned all the same: the slice's own `customers.*` keys included.
+    const named = customerLaw(
       syntheticTree({
-        [ACCOUNT]: "export const CustomerAccountView = () => t('common.buyerNote');",
-        [PANEL]: "export const Panel = () => t('common.buyerNote');",
+        [ACCOUNT]: "export const CustomerAccountView = () => t('common.buyerNote') + t('pos.buyer') + t('customers.title') + t('common.cancel');",
       }),
       catalog,
     );
-    expect(both.hits).toContain('key en: common.buyerNote');
-    // A key built at run time references every key under its prefix — for the files that READ keys. A customers-only file that
-    // builds `error.${code}` excuses NOTHING by itself: an excuse needs the specific literal key.
-    const dynamicByCustomers = customerLaw(syntheticTree({ [ACCOUNT]: 'export const CustomerAccountView = (code) => t(`error.${code}`);' }), catalog);
-    expect(dynamicByCustomers.excludedKeys).not.toContain('error.sale.customer_required');
-    expect(dynamicByCustomers.hits).toContain('key en: error.sale.customer_required');
-    // The shared library builds it as well (as `phase3-errors.ts` does): scanned and flagged all the same.
-    const dynamicShared = customerLaw(
-      syntheticTree({
-        [ACCOUNT]: 'export const CustomerAccountView = (code) => t(`error.${code}`);',
-        'apps/web/src/lib/phase3-errors.ts': 'export const refusalKey = (code) => `error.${code}`;',
-      }),
-      catalog,
-    );
-    expect(dynamicShared.hits).toContain('key en: error.sale.customer_required');
-    expect(customerLaw(syntheticTree({ [PANEL]: "export const Panel = (code) => t('error.' + code);" }), catalog).hits).toContain(
-      'key en: error.sale.customer_required',
-    );
+    expect(named.hits).toEqual(keyHits);
+    expect(named.keys).toEqual([...named.s7Keys]);
+    // The customers page and its views are customers-only FILES, and their keys are still scanned.
+    expect(named.customersOnly).toContain(ACCOUNT);
+    // POSITIVE: a key that does not name a customer passes wherever it is named.
+    expect(named.hits).not.toContain('key en: common.cancel');
+    expect(customerLaw(syntheticTree(), SYNTHETIC_CATALOG).keys).toEqual(['pos.title', 'stock.title']);
     // The shared header builds `nav.${key}`: `nav.customers` is an S7 nav key naming a customer, so it is scanned and flagged.
     // Deliberate and OPEN (see the PR notes): not worked around by name.
     const nav = customerLaw(syntheticTree({ [HEADER]: 'export const PageShell = (item) => t(`nav.${item.key}`);' }), {
       en: { ...SYNTHETIC_CATALOG.en, 'nav.customers': 'Customers' },
     });
     expect(nav.hits).toEqual(['key en: nav.customers']);
-    // Referenced only by the customers page it is excused, which is what a code fix for the nav would have to achieve.
+    // Even when only the customers page names it.
     const navOnlyCustomers = customerLaw(
       syntheticTree({
         [`${A}/customers/page.tsx`]:
@@ -506,7 +481,13 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       }),
       { en: { ...SYNTHETIC_CATALOG.en, 'nav.customers': 'Customers' } },
     );
-    expect(navOnlyCustomers.hits).toEqual([]);
+    expect(navOnlyCustomers.hits).toEqual(['key en: nav.customers']);
+    // The receivables refusal allowance is the only one, and it is exactly as on main (a registered code, nothing wider).
+    const code = RECEIVABLES_CODES[0] ?? '';
+    expect(customerLaw(syntheticTree(), { en: { ...SYNTHETIC_CATALOG.en, [`error.${code}`]: 'Customer payment refused' } }).hits).toEqual([]);
+    expect(customerLaw(syntheticTree(), { en: { ...SYNTHETIC_CATALOG.en, [`error.${code}x`]: 'Customer payment refused' } }).hits).toEqual([
+      `key en: error.${code}x`,
+    ]);
   });
 
   /**
@@ -528,23 +509,6 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       expect(law.customersOnly, what).not.toContain(ACCOUNT);
       expect(law.hits, what).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
     }
-  });
-
-  it('BOUNDARY (b): a key a non-S7 shared file reads is scanned, whoever else reads it', () => {
-    const catalog = { en: { ...SYNTHETIC_CATALOG.en, 'invoices.note.customerOwes': 'Customer owes' } };
-    const COPY = 'apps/web/src/lib/shared-copy.ts';
-    expect(isS7WebFile(COPY)).toBe(false);
-    const read = {
-      [COPY]: "export const copy = (t) => t('invoices.note.customerOwes');",
-      [`${CV}/CustomerListView.tsx`]:
-        "import { copy } from '@/lib/shared-copy';\nimport { CustomerAccountView } from './CustomerAccountView';\nexport const CustomerListView = () => copy + CustomerAccountView + t('customers.title') + t('invoices.note.customerOwes');",
-    };
-    // Read by a customers-only view alone: excused.
-    expect(customerLaw(syntheticTree(read), catalog).hits).toEqual([]);
-    expect(customerLaw(syntheticTree(read), catalog).excludedKeys).toEqual(expect.arrayContaining(['invoices.note.customerOwes']));
-    // Read by a non-S7 file that something other than the customers slice reaches: scanned and flagged.
-    const shared = customerLaw(syntheticTree({ ...read, [TILL]: "import { copy } from '@/lib/shared-copy';\nexport const TillView = () => copy;" }), catalog);
-    expect(shared.hits).toEqual(['key en: invoices.note.customerOwes']);
   });
 
   it('BOUNDARY (c): the customers route matcher is anchored at [locale]', () => {
@@ -723,85 +687,36 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     );
   });
 
-  it('BOUNDARY (h): keys FAIL CLOSED — any key read in a way no literal or leading prefix explains excuses nothing', () => {
+  it('BOUNDARY (h): there is no key exemption, so no way of READING a key can change what is scanned', () => {
     const catalog = { en: { ...SYNTHETIC_CATALOG.en, 'pos.buyer': 'Choose a customer' } };
     const customersPage = {
       [`${A}/customers/page.tsx`]:
         "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView + t('pos.buyer');",
     };
-    // POSITIVE: a plain-literal key only the customers page names is excused, so the excuse is not dead.
-    const excused = customerLaw(syntheticTree(customersPage), catalog);
-    expect(excused.excludedKeys).toEqual(['customers.title', 'pos.buyer']);
-    expect(excused.hits).toEqual([]);
-    // NEGATIVE: the till reads keys in a way nothing resolves; the customers page names the same key; main is red, so this must be.
-    const constructions: Record<string, string> = {
+    const base = customerLaw(syntheticTree(customersPage), catalog);
+    expect(base.hits).toEqual(['key en: pos.buyer']);
+    // Whatever the till does with the key — read it plainly, build it, alias the translator, pass it round — the answer is the same.
+    const reads: Record<string, string> = {
+      'a plain literal': "export const TillView = () => t('pos.buyer');",
       'a template into a variable': 'export const TillView = (ns, leaf) => {\n  const k = `${ns}.${leaf}`;\n  return t(k);\n};',
       'a concatenation of two literals': "export const TillView = () => t('pos' + '.buyer');",
       'a split literal': "export const TillView = () => t('pos.buy' + 'er');",
       'a template with a literal interpolation': "export const TillView = () => t(`pos${'.buyer'}`);",
-      'a template with a dynamic head': 'export const TillView = (ns) => t(`${ns}.buyer`);',
-      'a concatenation with a dynamic head': "export const TillView = (NS) => t(NS + '.buyer');",
-      'a slice': 'export const TillView = (k) => t(k.slice(0, 9));',
-      'a replace': "export const TillView = (k) => t(k.replace('x', 'pos.buyer'));",
       'a join on a variable separator': "export const TillView = (a, SEP) => t([a, 'buyer'].join(SEP));",
-      'a join on a dot': "export const TillView = (a) => t([a, 'buyer'].join('.'));",
-      'a concat method': "export const TillView = (a) => t(a.concat('.buyer'));",
-      'a bare variable': 'export const TillView = (key) => t(key);',
-      'a member': 'export const TillView = (copy) => t(copy.buyerKey);',
-      'a call': 'export const TillView = (code) => t(refusalKey(code));',
       'a key imported from a json file': "import copy from '@/messages/keys.json';\nexport const TillView = () => t(copy.buyerKey);",
-      'the same through translate()': 'export const TillView = (locale, key) => translate(locale, key);',
-      'a tail built outside any t() call': "export const buyerKey = (NS) => NS + '.buyer';",
+      'an aliased translator': "const tt = t;\nexport const TillView = () => tt('pos.buyer');",
+      'a translator in an object': "export const TillView = (label) => ({ t: label }).t('pos.buyer');",
+      'a translator mapped over keys': 'export const TillView = (ks) => ks.map(t);',
+      'a translator called with call': "export const TillView = () => t.call(null, 'pos.buyer');",
+      'a translator made on the spot': 'export const TillView = (l, k) => makeT(l)(k);',
+      'a translator on props': 'export const TillView = (props) => props.t(props.key);',
+      'a dictionary read': 'export const TillView = (dicts, locale, key) => dicts[locale][key];',
     };
-    for (const [what, view] of Object.entries(constructions)) {
+    for (const [what, view] of Object.entries(reads)) {
       const law = customerLaw(syntheticTree({ ...customersPage, [TILL]: view }), catalog);
-      // Every excuse is withdrawn: the slice's own `customers.title` is scanned too, and the planted key is flagged.
-      expect(law.excludedKeys, what).toEqual([]);
-      expect(law.hits, what).toEqual(['key en: customers.title', 'key en: pos.buyer']);
+      expect(law.hits, what).toEqual(['key en: pos.buyer']);
+      expect(law.keys, what).toEqual([...law.s7Keys]);
     }
-    // The opaque read can be ANYWHERE outside the customers-only files: a shared non-S7 file, the header, a route handler.
-    for (const path of ['apps/web/src/lib/anything.ts', HEADER, 'apps/web/src/app/api/x/route.ts']) {
-      const law = customerLaw(syntheticTree({ ...customersPage, [path]: 'export const f = (k) => t(k);' }), catalog);
-      expect(law.hits, path).toContain('key en: pos.buyer');
-    }
-    // What IS explained keeps the excuse: literals, a leading prefix, a conditional of literals, a concatenation that starts with a prefix.
-    for (const view of [
-      "export const TillView = () => t('pos.title');",
-      "export const TillView = (x) => t('stock.' + x + '.title');",
-      'export const TillView = (x) => t(`stock.${x}`);',
-      "export const TillView = (x) => t(x ? 'pos.title' : 'stock.title');",
-      "export const TillView = (n) => t('pos.title', { n });",
-    ]) {
-      const law = customerLaw(syntheticTree({ ...customersPage, [TILL]: view }), catalog);
-      expect(law.hits, view).toEqual([]);
-    }
-    // A prefix in the rest still covers every key under it (`pos.${x}` reads `pos.buyer`): not excused, flagged.
-    expect(customerLaw(syntheticTree({ ...customersPage, [TILL]: 'export const TillView = (x) => t(`pos.${x}`);' }), catalog).hits).toEqual([
-      'key en: pos.buyer',
-    ]);
-    // A customers-only file never excuses a whole prefix by itself, however it builds the key.
-    const prefixOnly = {
-      [`${A}/customers/page.tsx`]:
-        "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView + t(`pos.${'x'}`);",
-    };
-    expect(customerLaw(syntheticTree(prefixOnly), catalog).hits).toEqual(['key en: pos.buyer']);
-    // ...and an opaque read in a customers-only file does not widen anything: only the rest decides.
-    const opaqueByCustomers = customerLaw(
-      syntheticTree({ ...customersPage, [ACCOUNT]: 'export const CustomerAccountView = (k) => t(k) + customer.name;' }),
-      catalog,
-    );
-    expect(opaqueByCustomers.hits).toEqual([]);
-    // The extractor itself.
-    expect(opaqueKeyUses(["t(NS + '.buyer'); t(`${a}.title`); t(`${a}.${b}`); t(k); t(`error.${c}`); t('error.' + c); t('a.b'); t(`a.b`);"])).toEqual([
-      "t(NS + '.buyer')",
-      "NS + '.buyer'",
-      't(`${a}.title`)',
-      't(`${a}.${b}`)',
-      't(k)',
-    ]);
-    expect(opaqueKeyUses(["const s = `${whole}.${fraction}`; const p = base + '/x'; const j = a + 'b'; x.t('k'); const note = \"t(k)\"; // t(k)\n"])).toEqual(
-      [],
-    );
   });
 
   it('BOUNDARY (i): entries in any source extension and the newer Next special files are entries', () => {
@@ -919,6 +834,37 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(entryPoints(js.map((name) => `${A}/pos/${name.replace('a.', 'page.')}`))).toHaveLength(4);
   });
 
+  it('BOUNDARY (o): Pages Router files and mdx-components are entries', () => {
+    const view = `${importAccount}export default () => CustomerAccountView;`;
+    const P = 'apps/web/src/pages';
+    expect(
+      entryPoints([
+        `${P}/index.tsx`,
+        `${P}/_app.tsx`,
+        `${P}/_document.tsx`,
+        `${P}/api/ping.ts`,
+        `${P}/old/[id].jsx`,
+        'apps/web/src/mdx-components.tsx',
+        'apps/web/src/mdx-components.js',
+      ]),
+    ).toHaveLength(7);
+    // `pages` anywhere else is not the Pages Router.
+    expect(entryPoints([`${A}/pages/x.tsx`, 'apps/web/src/views/pages/x.tsx', 'apps/web/src/lib/pages.ts', `${P}/readme.md`])).toEqual([]);
+    const reaching: Record<string, Record<string, string>> = {
+      'a pages-router page': { [`${P}/old/index.tsx`]: view },
+      _app: { [`${P}/_app.tsx`]: view },
+      'a pages-router api route': { [`${P}/api/export.ts`]: view },
+      'a dynamic pages-router page': { [`${P}/old/[id].jsx`]: view },
+      'mdx-components': { 'apps/web/src/mdx-components.tsx': view },
+    };
+    for (const [what, extra] of Object.entries(reaching)) {
+      const law = customerLaw(syntheticTree(extra), SYNTHETIC_CATALOG);
+      // The customers view is reached from an entry that does not render under /customers: not customers-only, and flagged.
+      expect(law.customersOnly, what).not.toContain(ACCOUNT);
+      expect(law.hits, what).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
+    }
+  });
+
   it('REACH, repository: the scope is every S7 file and key except the derived customers-only set, and none names a customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
@@ -961,7 +907,9 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     const mainKeys = [...new Set([...Object.keys(ar), ...Object.keys(en), ...Object.keys(tr)])].filter((key) => isS7Key(key));
     expect(mainKeys.length).toBeGreaterThan(500);
     expect(law.s7Keys).toEqual(mainKeys.slice().sort());
-    expect(law.keys.length).toBe(mainKeys.length - law.excludedKeys.length);
+    // No key is excused by reach: the scanned key set IS main's.
+    expect(law.keys).toEqual(mainKeys.slice().sort());
+    expect(law.keys.length).toBe(mainKeys.length);
     expect(law.keys).toContain('pos.title');
     expect(law.keys).toContain('common.loading');
     // The law itself.
