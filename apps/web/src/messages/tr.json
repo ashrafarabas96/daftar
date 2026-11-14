@@ -913,5 +913,9 @@
   "error.invoice_settlement.settlement_inconsistent": "Tarafımızda bir sorun oluştu ve hiçbir şey kaydedilmedi. Lütfen yeniden deneyin ve sorun sürerse bize bildirin.",
   "error.customer_payment.arithmetic_invalid": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
   "error.customer_payment.registry_incomplete": "Bizim tarafımızda bir sorun oluştu. Hiçbir şey kaydedilmedi. Tekrar deneyin; sorun sürerse destekle iletişime geçin.",
-  "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin."
+  "pos.search.narrow": "En yakın sonuçlar gösteriliyor. Daraltmak için yazmaya devam edin.",
+  "nav.customers": "Müşteriler",
+  "customers.list.title": "Müşteriler",
+  "customers.list.empty": "Henüz müşteri yok",
+  "customers.list.contact": "İlgili kişi: {name}"
 }
