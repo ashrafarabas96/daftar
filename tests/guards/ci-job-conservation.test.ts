@@ -285,7 +285,8 @@ function checkNames(ciText: string): Map<string, string> {
   for (let i = from + 1; i < lines.length; i += 1) {
     const id = /^ {2}([A-Za-z0-9_-]+):$/.exec(lines[i] ?? '')?.[1];
     if (id === undefined) continue;
-    const name = /^ {4}name:\s*(.+?)\s*$/m.exec(jobText(ciText, id))?.[1];
+    const raw = /^ {4}name:\s*(.+?)\s*$/m.exec(jobText(ciText, id))?.[1];
+    const name = raw?.replace(/^(['\"])(.*)\1$/, '$2');
     out.set(id, name ?? id);
   }
   return out;
@@ -336,6 +337,9 @@ function aggregateProblems(ciText: string): string[] {
   }
   for (const extra of needs.filter((n) => !PARTS.includes(n))) problems.push(`C-9: \`${AGG_JOB}\` needs \`${extra}\`, which is not a part of the family`);
   if (/continue-on-error/.test(text)) problems.push(`C-9: \`${AGG_JOB}\` carries continue-on-error`);
+  const stepIf = text.split('\n').filter((l) => /^ {5,}(- )?if:/.test(l));
+  if (stepIf.length > 0) problems.push(`C-9: \`${AGG_JOB}\` has a step-level \`if:\` (${stepIf.join(' | ').trim()}) — a skipped step ends the job success`);
+  if ((text.match(/^ {6}- /gm) ?? []).length !== 1) problems.push(`C-9: \`${AGG_JOB}\` must have exactly one step`);
   const env = aggregateEnv(text);
   for (const part of PARTS) {
     if (!env.has(part)) problems.push(`C-9: \`${AGG_JOB}\` does not read \`needs.${part}.result\``);
@@ -550,6 +554,19 @@ describe('the required-check aggregate (DR-147/1)', () => {
     const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n)/, '$1    continue-on-error: true\n');
     expect(planted, 'the aggregate was not found to extend — update this proof').not.toBe(ci);
     expect(aggregateProblems(planted).join('\n')).toContain('carries continue-on-error');
+  });
+
+  it('RED: a step-level `if: false` would skip the only step and end the job success', () => {
+    const step = '      - name: Every part of the backend family finished success\n';
+    const planted = ci.replace(step, `${step}        if: false\n`);
+    expect(planted, 'the step line was not found to extend — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('step-level `if:`');
+  });
+
+  it('RED: a quoted work-job name still counts as a second check named `backend`', () => {
+    const planted = ci.replace('  backend:\n    name: backend-work\n', "  backend:\n    name: 'backend'\n");
+    expect(planted, 'the work job name line was not found to quote — update this proof').not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('C-10: 2 job(s) report a check named `backend`');
   });
 
   it('RED (behaviour): the script accepts a SKIPPED or CANCELLED part, as a check on `failure` alone would', () => {
