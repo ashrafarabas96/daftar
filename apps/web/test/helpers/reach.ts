@@ -134,16 +134,21 @@ export function importsOf(path: string, source: string, files: Readonly<Record<s
   const unresolved: string[] = [...parsed.computed];
   for (const spec of parsed.specifiers) {
     if (spec.endsWith('.json')) continue;
-    let base: string;
-    if (spec.startsWith('@/')) base = `${WEB_SRC}/${spec.slice(2)}`;
-    else if (spec.startsWith('./') || spec.startsWith('../')) base = posix.normalize(posix.join(posix.dirname(path), spec));
+    const find = (base: string): string | undefined =>
+      [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)].find(
+        (candidate) => Object.hasOwn(files, candidate) && SOURCE_FILE.test(candidate),
+      );
+    let hit: string | undefined;
+    if (spec.startsWith('@/')) hit = find(`${WEB_SRC}/${spec.slice(2)}`);
+    else if (spec.startsWith('./') || spec.startsWith('../')) hit = find(posix.normalize(posix.join(posix.dirname(path), spec)));
     else {
-      if (!PACKAGE.test(spec)) unresolved.push(spec);
+      // A bare specifier is a package — unless a file of `src/` answers to it, which is what a `baseUrl` or an alias would make
+      // it: then it is a LOCAL import and is followed. (`tsconfig` has no `baseUrl` and `next.config` no alias; both are asserted.)
+      const local = find(`${WEB_SRC}/${spec}`);
+      if (local !== undefined) resolved.push(local);
+      else if (!PACKAGE.test(spec)) unresolved.push(spec);
       continue;
     }
-    const hit = [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)].find(
-      (candidate) => Object.hasOwn(files, candidate) && SOURCE_FILE.test(candidate),
-    );
     if (hit === undefined) unresolved.push(spec);
     else resolved.push(hit);
   }

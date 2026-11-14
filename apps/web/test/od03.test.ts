@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import ar from '@/messages/ar.json';
@@ -265,10 +265,15 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    * (1) an otherwise-dead file, a library included, that REALLY imports a
    * customers-only file is excused with the slice; (2) `require.context`,
    * middleware redirects and `next.config` rewrites change what is reached at
-   * run time and are invisible here; (3) `.js` files are walked and can make a
-   * customers file reached, but are not themselves scanned for vocabulary
-   * (`isS7WebFile` is `.ts`/`.tsx` only); (4) Next intercepting routes under
-   * `customers` count as other entries.
+   * run time and are invisible here (a `next.config` that defines an alias,
+   * rewrite or redirect, or a `baseUrl`, fails BOUNDARY (p) instead); (3) files
+   * outside `src/` (`apps/web/server.mts`, `next.config`) are not walked, and an
+   * `app/` or `pages/` directory at the `apps/web` root would make Next ignore
+   * `src/` altogether (BOUNDARY (p) fails if one appears); (4) `.js` files are
+   * walked and can make a customers file reached, but are not themselves
+   * scanned for vocabulary (`isS7WebFile` is `.ts`/`.tsx` only); (5) Next
+   * intercepting routes under `customers` count as other entries; (6) the
+   * exemption is on FILES only: keys are scanned exactly as on main.
    *
    * Adding a page that is not under `customers` can only GROW the scanned set
    * (it adds to what "every other entry" reaches). Adding a customers page can
@@ -834,6 +839,39 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(entryPoints(js.map((name) => `${A}/pos/${name.replace('a.', 'page.')}`))).toHaveLength(4);
   });
 
+  it('BOUNDARY (p): a bare specifier a file of src/ answers to is a LOCAL import, and no alias or baseUrl exists that the walk does not know', () => {
+    const local = "import { CustomerAccountView } from 'views/customers/CustomerAccountView';\nexport const TillView = () => CustomerAccountView;";
+    const law = customerLaw(syntheticTree({ [TILL]: local }), SYNTHETIC_CATALOG);
+    // The till imports the customers view the way a `baseUrl` or an alias would let it: it is reached, so not customers-only, and flagged.
+    expect(law.customersOnly).not.toContain(ACCOUNT);
+    expect(law.hits).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
+    // A package is still a package: it resolves to nothing and is not a hole.
+    expect(importsOf(TILL, "import { useState } from 'react';\nimport x from '@scope/pkg';", syntheticTree())).toEqual({ resolved: [], unresolved: [] });
+    expect(() =>
+      customerLaw(syntheticTree({ [TILL]: "import { useState } from 'react';\nexport const TillView = useState;" }), SYNTHETIC_CATALOG),
+    ).not.toThrow();
+    // A bare specifier no package and no file answers to (`~/x`) is still a hole.
+    expect(() => customerLaw(syntheticTree({ [TILL]: "import { x } from '~/x';\nexport const TillView = x;" }), SYNTHETIC_CATALOG)).toThrow(
+      /could not resolve/,
+    );
+
+    // REPOSITORY: nothing resolves modules in a way the walk does not know.
+    const web = join(REPO_ROOT, 'apps', 'web');
+    const tsconfig = JSON.parse(readFileSync(join(web, 'tsconfig.json'), 'utf8')) as { compilerOptions: { baseUrl?: string; paths?: Record<string, unknown> } };
+    expect(tsconfig.compilerOptions.baseUrl, 'a baseUrl makes bare specifiers local to a directory the walk resolves only against src/').toBeUndefined();
+    const configs = readdirSync(web).filter((name) => /^next\.config\.[cm]?[jt]s$/.test(name));
+    expect(configs.length, 'no next.config was found').toBeGreaterThan(0);
+    for (const name of configs) {
+      const text = stripTsComments(readFileSync(join(web, name), 'utf8'));
+      expect(text, `${name} defines a hook that changes what a specifier means or where a route renders`).not.toMatch(
+        /\b(?:webpack|turbopack|resolveAlias|alias|modularizeImports|rewrites|redirects|pageExtensions|basePath)\b/,
+      );
+    }
+    // An `app/` or `pages/` directory at the root of apps/web makes Next ignore `src/` altogether.
+    for (const dir of ['app', 'pages']) expect(existsSync(join(web, dir)), `apps/web/${dir} makes Next ignore src/`).toBe(false);
+    expect(existsSync(join(web, 'src', 'app'))).toBe(true);
+  });
+
   it('BOUNDARY (o): Pages Router files and mdx-components are entries', () => {
     const view = `${importAccount}export default () => CustomerAccountView;`;
     const P = 'apps/web/src/pages';
@@ -865,7 +903,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     }
   });
 
-  it('REACH, repository: the scope is every S7 file and key except the derived customers-only set, and none names a customer', () => {
+  it('REACH, repository: every S7 file except the derived customers-only files, and every S7 key, names no customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
     // POSITIVE controls — a law that passes on an empty set is dead.
@@ -902,7 +940,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     }
     expect(law.screens.length, 'the scan ran over too few screens').toBeGreaterThan(10);
     expect(law.libraries.length).toBeGreaterThan(2);
-    // The key scope is main's count of S7 keys, minus only keys referenced exclusively by customers-only files.
+    // The key scope is main's: EVERY S7 key, in all three locales. The exemption is on FILES only; no key is excused.
     // Counted over all three catalogues: a key present in one locale only is still a key of the law's scope.
     const mainKeys = [...new Set([...Object.keys(ar), ...Object.keys(en), ...Object.keys(tr)])].filter((key) => isS7Key(key));
     expect(mainKeys.length).toBeGreaterThan(500);
