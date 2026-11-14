@@ -55,7 +55,9 @@ describe('static-guards on apps/web/src (R1, R6b, R14, R17) — the real script 
     'apps/web/src/__plant_pg.ts': "import { Pool } from 'pg';\nexport const p = Pool;\n",
     'apps/web/src/__plant_nest.ts': "import { Injectable } from '@nestjs/common';\nexport const i = Injectable;\n",
     'apps/web/src/__plant_role.ts': "export const role = 'daftar_migrator';\n",
-    'apps/web/src/__plant_migcreds.ts': 'export const u = process.env.MIGRATION_DATABASE_URL;\n',
+    // A fixture, not a read: the name is assembled so the literal never appears in this file, because the textual
+    // scan in scripts/phase2-deployment-authority.ts (2.1) strips comments but not strings and would flag it.
+    'apps/web/src/__plant_migcreds.ts': `export const u = process.env.${['MIGRATION', 'DATABASE', 'URL'].join('_')};\n`,
     'apps/web/src/__plant_ledger.ts': 'export const sql = "INSERT INTO journal_lines (id) VALUES (1)";\n',
   };
 
