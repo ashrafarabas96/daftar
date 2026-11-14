@@ -137,6 +137,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type { Response } from 'supertest';
 import { Client } from 'pg';
 import { appDbUrl, ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
+import { stripReaderOfRecordCalls } from '../helpers/reader-of-record-calls';
 import { InDatabaseClock, type InDatabaseReading } from '../helpers/in-database-time';
 import { must } from '../helpers/inventory-commands';
 import { readAs } from '../helpers/merchant-reads';
@@ -739,8 +740,14 @@ function readersOfRecord(root: string): string[] {
       // quietly exempted from the ceiling. `invoice_outstanding` itself
       // carries two live signatures (`0084:526`, `0084:593`), which is where
       // this was measured (TL-P4-S5-R1, §H of the refund guard). Widening it
-      // is byte-neutral on the tree as it stands — the set is the same four
-      // names — and strictly wider the day it is not.
+      // is byte-neutral on the tree as it stands — it changes no MEMBER of the
+      // set — and strictly wider the day it does. The count that used to stand
+      // in this sentence said "the same four names" and was wrong twice over:
+      // `BASE_READERS_OF_RECORD` is THREE (see its declaration above), and the
+      // closure the loop below returns is larger than either number and moves
+      // with the DDL, which is the whole point of deriving it. A number in
+      // prose that nothing re-measures is a claim, not a measurement
+      // (RULE-3), so this sentence no longer carries one.
       const definitions = phase4RoutineBodies(root, name);
       if (definitions.length === 0) continue; // unreadable bodies are the S1 gate's subject, not this one's
       if (definitions.some((body) => [...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body)))) {
@@ -755,7 +762,18 @@ function readersOfRecord(root: string): string[] {
 
 const READERS_OF_RECORD = readersOfRecord(join(__dirname, '..', '..'));
 const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\s*\\(`, 'i');
-const READER_OF_RECORD_CALL_G = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\([^)]*\\)`, 'gi');
+// The removal of reader-of-record CALLS from a statement used to be a regular
+// expression here: `\(([^)]*)\)`. `[^)]*` stops at the FIRST `)`, so a call
+// whose own arguments carry a parenthesis — `invoice_outstanding(array_agg(id),
+// sum(x))` — was only partly removed and the remainder was read as this read's
+// own arithmetic: a FALSE RED on a compliant statement, which is how a law gets
+// disabled rather than obeyed (card P4PERF_AL07_STRIP_UNBALANCED_PARENS, handed
+// to this lane by L1-q-10). It is now a balanced scan in
+// `tests/helpers/reader-of-record-calls.ts`, which is unit-controlled in
+// `tests-unit/l3-reader-of-record-call-strip.test.ts` — including the old
+// expression, kept there as a failing case rather than as a comment — because
+// this suite needs a cluster and a dataset to run at all, so its own machine
+// could never be controlled inside it.
 
 /** The three reads of one customer, labelled, so the fat-tail and median arms are built identically. */
 const readsOf = (
@@ -1676,7 +1694,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
       for (const c of statements) {
         // A `sum(` in the read's OWN statement would be the second copy. The
         // readers of record sum inside their own bodies, which is the point.
-        expect(/\bsum\s*\(/i.test(c.text.replace(READER_OF_RECORD_CALL_G, '')), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
+        expect(/\bsum\s*\(/i.test(stripReaderOfRecordCalls(c.text, READERS_OF_RECORD)), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
       }
     }
     console.log(`\nREADERS OF RECORD — P4-D\n${JSON.stringify(byRead, null, 1)}\n`);
