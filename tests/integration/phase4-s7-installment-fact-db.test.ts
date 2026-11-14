@@ -5865,12 +5865,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    and is the quantity truncation is actually decided on, so it is the
     //    witness of record and the activity scan is the corroborating one.
     //
-    //    MEASURED, in six probe executions of one CI log (`131793746672`) and
-    //    in two here: truncation happens IF AND ONLY IF the cutoff is NEWER
-    //    than the `DELETE`'s own xid. Every truncating execution printed
-    //    `delete_xid + 1`; the one failing execution printed `delete_xid - 2`
-    //    (`230642` against `230644`). THE PAIR OF NUMBERS IS THEREFORE A
-    //    CAUSE, not an inference from a byte count.
+    //    MEASURED, in the CI jobs that printed the pair, counted in their own
+    //    logs and not from memory. An earlier revision of this comment said
+    //    "six probe executions of one CI log and two here"; the log it cites
+    //    carries one execution of this case, so that count was a claim no
+    //    artifact supported. What the artifacts do carry:
+    //      - job `131793746672`: ONE execution -- `removable cutoff: 230642`
+    //        against `delete_xid 230644`, and the heap NOT truncated.
+    //      - job `131872940712`: TWO executions -- the no-holder arm at
+    //        `1349` against `1348` and at `230368` against `230367`, both
+    //        truncated; the holder arm at `1354` and `230373`, each EQUAL to
+    //        its own `delete_xid`, neither truncated.
+    //    So: truncation happens IF AND ONLY IF the cutoff is NEWER than the
+    //    `DELETE`'s own xid. THE PAIR OF NUMBERS IS THEREFORE A CAUSE, not an
+    //    inference from a byte count. No count of LOCAL executions is claimed
+    //    here: a number no artifact carries is not a measurement, and this
+    //    comment states only what a named log can be read back for.
     const cutoffOf = (x: Record<string, unknown>): number | null => {
       const m = [...heapNotices(x).matchAll(/removable cutoff: (\d+)/g)];
       // EXACTLY ONE, or none: the probe's heap is vacuumed once, and a second
