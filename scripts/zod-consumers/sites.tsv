@@ -5,8 +5,8 @@ apps/api/src/common/error.filter.ts	3	formatter	safe	HAND	import { ZodError } fr
 apps/api/src/common/error.filter.ts	54	formatter	intended	HAND	if (exception instanceof ZodError) {
 apps/api/src/common/error.filter.ts	56	method	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
 apps/api/src/common/error.filter.ts	56	issues-access	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
-apps/api/src/config.ts	402	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-apps/api/src/config.ts	402	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	661	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	661	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 apps/api/src/modules/accounting/accounting-reconciliation.reader.ts	251	find-shift	safe	R-RECEIVER	const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
 apps/api/src/modules/catalog/media.service.ts	132	find-shift	safe	R-RECEIVER	const v = row.variants.find((x) => x.size === size);
 apps/api/src/modules/inventory/inventory-stock-read.ts	98	find-shift	safe	R-RECEIVER	const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);
@@ -189,8 +189,8 @@ scripts/install-accounting-key.ts	56	find-shift	safe	R-RECEIVER	const retire = p
 scripts/install-inventory-key.ts	55	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
 scripts/install-provisioning-key.ts	51	find-shift	safe	R-RECEIVER	const retire = process.argv.find((a) => a.startsWith('--retire='))?.slice('--retire='.length);
 scripts/phase1-release-gate.ts	618	find-shift	safe	R-RECEIVER	const byName = (needle: string) => results.find((r) => r.name.toLowerCase().includes(needle));
-scripts/phase2-deployment-authority.ts	1462	find-shift	safe	R-RECEIVER	const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
-scripts/phase2-deployment-authority.ts	1464	find-shift	safe	R-RECEIVER	const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
+scripts/phase2-deployment-authority.ts	1479	find-shift	safe	R-RECEIVER	const loginInternal = rows.find((r) => r.role === 'daftar_accounting_internal');
+scripts/phase2-deployment-authority.ts	1481	find-shift	safe	R-RECEIVER	const inventoryInternal = rows.find((r) => r.role === 'daftar_inventory_internal');
 scripts/phase2-prefix.ts	154	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
 scripts/phase3-prefix.ts	184	find-shift	safe	R-RECEIVER	const rootArg = process.argv.slice(2).find((a) => a.startsWith('--root='));
 scripts/phase3-release-gate.ts	264	find-shift	safe	R-RECEIVER	const eq = argv.find((a) => a.startsWith(`--${name}=`));
@@ -198,9 +198,9 @@ scripts/phase3-review-index.ts	126	find-shift	safe	R-RECEIVER	return GROUP_RULES
 scripts/phase3-review-index.ts	433	find-shift	safe	R-RECEIVER	const h1 = lines.find((l) => /^#\s+\S/.test(l));
 scripts/phase3-review-index.ts	643	find-shift	safe	R-RECEIVER	const windowOf = (i: number): (typeof bounds)[number] | null => bounds.find((b) => i <= b.at) ?? null;
 scripts/phase3-s9-evidence.ts	75	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
-scripts/phase3-secret-scan.ts	383	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
-scripts/phase3-secret-scan.ts	488	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
-scripts/phase3-secret-scan.ts	782	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-secret-scan.ts	448	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
+scripts/phase3-secret-scan.ts	553	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
+scripts/phase3-secret-scan.ts	847	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
 scripts/phase4-gate.ts	342	find-shift	safe	R-RECEIVER	const w = present.find((x) => x.name === n);
 scripts/phase4-gate.ts	822	find-shift	safe	R-RECEIVER	const r = results.find((x) => x.id === st.id);
 scripts/phase4-gate.ts	843	find-shift	safe	R-RECEIVER	const hit = found.find((r) => needle.test(r));
@@ -215,24 +215,31 @@ scripts/phase4-s1-gate.ts	2773	find-shift	safe	R-RECEIVER	const evidence = argv.
 scripts/phase4-s2-gate.ts	648	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s3-gate.ts	521	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s4-gate.ts	785	find-shift	safe	R-RECEIVER	declaredInvoiceEdges(sql, child).find(
-scripts/phase4-s4-gate.ts	2647	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
-scripts/phase4-s4-gate.ts	3711	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
-scripts/plan-evidence/discover-plan-claims.ts	395	find-shift	safe	R-RECEIVER	const outArg = args.find((a) => a.startsWith('--out='))?.slice('--out='.length);
+scripts/phase4-s4-gate.ts	2683	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
+scripts/phase4-s4-gate.ts	3747	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/plan-evidence/discover-plan-claims.ts	426	find-shift	safe	R-RECEIVER	const outArg = args.find((a) => a.startsWith('--out='))?.slice('--out='.length);
 scripts/plan-evidence/target-cluster.ts	186	find-shift	safe	R-RECEIVER	const dbArg = args.find((a) => a.startsWith('--database='))?.slice('--database='.length);
 scripts/test-census.ts	220	errors-access	safe	R-RECEIVER	for (const error of module.errors()) problems.push(`${file}: ${error.message}`);
 scripts/test-census.ts	314	find-shift	safe	R-RECEIVER	source: `vitest collect, ${PROJECTS.find((p) => p.id === rule.project)?.config ?? rule.project}`,
 scripts/test-census.ts	366	find-shift	safe	R-RECEIVER	const arg = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 tests-unit/browser-pacer-route-coverage.test.ts	27	find-shift	safe	R-RECEIVER	const row = (c: RouteCoverage) => c.table().find((r) => r.route === KEY);
-tests/browser/gate.ts	82	find-shift	safe	R-BROWSER-GATE	const value = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
-tests/browser/gate.ts	224	length	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
-tests/browser/gate.ts	224	issues-access	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
-tests/browser/gate.ts	256	length	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
-tests/browser/gate.ts	256	issues-access	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
-tests/browser/gate.ts	302	length	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
-tests/browser/gate.ts	302	issues-access	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
-tests/browser/gate.ts	305	issues-access	safe	R-BROWSER-GATE	for (const i of r.issues) console.log(`    [${i.kind}] ${i.detail}`);
-tests/browser/gate.ts	331	method	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
-tests/browser/gate.ts	331	issues-access	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
+tests-unit/npm-audit-minimatch-override.test.ts	93	find-shift	safe	R-RECEIVER	const key = Object.keys(pkg.overrides ?? {}).find((k) => k.startsWith('minimatch@'));
+tests-unit/td24-ci-redis-service-law.test.ts	144	find-shift	safe	R-RECEIVER	const line = (serviceLines ?? []).find((l) => l.trim().startsWith('image:'));
+tests-unit/td24-ci-redis-service-law.test.ts	162	find-shift	safe	R-RECEIVER	const run = stepLines.find((l) => l.trim().startsWith('run:'));
+tests-unit/td24-ci-redis-service-law.test.ts	199	find-shift	safe	R-RECEIVER	const url = step.env.find((l) => l.trim().startsWith('REDIS_URL:'));
+tests-unit/td24-limiter-store-law.test.ts	139	find-shift	safe	R-RECEIVER	const provider = providers.find((p): p is FactoryProvider => typeof p === 'object' && 'provide' in p && p.provide === ThrottlerStorage && 'useFactory' in p);
+tests-unit/td24-limiter-store-law.test.ts	150	find-shift	safe	R-RECEIVER	const provider = providers.find((p): p is FactoryProvider => typeof p === 'object' && 'provide' in p && p.provide === 'RATE_LIMITER' && 'useFactory' in p);
+tests-unit/td24-redis-throttler-store.test.ts	294	find-shift	safe	R-RECEIVER	const sample = metrics.snapshot().find((s) => s.name === RATE_LIMIT_METRICS.storeDegradedTotal);
+tests/browser/gate.ts	83	find-shift	safe	R-BROWSER-GATE	const value = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+tests/browser/gate.ts	228	length	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
+tests/browser/gate.ts	228	issues-access	safe	R-BROWSER-GATE	const issues = run.steps.reduce((n, s) => n + s.issues.length, 0);
+tests/browser/gate.ts	260	length	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
+tests/browser/gate.ts	260	issues-access	safe	R-BROWSER-GATE	issues: records.reduce((n, s) => n + s.issues.length, 0),
+tests/browser/gate.ts	306	length	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
+tests/browser/gate.ts	306	issues-access	safe	R-BROWSER-GATE	const bad = records.filter((r) => r.issues.length > 0);
+tests/browser/gate.ts	309	issues-access	safe	R-BROWSER-GATE	for (const i of r.issues) console.log(`    [${i.kind}] ${i.detail}`);
+tests/browser/gate.ts	335	method	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
+tests/browser/gate.ts	335	issues-access	safe	R-BROWSER-GATE	const seen = new Set(steps.flatMap((s) => s.issues.map((i) => i.kind)));
 tests/browser/invariants.ts	368	issues-access	safe	R-BROWSER-GATE	return 'issues' in value && Array.isArray(value.issues) && 'scrollWidth' in value && typeof value.scrollWidth === 'number';
 tests/browser/pacer.ts	39	find-shift	safe	R-BROWSER-GATE	while (this.spent.length > 0 && (this.spent[0] ?? now) <= now - this.windowMs) this.spent.shift();
 tests/browser/run-context.ts	141	issues-access	safe	R-BROWSER-GATE	target.issues.push({ kind, detail: detail.slice(0, 300) });
@@ -254,7 +261,7 @@ tests/golden-regression/phase4-s2/07-atomic-sale-law.golden.test.ts	225	find-shi
 tests/golden-regression/phase4-s2/08-sale-idempotency.golden.test.ts	132	find-shift	safe	R-RECEIVER	const documentKey = r.rows.find((row) => row.cols.includes('business_id') && row.cols.includes('id'));
 tests/golden-regression/phase4-s2/sale-path.ts	177	find-shift	safe	R-RECEIVER	return seen.find((s) => /\.insufficient_stock$/.test(s)) ?? null;
 tests/golden-regression/phase4-s4/harness.ts	165	find-shift	safe	R-RECEIVER	const single = bodies.find((r) => r.args.replace(/\s+/g, '') === 'invoice_outstanding(uuid,uuid)')?.body ?? '';
-tests/golden-regression/phase4-s4/settlement-path.ts	803	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
+tests/golden-regression/phase4-s4/settlement-path.ts	810	find-shift	safe	R-RECEIVER	return seen.find((s) => s === expected) ?? null;
 tests/golden-regression/phase4/01-cross-tenant.golden.test.ts	1683	find-shift	safe	R-RECEIVER	const row = (await openInvoices(shop, actor)).find((i) => i.invoiceId === invoiceId);
 tests/golden-regression/phase4/04-schema-lint.golden.test.ts	162	find-shift	safe	R-RECEIVER	const column = columns.find((a) => a.relation === relation && a.column === required);
 tests/guards/mig-0084-end-state-signature-law.test.ts	442	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
@@ -273,11 +280,11 @@ tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1356	find-shift	safe	R-R
 tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1363	find-shift	safe	R-RECEIVER	const r = right.find((c) => c.currency === currency);
 tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1364	find-shift	safe	R-RECEIVER	const w = wrong.find((c) => c.currency === currency);
 tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	1370	find-shift	safe	R-RECEIVER	expect(wrong.find((c) => c.currency === 'JOD')).toEqual(right.find((c) => c.currency === 'JOD'));
-tests/guards/p4s4-required-ci.test.ts	748	find-shift	safe	R-RECEIVER	const ev = S4_EVIDENCE_STEPS.find((e) => e.scriptBody !== undefined);
-tests/guards/p4s4-required-ci.test.ts	1322	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === victim && r.title === law);
-tests/guards/p4s4-required-ci.test.ts	1571	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-payment-closure.test.ts');
-tests/guards/p4s4-required-ci.test.ts	1594	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-customer-identity-pin.test.ts');
-tests/guards/p4s4-required-ci.test.ts	1762	find-shift	safe	R-RECEIVER	const victim = S4_EVIDENCE_STEPS.find((e) => [...`${e.label} ${e.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].length === 0);
+tests/guards/p4s4-required-ci.test.ts	802	find-shift	safe	R-RECEIVER	const ev = S4_EVIDENCE_STEPS.find((e) => e.scriptBody !== undefined);
+tests/guards/p4s4-required-ci.test.ts	1391	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === victim && r.title === law);
+tests/guards/p4s4-required-ci.test.ts	1640	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-payment-closure.test.ts');
+tests/guards/p4s4-required-ci.test.ts	1663	find-shift	safe	R-RECEIVER	const row = ROSTER_RECORDED.find((r) => r.suite === 'tests/integration/p4s4-customer-identity-pin.test.ts');
+tests/guards/p4s4-required-ci.test.ts	1831	find-shift	safe	R-RECEIVER	const victim = S4_EVIDENCE_STEPS.find((e) => [...`${e.label} ${e.name}`.matchAll(/\bP4-[A-Z](?:-[A-Z]+)?\b/g)].length === 0);
 tests/guards/p4s4-settlement-surface-laws.test.ts	570	find-shift	safe	R-RECEIVER	const hit = readdirSync(dir).find((f) => /_phase4_customer_payments_credits\.sql$/.test(f));
 tests/guards/p4s4-settlement-surface-laws.test.ts	617	find-shift	safe	HAND	const other = ROW_LOCK_ONLY_ROUTINES.find((r) => r !== fn) as string;
 tests/guards/p4s4-standard-aging-not-due-band.test.ts	378	method	safe	HAND	if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');
@@ -341,6 +348,7 @@ tests/integration/accounting-source-completeness.test.ts	372	find-shift	safe	R-R
 tests/integration/accounting-source-completeness.test.ts	387	find-shift	safe	R-RECEIVER	const search = must(row.config, `${fn} has no search_path`).find((c) => c.startsWith('search_path='));
 tests/integration/catalog-base-variant.test.ts	150	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_sku_uq')?.indexdef).toMatch(/WHERE \(+sku IS NOT NULL\)/);
 tests/integration/catalog-base-variant.test.ts	151	find-shift	safe	R-RECEIVER	expect(indexes.find((i) => i.indexname === 'variants_barcode_uq')?.indexdef).toMatch(/WHERE \(+barcode IS NOT NULL\)/);
+tests/integration/dr71-fx-settlement-closure.test.ts	545	find-shift	safe	R-RECEIVER	last.chain.find((s) => s.relation === 'payment_allocations' && s.positionMinor > 0n),
 tests/integration/inventory-seam.test.ts	240	find-shift	safe	R-RECEIVER	const seamClient = must(issued.find((q) => q.text === SERVER_VIEW)).client;
 tests/integration/invitation-lifecycle.test.ts	111	find-shift	safe	R-RECEIVER	const item = (list.body.items as { email: string; status: string }[]).find((i) => i.email === email);
 tests/integration/invitation-lifecycle.test.ts	180	find-shift	safe	R-RECEIVER	const maxUsers = (ent.body.limits as { key: string; usage: number }[]).find((l) => l.key === 'MAX_USERS');
@@ -358,9 +366,9 @@ tests/integration/p4s4-customer-identity-pin.test.ts	321	find-shift	safe	R-RECEI
 tests/integration/p4s4-customer-identity-pin.test.ts	457	find-shift	safe	R-RECEIVER	(await invoiceChain(ownerPool(), w.shop.businessId, invoiceC2.invoiceId)).find((st) => st.relation === 'customer_credit_applications'),
 tests/integration/p4s4-invoice-settlement-chain.test.ts	331	find-shift	safe	R-RECEIVER	chain.find((s) => s.relation === 'payment_allocations'),
 tests/integration/phase3-s8-negative-controls.test.ts	237	find-shift	safe	R-RECEIVER	accounts.find((a) => a.key === key),
-tests/integration/phase4-s7-installment-fact-db.test.ts	4133	find-shift	safe	R-RECEIVER	(M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
-tests/integration/phase4-s7-installment-fact-db.test.ts	4135	find-shift	safe	R-RECEIVER	expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
-tests/integration/phase4-s7-installment-fact-db.test.ts	4912	find-shift	safe	R-RECEIVER	const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
+tests/integration/phase4-s7-installment-fact-db.test.ts	4725	find-shift	safe	R-RECEIVER	(M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
+tests/integration/phase4-s7-installment-fact-db.test.ts	4727	find-shift	safe	R-RECEIVER	expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
+tests/integration/phase4-s7-installment-fact-db.test.ts	5504	find-shift	safe	R-RECEIVER	const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
 tests/integration/pos-s3-cart.test.ts	714	find-shift	safe	R-RECEIVER	const ordinal = indexes.find((row) => row.name === POS_CART_UNIQUE_CONSTRAINT);
 tests/integration/pos-s3-cart.test.ts	727	find-shift	safe	R-RECEIVER	const byProduct = indexes.find((row) => row.cols.includes('product_id') && row.cols.includes('variant_id'));
 tests/integration/process-composition.test.ts	237	find-shift	safe	R-RECEIVER	const of = (p: string): ReadonlySet<Ctor> => (COMPOSITIONS.find((c) => c.process === p) as Composition<Ctor>).controllers;
@@ -428,7 +436,7 @@ tests/performance/receivables-open-page-equivalence.test.ts	518	find-shift	safe	
 tests/performance/receivables-open-page-equivalence.test.ts	519	find-shift	safe	R-RECEIVER	const neighbour = cases.find((k) => k.key === 'neighbour') as CaseSpec;
 tests/performance/receivables-open-page-equivalence.test.ts	549	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'identity') as CaseSpec;
 tests/performance/receivables-open-page-equivalence.test.ts	631	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'fakeLimit') as CaseSpec;
-tests/performance/receivables-s4-budgets.test.ts	1271	find-shift	safe	R-RECEIVER	plans.find((p) => p.text.includes('customer_ar_outstanding(')),
+tests/performance/receivables-s4-budgets.test.ts	1746	find-shift	safe	R-RECEIVER	plans.find((p) => p.text.includes('customer_ar_outstanding(')),
 tests/performance/receivables-s4-dataset.ts	335	find-shift	safe	R-RECEIVER	while (state.at.length > 0 && now - (state.at[0] as number) >= THROTTLE.windowMs) state.at.shift();
 tests/security/accounting-credential-matrix.test.ts	196	find-shift	safe	R-RECEIVER	const setting = (f.config ?? []).find((c) => c.toLowerCase().startsWith('search_path='));
 tests/security/accounting-raw-sql-invariants.test.ts	159	find-shift	safe	R-RECEIVER	cashId = must(accounts.rows.find((a) => a.system_key === 'cash')).id;
@@ -436,6 +444,13 @@ tests/security/accounting-raw-sql-invariants.test.ts	160	find-shift	safe	R-RECEI
 tests/security/accounting-sources-authority.test.ts	405	find-shift	safe	R-RECEIVER	const setting = must(row.config, row.name).find((c) => c.startsWith('search_path='));
 tests/security/branch-scopes.test.ts	216	find-shift	safe	R-RECEIVER	const scoped = (res.body.items as { userId: string; branchScopeMode: string; allowedBranchIds: string[] }[]).find((x) => x.userId === c.scoped.userId);
 tests/security/branch-scopes.test.ts	219	find-shift	safe	R-RECEIVER	const ownerRow = (res.body.items as { userId: string; branchScopeMode: string }[]).find((x) => x.userId === c.owner.userId);
+tests/security/dr71-mail-isolation.test.ts	173	find-shift	safe	R-RECEIVER	const s = rec.sent.find((x) => x.kind === kind && x.to === to);
+tests/security/dr71-mail-isolation.test.ts	232	find-shift	safe	R-RECEIVER	const vrow = rows.find((r) => r.email === victim);
+tests/security/dr71-mail-isolation.test.ts	235	find-shift	safe	R-RECEIVER	expect((await deliveries()).find((r) => r.id === vrow?.id)?.email, 'the tamper is really in the row when the worker claims it').toBe(target);
+tests/security/dr71-mail-isolation.test.ts	253	find-shift	safe	R-RECEIVER	const row = (await deliveries()).find((r) => r.id === vrow?.id);
+tests/security/dr71-mail-isolation.test.ts	268	find-shift	safe	R-RECEIVER	const aRow = (await deliveries()).find((r) => r.email === mine);
+tests/security/dr71-mail-isolation.test.ts	274	find-shift	safe	R-RECEIVER	const row2 = (await deliveries()).find((r) => r.email === mine2 && r.status === 'pending');
+tests/security/dr71-mail-isolation.test.ts	291	find-shift	safe	R-RECEIVER	expect((await deliveries()).find((r) => r.id === row2?.id)?.last_error).toBe('PAYLOAD_DECRYPT_FAILED');
 tests/security/dr71-zod-sensitive-paths.test.ts	110	issues-access	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
 tests/security/dr71-zod-sensitive-paths.test.ts	110	body-consumer	intended	R-DR71-SUITE	return { captured, issues: captured.body.error.details?.issues ?? [] };
 tests/security/dr71-zod-sensitive-paths.test.ts	119	issues-access	intended	R-DR71-SUITE	for (const i of o.issues) expect(Object.keys(i).sort(), `${label}: an issue carries exactly path and code — no message, no keys`).toEqual(['code', 'path']);
@@ -465,7 +480,7 @@ tests/security/dr71-zod-sensitive-paths.test.ts	297	method	intended	R-DR71-SUITE
 tests/security/dr71-zod-sensitive-paths.test.ts	297	issues-access	intended	R-DR71-SUITE	expect(o.issues.map((i) => i.code)).toEqual(expect.arrayContaining(['unrecognized_keys']));
 tests/security/dr71-zod-sensitive-paths.test.ts	369	issues-access	intended	R-DR71-SUITE	for (const i of (err(res).details as { issues: object[] }).issues) expect(Object.keys(i).sort()).toEqual(['code', 'path']);
 tests/security/dr71-zod-sensitive-paths.test.ts	389	find-shift	intended	R-DR71-SUITE	).find((m) => m.userId === uid),
-tests/security/dr71-zod-sensitive-paths.test.ts	406	find-shift	intended	R-DR71-SUITE	expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);
+tests/security/dr71-zod-sensitive-paths.test.ts	413	find-shift	intended	R-DR71-SUITE	expect(JSON.stringify((after.body.items as { userId: string }[]).find((m) => m.userId === uid)), 'the member is exactly as before').toBe(snapshot);
 tests/security/inventory-payload-parity.test.ts	85	find-shift	safe	R-RECEIVER	const c = INVPL.find((x) => x.name === name);
 tests/security/journal-privilege-matrix.test.ts	608	find-shift	safe	R-RECEIVER	.find((t) => !prefixRelations.has(t));
 tests/security/p3c-bff-admin-session-retry.test.ts	54	find-shift	safe	R-RECEIVER	const next = answers.shift();
@@ -489,15 +504,15 @@ tests/security/p4s4-internal-definer-inventory.test.ts	2116	find-shift	safe	R-RE
 tests/security/p4s4-internal-definer-inventory.test.ts	2137	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.callerIds === 'unbound');
 tests/security/p4s4-internal-definer-inventory.test.ts	2156	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.sig === 'inventory_business_has_stock_movements(uuid)');
 tests/security/p4s4-internal-definer-inventory.test.ts	2199	find-shift	safe	R-RECEIVER	const door = DOORS.find((d) => d.callerIds === 'signed-id-equality');
-tests/security/p4s4-rls-barrier-behaviour.test.ts	879	find-shift	safe	R-RECEIVER	const before = (await policyState(c)).find((r) => r.relname === rel && r.polname === 'business_isolation_delete');
-tests/security/p4s4-rls-barrier-behaviour.test.ts	902	find-shift	safe	R-RECEIVER	after.find((r) => r.relname === rel && r.polname === 'business_isolation_delete'),
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2283	find-shift	safe	R-RECEIVER	(await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc,
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2290	find-shift	safe	R-RECEIVER	must((await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc, 'check'),
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2685	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'B'),
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2693	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'D'),
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2748	find-shift	safe	R-RECEIVER	const named = AUTHORITY_MATRIX.find((r) => r.principal === role);
-tests/security/p4s4-rls-barrier-behaviour.test.ts	2790	find-shift	safe	R-RECEIVER	.map((role) => AUTHORITY_MATRIX.find((r) => r.principal === role))
-tests/security/p4s4-rls-barrier-behaviour.test.ts	3015	find-shift	safe	R-RECEIVER	AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	887	find-shift	safe	R-RECEIVER	const before = (await policyState(c)).find((r) => r.relname === rel && r.polname === 'business_isolation_delete');
+tests/security/p4s4-rls-barrier-behaviour.test.ts	910	find-shift	safe	R-RECEIVER	after.find((r) => r.relname === rel && r.polname === 'business_isolation_delete'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2291	find-shift	safe	R-RECEIVER	(await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc,
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2298	find-shift	safe	R-RECEIVER	must((await policyState(c)).find((r) => r.relname === rel && r.polname === 'tenant_membership')?.wc, 'check'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2693	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'B'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2701	find-shift	safe	R-RECEIVER	matrix.find((r) => r.caseId === 'D'),
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2756	find-shift	safe	R-RECEIVER	const named = AUTHORITY_MATRIX.find((r) => r.principal === role);
+tests/security/p4s4-rls-barrier-behaviour.test.ts	2798	find-shift	safe	R-RECEIVER	.map((role) => AUTHORITY_MATRIX.find((r) => r.principal === role))
+tests/security/p4s4-rls-barrier-behaviour.test.ts	3023	find-shift	safe	R-RECEIVER	AUTHORITY_MATRIX.find((r) => r.caseId === 'B'),
 tests/security/p4s4-rls-quals-once-per-query.test.ts	128	find-shift	safe	R-RECEIVER	const q = r.rows.find((x) => x.polname === pol)?.q;
 tests/security/phase2-s8-gate-tamper.test.ts	334	find-shift	safe	HAND	const victim = Object.entries(lock.packages).find(
 tests/security/phase3-s8-grant-matrix.test.ts	539	find-shift	safe	R-RECEIVER	const purchases = (await taxColumns(ownerPool())).find((x) => x.col === 'purchases.tax_minor');
