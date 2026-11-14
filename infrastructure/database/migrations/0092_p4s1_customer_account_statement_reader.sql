@@ -67,8 +67,14 @@
 -- This reader is SECURITY INVOKER, `LANGUAGE sql STABLE`, exactly like
 -- every reader-of-record that `daftar_app` may execute:
 -- `customer_ar_outstanding` and `customer_ar_aging` (`0083`),
--- `customer_ar_open_document_counts` and `customer_open_invoices_page`
--- (`0084`). It is NOT SECURITY DEFINER, and that is a deliberate
+-- and the two readers `0084` added (the open-document counts, and the
+-- open-invoice page). Those last two are named here in prose and not by
+-- identifier on purpose: the ownership law in
+-- tests/performance/receivables-open-page-equivalence.test.ts §11 counts
+-- EVERY migration whose text contains the page reader's name, comments
+-- included, to keep `0084` the single place that defines it -- and this
+-- migration defines no reader of `0084`'s, it only stands beside them.
+-- It is NOT SECURITY DEFINER, and that is a deliberate
 -- substitution for the DEFINER shape `0091`'s WRITE routines carry,
 -- stated here with its direction of error:
 --
