@@ -132,8 +132,19 @@ describe('this package assumes no currency precision', () => {
   const scalesByPowerOfTen = (source: string): string[] => {
     const code = blankOut(source);
     const found: string[] = [];
-    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) found.push(m[1]);
-    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) found.push(m[1]);
+    // The capture group is mandatory in both patterns, so a match always
+    // carries it; this explicit narrowing is what `noUncheckedIndexedAccess`
+    // asks for. It is a NARROWING and not a default: `?? ''` would push an
+    // empty name into `found`, and the law would then report an offence
+    // whose literal it could not name.
+    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) {
+      const literal = m[1];
+      if (literal !== undefined) found.push(literal);
+    }
+    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) {
+      const literal = m[1];
+      if (literal !== undefined) found.push(literal);
+    }
     return found;
   };
 
