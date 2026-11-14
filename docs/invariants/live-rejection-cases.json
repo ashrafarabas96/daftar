@@ -1,0 +1,741 @@
+[
+  {
+    "id": "INV-INV-11-value-only",
+    "label": "a movement with no quantity and no value is refused",
+    "mechanism": "CHECK stock_movements_value_only_ck — 0059:150",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003'),('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000005','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),0,NULL,0,'33333333-3333-4333-8333-333333333333')",
+    "expect": "reject",
+    "expectText": "stock_movements_value_only_ck",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),0,NULL,5,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is a value-only movement, which both CHECKs allow; it ends in ROLLBACK because the deferred binding foreign key would refuse a movement that has no source binding at COMMIT, and that refusal belongs to INV-INV-16, not here."
+  },
+  {
+    "id": "INV-INV-11-cost-snapshot",
+    "label": "a movement with no quantity but a cost snapshot is refused",
+    "mechanism": "CHECK stock_movements_cost_snapshot_ck — 0059:151",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),0,1,5,'33333333-3333-4333-8333-333333333333')",
+    "expect": "reject",
+    "expectText": "stock_movements_cost_snapshot_ck",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The plant differs from the control in the quantity alone: zero against one, with a cost snapshot present in both."
+  },
+  {
+    "id": "INV-INV-10-key-sequence",
+    "label": "two movements cannot share one stock sequence number on one key",
+    "mechanism": "UNIQUE stock_movements_key_seq_uq (business_id, warehouse_id, variant_id, stock_seq) — 0059:147",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')",
+    "expect": "reject",
+    "expectText": "stock_movements_key_seq_uq",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',2,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The plant repeats the sequence number alone: the identity unique at 0059:148 is untouched because the id, the source and the source line all differ."
+  },
+  {
+    "id": "INV-INV-16-movement-without-binding",
+    "label": "a movement that no source binding claims is refused at COMMIT",
+    "mechanism": "deferred FK stock_movements_binding_fk — 0059:183-186",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',3,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000012','aaaaaaaa-0000-4000-8000-000000000013',1,1,1,'33333333-3333-4333-8333-333333333333')",
+    "expect": "reject",
+    "expectText": "stock_movements_binding_fk",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000014','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000014','aaaaaaaa-0000-4000-8000-000000000015',1,'aaaaaaaa-0000-4000-8000-000000000004',1,0) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',8,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000014','aaaaaaaa-0000-4000-8000-000000000015',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000014','aaaaaaaa-0000-4000-8000-000000000015','adjustment')",
+      "INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000014','aaaaaaaa-0000-4000-8000-000000000015','adjustment') ON CONFLICT DO NOTHING"
+    ],
+    "deferred": true,
+    "notes": "The control is a whole adjustment document whose value is nought: the header, its line, the movement, the binding and the bridge row, committed together. It was built because the controls refused three times in a row and each refusal named the next row the document needs (inventory.stock_source_line_missing, then the bridge's line foreign key), which is the schema describing its own completeness. The plant of each case is that same document one row short."
+  },
+  {
+    "id": "INV-INV-16-binding-without-movement",
+    "label": "a source binding that no movement answers is refused at COMMIT",
+    "mechanism": "deferred FK stock_source_bindings_movement_fk — 0059:188-191",
+    "plant": "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000016','aaaaaaaa-0000-4000-8000-000000000017','adjustment')",
+    "expect": "reject",
+    "expectText": "stock_source_bindings_movement_fk",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000018','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000018','aaaaaaaa-0000-4000-8000-000000000019',1,'aaaaaaaa-0000-4000-8000-000000000004',1,0) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',9,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000018','aaaaaaaa-0000-4000-8000-000000000019',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000018','aaaaaaaa-0000-4000-8000-000000000019','adjustment')",
+      "INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000018','aaaaaaaa-0000-4000-8000-000000000019','adjustment') ON CONFLICT DO NOTHING"
+    ],
+    "deferred": true,
+    "notes": "The control is a whole adjustment document whose value is nought: the header, its line, the movement, the binding and the bridge row, committed together. It was built because the controls refused three times in a row and each refusal named the next row the document needs (inventory.stock_source_line_missing, then the bridge's line foreign key), which is the schema describing its own completeness. The plant of each case is that same document one row short."
+  },
+  {
+    "id": "INV-INV-15-value-without-quantity",
+    "label": "a stock key with no quantity may not hold value, and the refusal arrives at COMMIT",
+    "mechanism": "deferred CONSTRAINT TRIGGER stock_levels_zero_on_hand_zero_value — 0060:655-668, 0060:738-741",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000005','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000005',0,5)",
+    "expect": "reject",
+    "expectText": "zero_stock_residual_value",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000005','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id,on_hand,valuation_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000005',1,5)"
+    ],
+    "deferred": true,
+    "notes": "The plant and the control differ in the quantity alone: zero against one, with the same value. Both satisfy every table CHECK, so only the COMMIT-time trigger can tell them apart."
+  },
+  {
+    "id": "INV-INV-13-precision",
+    "label": "the precision test refuses a unit precision outside nought to four",
+    "mechanism": "inventory_quantity_is_representable — 0060:118-124, raising at 0060:121-122",
+    "plant": "SELECT inventory_quantity_is_representable(1.2, 5::smallint)",
+    "expect": "reject",
+    "expectText": "inventory.arithmetic_invalid",
+    "control": ["SELECT inventory_quantity_is_representable(1.2345, 4::smallint)"],
+    "deferred": false,
+    "notes": "This measures the function, not a write path: the refusal of a quantity with too many decimals lives inside the single-writer primitive, which cannot be called without a signed assertion. That half stays NOT_RUN and is named as such."
+  },
+  {
+    "id": "INV-ACC-01-one-side",
+    "label": "a journal line that is both a debit and a credit is refused",
+    "mechanism": "CHECK journal_lines_one_side_ck — 0042:221",
+    "setup": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000b','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','aaaaaaaa-0000-4000-8000-00000000000a') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','user','33333333-3333-4333-8333-333333333333',repeat('a',64)) ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',1,a.id,100,100,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code LIMIT 1",
+    "expect": "reject",
+    "expectText": "journal_lines_one_side_ck",
+    "control": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000b','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','aaaaaaaa-0000-4000-8000-00000000000a') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','user','33333333-3333-4333-8333-333333333333',repeat('a',64)) ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',1,a.id,100,0,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code LIMIT 1"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is the same line as a debit alone. It ends in ROLLBACK because one debit with no credit is an unbalanced entry, which is the COMMIT-time refusal measured by the next case."
+  },
+  {
+    "id": "INV-ACC-01-unbalanced",
+    "label": "an entry whose debits and credits differ is refused at COMMIT",
+    "mechanism": "accounting_assert_entry_valid raising at 0043:206, through the deferred triggers at 0043:292-299",
+    "setup": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000b','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','aaaaaaaa-0000-4000-8000-00000000000a') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','user','33333333-3333-4333-8333-333333333333',repeat('a',64)) ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',1,a.id,100,0,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code LIMIT 1"
+    ],
+    "plant": "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',2,a.id,0,90,90,b.base_currency,b.base_currency,90,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code OFFSET 1 LIMIT 1",
+    "expect": "reject",
+    "expectText": "accounting.entry_unbalanced",
+    "control": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000c','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000c','aaaaaaaa-0000-4000-8000-00000000000d') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000d',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000c','user','33333333-3333-4333-8333-333333333333',repeat('b',64)) ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000d',1,a.id,100,0,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code LIMIT 1",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000d',2,a.id,0,100,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id ORDER BY a.code OFFSET 1 LIMIT 1"
+    ],
+    "deferred": true,
+    "notes": "The control is the same entry balanced at a hundred on both sides, under its own source and fingerprint, and it must survive COMMIT. Both share every other field, so the difference measured is the balance alone."
+  },
+  {
+    "id": "INV-ACC-05-fx-update",
+    "label": "an entered exchange rate cannot be updated",
+    "mechanism": "accounting_fx_rates_immutable through accounting_fx_rates_no_mutation BEFORE UPDATE OR DELETE — 0048:144-154",
+    "setup": [
+      "INSERT INTO accounting_fx_rates(tenant_id,business_id,id,from_currency,to_currency,rate,effective_at,entered_by_user_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000020',b.base_currency,c.code,3.7,'2026-01-01 00:00:00+00','33333333-3333-4333-8333-333333333333' FROM businesses b, currencies c WHERE b.id='22222222-2222-4222-8222-222222222222' AND c.code <> b.base_currency ORDER BY c.code LIMIT 1"
+    ],
+    "plant": "UPDATE accounting_fx_rates SET rate = 4 WHERE business_id='22222222-2222-4222-8222-222222222222' AND id='aaaaaaaa-0000-4000-8000-000000000020'",
+    "expect": "reject",
+    "expectText": "accounting.fx_rate_immutable",
+    "control": [
+      "INSERT INTO accounting_fx_rates(tenant_id,business_id,id,from_currency,to_currency,rate,effective_at,entered_by_user_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000021',b.base_currency,c.code,3.8,'2026-02-01 00:00:00+00','33333333-3333-4333-8333-333333333333' FROM businesses b, currencies c WHERE b.id='22222222-2222-4222-8222-222222222222' AND c.code <> b.base_currency ORDER BY c.code LIMIT 1"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is the correction the rule allows: a new rate at a later effective time, accepted as a statement."
+  },
+  {
+    "id": "INV-ACC-05-fx-delete",
+    "label": "an entered exchange rate cannot be deleted",
+    "mechanism": "the same trigger, on DELETE — 0048:152-154",
+    "setup": [
+      "INSERT INTO accounting_fx_rates(tenant_id,business_id,id,from_currency,to_currency,rate,effective_at,entered_by_user_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000022',b.base_currency,c.code,3.9,'2026-03-01 00:00:00+00','33333333-3333-4333-8333-333333333333' FROM businesses b, currencies c WHERE b.id='22222222-2222-4222-8222-222222222222' AND c.code <> b.base_currency ORDER BY c.code LIMIT 1"
+    ],
+    "plant": "DELETE FROM accounting_fx_rates WHERE business_id='22222222-2222-4222-8222-222222222222' AND id='aaaaaaaa-0000-4000-8000-000000000022'",
+    "expect": "reject",
+    "expectText": "accounting.fx_rate_immutable",
+    "control": [
+      "INSERT INTO accounting_fx_rates(tenant_id,business_id,id,from_currency,to_currency,rate,effective_at,entered_by_user_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000023',b.base_currency,c.code,4.0,'2026-04-01 00:00:00+00','33333333-3333-4333-8333-333333333333' FROM businesses b, currencies c WHERE b.id='22222222-2222-4222-8222-222222222222' AND c.code <> b.base_currency ORDER BY c.code LIMIT 1"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The same table accepts an insert in the same breath, so the refusal is the trigger's and not the table's."
+  },
+  {
+    "id": "INV-ACC-05-ledger-append-only",
+    "label": "a stock movement cannot be amended once written",
+    "mechanism": "stock_ledger_append_only through stock_movements_append_only — 0059:265-269, 0059:287-289",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000024','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',6,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "plant": "UPDATE stock_movements SET reason = 'probe' WHERE business_id='22222222-2222-4222-8222-222222222222' AND id='aaaaaaaa-0000-4000-8000-000000000024'",
+    "expect": "reject",
+    "expectText": "inventory.ledger_immutable",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id,reason) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',7,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,'33333333-3333-4333-8333-333333333333','probe')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control writes the same reason as a NEW row, which the append-only rule allows; only the amendment of a written row is refused."
+  },
+  {
+    "id": "INV-ACC-07-one-entry-per-source",
+    "label": "one source document cannot carry two journal entries",
+    "mechanism": "UNIQUE journal_entries_business_id_source_type_source_id_key — 0042:148, name read from pg_constraint on this database",
+    "setup": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000b','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-00000000000a',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','user','33333333-3333-4333-8333-333333333333',repeat('a',64)) ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000025',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-00000000000b','user','33333333-3333-4333-8333-333333333333',repeat('c',64))",
+    "expect": "reject",
+    "expectText": "journal_entries_business_id_source_type_source_id_key",
+    "control": [
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000026','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000027',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-000000000026','user','33333333-3333-4333-8333-333333333333',repeat('d',64))"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is a second entry under its OWN source, accepted as a statement; it ends in ROLLBACK because an entry with no lines and no binding would be refused at COMMIT by guards that belong to other invariants."
+  },
+  {
+    "id": "INV-ACC-09-realised-fx",
+    "label": "a realised exchange difference that is not the subtraction is refused",
+    "mechanism": "CHECK payment_allocations_realized_ck — 0081:335-336",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO payment_allocations(tenant_id,business_id,id,payment_id,customer_id,invoice_id,line_no,payment_currency,payment_amount_minor,payment_to_base_rate,payment_base_amount_minor,invoice_currency,invoice_amount_applied_minor,invoice_historical_to_base_rate,ar_released_before_txn_minor,invoice_carrying_base_released_minor,ar_dust_base_minor,realized_fx_gain_loss_minor,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000030',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1,b.base_currency,100,1,100,b.base_currency,100,1,0,90,0,5,'aaaaaaaa-0000-4000-8000-000000000030' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "payment_allocations_realized_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO payment_allocations(tenant_id,business_id,id,payment_id,customer_id,invoice_id,line_no,payment_currency,payment_amount_minor,payment_to_base_rate,payment_base_amount_minor,invoice_currency,invoice_amount_applied_minor,invoice_historical_to_base_rate,ar_released_before_txn_minor,invoice_carrying_base_released_minor,ar_dust_base_minor,realized_fx_gain_loss_minor,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000031',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1,b.base_currency,100,1,100,b.base_currency,100,1,0,90,0,10,'aaaaaaaa-0000-4000-8000-000000000031' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "Both the plant and the control run with session_replication_role set to replica, so the row triggers and the referential checks are out of the way and what is measured is the CHECK alone: base a hundred less ninety released is ten, and the plant says five. A refusal here is therefore the CHECK's, and the control proves the same statement is otherwise accepted. This does NOT measure the guard trigger that refuses a hand-written allocation in ordinary operation."
+  },
+  {
+    "id": "INV-ACC-17-pair",
+    "label": "a credit's remaining amount and its carrying value must be zero together",
+    "mechanism": "CHECK customer_credits_remaining_pair_ck — 0081:411-412",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO customer_credits(tenant_id,business_id,id,customer_id,origin_payment_id,currency_code,original_amount_minor,original_carrying_base_amount_minor,credit_to_base_rate,rate_source,rate_timestamp,remaining_amount_minor,remaining_carrying_base_amount_minor,credit_date,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000032',gen_random_uuid(),gen_random_uuid(),b.base_currency,100,100,1,'base','2026-01-01 00:00:00+00',0,5,CURRENT_DATE,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000032' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "customer_credits_remaining_pair_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO customer_credits(tenant_id,business_id,id,customer_id,origin_payment_id,currency_code,original_amount_minor,original_carrying_base_amount_minor,credit_to_base_rate,rate_source,rate_timestamp,remaining_amount_minor,remaining_carrying_base_amount_minor,credit_date,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000033',gen_random_uuid(),gen_random_uuid(),b.base_currency,100,100,1,'base','2026-01-01 00:00:00+00',0,0,CURRENT_DATE,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000033' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is the same row with both halves at zero, which the pair rule allows and the ceiling rule allows too."
+  },
+  {
+    "id": "INV-ACC-17-ceiling",
+    "label": "a credit cannot have more remaining than it was issued for",
+    "mechanism": "CHECK customer_credits_remaining_ck — 0081:405",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO customer_credits(tenant_id,business_id,id,customer_id,origin_payment_id,currency_code,original_amount_minor,original_carrying_base_amount_minor,credit_to_base_rate,rate_source,rate_timestamp,remaining_amount_minor,remaining_carrying_base_amount_minor,credit_date,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000034',gen_random_uuid(),gen_random_uuid(),b.base_currency,100,100,1,'base','2026-01-01 00:00:00+00',101,101,CURRENT_DATE,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000034' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "customer_credits_remaining_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO customer_credits(tenant_id,business_id,id,customer_id,origin_payment_id,currency_code,original_amount_minor,original_carrying_base_amount_minor,credit_to_base_rate,rate_source,rate_timestamp,remaining_amount_minor,remaining_carrying_base_amount_minor,credit_date,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000035',gen_random_uuid(),gen_random_uuid(),b.base_currency,100,100,1,'base','2026-01-01 00:00:00+00',100,100,CURRENT_DATE,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000035' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The plant and the control differ by one minor unit over the issued amount, so the refusal is the ceiling's and not the pair rule's."
+  },
+  {
+    "id": "INV-ACC-06-binding-without-entry",
+    "label": "a source binding with no journal entry is refused",
+    "mechanism": "accounting_source_bindings.journal_entry_id NOT NULL — 0042:278",
+    "plant": "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment',gen_random_uuid(),NULL)",
+    "expect": "reject",
+    "expectText": "journal_entry_id",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment',gen_random_uuid(),gen_random_uuid())"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control carries the same row with an entry id, under session_replication_role=replica so the deferred entry foreign key is out of the way: what is measured here is the column rule, that no allocation can exist without an entry to name."
+  },
+  {
+    "id": "INV-ACC-06-binding-identity",
+    "label": "an allocation's binding identity must be the allocation itself",
+    "mechanism": "CHECK payment_allocations_binding_identity_ck (binding_source_id = id) — 0081:339",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO payment_allocations(tenant_id,business_id,id,payment_id,customer_id,invoice_id,line_no,payment_currency,payment_amount_minor,payment_to_base_rate,payment_base_amount_minor,invoice_currency,invoice_amount_applied_minor,invoice_historical_to_base_rate,ar_released_before_txn_minor,invoice_carrying_base_released_minor,ar_dust_base_minor,realized_fx_gain_loss_minor,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000040',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1,b.base_currency,100,1,100,b.base_currency,100,1,0,100,0,0,'aaaaaaaa-0000-4000-8000-000000000041' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "payment_allocations_binding_identity_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO payment_allocations(tenant_id,business_id,id,payment_id,customer_id,invoice_id,line_no,payment_currency,payment_amount_minor,payment_to_base_rate,payment_base_amount_minor,invoice_currency,invoice_amount_applied_minor,invoice_historical_to_base_rate,ar_released_before_txn_minor,invoice_carrying_base_released_minor,ar_dust_base_minor,realized_fx_gain_loss_minor,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000042',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),1,b.base_currency,100,1,100,b.base_currency,100,1,0,100,0,0,'aaaaaaaa-0000-4000-8000-000000000042' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The plant and the control differ in one field: whether the binding identity is the row's own id. Both run with the row triggers and the referential checks out of the way, so the refusal is the CHECK's."
+  },
+  {
+    "id": "INV-ACC-12-ppv-by-subtraction",
+    "label": "a purchase price variance that is not the subtraction is refused",
+    "mechanism": "CHECK supplier_returns_ppv_ck (ppv = ap + credit - inventory_value) — 0065:207",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO supplier_returns(tenant_id,business_id,id,purchase_id,supplier_id,warehouse_id,business_transaction_id,created_by,binding_source_id,currency_code,source_to_base_rate,document_date,intent_sha256,carrying_txn_minor,ap_txn_minor,ap_base_minor,ap_dust_base_minor,ap_released_before_txn_minor,credit_txn_minor,credit_base_minor,inventory_value_base_minor,ppv_base_minor) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000043',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000043',b.base_currency,1,CURRENT_DATE,repeat('a',64),100,100,100,0,0,0,0,100,5 FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "supplier_returns_ppv_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO supplier_returns(tenant_id,business_id,id,purchase_id,supplier_id,warehouse_id,business_transaction_id,created_by,binding_source_id,currency_code,source_to_base_rate,document_date,intent_sha256,carrying_txn_minor,ap_txn_minor,ap_base_minor,ap_dust_base_minor,ap_released_before_txn_minor,credit_txn_minor,credit_base_minor,inventory_value_base_minor,ppv_base_minor) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000044',gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000044',b.base_currency,1,CURRENT_DATE,repeat('a',64),100,100,100,0,0,0,0,95,5 FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "A hundred payable plus no credit less ninety-five of inventory value is five, which the control says; the plant keeps the five and says the inventory value is a hundred, so only the subtraction is broken."
+  },
+  {
+    "id": "INV-ACC-13-settlement-account",
+    "label": "a payment method cannot post to an account that is not a settlement asset",
+    "mechanism": "accounting_settlement_account_eligibility through payment_method_guard — 0067:827-828",
+    "setup": [
+      "SET LOCAL app.business_id = '22222222-2222-4222-8222-222222222222'",
+      "SET LOCAL app.business_transaction_id = '55555555-5555-4555-8555-555555555555'"
+    ],
+    "plant": "INSERT INTO payment_methods(tenant_id,business_id,id,posting_account_id,business_transaction_id,created_by,updated_by,system_type,is_active,requires_reference,sort_order,revision,create_intent_sha256,last_intent_sha256) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000045',a.id,'55555555-5555-4555-8555-555555555555','33333333-3333-4333-8333-333333333333','33333333-3333-4333-8333-333333333333','cash',true,false,1,1,repeat('a',64),repeat('a',64) FROM accounts a WHERE a.business_id='22222222-2222-4222-8222-222222222222' AND a.system_key='accounts_receivable'",
+    "expect": "reject",
+    "expectText": "posting_account_ineligible",
+    "control": [
+      "SET LOCAL app.business_id = '22222222-2222-4222-8222-222222222222'",
+      "SET LOCAL app.business_transaction_id = '55555555-5555-4555-8555-555555555555'",
+      "INSERT INTO payment_methods(tenant_id,business_id,id,posting_account_id,business_transaction_id,created_by,updated_by,system_type,is_active,requires_reference,sort_order,revision,create_intent_sha256,last_intent_sha256) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000046',a.id,'55555555-5555-4555-8555-555555555555','33333333-3333-4333-8333-333333333333','33333333-3333-4333-8333-333333333333','cash',true,false,1,1,repeat('a',64),repeat('a',64) FROM accounts a WHERE a.business_id='22222222-2222-4222-8222-222222222222' AND a.system_key='cheque_clearing'",
+      "INSERT INTO payment_method_names(tenant_id,business_id,payment_method_id,locale,display_name) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000046','ar','probe')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "Receivables is an asset but not a settlement account, which is the distinction being measured; the control posts to cheque clearing, which is one. The control ends in ROLLBACK because the deferred name requirement and the accounting bindings belong to other rules."
+  },
+  {
+    "id": "INV-INV-02-actor-required",
+    "label": "a movement with no actor is refused",
+    "mechanism": "stock_movements.actor_user_id NOT NULL — 0059:144",
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',20,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,NULL,NULL)",
+    "expect": "reject",
+    "expectText": "actor_user_id",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',21,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,NULL,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control is the same movement with its actor, under replica because the stock level foreign key is immediate and belongs to another rule."
+  },
+  {
+    "id": "INV-INV-02-textual-reason-is-not-a-column-rule",
+    "label": "the table accepts an adjustment with no textual reason, which the function requires",
+    "mechanism": "stock_movements.reason is NULL-allowed (0059:143) while inventory.reason_required lives inside the writer (0060:344-345)",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',22,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,NULL,'33333333-3333-4333-8333-333333333333')",
+    "expect": "accept",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',23,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,'probe','33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "A gap proved positive, and a narrow one: the row goes in without a reason, so the requirement is the function's and not the table's. It does NOT say the ordinary write path accepts it -- that path is the single-writer primitive, which refuses with inventory.reason_required and is not reachable from SQL without a signed assertion."
+  },
+  {
+    "id": "INV-INV-08-half-even-refuses-a-bad-scale",
+    "label": "the rounding primitive refuses a zero denominator",
+    "mechanism": "inventory_half_even raising inventory.arithmetic_invalid — 0060:83-94",
+    "plant": "SELECT inventory_half_even(1, 0, 0)",
+    "expect": "reject",
+    "expectText": "inventory.arithmetic_invalid",
+    "control": ["SELECT inventory_half_even(5, 2, 0)"],
+    "deferred": false,
+    "notes": "The control is a rounding that must work: five halves at scale nought. The function is SECURITY DEFINER with EXECUTE revoked from PUBLIC, so this measures it as the superuser the probe runs as."
+  },
+  {
+    "id": "INV-INV-08-value-range",
+    "label": "a movement value outside the stored range is refused",
+    "mechanism": "CHECK stock_movements_value_range_ck — 0059:153",
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',24,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,2000000000000000000,NULL,'33333333-3333-4333-8333-333333333333')",
+    "expect": "reject",
+    "expectText": "stock_movements_value_range_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',25,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,1,1,NULL,'33333333-3333-4333-8333-333333333333')"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "Two times ten to the eighteenth is outside the range the column is allowed to hold; the control is a value of one in the same shape."
+  },
+  {
+    "id": "INV-ACC-18-no-reversal-exists",
+    "label": "no reversal of a payment allocation exists to be called — the gap, probed with a control",
+    "mechanism": "the absence of reverse_payment_allocation, payment_reversal and void_invoice, against the presence of payment_allocation_guard",
+    "plant": "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_proc WHERE proname IN ('reverse_payment_allocation','payment_reversal','void_invoice')) THEN RAISE EXCEPTION 'one of the absent routines exists after all'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'payment_allocation_guard') THEN RAISE EXCEPTION 'the probe cannot see a routine that does exist'; END IF; END $$"
+    ],
+    "deferred": false,
+    "notes": "A gap cannot be proved by a SELECT that returns nothing, because an empty answer and a blind probe look alike. So the plant RAISES if any of the three routines exists -- its acceptance is the absence -- and the control RAISES if the probe cannot see payment_allocation_guard, which does exist. The pair is the positive control RULE-3 asks for. It does not say the gap is harmless: C3 remains a blocking card."
+  },
+  {
+    "id": "INV-ACC-03-consumed-ceiling",
+    "label": "a refund cannot consume more of a credit note than the note had left",
+    "mechanism": "CHECK supplier_refunds_consumed_ck — 0067:492",
+    "setup": ["SET LOCAL session_replication_role = replica"],
+    "plant": "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000060',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,11,1,10,11,0,b.base_currency,11,1,11,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000060' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "supplier_refunds_consumed_ck",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000061',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,10,1,10,10,0,b.base_currency,10,1,10,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000061' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "Eleven consumed against ten remaining is the only difference from the control; both run with the guard trigger and the referential checks out of the way, so the refusal is the CHECK's."
+  },
+  {
+    "id": "INV-ACC-03-one-refund-per-level",
+    "label": "two refunds cannot claim the same remaining level of one credit note",
+    "mechanism": "UNIQUE supplier_refunds_level_uq (business_id, credit_note_id, credit_remaining_before_minor) — 0067:491",
+    "setup": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000062',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,10,1,10,10,0,b.base_currency,10,1,10,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000062' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "plant": "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000063',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,10,1,10,10,0,b.base_currency,10,1,10,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000063' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+    "expect": "reject",
+    "expectText": "supplier_refunds_level_uq",
+    "control": [
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000064',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,10,1,10,10,0,b.base_currency,10,1,10,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000064' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'",
+      "INSERT INTO supplier_refunds(tenant_id,business_id,id,supplier_id,credit_note_id,payment_method_id,posting_account_id,refund_date,source_currency,source_amount_consumed_minor,source_to_base_rate,credit_remaining_before_minor,source_carrying_base_released_minor,source_dust_base_minor,receipt_currency,receipt_amount_minor,receipt_to_base_rate,receipt_base_amount_minor,rate_source,rate_timestamp,realized_fx_gain_loss_minor,intent_sha256,business_transaction_id,created_by,binding_source_id) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000065',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000057',gen_random_uuid(),gen_random_uuid(),CURRENT_DATE,b.base_currency,9,1,9,9,0,b.base_currency,9,1,9,'base','2026-01-01 00:00:00+00',0,repeat('a',64),gen_random_uuid(),'33333333-3333-4333-8333-333333333333','aaaaaaaa-0000-4000-8000-000000000065' FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222'"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "The control takes two refunds off the same note at two different remaining levels, which is the consumption chain the rule allows; the plant repeats one level."
+  },
+  {
+    "id": "INV-ACC-11-inventory-account-domain",
+    "label": "after the first stock movement, a manual entry may not touch the inventory account",
+    "mechanism": "accounting_inventory_account_domain_guard — 0069:225-240, trigger 0069:250, re-checked at 0071:312-325",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000066','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000066','aaaaaaaa-0000-4000-8000-000000000067',1,'aaaaaaaa-0000-4000-8000-000000000004',1,0) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',30,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000066','aaaaaaaa-0000-4000-8000-000000000067',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000066','aaaaaaaa-0000-4000-8000-000000000067','adjustment')",
+      "INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000066','aaaaaaaa-0000-4000-8000-000000000067','adjustment') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000068','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-000000000068','aaaaaaaa-0000-4000-8000-000000000069') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000069',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-000000000068','user','33333333-3333-4333-8333-333333333333',repeat('a',64)) ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000069',1,a.id,100,0,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id AND a.system_key='inventory'; INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000069',2,a.id,0,100,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id AND a.system_key='cash'",
+    "expect": "reject",
+    "expectText": "inventory_account_domain",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000070','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000070','aaaaaaaa-0000-4000-8000-000000000071',1,'aaaaaaaa-0000-4000-8000-000000000004',1,0) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',31,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000070','aaaaaaaa-0000-4000-8000-000000000071',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000070','aaaaaaaa-0000-4000-8000-000000000071','adjustment')",
+      "INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000070','aaaaaaaa-0000-4000-8000-000000000071','adjustment') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_manual_adjustments(tenant_id,business_id,id,reason,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000072','probe','33333333-3333-4333-8333-333333333333') ON CONFLICT DO NOTHING",
+      "INSERT INTO accounting_source_bindings(tenant_id,business_id,source_type,source_id,journal_entry_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','manual_adjustment','aaaaaaaa-0000-4000-8000-000000000072','aaaaaaaa-0000-4000-8000-000000000073') ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_entries(tenant_id,business_id,id,entry_date,source_type,source_id,actor_kind,actor_user_id,posting_fingerprint) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000073',CURRENT_DATE-1,'manual_adjustment','aaaaaaaa-0000-4000-8000-000000000072','user','33333333-3333-4333-8333-333333333333',repeat('b',64)) ON CONFLICT DO NOTHING",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000073',1,a.id,100,0,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id AND a.system_key='cash'",
+      "INSERT INTO journal_lines(tenant_id,business_id,journal_entry_id,line_no,account_id,debit_minor,credit_minor,base_amount_minor,base_currency,txn_currency,txn_amount_minor,fx_rate,fx_rate_source,fx_rate_at) SELECT '11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000073',2,a.id,0,100,100,b.base_currency,b.base_currency,100,1,'base',date_trunc('second', now()) FROM businesses b, accounts a WHERE b.id='22222222-2222-4222-8222-222222222222' AND a.business_id=b.id AND a.system_key='accounts_payable'"
+    ],
+    "deferred": true,
+    "notes": "The business has a stock movement in the same transaction, which is what turns the guard on. The plant's entry puts a hundred on the inventory account; the control's puts it between cash and payables. Both commit, so the deferred guard has its say in each."
+  },
+  {
+    "id": "INV-INV-03-rebuild-catches-a-wrong-cache",
+    "label": "the rebuild in the database sees a cache that does not match its movements",
+    "mechanism": "inventory_stock_verify over inventory_stock_fold — 0060:517, 0060:581; signatures and GUCs measured on this database",
+    "setup": [
+      "SET LOCAL app.business_id = '22222222-2222-4222-8222-222222222222'",
+      "SET LOCAL app.tenant_id = '11111111-1111-4111-8111-111111111111'",
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000090','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090',1,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "UPDATE stock_levels s SET on_hand = f.on_hand, valuation_base_minor = f.valuation_base_minor, avg_unit_cost_base_minor = f.avg_unit_cost_base_minor, last_stock_seq = f.last_stock_seq FROM inventory_stock_fold('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090') f WHERE s.business_id='22222222-2222-4222-8222-222222222222' AND s.warehouse_id='aaaaaaaa-0000-4000-8000-000000000002' AND s.variant_id='aaaaaaaa-0000-4000-8000-000000000090'",
+      "UPDATE stock_levels SET on_hand = on_hand + 1 WHERE business_id='22222222-2222-4222-8222-222222222222' AND warehouse_id='aaaaaaaa-0000-4000-8000-000000000002' AND variant_id='aaaaaaaa-0000-4000-8000-000000000090'"
+    ],
+    "plant": "DO $$ BEGIN IF (SELECT matches FROM inventory_stock_verify('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090')) THEN RAISE EXCEPTION 'the rebuild called a drifted cache a match'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "SET LOCAL app.business_id = '22222222-2222-4222-8222-222222222222'",
+      "SET LOCAL app.tenant_id = '11111111-1111-4111-8111-111111111111'",
+      "SET LOCAL session_replication_role = replica",
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000090','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090',2,'adjustment','inventory_adjustment',gen_random_uuid(),gen_random_uuid(),1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "UPDATE stock_levels s SET on_hand = f.on_hand, valuation_base_minor = f.valuation_base_minor, avg_unit_cost_base_minor = f.avg_unit_cost_base_minor, last_stock_seq = f.last_stock_seq FROM inventory_stock_fold('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090') f WHERE s.business_id='22222222-2222-4222-8222-222222222222' AND s.warehouse_id='aaaaaaaa-0000-4000-8000-000000000002' AND s.variant_id='aaaaaaaa-0000-4000-8000-000000000090'",
+      "DO $$ BEGIN IF NOT (SELECT matches FROM inventory_stock_verify('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000090')) THEN RAISE EXCEPTION 'the rebuild called a synced cache a mismatch'; END IF; END $$"
+    ],
+    "controlEnds": "rollback",
+    "deferred": false,
+    "notes": "A reader, not a refuser, so the case is shaped the other way round: the plant RAISES if the reader calls a drifted cache a match, and its acceptance is the detection; the control RAISES if a synced cache is called a mismatch, so the reader is not simply always saying no. Three things had to be measured before this could pass, and each was a defect of mine: the key must be FRESH, because a key carrying committed movements at scattered sequence numbers makes inventory_stock_fold report sequence_gapless = false and then no cache can match it; the sequence must start at one for the same reason; and app.tenant_id must be set beside app.business_id, or the cache side of verify comes back NULL and 'mismatch' means the reader found no cache at all. The runner ends every attempt with COMMIT, and the case reads no state afterwards. The control takes sequence two, because the plant commits (its expectation is acceptance) and leaves sequence one behind; one and two keep the sequence gapless."
+  },
+  {
+    "id": "INV-INV-05-transfer-pair",
+    "label": "a transfer line needs both its legs, and one alone is refused at COMMIT",
+    "mechanism": "stock_source_complete_inventory_transfer — 0061:902-928, trigger 0061:1300",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000001','probe-2') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfers(tenant_id,business_id,id,source_warehouse_id,destination_warehouse_id,intent_sha256,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000051','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000050',repeat('a',64),'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfer_lines(tenant_id,business_id,transfer_id,id,line_no,variant_id,qty) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000051','aaaaaaaa-0000-4000-8000-000000000052',1,'aaaaaaaa-0000-4000-8000-000000000004',1) ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',42,'transfer_out','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000051','aaaaaaaa-0000-4000-8000-000000000052',-1,0,0,'33333333-3333-4333-8333-333333333333'); INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000051','aaaaaaaa-0000-4000-8000-000000000052','transfer_out'); INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000051','aaaaaaaa-0000-4000-8000-000000000052','transfer_out') ON CONFLICT DO NOTHING",
+    "expect": "reject",
+    "expectText": "source_movement_set_incomplete",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000001','probe-2') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfers(tenant_id,business_id,id,source_warehouse_id,destination_warehouse_id,intent_sha256,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000050',repeat('a',64),'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfer_lines(tenant_id,business_id,transfer_id,id,line_no,variant_id,qty) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054',1,'aaaaaaaa-0000-4000-8000-000000000004',1) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',43,'transfer_out','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054',-1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054','transfer_out')",
+      "INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054','transfer_out') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004',44,'transfer_in','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054','transfer_in')",
+      "INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000053','aaaaaaaa-0000-4000-8000-000000000054','transfer_in') ON CONFLICT DO NOTHING"
+    ],
+    "deferred": true,
+    "notes": "The control is the same transfer with both legs and both bindings, committed; the plant is the out leg alone."
+  },
+  {
+    "id": "INV-INV-05-value-conservation-is-not-in-the-database",
+    "label": "the two legs of a transfer may carry values that do not cancel",
+    "mechanism": "the gap: value conservation lives only in inventory_post_stock_movement (0060:374), and inventory_source_value_complete does not cover transfers (0061:1342-1349)",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000001','probe-2') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfers(tenant_id,business_id,id,source_warehouse_id,destination_warehouse_id,intent_sha256,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000050',repeat('a',64),'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfer_lines(tenant_id,business_id,transfer_id,id,line_no,variant_id,qty) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056',1,'aaaaaaaa-0000-4000-8000-000000000004',1) ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',45,'transfer_out','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056',-1,5,-5,'33333333-3333-4333-8333-333333333333'); INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056','transfer_out'); INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056','transfer_out') ON CONFLICT DO NOTHING; INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004',46,'transfer_in','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056',1,3,3,'33333333-3333-4333-8333-333333333333'); INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056','transfer_in'); INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000055','aaaaaaaa-0000-4000-8000-000000000056','transfer_in') ON CONFLICT DO NOTHING",
+    "expect": "accept",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000001','probe-2') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfers(tenant_id,business_id,id,source_warehouse_id,destination_warehouse_id,intent_sha256,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000050',repeat('a',64),'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_transfer_lines(tenant_id,business_id,transfer_id,id,line_no,variant_id,qty) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081',1,'aaaaaaaa-0000-4000-8000-000000000004',1) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',60,'transfer_out','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081',-1,5,-5,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081','transfer_out')",
+      "INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081','transfer_out') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000050','aaaaaaaa-0000-4000-8000-000000000004',61,'transfer_in','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081',1,5,5,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_transfer','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081','transfer_in')",
+      "INSERT INTO stock_source_bridge_inventory_transfer(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000080','aaaaaaaa-0000-4000-8000-000000000081','transfer_in') ON CONFLICT DO NOTHING"
+    ],
+    "deferred": false,
+    "notes": "A gap proved positive: five out and three in commits, so nothing in the database compares the legs' values. The control is the same transfer with five against five, which commits too -- that is the point: both pass, so the pair rule is about completeness and not about value. It does NOT say the ordinary path loses value: that path assigns the value inside the single writer, which is why C6 stays blocking. The control carries its OWN transfer identity: the first version reused the pair case's, which had already committed, and stock_movements_identity_uq refused it."
+  },
+  {
+    "id": "INV-INV-14-document-total-is-the-sum-of-its-movements",
+    "label": "an adjustment whose total is not the sum of its movement values is refused at COMMIT",
+    "mechanism": "inventory_source_value_complete — 0061:1126, raising at 0061:1146, trigger 0061:1342",
+    "setup": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING"
+    ],
+    "plant": "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000074','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING; INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000074','aaaaaaaa-0000-4000-8000-000000000075',1,'aaaaaaaa-0000-4000-8000-000000000004',1,1) ON CONFLICT DO NOTHING; INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',49,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000074','aaaaaaaa-0000-4000-8000-000000000075',1,1,1,'33333333-3333-4333-8333-333333333333'); INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000074','aaaaaaaa-0000-4000-8000-000000000075','adjustment'); INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000074','aaaaaaaa-0000-4000-8000-000000000075','adjustment') ON CONFLICT DO NOTHING",
+    "expect": "reject",
+    "expectText": "source_value_mismatch",
+    "control": [
+      "INSERT INTO branches(business_id,id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO warehouses(business_id,id,branch_id,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000001','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO products(business_id,id,base_price_minor,price_currency) SELECT '22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003',0,b.base_currency FROM businesses b WHERE b.id='22222222-2222-4222-8222-222222222222' ON CONFLICT DO NOTHING",
+      "INSERT INTO product_translations(business_id,product_id,locale,name) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000003','ar','probe') ON CONFLICT DO NOTHING",
+      "INSERT INTO product_variants(business_id,id,product_id) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000004','aaaaaaaa-0000-4000-8000-000000000003') ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_levels(tenant_id,business_id,warehouse_id,variant_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004') ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustments(tenant_id,business_id,id,kind,warehouse_id,occurred_on,reason,intent_sha256,total_value_base_minor,actor_user_id,business_transaction_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000076','adjustment','aaaaaaaa-0000-4000-8000-000000000002',CURRENT_DATE,'probe',repeat('a',64),0,'33333333-3333-4333-8333-333333333333',gen_random_uuid()) ON CONFLICT DO NOTHING",
+      "INSERT INTO inventory_adjustment_lines(tenant_id,business_id,adjustment_id,id,line_no,variant_id,qty_delta,unit_cost_base_minor) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000076','aaaaaaaa-0000-4000-8000-000000000077',1,'aaaaaaaa-0000-4000-8000-000000000004',1,0) ON CONFLICT DO NOTHING",
+      "INSERT INTO stock_movements(tenant_id,business_id,id,warehouse_id,variant_id,stock_seq,movement_kind,source_type,source_id,source_line_id,qty_delta,unit_cost_base_minor,value_delta_base_minor,actor_user_id) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222',gen_random_uuid(),'aaaaaaaa-0000-4000-8000-000000000002','aaaaaaaa-0000-4000-8000-000000000004',50,'adjustment','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000076','aaaaaaaa-0000-4000-8000-000000000077',1,0,0,'33333333-3333-4333-8333-333333333333')",
+      "INSERT INTO stock_source_bindings(tenant_id,business_id,source_type,source_id,source_line_id,movement_kind) VALUES ('11111111-1111-4111-8111-111111111111','22222222-2222-4222-8222-222222222222','inventory_adjustment','aaaaaaaa-0000-4000-8000-000000000076','aaaaaaaa-0000-4000-8000-000000000077','adjustment')",
+      "INSERT INTO stock_source_bridge_inventory_adjustment(business_id,source_id,source_line_id,movement_kind) VALUES ('22222222-2222-4222-8222-222222222222','aaaaaaaa-0000-4000-8000-000000000076','aaaaaaaa-0000-4000-8000-000000000077','adjustment') ON CONFLICT DO NOTHING"
+    ],
+    "deferred": true,
+    "notes": "The header says its total value is nought while its one movement carries one. The control is the same document with both at nought. A non-zero total would need the accounting binding and its entry, which is the other arm and is not planted here."
+  },
+  {
+    "id": "INV-ACC-04-no-installment-identity-guard",
+    "label": "down payment plus instalments = invoice total has no guard in the database — the gap, probed with a control",
+    "mechanism": "the absence of installment_schedule_verify in pg_proc, against the presence of payment_allocation_guard; the guard exists only in infrastructure/database/specifications/p4s7-installment-aging.spec.sql, not in a migration",
+    "plant": "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'installment_schedule_verify') THEN RAISE EXCEPTION 'installment_schedule_verify exists after all'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'payment_allocation_guard') THEN RAISE EXCEPTION 'the probe cannot see a routine that does exist'; END IF; END $$"
+    ],
+    "deferred": false,
+    "notes": "Same shape as INV-ACC-18: the plant RAISES if the routine exists, so its acceptance is the absence, and the control RAISES if the probe cannot see a routine known to exist. This probes the migrated database only (87 migrations); it says nothing about the spec file's own trigger, which CI exercises at ci.yml:887. When a migration that installs the function lands, this case fails on purpose and must be re-cut as a refusal."
+  },
+  {
+    "id": "INV-ACC-10-no-void-invoice-routine",
+    "label": "voiding a paid invoice has no atomic routine in the database — the gap, probed with a control",
+    "mechanism": "the absence of any routine whose name contains 'void' among the migrated functions, against the presence of payment_allocation_guard",
+    "plant": "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname LIKE '%void%') THEN RAISE EXCEPTION 'a routine with void in its name exists after all'; END IF; END $$",
+    "expect": "accept",
+    "control": [
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.proname = 'payment_allocation_guard') THEN RAISE EXCEPTION 'the probe cannot see a routine that does exist'; END IF; END $$"
+    ],
+    "deferred": false,
+    "notes": "Wider than INV-ACC-18, which names three exact routines: this plant refuses ANY public routine with void in its name, so a differently named void routine would also trip it. Only the absence arm is measured. The other arm in the plan -- that a transition of a paid invoice to void is accepted by the table with nothing preventing it (0075:583-584) -- needs an invoice stack and stays NOT_RUN. When a void routine lands this case fails on purpose and must be re-cut."
+  }
+]
