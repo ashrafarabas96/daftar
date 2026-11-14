@@ -112,8 +112,19 @@ describe('the requested DDL declares no anonymous CHECK', () => {
     return offences;
   };
 
+  /**
+   * The executable half of a line: what the law reads. The sightedness control
+   * below must read the SAME half, or a `-- CONSTRAINT x CHECK (...)` sitting
+   * inside a comment would satisfy the control while the law never sees it —
+   * the error direction being a SOFTENED CONTROL, not a softened law. Measured
+   * on this tree the two halves agree exactly (25 named and 6 policy either
+   * way, and zero CHECK lines that live only inside a comment), so this closes
+   * a hole rather than a defect. (Raised by the finance review of `27c8f2b9`.)
+   */
+  const executableHalf = (line: string): string => line.replace(/--.*$/, '');
+
   /** Lines carrying any form of CHECK, which is the set the law reads. */
-  const checkLines = (ddl: string): string[] => ddl.split('\n').filter((l) => /\bCHECK\s*\(/i.test(l.replace(/--.*$/, '')));
+  const checkLines = (ddl: string): string[] => ddl.split('\n').filter((l) => /\bCHECK\s*\(/i.test(executableHalf(l)));
 
   it('reads a DDL that actually declares CHECKs, so a clean result means something', () => {
     // Without this, a renamed, emptied or mis-pathed DDL yields no offences
@@ -126,12 +137,20 @@ describe('the requested DDL declares no anonymous CHECK', () => {
     const lines = checkLines(ddl);
     expect(lines.length, 'the DDL declares no CHECK of any kind, so this law read nothing').toBeGreaterThan(5);
     expect(
-      lines.filter((l) => /\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(l)).length,
+      lines.filter((l) => /\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(executableHalf(l))).length,
       'no NAMED check in the DDL, so the naming exclusion is never exercised',
     ).toBeGreaterThan(0);
-    expect(lines.filter((l) => /\bWITH\s+CHECK\s*\(/i.test(l)).length, 'no policy WITH CHECK in the DDL, so that exclusion is never exercised').toBeGreaterThan(
-      0,
-    );
+    expect(
+      lines.filter((l) => /\bWITH\s+CHECK\s*\(/i.test(executableHalf(l))).length,
+      'no policy WITH CHECK in the DDL, so that exclusion is never exercised',
+    ).toBeGreaterThan(0);
+    // And `executableHalf` is PROVED to discriminate, here rather than in a case
+    // of its own: on this tree the stripped and raw halves agree exactly, so
+    // nothing above would notice if the call were removed or became the identity
+    // — a change invisible on today's tree is the kind that regresses in
+    // silence. The two lines below differ only by `-- `.
+    expect(checkLines('CONSTRAINT amount_positive CHECK (amount_minor > 0),'), 'the executable form is read').toHaveLength(1);
+    expect(checkLines('-- CONSTRAINT amount_positive CHECK (amount_minor > 0),'), 'the commented form is NOT read').toHaveLength(0);
   });
 
   it('names every table CHECK it declares', () => {

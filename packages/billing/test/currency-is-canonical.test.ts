@@ -133,18 +133,21 @@ describe('this package assumes no currency precision', () => {
     const code = blankOut(source);
     const found: string[] = [];
     // The capture group is mandatory in both patterns, so a match always
-    // carries it; this explicit narrowing is what `noUncheckedIndexedAccess`
-    // asks for. It is a NARROWING and not a default: `?? ''` would push an
-    // empty name into `found`, and the law would then report an offence
-    // whose literal it could not name.
-    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) {
+    // carries it. `?? ''` stays refused — it would push an empty name into
+    // `found` and the law would report an offence whose literal it could not
+    // name — but so does `if (literal !== undefined) push(...)`, which was the
+    // first shape of this and READS as a guard while being a SILENT SKIP: the
+    // branch is unreachable today, and if either pattern ever made the group
+    // optional a real hit would be dropped without a word. A law that loses a
+    // hit in silence is the fail-open this file exists to forbid, so the
+    // unreachable state is NAMED. (Raised by the finance review of `27c8f2b9`.)
+    const collect = (m: RegExpMatchArray): void => {
       const literal = m[1];
-      if (literal !== undefined) found.push(literal);
-    }
-    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) {
-      const literal = m[1];
-      if (literal !== undefined) found.push(literal);
-    }
+      if (literal === undefined) throw new Error(`the scale pattern matched without its mandatory group: ${m[0]}`);
+      found.push(literal);
+    };
+    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) collect(m);
+    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) collect(m);
     return found;
   };
 
