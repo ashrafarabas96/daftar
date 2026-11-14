@@ -91,29 +91,71 @@ const dbTests = readdirSync(DB_DIR)
   .map((f) => ({ file: f, literals: stringLiteralsOf(readFileSync(join(DB_DIR, f), 'utf8')) }));
 
 describe('the requested DDL declares no anonymous CHECK', () => {
-  it('names every table CHECK it declares', () => {
-    const ddl = readFileSync(DDL, 'utf8');
+  /**
+   * THE SCAN, factored out so the law and its witness call the same code.
+   * Written inline, the witness could only restate the three regexes, and a
+   * witness that restates the law certifies its own copy.
+   *
+   * `WITH CHECK (...)` is a POLICY clause, not a table constraint, and the
+   * house RLS pattern uses it on every policy; a `CONSTRAINT <name> CHECK`
+   * is named, which is the whole point of the law.
+   */
+  const anonymousChecksIn = (ddl: string): string[] => {
     const offences: string[] = [];
     ddl.split('\n').forEach((line, i) => {
-      // `WITH CHECK (...)` is a POLICY clause, not a table constraint, and
-      // the house RLS pattern uses it on every policy.
       const stripped = line.replace(/--.*$/, '');
       if (!/\bCHECK\s*\(/i.test(stripped)) return;
       if (/\bWITH\s+CHECK\s*\(/i.test(stripped)) return;
       if (/\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(stripped)) return;
       offences.push(`line ${i + 1}: ${stripped.trim()}`);
     });
+    return offences;
+  };
+
+  /** Lines carrying any form of CHECK, which is the set the law reads. */
+  const checkLines = (ddl: string): string[] => ddl.split('\n').filter((l) => /\bCHECK\s*\(/i.test(l.replace(/--.*$/, '')));
+
+  it('reads a DDL that actually declares CHECKs, so a clean result means something', () => {
+    // Without this, a renamed, emptied or mis-pathed DDL yields no offences
+    // and the law passes on nothing at all (RULE-18: an empty probe is not a
+    // zero). The exclusions are asserted against the REAL file here, not only
+    // against fabricated text, so the law is known to be exercising both of
+    // them on the subject it guards.
+    const ddl = readFileSync(DDL, 'utf8');
+    expect(ddl.length, 'the requested DDL read back empty or near-empty').toBeGreaterThan(2000);
+    const lines = checkLines(ddl);
+    expect(lines.length, 'the DDL declares no CHECK of any kind, so this law read nothing').toBeGreaterThan(5);
+    expect(
+      lines.filter((l) => /\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(l)).length,
+      'no NAMED check in the DDL, so the naming exclusion is never exercised',
+    ).toBeGreaterThan(0);
+    expect(lines.filter((l) => /\bWITH\s+CHECK\s*\(/i.test(l)).length, 'no policy WITH CHECK in the DDL, so that exclusion is never exercised').toBeGreaterThan(
+      0,
+    );
+  });
+
+  it('names every table CHECK it declares', () => {
+    const offences = anonymousChecksIn(readFileSync(DDL, 'utf8'));
     expect(offences, 'an anonymous CHECK in the requested DDL — PostgreSQL would name it, and no case could assert that name').toStrictEqual([]);
   });
 
   it('proves that scan can see an anonymous CHECK at all', () => {
-    // The law above is a prohibition; this is its non-vacuity witness.
-    const planted = '  amount_minor bigint NOT NULL CHECK (amount_minor > 0),';
-    expect(/\bCHECK\s*\(/i.test(planted)).toBe(true);
-    expect(/\bCONSTRAINT\s+\w+\s+CHECK\s*\(/i.test(planted)).toBe(false);
-    // And a policy clause is not mistaken for one.
-    const policy = '  WITH CHECK (app_bypass() OR business_id::text = app_business());';
-    expect(/\bWITH\s+CHECK\s*\(/i.test(policy)).toBe(true);
+    // The law above is a prohibition; these are its non-vacuity witnesses,
+    // and they run `anonymousChecksIn` itself.
+    expect(anonymousChecksIn('  amount_minor bigint NOT NULL CHECK (amount_minor > 0),')).toStrictEqual([
+      'line 1: amount_minor bigint NOT NULL CHECK (amount_minor > 0),',
+    ]);
+    // The line number travels with the offence, so a second line is reported
+    // as the second line.
+    expect(anonymousChecksIn('a\n  x bigint CHECK (x > 0),')).toStrictEqual(['line 2: x bigint CHECK (x > 0),']);
+    // And each exclusion is exercised: a named constraint, a policy clause,
+    // and a CHECK that lives only inside a comment.
+    expect(anonymousChecksIn('  CONSTRAINT amount_positive CHECK (amount_minor > 0),')).toStrictEqual([]);
+    expect(anonymousChecksIn('  WITH CHECK (app_bypass() OR business_id::text = app_business());')).toStrictEqual([]);
+    expect(anonymousChecksIn('  -- CHECK (amount_minor > 0) was moved to a named constraint')).toStrictEqual([]);
+    // Two anonymous CHECKs are two offences, so the law is not a one-hit
+    // special case.
+    expect(anonymousChecksIn('  a bigint CHECK (a > 0),\n  b bigint CHECK (b > 0),')).toHaveLength(2);
   });
 });
 
