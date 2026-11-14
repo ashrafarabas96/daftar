@@ -436,7 +436,7 @@ tests/performance/receivables-open-page-equivalence.test.ts	518	find-shift	safe	
 tests/performance/receivables-open-page-equivalence.test.ts	519	find-shift	safe	R-RECEIVER	const neighbour = cases.find((k) => k.key === 'neighbour') as CaseSpec;
 tests/performance/receivables-open-page-equivalence.test.ts	549	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'identity') as CaseSpec;
 tests/performance/receivables-open-page-equivalence.test.ts	631	find-shift	safe	R-RECEIVER	const subject = (): CaseSpec => cases.find((k) => k.key === 'fakeLimit') as CaseSpec;
-tests/performance/receivables-s4-budgets.test.ts	1746	find-shift	safe	R-RECEIVER	plans.find((p) => p.text.includes('customer_ar_outstanding(')),
+tests/performance/receivables-s4-budgets.test.ts	1752	find-shift	safe	R-RECEIVER	plans.find((p) => p.text.includes('customer_ar_outstanding(')),
 tests/performance/receivables-s4-dataset.ts	335	find-shift	safe	R-RECEIVER	while (state.at.length > 0 && now - (state.at[0] as number) >= THROTTLE.windowMs) state.at.shift();
 tests/security/accounting-credential-matrix.test.ts	196	find-shift	safe	R-RECEIVER	const setting = (f.config ?? []).find((c) => c.toLowerCase().startsWith('search_path='));
 tests/security/accounting-raw-sql-invariants.test.ts	159	find-shift	safe	R-RECEIVER	cashId = must(accounts.rows.find((a) => a.system_key === 'cash')).id;
