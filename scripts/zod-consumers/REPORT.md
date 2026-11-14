@@ -5,11 +5,11 @@ Scope: `apps/**`, `tests/**`, `packages/**`, `tests-unit/**`, `scripts/**` (the 
 
 ## Totals (informational: they move whenever unrelated code adds a `.find(`)
 
-classified sites: 558 — safe: 525, intended: 33
+classified sites: 540 — safe: 507, intended: 33
 
-by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=424, formatter=13, index=2, issues-access=35, length=7, method=18
+by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=406, formatter=13, index=2, issues-access=35, length=7, method=18
 
-by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=448
+by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=430
 
 `needs-fixing` sites: 0
 
