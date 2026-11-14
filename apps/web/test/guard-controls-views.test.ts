@@ -21,8 +21,9 @@ vi.mock('node:fs', async (importOriginal) => {
     if (state.ghost && p.endsWith('/src/views/ghost')) return ['GhostView.tsx'];
     const real = (actual.readdirSync as (a: unknown, b?: unknown) => unknown)(path, options);
     if (state.ghost && p.endsWith('/src/views') && Array.isArray(real)) {
+      const names: unknown[] = real as unknown[];
       const ghost = { name: 'ghost', isDirectory: () => true };
-      return options ? [...real, ghost] : [...real, 'ghost'];
+      return options ? [...names, ghost] : [...names, 'ghost'];
     }
     return real;
   }) as typeof actual.readdirSync;
