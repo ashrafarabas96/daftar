@@ -19,7 +19,8 @@
  *
  * EVERY SITE THAT ENFORCES `receivables.view` FOR `POST /v1/sales`, enumerated
  * by grepping the permission name and the route across `apps/api/src` — there
- * are TWO, and the §A case below is a guard on BOTH, not on either one:
+ * are TWO, and the §A case below is a guard on G1-A and is BLIND to G1-B on
+ * its own. Which way round that falls is measured below, not assumed:
  *
  *   G1-A  `apps/api/src/modules/selling/sale-commit.service.ts:301-303`
  *         — `SaleCommitService.plan` step 2: `settlementMode === 'credit'` and
@@ -39,12 +40,32 @@
  * `sales.create` too (`inventory-authorization.ts:122`), so the minted
  * assertion and the database behind it are NOT a third gate on this key.
  *
- * WHY THE ENUMERATION IS WRITTEN OUT HERE. A negative control that disables
- * ONE of several gates is a BLIND control, and this route is exactly that
- * trap: weakening G1-A alone leaves the case GREEN, because the request falls
- * through to G1-B and is refused 403 there instead — a different envelope, the
- * same status. The case only goes RED with BOTH disabled. A future reader who
- * takes §A for a guard on one gate will weaken one and read a false green.
+ * WHY THE ENUMERATION IS WRITTEN OUT HERE, AND WHICH GATE §A ACTUALLY HOLDS.
+ * A negative control that disables ONE of several gates is a BLIND control,
+ * and this route has two gates, so the direction has to be named rather than
+ * hoped for. It is decided by WHAT §A ASSERTS, not by the status code: §A
+ * requires the TYPED code `sale.credit_not_permitted` through `refusalCode`,
+ * which matches the full dotted code exactly and returns `null` for anything
+ * else (`settlement-path.ts`). Therefore:
+ *
+ *   — remove G1-A alone ⇒ the request falls through to G1-B, which answers a
+ *     bare 403 `FORBIDDEN` with no `details` ⇒ `refusalCode` is `null` ⇒ §A
+ *     goes RED. This is the gate §A holds.
+ *   — remove G1-B alone ⇒ G1-A still answers first with the typed code ⇒ §A
+ *     stays GREEN. §A is BLIND to G1-B on its own, and nothing here should be
+ *     read as proof that G1-B is executed at all.
+ *
+ * So the status assertion alone would indeed be the blind control this note
+ * warns about — a bare 403 from G1-B would satisfy it. The typed-code
+ * assertion at the case's own second `expect` is what makes §A see G1-A, and
+ * its failure message says so in the same words. An earlier version of this
+ * note had the direction backwards — it claimed §A was green on G1-A alone and
+ * red only with both gone — and that was wrong against the assertion written
+ * twenty lines below it, measured on `9e100e61` by an independent review. A
+ * false sentence in a header is read as a judgement, so it is corrected here
+ * rather than left standing beside a correct test. G1-B STILL HAS NO NEGATIVE
+ * CONTROL ANYWHERE: that is an open gap in this lane's queue, not a claim this
+ * suite closes.
  *
  * ── CLAIM 2: `payments.collect` IS THE KEY TO THE MONEY ───────────────────
  *
