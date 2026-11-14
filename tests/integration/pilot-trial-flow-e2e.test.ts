@@ -366,6 +366,9 @@ let crossCustomerStatus: number | null = null;
 let crossCustomerBody = '';
 let payerBalanceAfterCross: bigint | null = null;
 let targetBalanceAfterCross: bigint | null = null;
+/** Arm J: the three on-account sends that ask what a REPLAY is keyed on. */
+const replayKeyResults: { label: string; status: number; body: string; replayed: unknown }[] = [];
+let balanceAfterReplayKey: bigint | null = null;
 /** The flow customer's still-open documents, and arm B's customer's. */
 let openInvoices: readonly OpenInvoiceRow[] = [];
 let otherOpenInvoices: readonly OpenInvoiceRow[] | null = null;
@@ -759,6 +762,62 @@ beforeAll(async () => {
     const targetAgain = await w.t.request.get(`/v1/customers/${termCustomerId}/receivable`).set(w.headers).send();
     if (targetAgain.status < 300) targetBalanceAfterCross = BigInt((targetAgain.body as ReceivableBody).baseMinor);
   }
+
+  step = 'arm J — what a REPLAY is keyed on: the document, or the money';
+  // Step 3b proved that the SAME command sent twice does not take money
+  // twice. It cannot, on its own, say WHY — and the two possible reasons are
+  // not equally safe. If this estate answered "replayed" to any request whose
+  // money looked the same, a customer handing over two identical cash
+  // instalments on one day would have the second one swallowed: the merchant
+  // would see one payment, the customer would have paid twice, and every page
+  // would still reconcile. That is the silent loss this arm rules out, and
+  // step 3b alone cannot: its replay is identical in BOTH the document id and
+  // the money, so it is consistent with either rule.
+  //
+  // The contract names the key — under `daftar.payment_id`, with the
+  // request-only intent, "an equal stored intent returns the stored rows
+  // (replayed), another is customer_payment.idempotency_conflict"
+  // (`0081:2194`) — so both halves are driven rather than trusted.
+  //
+  // ALL THREE SENDS ARE ON ACCOUNT, zero allocations, lawful by that same
+  // contract, and that is what keeps the arm isolated without a customer of
+  // its own: unapplied money reduces no debt (DR-114), so whatever the estate
+  // does with these, none of them can move the figure the arms above and
+  // below assert.
+  const replayKeyId = randomUUID();
+  const replayKeyAmount = '137';
+  for (const [label, paymentId, amountMinor] of [
+    ['the first on-account payment', replayKeyId, replayKeyAmount],
+    // Same customer, same method, same date, same amount, no allocations —
+    // everything the money IS — under a different document id. The credit id
+    // differs too, and necessarily: it is the held credit's own primary key,
+    // so reusing it would collide on that key rather than answer this
+    // question. So the claim is not byte-identity; it is that everything
+    // which makes this the same MONEY is the same.
+    ['the same money under a NEW document id', randomUUID(), replayKeyAmount],
+    // The first document id again, carrying a DIFFERENT amount. A cashier who
+    // reuses an id after correcting the figure must not be told the
+    // correction was accepted while the original amount is what is kept.
+    ['a DIFFERENT amount under the FIRST document id', replayKeyId, '138'],
+  ] as const) {
+    const sent = await collectPayment(w.t, w.headers, {
+      paymentId,
+      customerId,
+      paymentMethodId: w.paymentMethodId,
+      paymentDate: w.day,
+      amountMinor,
+      creditId: randomUUID(),
+      allocations: [],
+    });
+    replayKeyResults.push({
+      label,
+      status: sent.status,
+      body: JSON.stringify(sent.body),
+      replayed: (sent.body as { replayed?: unknown }).replayed,
+    });
+  }
+  const afterReplayKey = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
+  if (afterReplayKey.status < 300) balanceAfterReplayKey = BigInt((afterReplayKey.body as ReceivableBody).baseMinor);
 }, 240_000);
 
 afterAll(async () => {
@@ -1378,6 +1437,39 @@ describe(CLAIM, () => {
     const untouched = BigInt((termOpenInvoices ?? [])[0]?.totalTxnMinor ?? '-1');
     expect(untouched > 0n, 'the untouched total came back as nothing, so the comparison below would be about zero').toBe(true);
     expect(targetBalanceAfterCross, "the refused payment moved the other customer's balance").toBe(untouched);
+  });
+
+  it('ARM J — a REPLAY is keyed on the document and not on the money: identical money under a new id is new money, and a reused id with changed money is refused', () => {
+    expect(refusedAt).toBeNull();
+    // CORPUS CONTROL: all three sends were actually made, in order. Without
+    // this, a loop that built nothing would read as three silent passes.
+    expect(
+      replayKeyResults.map((r) => r.label),
+      'arm J did not make all three sends',
+    ).toStrictEqual(['the first on-account payment', 'the same money under a NEW document id', 'a DIFFERENT amount under the FIRST document id']);
+    const first = replayKeyResults[0];
+    const sameMoney = replayKeyResults[1];
+    const sameId = replayKeyResults[2];
+    expect(first?.status, `the first on-account payment was refused: ${first?.body}`).toBeLessThan(300);
+    expect(first?.replayed, 'a payment nobody had sent before was answered as a replay').not.toBe(true);
+    // HALF ONE, and it is the dangerous direction. Identical money under its
+    // own document id is a SECOND payment and must be taken as one. Step 3b
+    // asserts the opposite answer positively — status 200 with `replayed`
+    // true — so the two cases together discriminate: one of them must fail
+    // under either wrong rule.
+    expect(sameMoney?.status, `a second identical payment under its own id was refused: ${sameMoney?.body}`).toBeLessThan(300);
+    expect(
+      sameMoney?.replayed,
+      'a second identical payment under its own document id was answered as a replay of the first, so money the customer handed over was swallowed',
+    ).not.toBe(true);
+    // HALF TWO. The same id with different money is a conflict, and the
+    // estate names it, so the name is asserted and not merely the status.
+    expect(sameId?.status, `a reused document id carrying a changed amount was accepted: ${sameId?.body}`).toBeGreaterThanOrEqual(400);
+    expect(sameId?.body, 'the refusal does not name the idempotency conflict').toContain('idempotency_conflict');
+    // AND THE MONEY, which is the law rather than the status codes: all three
+    // were on account, so the debt is exactly where it was.
+    expect(balanceAfterReplayKey, 'the balance was not re-read after arm J').not.toBeNull();
+    expect(balanceAfterReplayKey, 'money applied to no document moved the debt anyway').toBe(observedBalanceMinor);
   });
 
   it('OWED — the statement route is read through this file once it reaches a tree this suite shares', () => {
