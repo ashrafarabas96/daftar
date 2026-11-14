@@ -153,6 +153,22 @@ if [ "$P5_EXISTING_SERVER" = "1" ]; then
     comm -13 <(printf '%s\n' "$P5_ROLES_BEFORE") <(printf '%s\n' "$1")
   }
 
+  # THE VERDICT, separated from the guard that calls it, so a control can make
+  # it fire for real instead of inspecting it. It PRINTS its reasoning and
+  # RETURNS the status; every caller reads that status directly from `$?`,
+  # never from the end of a pipeline (RULE-1: `cmd | tail` yields tail's code).
+  p5_assert_no_leak() {
+    left=$(p5_roles_added "$1")
+    if [ -n "$left" ]; then
+      echo "ROLE LEAK: this lane left principals behind in the shared cluster:"
+      printf '  %s\n' $left
+      echo "Phase 3 locks the runtime principals at seven; a lane that adds to them breaks an accepted law."
+      return 1
+    fi
+    echo "NO LEAK: the cluster's role set matches the set this lane found."
+    return 0
+  }
+
   ROLES_BEFORE=$(p5_roles_now)
   if [ -z "$ROLES_BEFORE" ]; then
     echo "pg_roles answered nothing before the bootstrap; an empty probe is not a zero (RULE-18)."
@@ -197,6 +213,46 @@ if [ "$P5_EXISTING_SERVER" = "1" ]; then
   fi
   echo "TEARDOWN CONTROL OK: the difference saw the planted $P5_CONTROL_ROLE and lost it again, so the guard can fire."
 
+  # AND THE OTHER HALF: SIGHT IS NOT A KILL.
+  #
+  # The control above proves the difference SEES a planted role. It does not
+  # prove the step FAILS when one is seen -- a verdict that printed `ROLE LEAK`
+  # and still returned 0 would pass that control untouched. So the verdict is
+  # made to fire here, against the found set plus one fabricated name, and the
+  # lane refuses to continue unless the verdict both says `ROLE LEAK` and
+  # returns non-zero.
+  #
+  # The status is taken from `$?` of the command substitution itself, so it is
+  # the verdict's own code and not a pipeline's last stage (RULE-1), and the
+  # output must be non-empty before any code is believed (RULE-18). No role is
+  # created for this half: the leak is fabricated in a string, so the cluster
+  # is never touched by it.
+  KILL_OUT=$(p5_assert_no_leak "$(printf '%s\n%s\n' "$ROLES_BEFORE" "p5_fabricated_leak_$$" | LC_ALL=C sort)" 2>&1)
+  KILL_RC=$?
+  if [ -z "$KILL_OUT" ]; then
+    echo "CONTROL FAILED (kill half): the verdict printed nothing, so its code means nothing (RULE-18)."
+    exit 1
+  fi
+  if [ "$KILL_RC" -eq 0 ]; then
+    echo "CONTROL FAILED (kill half): the verdict accepted a set carrying a leaked role, and returned 0."
+    echo "A guard that sees a leak and passes anyway is the false green this control exists to catch."
+    exit 1
+  fi
+  case "$KILL_OUT" in
+    *"ROLE LEAK"*) : ;;
+    *)
+      echo "CONTROL FAILED (kill half): non-zero code but no ROLE LEAK line, so the refusal was for another reason: [$KILL_OUT]"
+      exit 1
+      ;;
+  esac
+  PASS_OUT=$(p5_assert_no_leak "$ROLES_BEFORE" 2>&1)
+  PASS_RC=$?
+  if [ -z "$PASS_OUT" ] || [ "$PASS_RC" -ne 0 ]; then
+    echo "CONTROL FAILED (accept half): the verdict refused the very set handed to it as the baseline: rc=$PASS_RC out=[$PASS_OUT]"
+    exit 1
+  fi
+  echo "KILL CONTROL OK: the verdict refuses a fabricated leak (rc=$KILL_RC, says ROLE LEAK) and accepts the found set (rc=$PASS_RC)."
+
   p5_restore_cluster() {
     rc_keep=$?
     psql -tA "$ADMIN_URL" -c "DROP DATABASE IF EXISTS $P5_DB_NAME WITH (FORCE)" > /dev/null 2>&1
@@ -215,11 +271,14 @@ if [ "$P5_EXISTING_SERVER" = "1" ]; then
       echo "TEARDOWN UNVERIFIABLE: pg_roles answered nothing after the drops (RULE-18)."
       exit 1
     fi
-    LEFT=$(p5_roles_added "$ROLES_AFTER")
-    if [ -n "$LEFT" ]; then
-      echo "ROLE LEAK: this lane left principals behind in the shared cluster:"
-      printf '  %s\n' $LEFT
-      echo "Phase 3 locks the runtime principals at seven; a lane that adds to them breaks an accepted law."
+    VERDICT=$(p5_assert_no_leak "$ROLES_AFTER" 2>&1)
+    VERDICT_RC=$?
+    if [ -z "$VERDICT" ]; then
+      echo "TEARDOWN UNVERIFIABLE: the verdict printed nothing, so its code means nothing (RULE-18)."
+      exit 1
+    fi
+    printf '%s\n' "$VERDICT"
+    if [ "$VERDICT_RC" -ne 0 ]; then
       exit 1
     fi
     echo "TEARDOWN OK: cluster role set restored; created-and-dropped = [$(printf '%s ' $MINE)]"
