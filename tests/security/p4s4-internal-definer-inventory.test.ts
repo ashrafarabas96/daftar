@@ -520,6 +520,40 @@ const DOORS: readonly Door[] = [
     writes: true,
   },
   {
+    sig: 'customer_create(uuid,text,text,text,text)',
+    owner: 'inventory',
+    grantees: ['daftar_app'],
+    kind: 'command',
+    // `receivables` is the LAW'S word, not a claim that customer master data is
+    // a receivable: `domainFromCatalogue` derives the domain from the family of
+    // the operation code the body signs, and `OP_FAMILY_DOMAIN.customer` is
+    // `receivables`. Recording anything truer-sounding here would be red.
+    domain: 'receivables',
+    tenant: 'signed',
+    business: 'signed',
+    assertion: "inventory_assertion_consume('customer.create')",
+    permission: 'signed-op',
+    callerIds: 'payload-digest',
+    bindings: 'none',
+    reads: true,
+    writes: true,
+  },
+  {
+    sig: 'customer_update(uuid,integer,text,text,text,text)',
+    owner: 'inventory',
+    grantees: ['daftar_app'],
+    kind: 'command',
+    domain: 'receivables',
+    tenant: 'signed',
+    business: 'signed',
+    assertion: "inventory_assertion_consume('customer.update')",
+    permission: 'signed-op',
+    callerIds: 'payload-digest',
+    bindings: 'none',
+    reads: true,
+    writes: true,
+  },
+  {
     sig: 'inventory_adjust_stock(uuid,uuid,date,text,uuid[],numeric[],numeric[],bigint[])',
     owner: 'inventory',
     grantees: ['daftar_app'],

@@ -133,7 +133,12 @@ describe('C1.5 §1 — the floor this build requires is the DDL it ships', () =>
   });
 
   it('the ordinal is parsed from the name, and an unplaceable name parses to null rather than to zero', () => {
-    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(86);
+    // 91 since `0091_p4s1_customer_write_commands.sql` shipped and the constant
+    // moved with it. The literal is pinned rather than derived from
+    // `REQUIRED_SCHEMA_MIGRATION` on purpose: deriving it would assert the
+    // parser against itself and let the floor move unannounced, which is the
+    // one thing this guard exists to prevent.
+    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(91);
     expect(migrationOrdinal('0083_phase4_ar_outstanding_set_based.sql'), 'a four-digit prefix').toBe(83);
     expect(migrationOrdinal('10000_far_future.sql'), 'a five-digit prefix is placed by VALUE, not by string order').toBe(10_000);
     // The reason the comparison is numeric rather than lexicographic. While
