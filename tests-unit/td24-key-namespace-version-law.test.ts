@@ -62,7 +62,13 @@ describe('TD-24: the rate-limit key namespace carries a pinned version', () => {
     expect(version).toMatch(/^v[1-9][0-9]*$/);
     // And the version is the LAST segment before the hash tag opens, so a new
     // namespace cannot be smuggled in as a suffix after it.
-    expect(rateLimitKey(PRE_AUTH_SCOPE, 'x')).toMatch(new RegExp(`^${KEY_NAMESPACE.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}:\\{`));
+    //
+    // Asserted as a LITERAL prefix, not as a pattern: the first draft built a
+    // `RegExp` from the namespace through a hand-rolled escaper, and the escaper
+    // was inert -- measured, not supposed: `escape('a.b') === 'a.b'`, and on a
+    // value carrying `+` the assertion went false rather than loose. A claim that
+    // needs no pattern should carry none. (Review of #106, finding 1.)
+    expect(rateLimitKey(PRE_AUTH_SCOPE, 'x').startsWith(`${KEY_NAMESPACE}:{`)).toBe(true);
   });
 
   it('KEY-NS-C: the boundary — the scope segment is read through the store, so a segment change does not redden this law', () => {
