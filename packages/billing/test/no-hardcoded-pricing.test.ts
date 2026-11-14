@@ -153,12 +153,31 @@ describe('§20 arm A — every numeric literal in src is allowlisted with a reas
     expect(all).not.toContain('0043');
   });
 
+  /**
+   * THE SCAN, factored out so the law and its control call the same code. Arm
+   * A had a non-vacuity case for the EXTRACTOR -- more than forty literals
+   * found -- but nothing proved the ALLOWLIST TEST itself could reject. A
+   * membership test that always said "allowed" would have passed that case.
+   */
+  const unallowlistedLiteralsIn = (source: string): string[] => numericLiteralsOf(source).filter((lit) => !(lit in ALLOWED_NUMERIC));
+
+  it('proves the allowlist test rejects a literal that is not in it', () => {
+    // A price-shaped literal is the thing this law exists to catch.
+    expect(unallowlistedLiteralsIn('const price = 4999n;\n')).toStrictEqual(['4999n']);
+    // Two at once, so it is not a one-hit special case, and both are named.
+    expect(unallowlistedLiteralsIn('const a = 777;\nconst b = 8888;\n')).toStrictEqual(['777', '8888']);
+    // And an allowlisted value is NOT reported, so the test is a membership
+    // test and not a blanket refusal -- the negative half.
+    expect(unallowlistedLiteralsIn('const cap = 18n;\n')).toStrictEqual([]);
+    // A number that lives only in a comment is not a literal in code, which
+    // is what makes the law readable alongside its own documentation.
+    expect(unallowlistedLiteralsIn('// the migration is 0043\n')).toStrictEqual([]);
+  });
+
   it('contains no numeric literal outside the allowlist', () => {
     const offences: string[] = [];
     for (const [file, source] of SOURCES) {
-      for (const lit of numericLiteralsOf(source)) {
-        if (!(lit in ALLOWED_NUMERIC)) offences.push(`${file}: ${lit}`);
-      }
+      for (const lit of unallowlistedLiteralsIn(source)) offences.push(`${file}: ${lit}`);
     }
     expect(offences, 'a numeric literal in src is not in the §20 allowlist').toEqual([]);
   });
@@ -227,12 +246,26 @@ describe('§20 arm C — no currency is written into the source', () => {
     expect(all.some((l) => l.includes('MIGRATION PATCH REQUEST'))).toBe(false);
   });
 
+  /** Factored for the same reason: a control must run the law, not a copy. */
+  const currencyCodeLiteralsIn = (source: string): string[] => stringLiteralsOf(source).filter((lit) => /^[A-Z]{3}$/.test(lit));
+
+  it('proves the currency-code test can see a currency code', () => {
+    expect(currencyCodeLiteralsIn("const c = 'USD';\n")).toStrictEqual(['USD']);
+    expect(currencyCodeLiteralsIn("const a = 'ILS';\nconst b = 'JOD';\n")).toStrictEqual(['ILS', 'JOD']);
+    // The shape is exactly three uppercase letters: not two, not four, not
+    // lower case, and not a code embedded in a longer string.
+    expect(currencyCodeLiteralsIn("const c = 'US';\n")).toStrictEqual([]);
+    expect(currencyCodeLiteralsIn("const c = 'USDX';\n")).toStrictEqual([]);
+    expect(currencyCodeLiteralsIn("const c = 'usd';\n")).toStrictEqual([]);
+    expect(currencyCodeLiteralsIn("const c = 'price in USD';\n")).toStrictEqual([]);
+    // And a code written only in a comment is not a literal in code.
+    expect(currencyCodeLiteralsIn('// amounts are in USD\n')).toStrictEqual([]);
+  });
+
   it('contains no three-letter uppercase currency code', () => {
     const offences: string[] = [];
     for (const [file, source] of SOURCES) {
-      for (const lit of stringLiteralsOf(source)) {
-        if (/^[A-Z]{3}$/.test(lit)) offences.push(`${file}: '${lit}'`);
-      }
+      for (const lit of currencyCodeLiteralsIn(source)) offences.push(`${file}: '${lit}'`);
     }
     expect(offences, 'a currency code is written into src; a currency is configuration').toEqual([]);
   });
