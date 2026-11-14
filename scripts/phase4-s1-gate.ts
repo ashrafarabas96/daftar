@@ -369,14 +369,19 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // `unrosteredElsewhere` demands exactly this row.
   //
   // The floor is EQUAL to the executable count in the tree, so it becomes a
-  // floor as the suite grows — and it was WRONG until now: it said 13 while
-  // the suite ran 15, with zero `.skip`, so two cases could have been deleted
-  // without this gate going red. The claim "measured by this gate's own
-  // instrument" was prose, not a measurement (RULE-3), and a floor below the
-  // tree is how a count stops being a guard.
+  // floor as the suite grows — and it has now been wrong TWICE in the same
+  // way. It said 13 while the suite ran 15, and after that correction it said
+  // 15 while the suite ran 16, with zero `.skip` either time: the case the
+  // second gap exempted was `(h)`, the one case that proves the write routes
+  // refuse a member without `customers.manage`, so the permission control
+  // could have been deleted with this gate still green. Measured on this
+  // head, by this gate's own instrument: 16 runnable `it(`, 0 `.skip`, 0
+  // `it.each`. A floor below the tree is how a count stops being a guard, and
+  // a correction that is not re-measured against the tree is how it happens
+  // again.
   //
   // What a count cannot see is SUBSTITUTION, so the row also pins BY NAME
-  // every case the suite runs, all fifteen rather than a chosen ten: creation
+  // every case the suite runs, all sixteen rather than a chosen ten: creation
   // at revision 1 with its replay, the SAME id carrying a different statement
   // refused as `customer.idempotency_conflict`, the update that states the
   // whole customer and leaves `status` alone, the stale revision, a statement
@@ -386,14 +391,15 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   // in B by presenting B's business id — the second half was the one the prose
   // promised and the pin omitted), the revision guard, the 0075 guards still
   // triggered, the worker refused 42501 with its claim proved able to fail,
-  // the head-migration predicate, and the migration applying upward both on a
-  // clean database and on one that already holds rows.
+  // the head-migration predicate, the migration applying upward both on a
+  // clean database and on one that already holds rows, and the permission bit
+  // itself being load-bearing on both write routes.
   {
     id: 'S1-CW-01',
     area: 'customer-write',
     runner: 'root',
     file: 'tests/integration/p4s1-customer-write-commands.test.ts',
-    cases: 15,
+    cases: 16,
     titles: [
       'creates at revision 1, active, with 201; and replays the same statement as 200',
       'refuses the same id carrying a different statement with customer.idempotency_conflict',
@@ -410,6 +416,7 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
       'applies on a database already holding rows, and changes no table but the registry it writes',
       'daftar_worker is refused 42501 by both routines, and the claim is proved able to fail',
       'headMigration() is the migrations directory own highest file, and a short build fails the predicate',
+      'refuses POST /v1/customers and PUT /v1/customers/:id for a member holding every permission but customers.manage, while the same member still reads',
     ],
   },
 ];
