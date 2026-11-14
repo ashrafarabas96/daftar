@@ -1,7 +1,7 @@
 'use client';
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Card, ErrorState, colors, spacing, typography } from '@daftar/design-system';
+import { Card, ErrorState, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { currentBusinessId, ensureSession } from '@/lib/client';
 import { getEntitlement, listMembers, listProducts } from '@/lib/merchant-api';
@@ -47,7 +47,7 @@ export default function DashboardPage({ params }: { params: Promise<{ locale: Lo
 
   const statCard = (label: string, value: string | number) => (
     <Card key={label} style={{ flex: 1, minWidth: '12rem' }}>
-      <p style={{ margin: 0, color: colors.neutral[500], fontSize: typography.size.sm }}>{label}</p>
+      <p style={{ margin: 0, color: textColors.secondary, fontSize: typography.size.sm }}>{label}</p>
       <p style={{ margin: `${spacing[2]} 0 0`, fontSize: typography.size['2xl'], fontWeight: 700, color: colors.neutral[900] }}>{value}</p>
     </Card>
   );

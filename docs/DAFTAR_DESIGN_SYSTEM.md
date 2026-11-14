@@ -16,7 +16,8 @@ Clean · Premium · Modern · Calm · Trustworthy · Fast · Professional · Hum
 | `color.primary` | `#2563EB` | الأزرق Premium: الأزرار الرئيسية، الروابط، العناصر النشطة، الشعار |
 | `color.primary.light` | `#60A5FA` | التدرجات، الحالات الثانوية، رسوم |
 | `color.bg` | `#F3F4F6` | خلفية الشاشات |
-| `color.text.secondary` / `color.icon.muted` | `#9CA3AF` | النص الثانوي والأيقونات الخافتة |
+| `color.text.secondary` | `#4B5563` | النص الثانوي (AA: 7.56 على الأبيض، 6.87 على `#F3F4F6`) — T-08 |
+| `color.icon.muted` | `#9CA3AF` | الأيقونات الزخرفية والمعطّلة فقط؛ لا يُستعمل لونًا لنص (2.54 على الأبيض) |
 | `color.text.primary` / `color.navy` | `#111827` | Navy عميق للعناوين والنص الأساسي |
 | `color.surface` | `#FFFFFF` | البطاقات والأسطح |
 
@@ -35,6 +36,20 @@ Clean · Premium · Modern · Calm · Trustworthy · Fast · Professional · Hum
 | `color.whatsapp` (أخضر واتساب) | أزرار/أفعال واتساب فقط (إرسال كشف) — يُستخدم بحصرية |
 
 قاعدة: كل Badge دلالي = نص ملوّن على خلفية فاتحة جدًا من نفس العائلة + Radius كامل (pill) — كما في الصور.
+
+### 2.4 رموز النص الدلالية (AA ≥ 4.5:1 — T-08)
+
+الألوان الدلالية الأساسية أعلاه لا تتغير (`#059669` `#D97706` `#DC2626` `#0284C7` و`#2563EB`)؛ تُستعمل للخلفيات والحدود. **لون النص** الدلالي يأتي من هذه الرموز (`textColors` / `badgeColors` / `toastColors` في `packages/design-system/src/tokens.ts`):
+
+| Token | القيمة | النسبة | الاستخدام |
+|---|---|---|---|
+| `color.text.secondary` | `#4B5563` | 7.56 أبيض / 6.87 `#F3F4F6` | النص الثانوي، التلميحات، رؤوس الجداول |
+| `color.text.link` | `#2563EB` | 5.17 أبيض / 4.70 `#F3F4F6` | الروابط والتبويب النشط |
+| `color.text.success` | `#047857` | 5.48 أبيض / 4.84 على `#D1FAE5` | رسائل النجاح، Badge النجاح، خلفية Toast النجاح (نص أبيض) |
+| `color.text.warning` | `#92400E` | 7.09 أبيض / 6.37 على `#FEF3C7` | نص التحذير، Badge التحذير |
+| `color.text.danger` | `#B91C1C` | 6.47 أبيض / 5.30 على `#FEE2E2` | رسائل الخطأ، Badge الخطر |
+| `color.text.info` | `#0369A1` | 5.93 أبيض / 5.17 على `#E0F2FE` | نص المعلومات، Badge المعلومات، خلفية Toast المعلومات (نص أبيض) |
+| `color.badge.brand.fg` | `#1D4ED8` | 5.49 على `#DBEAFE` | Badge العلامة |
 
 ## 3. Typography
 

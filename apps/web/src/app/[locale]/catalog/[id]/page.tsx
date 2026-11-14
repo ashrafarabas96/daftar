@@ -3,7 +3,7 @@ import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { CategoryDto, LocaleCode, ProductDto } from '@daftar/shared-contracts';
 import { formatMinor, minorUnitsOf, parseMajorToMinor } from '@daftar/shared-contracts';
-import { Badge, Button, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Badge, Button, Select, Table, TextField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, ensureSession } from '@/lib/client';
 import { archiveProduct, attachMedia, getMediaAccessUrl, getProduct, listCategories, updateProduct, uploadMedia } from '@/lib/merchant-api';
@@ -225,19 +225,19 @@ export default function ProductEditPage({ params }: { params: Promise<{ locale: 
             ) : null}
           </div>
           {message ? (
-            <p role="status" style={{ color: colors.semantic.success, margin: 0 }}>
+            <p role="status" style={{ color: textColors.success, margin: 0 }}>
               {message}
             </p>
           ) : null}
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+            <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
               {error}
             </p>
           ) : null}
 
           <h2 style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.lg, margin: `${spacing[4]} 0 0` }}>{t('catalog.variants')}</h2>
           {product.variants.length === 0 ? (
-            <p style={{ margin: 0, color: colors.neutral[500], fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>
+            <p style={{ margin: 0, color: textColors.secondary, fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>
               {t('catalog.noVariants')}
             </p>
           ) : (
@@ -372,7 +372,7 @@ function TrackingSection({ locale, productId }: { locale: Locale; productId: str
   if (!allowed) {
     // The grants could not be read: say so, rather than hide the card in silence.
     return errorKey !== null ? (
-      <p role="alert" style={{ color: colors.semantic.danger, marginTop: spacing[6] }}>
+      <p role="alert" style={{ color: textColors.danger, marginTop: spacing[6] }}>
         {t(errorKey)}
       </p>
     ) : null;

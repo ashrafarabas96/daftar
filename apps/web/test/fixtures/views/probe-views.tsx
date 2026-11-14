@@ -68,7 +68,12 @@ export const LeakProbe = ({ row, t }: Props) => (
 export const WideProbe = ({ t }: Props) => <div style={{ width: '25rem' }}>{t('common.done')}</div>;
 export const ViewportProbe = ({ t }: Props) => <div style={{ width: '100vw' }}>{t('common.done')}</div>;
 export const TableProbe = ({ row }: Props) => <Table columns={[{ key: 'n', header: 'n', render: (r: { id: string }) => r.id }]} rows={[{ id: row.name }]} />;
-export const SmallButtonProbe = ({ t }: Props) => <Button size="sm">{t('common.done')}</Button>;
+// size="sm" is a 2.75rem touch target since T-07, so the planted under-target button sets its own smaller height.
+export const SmallButtonProbe = ({ t }: Props) => (
+  <Button size="sm" style={{ minHeight: '2rem' }}>
+    {t('common.done')}
+  </Button>
+);
 export const RawButtonProbe = ({ t }: Props) => <button type="button">{t('common.done')}</button>;
 export const ContentBoxProbe = ({ t }: Props) => <input aria-label={t('common.done')} style={{ width: '100%', padding: '0 0.75rem', minHeight: '2.75rem' }} />;
 export const DigitsProbe = ({ row, t }: Props) => (

@@ -1,7 +1,7 @@
 'use client';
 import { Suspense, use, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Button, Card, PasswordField, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Button, Card, PasswordField, TextField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, ensureSession, setAccessToken, setCurrentBusinessId } from '@/lib/client';
 import { acceptInvitation, acceptInvitationRegister } from '@/lib/merchant-api';
@@ -72,7 +72,7 @@ function AcceptInvitationForm({ locale }: { locale: Locale }) {
       <Card style={{ width: '100%', maxWidth: '26rem' }}>
         <h1 style={{ fontFamily: typography.fontFamily.base, color: colors.neutral[900] }}>{t('invite.title')}</h1>
         {!token ? (
-          <p role="alert" style={{ color: colors.semantic.danger }}>
+          <p role="alert" style={{ color: textColors.danger }}>
             {t('invite.notFound')}
           </p>
         ) : signedIn === null ? (
@@ -105,7 +105,7 @@ function AcceptInvitationForm({ locale }: { locale: Locale }) {
           </form>
         )}
         {error ? (
-          <p role="alert" style={{ color: colors.semantic.danger }}>
+          <p role="alert" style={{ color: textColors.danger }}>
             {error}
           </p>
         ) : null}
