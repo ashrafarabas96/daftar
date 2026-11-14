@@ -319,6 +319,20 @@ interface ReceivableBody {
 /** The per-currency half of each receivable answer, kept for the laws below. */
 let observedByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] = [];
 let otherByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] | null = null;
+/**
+ * `day` shifted by whole days, as a civil date and nothing else.
+ *
+ * The arithmetic is done in UTC on purpose: a civil date minus a civil date
+ * has no timezone, and reading the local clock here would make this suite
+ * answer a different question either side of local midnight — the same reason
+ * every date on these routes is supplied rather than defaulted.
+ */
+function civilDatePlusDays(day: string, days: number): string {
+  const parts = day.split('-').map((p) => Number(p));
+  const shifted = Date.UTC(parts[0] ?? 0, (parts[1] ?? 1) - 1, parts[2] ?? 1) + days * 86_400_000;
+  return new Date(shifted).toISOString().slice(0, 10);
+}
+
 /** The fields this suite reads off one row of the open-invoices page. */
 interface OpenInvoiceRow {
   readonly invoiceId: string;
@@ -328,7 +342,15 @@ interface OpenInvoiceRow {
   readonly settlementState: string;
   readonly isCredit: boolean;
   readonly hasExplicitDueDate: boolean;
+  readonly dueDate: string | null;
+  readonly daysPastDue: number;
+  readonly ageDays: number;
 }
+/** Arm E: the sale that states a term, and what its page says about it. */
+let termDueDate = '';
+let termSaleStatus: number | null = null;
+let termSaleBody = '';
+let termOpenInvoices: readonly OpenInvoiceRow[] | null = null;
 /** The flow customer's still-open documents, and arm B's customer's. */
 let openInvoices: readonly OpenInvoiceRow[] = [];
 let otherOpenInvoices: readonly OpenInvoiceRow[] | null = null;
@@ -573,6 +595,34 @@ beforeAll(async () => {
   const unknownCustomer = await w.t.request.get(`/v1/customers/${randomUUID()}/receivable`).set(w.headers).send();
   unknownCustomerStatus = unknownCustomer.status;
   unknownCustomerBody = JSON.stringify(unknownCustomer.body);
+
+  step = 'arm E — a sale on account WITH a stated term, on a customer of its own';
+  // The flow's own sale names no due date, so it exercises only the arm where
+  // the age is anchored on the issue date. A merchant who sells on credit
+  // states a term, and that is the other arm — on a customer of its own, so
+  // the flow's single open document stays single.
+  const termCustomerId = await newCustomer(w);
+  termDueDate = civilDatePlusDays(w.day, 7);
+  const termSale = await w.t.request
+    .post('/v1/sales')
+    .set(w.headers)
+    .send({
+      saleId: randomUUID(),
+      settlementMode: 'credit',
+      customerId: termCustomerId,
+      warehouseId: w.shop.w1,
+      documentDate: w.day,
+      dueDate: termDueDate,
+      taxMinor: '0',
+      notes: null,
+      lines: [{ lineId: randomUUID(), productId: w.shop.piece.productId, variantId: null, quantity: '1', discountMinor: '0' }],
+    });
+  termSaleStatus = termSale.status;
+  termSaleBody = JSON.stringify(termSale.body);
+  if (termSale.status < 300) {
+    const termPage = await w.t.request.get(`/v1/customers/${termCustomerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
+    if (termPage.status < 300) termOpenInvoices = (termPage.body as { items: readonly OpenInvoiceRow[] }).items;
+  }
 }, 240_000);
 
 afterAll(async () => {
@@ -1094,6 +1144,36 @@ describe(CLAIM, () => {
     // AND THE OTHER DIRECTION: the same route answered 200 for the customer
     // of this flow a moment earlier, so the 404 is about the id.
     expect(balanceWasRead, 'the same route never answered successfully, so the refusal says nothing').toBe(true);
+  });
+
+  it('ARM E — a stated TERM is reported as a term, and the two ages are not each other', () => {
+    expect(refusedAt).toBeNull();
+    expect(termSaleStatus, `the sale with a stated term was refused: ${termSaleBody}`).toBeLessThan(300);
+    expect(termOpenInvoices, 'arm E never read its page').not.toBeNull();
+    const rows = termOpenInvoices ?? [];
+    expect(rows.length, 'the sale with a term left no open document').toBe(1);
+    const row = rows[0];
+    // The term is reported as a TERM, in its own field. The flow's own sale
+    // names none, so without this arm the suite would only ever have seen the
+    // `false` side of it.
+    expect(row?.hasExplicitDueDate, 'a stated due date was not reported as one').toBe(true);
+    expect(row?.dueDate, 'the due date came back as something other than the one stated').toBe(termDueDate);
+    // AND THE TWO AGES ARE INDEPENDENT, which is the law this arm exists for.
+    // `daysPastDue` is measured against the TERM and `ageDays` against the
+    // document's own date, so a sale made today with a term a week out is
+    // SEVEN DAYS from being late and ZERO days old. A page that derived
+    // either from the other could not report both.
+    expect(row?.daysPastDue, 'how late the debt is, against a term seven days out').toBe(-7);
+    expect(row?.ageDays, 'how old the document is, against the day it was issued').toBe(0);
+    expect(row?.daysPastDue === row?.ageDays, 'the two ages came back equal, so one of them is derived from the other').toBe(false);
+    // AND A NEGATIVE AGE IS NOT A MISSING TERM. This is the pairing the page's
+    // own contract calls the defect it closed: `hasExplicitDueDate` says
+    // whether a term exists and NOTHING else says it, so a debt that is not
+    // yet late must not read as a debt with no term.
+    expect(row?.hasExplicitDueDate, 'a negative days-past-due was read as a missing term').toBe(true);
+    // And it is debt, not credit: nothing has been collected against it.
+    expect(row?.isCredit, 'an unpaid invoice with a term was marked as carrying credit').toBe(false);
+    expect(row?.settlementState, 'an invoice nobody has paid against is not unpaid').toBe('unpaid');
   });
 
   it('OWED — the statement route is read through this file once it reaches a tree this suite shares', () => {
