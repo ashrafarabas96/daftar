@@ -301,6 +301,30 @@ function parseHardening(migration: string): { readonly entries: HardeningEntry[]
   return { entries, malformed };
 }
 
+/**
+ * The statement-stream differences between the accepted DDL and the migration's
+ * parity region, as findings that NAME the object each one is about.
+ *
+ * ONE function, called by the law below AND by its three negative controls. A
+ * control that restated this loop would certify its own copy of it — the exact
+ * defect this round had to close in four other laws — so the controls mutate a
+ * copy of the DDL and read THIS function's answer.
+ */
+function parityDifferences(ddl: string, migration: string): { readonly findings: string[]; readonly expected: number; readonly actual: number } {
+  const expected = splitStatements(applySubstitutions(ddl)).filter((s) => executableText(s).trim() !== '' && !s.includes(EXCEPTION_STATEMENT));
+  const actual = splitStatements(parityRegion(migration)).filter((s) => executableText(s).trim() !== '');
+  const findings: string[] = [];
+  for (let i = 0; i < Math.max(expected.length, actual.length); i++) {
+    const e = expected[i];
+    const a = actual[i];
+    if (e === undefined) findings.push(`+ only in the migration: ${objectOf(a as string)}`);
+    else if (a === undefined) findings.push(`- missing from the migration: ${objectOf(e)}`);
+    else if (executableText(e).replace(/\s+/g, ' ').trim() !== executableText(a).replace(/\s+/g, ' ').trim())
+      findings.push(`~ differs at statement ${i + 1}: DDL has ${objectOf(e)}, the migration has ${objectOf(a)}`);
+  }
+  return { findings, expected: expected.length, actual: actual.length };
+}
+
 function applySubstitutions(sql: string): string {
   let out = sql;
   for (const { from, to } of DECLARED_SUBSTITUTIONS) {
@@ -345,22 +369,55 @@ describe('DR-100 item 2 — migration 0088 carries the accepted billing DDL', ()
   });
 
   it('statement by statement, and a difference is reported by the object it is about', () => {
+    const { findings, expected, actual } = parityDifferences(readNormalized(DDL_PATH), readNormalized(MIGRATION_PATH));
+    expect(expected, 'the accepted DDL produced no statements, so this comparison would be vacuous').toBeGreaterThan(20);
+    expect(findings, `the migration's statement stream is not the accepted DDL's:\n${findings.join('\n')}`).toEqual([]);
+    expect(actual).toBe(expected);
+  });
+
+  /**
+   * THE THREE NEGATIVE CONTROLS OF THE PARITY STREAM. Until these existed, the
+   * keystone claim of this file — that the migration IS the accepted DDL — rested
+   * on a comparison none of whose three findings had ever been seen to speak. A
+   * green equality says nothing about whether the differ can report, or whether
+   * `objectOf` can NAME: an `objectOf` that returned the empty string would leave
+   * every finding unnamed and every case here still green.
+   *
+   * Each control mutates a COPY of the DDL in memory — the file on disk is not
+   * touched, and the migration is never touched at all — anchors on text that
+   * occurs exactly once (asserted, RULE-27), and asserts the finding NAMES the
+   * object rather than merely existing.
+   */
+  it('RED: a statement that differs is reported, at its index and by its object', () => {
     const ddl = readNormalized(DDL_PATH);
-    const migration = readNormalized(MIGRATION_PATH);
-    const expected = splitStatements(applySubstitutions(ddl)).filter((s) => executableText(s).trim() !== '' && !s.includes(EXCEPTION_STATEMENT));
-    const actual = splitStatements(parityRegion(migration)).filter((s) => executableText(s).trim() !== '');
-    expect(expected.length, 'the accepted DDL produced no statements, so this comparison would be vacuous').toBeGreaterThan(20);
-    const differing: string[] = [];
-    for (let i = 0; i < Math.max(expected.length, actual.length); i++) {
-      const e = expected[i];
-      const a = actual[i];
-      if (e === undefined) differing.push(`+ only in the migration: ${objectOf(a as string)}`);
-      else if (a === undefined) differing.push(`- missing from the migration: ${objectOf(e)}`);
-      else if (executableText(e).replace(/\s+/g, ' ').trim() !== executableText(a).replace(/\s+/g, ' ').trim())
-        differing.push(`~ differs at statement ${i + 1}: DDL has ${objectOf(e)}, the migration has ${objectOf(a)}`);
-    }
-    expect(differing, `the migration's statement stream is not the accepted DDL's:\n${differing.join('\n')}`).toEqual([]);
-    expect(actual).toHaveLength(expected.length);
+    const target = 'p5scratch.lock_grants_in_order(uuid, uuid, text)';
+    expect(ddl.split(target).length - 1, 'the probe must find exactly one site to mutate').toBe(1);
+    const mutated = ddl.replace(target, 'p5scratch.lock_grants_in_order(uuid, uuid, uuid)');
+    const { findings } = parityDifferences(mutated, readNormalized(MIGRATION_PATH));
+    const report = findings.join('\n');
+    expect(report, 'the difference is reported at a statement index').toMatch(/~ differs at statement \d+:/);
+    expect(report, 'and the object is NAMED, which an objectOf returning "" would not do').toContain('public.lock_grants_in_order');
+  });
+
+  it('RED: a statement the DDL no longer has is reported as only in the migration, by its object', () => {
+    const ddl = readNormalized(DDL_PATH);
+    const target = 'REVOKE ALL ON FUNCTION p5scratch.assert_invoice_credit_agrees(uuid) FROM PUBLIC;';
+    expect(ddl.split(target).length - 1, 'the probe must find exactly one statement to remove').toBe(1);
+    // It is the LAST statement, so its removal shortens the stream by one and
+    // shifts nothing: one finding, not a cascade.
+    expect(ddl.trimEnd().endsWith(target), 'the removal is of the LAST statement, or the stream would shift').toBe(true);
+    const { findings } = parityDifferences(ddl.replace(target, ''), readNormalized(MIGRATION_PATH));
+    expect(findings, 'exactly one finding, and it is the extra statement').toStrictEqual([
+      '+ only in the migration: REVOKE ON public.assert_invoice_credit_agrees',
+    ]);
+  });
+
+  it('RED: a statement the migration does not have is reported as missing, by its object', () => {
+    const ddl = readNormalized(DDL_PATH);
+    const seeded = `${ddl.trimEnd()}\nCREATE SEQUENCE p5scratch.a_probe_sequence;\n`;
+    expect(ddl.includes('a_probe_sequence'), 'the seed must not already exist, or its finding proves nothing').toBe(false);
+    const { findings } = parityDifferences(seeded, readNormalized(MIGRATION_PATH));
+    expect(findings, 'exactly one finding, and it is the seeded statement').toStrictEqual(['- missing from the migration: SEQUENCE public.a_probe_sequence']);
   });
 
   it('the single declared exception is measured in both directions', () => {
