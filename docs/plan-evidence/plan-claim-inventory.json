@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 431,
+    "hits": 432,
     "planGates": 120,
     "assertions": 31,
-    "files": 54
+    "files": 55
   },
   "byPhase": {
     "cross-phase": {
       "planGates": 51,
       "assertions": 11,
-      "mentions": 119
+      "mentions": 120
     },
     "phase-2": {
       "planGates": 0,
@@ -315,6 +315,12 @@
       "phase": "cross-phase"
     },
     "tests/guards/required-ci-chain-composition.test.ts": {
+      "planGates": 0,
+      "assertions": 0,
+      "mentions": 1,
+      "phase": "cross-phase"
+    },
+    "tests/helpers/embedded-cluster.ts": {
       "planGates": 0,
       "assertions": 0,
       "mentions": 1,
@@ -1841,6 +1847,14 @@
       "signals": ["plan-shape-word"],
       "kind": "mention",
       "text": "* that every plan-shape gate the tree declares is reachable from the required"
+    },
+    {
+      "file": "tests/helpers/embedded-cluster.ts",
+      "line": 182,
+      "phase": "cross-phase",
+      "signals": ["collation-dependent-range"],
+      "kind": "mention",
+      "text": "// is not needed for the encoding — and it would make `datcollate` exactly `C`,"
     },
     {
       "file": "tests/helpers/plan-evidence-env.ts",

@@ -66,6 +66,37 @@ export async function ping(): Promise<boolean> {
 }
 
 /**
+ * The cluster that is about to be used must be UTF8, and say so itself.
+ *
+ * `initdbFlags` only runs when a cluster is CREATED: `persistent: true` plus the
+ * `PG_VERSION` check below means a directory an earlier run built with the host's
+ * code page is REUSED as it is, and the flag silently does nothing. A server that
+ * was already listening (CI's `postgres` service, a cluster another run left up) is
+ * likewise never passed the flag. So the flag is not the guarantee — this is. It is
+ * read out of the server, by name, before any suite gets it.
+ *
+ * MEASURED red, on a real cluster: one built with no flags on this host answers
+ * `WIN1256` here, and `applyBootstrap` then dies on U+2500. One built with
+ * `--encoding=UTF8` answers `UTF8`.
+ */
+export async function assertServerEncodingUtf8(): Promise<void> {
+  const pool = new Pool({ connectionString: adminUrl, max: 1, connectionTimeoutMillis: 1500 });
+  try {
+    const { rows } = await pool.query<{ enc: string }>("SELECT current_setting('server_encoding') AS enc");
+    const enc = rows[0]?.enc;
+    if (enc !== 'UTF8') {
+      throw new Error(
+        `the cluster at ${PG_DIR} (port ${PG_PORT}) reports server_encoding=${String(enc)}, not UTF8. ` +
+          'A cluster is only encoded at creation, so a directory built with the host code page stays that way: ' +
+          `stop it and delete ${PG_DIR} so it is rebuilt, or point PG_PORT at a UTF8 server.`,
+      );
+    }
+  } finally {
+    await pool.end().catch(() => undefined);
+  }
+}
+
+/**
  * Is the shared data directory actually held by a live postmaster?
  *
  * The file's presence alone is not the answer. `postmaster.pid` survives a
@@ -121,7 +152,10 @@ export function pidFileHeld(dir: string = PG_DIR): boolean {
  */
 export async function startOrReuse(): Promise<void> {
   for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
-    if (await ping()) return; // a usable server is already listening
+    if (await ping()) {
+      await assertServerEncodingUtf8(); // reuse is where the creation flag cannot reach
+      return;
+    }
     if (pidFileHeld()) {
       // Someone else owns the directory: either still starting or still stopping.
       await delay(SETTLE_DELAY_MS);
@@ -134,6 +168,24 @@ export async function startOrReuse(): Promise<void> {
       password: PG_PASSWORD,
       port: PG_PORT,
       persistent: true,
+      // MEASURED on this host, two clusters built from the bundled initdb:
+      //   no flag          -> server_encoding WIN1256, and `applyBootstrap` dies with
+      //                       `character with byte sequence 0xe2 0x94 0x80 ... has no
+      //                       equivalent in encoding "WIN1256"` (U+2500, 83 of them in
+      //                       bootstrap.sql). The cluster STARTS fine; the bootstrap is
+      //                       what fails, because initdb takes the HOST's code page and
+      //                       on an Arabic Windows that is `Arabic_Palestinian
+      //                       Authority.1256`.
+      //   --encoding=UTF8  -> server_encoding UTF8, bootstrap OK.
+      // The encoding alone is set, and the locale deliberately is NOT: initdb accepts
+      // `--encoding=UTF8` against the 1256 locale (exit 0, measured), so `--locale=C`
+      // is not needed for the encoding — and it would make `datcollate` exactly `C`,
+      // which tests/helpers/plan-evidence-env.ts classifies as byte order, demoting
+      // every local plan-evidence run and letting a prefix-range assertion green here
+      // on a property CI's `en_US.utf8` service does not have. Leaving the locale alone
+      // keeps collation exactly as it is on main, so this change moves the encoding and
+      // nothing else.
+      initdbFlags: ['--encoding=UTF8'],
       postgresFlags: PRELOAD_STAT_STATEMENTS ? ['-c', 'shared_preload_libraries=pg_stat_statements', '-c', 'pg_stat_statements.track=top'] : [],
     });
     if (!existsSync(join(PG_DIR, 'PG_VERSION'))) {
@@ -141,13 +193,26 @@ export async function startOrReuse(): Promise<void> {
     }
     try {
       await pg.start();
-      return;
     } catch (e) {
       pg = null;
       // Lost the race against a concurrent start: settle and re-evaluate.
       if (!/postmaster\.pid|already (exists|running)/i.test(e instanceof Error ? e.message : String(e))) throw e;
       await delay(SETTLE_DELAY_MS);
+      continue;
     }
+    // The guard sits OUTSIDE the race handler above, on purpose: a wrong encoding is not
+    // a lost race and must never be retried. But the postmaster has started by now, and
+    // dropping the only handle to it (`pg = null`) before throwing orphaned it, still
+    // listening on the port. Stop it first, then let the error out; a failed stop must
+    // not replace the encoding error that explains what is wrong.
+    try {
+      await assertServerEncodingUtf8();
+    } catch (e) {
+      await pg.stop().catch(() => undefined);
+      pg = null;
+      throw e;
+    }
+    return;
   }
   throw new Error(`PostgreSQL at ${PG_DIR} (port ${PG_PORT}) did not become usable within ${(START_ATTEMPTS * SETTLE_DELAY_MS) / 1000}s`);
 }
