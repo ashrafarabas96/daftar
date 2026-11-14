@@ -351,6 +351,9 @@ let termDueDate = '';
 let termSaleStatus: number | null = null;
 let termSaleBody = '';
 let termOpenInvoices: readonly OpenInvoiceRow[] | null = null;
+/** Arm G: the two misdated collections, and the balance read after them. */
+const misdatedResults: { label: string; status: number; body: string }[] = [];
+let balanceAfterMisdated: bigint | null = null;
 /** Arm F: the cross-customer allocation, and both balances read after it. */
 let crossCustomerStatus: number | null = null;
 let crossCustomerBody = '';
@@ -628,6 +631,40 @@ beforeAll(async () => {
     const termPage = await w.t.request.get(`/v1/customers/${termCustomerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
     if (termPage.status < 300) termOpenInvoices = (termPage.body as { items: readonly OpenInvoiceRow[] }).items;
   }
+
+  step = 'arm G — a collection dated before the invoice, and one dated tomorrow';
+  // A payment cannot be made before the debt exists, and it cannot be made
+  // tomorrow. This is not a formality for THIS suite: the statement orders
+  // its rows by entry date, so a collection dated before its invoice would
+  // sort ABOVE the sale and carry the running balance negative in the middle
+  // of a page that is otherwise perfectly consistent — the same class of
+  // silent wrongness as money attached to the wrong customer. The estate
+  // names both refusals (`date_before_invoice`, `date_in_future`), and this
+  // arm is what proves they reach the merchant.
+  for (const [label, date] of [
+    ['before the invoice', civilDatePlusDays(w.day, -1)],
+    ['tomorrow', civilDatePlusDays(w.day, 1)],
+  ] as const) {
+    const misdated = await collectPayment(w.t, w.headers, {
+      paymentId: randomUUID(),
+      customerId,
+      paymentMethodId: w.paymentMethodId,
+      paymentDate: date,
+      amountMinor: '100',
+      allocations: [
+        {
+          invoiceId: invoice.invoiceId,
+          appliedMinor: '100',
+          releasedBeforeMinor: collectedMinor.toString(),
+          invoiceTotalTxnMinor: invoice.totalTxnMinor,
+          invoiceTotalBaseMinor: invoice.totalBaseMinor,
+        },
+      ],
+    });
+    misdatedResults.push({ label, status: misdated.status, body: JSON.stringify(misdated.body) });
+  }
+  const afterMisdated = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
+  if (afterMisdated.status < 300) balanceAfterMisdated = BigInt((afterMisdated.body as ReceivableBody).baseMinor);
 
   step = "arm F — money offered against ANOTHER customer's invoice";
   // The one misattribution that would ruin a statement without contradicting
@@ -1219,6 +1256,25 @@ describe(CLAIM, () => {
     // And it is debt, not credit: nothing has been collected against it.
     expect(row?.isCredit, 'an unpaid invoice with a term was marked as carrying credit').toBe(false);
     expect(row?.settlementState, 'an invoice nobody has paid against is not unpaid').toBe('unpaid');
+  });
+
+  it('ARM G — a collection cannot be dated before its invoice, nor tomorrow, and neither attempt moves the balance', () => {
+    expect(refusedAt).toBeNull();
+    // CORPUS CONTROL: both attempts were actually made.
+    expect(
+      misdatedResults.map((r) => r.label),
+      'arm G did not make both attempts',
+    ).toStrictEqual(['before the invoice', 'tomorrow']);
+    for (const r of misdatedResults) {
+      expect(r.status, `a collection dated ${r.label} was accepted: ${r.body}`).toBeGreaterThanOrEqual(400);
+    }
+    // AND THE MONEY. This matters to this suite more than to most: the
+    // statement orders its rows by entry date, so a collection dated before
+    // its invoice would sort ABOVE the sale and carry the running balance
+    // negative in the middle of a page that is otherwise consistent — wrong
+    // in exactly the way no recurrence law can see.
+    expect(balanceAfterMisdated, 'the balance was not re-read after the misdated attempts').not.toBeNull();
+    expect(balanceAfterMisdated, 'a refused misdated collection moved the balance').toBe(observedBalanceMinor);
   });
 
   it("ARM F — money offered against another customer's invoice is refused, and NO balance moves", () => {
