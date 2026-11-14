@@ -4,9 +4,11 @@ import type { OverrideDto } from '@daftar/shared-contracts';
 import { Button, Dialog, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
 import { ApiError } from '@/lib/client';
 import { createOverride, listOverrides, revokeOverride } from '@/lib/admin-api';
+import { useT } from '@/lib/i18n';
 import { Shell } from '../Shell';
 
 export default function OverridesPage() {
+  const t = useT();
   const [items, setItems] = useState<OverrideDto[]>([]);
   const [open, setOpen] = useState(false);
   const [businessId, setBusinessId] = useState('');
@@ -41,7 +43,7 @@ export default function OverridesPage() {
       setOpen(false);
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.code : 'Failed — check the business id and XOR shape (feature OR limit, never both).');
+      setError(e instanceof ApiError ? e.code : t('overrides.error.createFailed'));
     } finally {
       setBusy(false);
     }
@@ -63,26 +65,29 @@ export default function OverridesPage() {
   return (
     <Shell active="overrides">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ fontFamily: typography.fontFamily.base, margin: 0 }}>Entitlement overrides</h1>
-        <Button onClick={() => setOpen(true)}>New override</Button>
+        <h1 style={{ fontFamily: typography.fontFamily.base, margin: 0 }}>{t('overrides.title')}</h1>
+        <Button onClick={() => setOpen(true)}>{t('overrides.new')}</Button>
       </div>
       <div style={{ marginTop: spacing[4] }}>
         <Table
           rows={items}
           columns={[
-            { key: 'business', header: 'Business', render: (o) => <code>{o.businessId.slice(0, 8)}…</code> },
+            { key: 'business', header: t('common.col.business'), render: (o) => <code>{o.businessId.slice(0, 8)}…</code> },
             {
               key: 'what',
-              header: 'Override',
-              render: (o) => (o.featureKey ? `feature ${o.featureKey}=${String(o.enabledValue)}` : `limit ${o.limitKey}=${o.limitValue}`),
+              header: t('overrides.col.override'),
+              render: (o) =>
+                o.featureKey
+                  ? t('common.override.feature', { key: o.featureKey, value: String(o.enabledValue) })
+                  : t('common.override.limit', { key: o.limitKey ?? '', value: o.limitValue ?? '' }),
             },
-            { key: 'reason', header: 'Reason', render: (o) => o.reason },
+            { key: 'reason', header: t('common.col.reason'), render: (o) => o.reason },
             {
               key: 'window',
-              header: 'Window',
+              header: t('overrides.col.window'),
               render: (o) => `${new Date(o.startsAt).toLocaleDateString()} → ${o.endsAt ? new Date(o.endsAt).toLocaleDateString() : '∞'}`,
             },
-            { key: 'state', header: 'State', render: (o) => (o.revokedAt ? 'revoked' : 'active') },
+            { key: 'state', header: t('common.col.state'), render: (o) => (o.revokedAt ? t('common.revoked') : t('common.active')) },
             {
               key: 'actions',
               header: '',
@@ -90,7 +95,7 @@ export default function OverridesPage() {
               render: (o) =>
                 !o.revokedAt ? (
                   <Button size="sm" variant="ghost" onClick={() => setRevoking(o)}>
-                    Revoke
+                    {t('common.revoke')}
                   </Button>
                 ) : null,
             },
@@ -99,50 +104,50 @@ export default function OverridesPage() {
       </div>
       <Dialog
         open={open}
-        title="New entitlement override"
+        title={t('overrides.dialog.newTitle')}
         onClose={() => setOpen(false)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setOpen(false)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button loading={busy} disabled={!businessId || reason.trim().length < 3} onClick={() => void create()}>
-              Create
+              {t('common.create')}
             </Button>
           </>
         }
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: spacing[4] }}>
-          <TextField label="Business ID" value={businessId} onChange={setBusinessId} required />
+          <TextField label={t('overrides.field.businessId')} value={businessId} onChange={setBusinessId} required />
           <Select
-            label="Kind"
+            label={t('overrides.field.kind')}
             value={kind}
             onChange={(v) => setKind(v as 'feature' | 'limit')}
             options={[
-              { value: 'feature', label: 'Feature' },
-              { value: 'limit', label: 'Limit' },
+              { value: 'feature', label: t('overrides.kind.feature') },
+              { value: 'limit', label: t('overrides.kind.limit') },
             ]}
           />
           {kind === 'feature' ? (
             <>
-              <TextField label="Feature key" value={featureKey} onChange={setFeatureKey} required />
+              <TextField label={t('overrides.field.featureKey')} value={featureKey} onChange={setFeatureKey} required />
               <Select
-                label="Enabled"
+                label={t('overrides.field.enabled')}
                 value={enabledValue}
                 onChange={setEnabledValue}
                 options={[
-                  { value: 'true', label: 'true' },
-                  { value: 'false', label: 'false' },
+                  { value: 'true', label: t('overrides.bool.true') },
+                  { value: 'false', label: t('overrides.bool.false') },
                 ]}
               />
             </>
           ) : (
             <>
-              <TextField label="Limit key" value={limitKey} onChange={setLimitKey} required />
-              <TextField label="Limit value" value={limitValue} onChange={setLimitValue} inputMode="numeric" required />
+              <TextField label={t('overrides.field.limitKey')} value={limitKey} onChange={setLimitKey} required />
+              <TextField label={t('overrides.field.limitValue')} value={limitValue} onChange={setLimitValue} inputMode="numeric" required />
             </>
           )}
-          <TextField label="Reason (audited)" value={reason} onChange={setReason} required />
+          <TextField label={t('common.reasonAudited')} value={reason} onChange={setReason} required />
           {error ? (
             <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
               {error}
@@ -152,20 +157,20 @@ export default function OverridesPage() {
       </Dialog>
       <Dialog
         open={!!revoking}
-        title="Revoke override"
+        title={t('overrides.dialog.revokeTitle')}
         onClose={() => setRevoking(null)}
         footer={
           <>
             <Button variant="ghost" onClick={() => setRevoking(null)}>
-              Cancel
+              {t('common.cancel')}
             </Button>
             <Button variant="danger" loading={busy} disabled={revokeReason.trim().length < 3} onClick={() => void revoke()}>
-              Revoke
+              {t('common.revoke')}
             </Button>
           </>
         }
       >
-        <TextField label="Reason (audited)" value={revokeReason} onChange={setRevokeReason} required />
+        <TextField label={t('common.reasonAudited')} value={revokeReason} onChange={setRevokeReason} required />
       </Dialog>
     </Shell>
   );
