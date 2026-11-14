@@ -5843,12 +5843,23 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
     //    sentence that is TRUE and that names no cause -- and that single red
     //    blocked the `P4-S1` gate for every lane that merges `main`.
     //
-    //    A LAW THAT REDS ON A PREMISE IT DOES NOT OWN IS A FALSE RED, AND A
-    //    FALSE RED IS HOW A LAW GETS DISABLED. So the premise is MEASURED in
-    //    the same execution and the verdict is three-way. NOTHING IS SKIPPED
-    //    AND NO THRESHOLD MOVES: every execution asserts, and the only
-    //    outcome newly tolerated is the one where the instrument NAMES the
-    //    backend that held the horizon.
+    //    THE PREMISE IS THEREFORE MEASURED IN THE SAME EXECUTION -- AND ONLY
+    //    MEASURED. An earlier revision read the two instruments below into a
+    //    three-way verdict and TOLERATED the outcome where one of them named a
+    //    holder, on the argument that a law reding on a premise it does not own
+    //    is a false red. THAT TOLERANCE IS WITHDRAWN, because the premise is
+    //    not unowned: it is a property of the DATABASE the probe runs in, and
+    //    the way to own it is to give the probe a database of its own, not to
+    //    accept its failure. And the tolerance did not even hold its own line:
+    //    MEASURED in job `131793746672`, step «Phase 4 slice gate», the arm
+    //    that did not truncate had an EMPTY blocker list, so the instrument
+    //    named NOBODY and the outcome was excused anyway -- by the cutoff
+    //    reading alone (`230642` against `delete_xid 230644`). An excuse that
+    //    names nobody attributes nothing and rules nothing out.
+    //    SO: NOTHING IS SKIPPED, NO THRESHOLD MOVES, AND NOTHING IS TOLERATED.
+    //    Every execution asserts, the two instruments are PRINTED so that a red
+    //    arrives with its own cause attached, and arm 1's truncation is
+    //    asserted unconditionally at the end of this body.
     const heapNotices = (x: Record<string, unknown>): string =>
       ((x['verbose'] as readonly string[] | undefined) ?? []).filter((l) => l.includes('public.dr101_probe')).join('\n');
     const held = (x: Record<string, unknown>): readonly Record<string, unknown>[] => [
