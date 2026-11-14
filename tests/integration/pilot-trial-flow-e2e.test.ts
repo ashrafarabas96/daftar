@@ -351,6 +351,13 @@ let termDueDate = '';
 let termSaleStatus: number | null = null;
 let termSaleBody = '';
 let termOpenInvoices: readonly OpenInvoiceRow[] | null = null;
+/** Arm H: money on account with no allocation, and the balance read after it. */
+let onAccountStatus: number | null = null;
+let onAccountBody = '';
+let balanceAfterOnAccount: bigint | null = null;
+/** Arm I: the allocation one minor unit larger than what remains. */
+let overAppliedStatus: number | null = null;
+let overAppliedBody = '';
 /** Arm G: the two misdated collections, and the balance read after them. */
 const misdatedResults: { label: string; status: number; body: string }[] = [];
 let balanceAfterMisdated: bigint | null = null;
@@ -631,6 +638,53 @@ beforeAll(async () => {
     const termPage = await w.t.request.get(`/v1/customers/${termCustomerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
     if (termPage.status < 300) termOpenInvoices = (termPage.body as { items: readonly OpenInvoiceRow[] }).items;
   }
+
+  step = 'arm H — money ON ACCOUNT, allocated to nothing';
+  // The contract calls zero allocations lawful: "pure on-account money". So
+  // this is not a refusal arm — it is the DR-114 law in the wild. The
+  // customer hands over money that is not applied to any document, and the
+  // RECEIVABLE MUST NOT MOVE: unapplied money is not a reduction of a debt,
+  // it is a credit held for them. The surplus arm reaches the same law
+  // through an overpayment; this reaches it with no document at all, which is
+  // the case a netting implementation is most likely to get wrong.
+  const onAccount = await collectPayment(w.t, w.headers, {
+    paymentId: randomUUID(),
+    customerId,
+    paymentMethodId: w.paymentMethodId,
+    paymentDate: w.day,
+    amountMinor: '250',
+    creditId: randomUUID(),
+    allocations: [],
+  });
+  onAccountStatus = onAccount.status;
+  onAccountBody = JSON.stringify(onAccount.body);
+  const afterOnAccount = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
+  if (afterOnAccount.status < 300) balanceAfterOnAccount = BigInt((afterOnAccount.body as ReceivableBody).baseMinor);
+
+  step = 'arm I — an allocation larger than what is left on the invoice';
+  // One minor unit more than remains. The estate names the refusal
+  // (`amount_exceeds_outstanding`), and the reason it matters to a STATEMENT
+  // is that an over-applied invoice would carry a credit balance on a
+  // document that was never overpaid — a page that reconciles to itself and
+  // describes something that did not happen.
+  const overApplied = await collectPayment(w.t, w.headers, {
+    paymentId: randomUUID(),
+    customerId,
+    paymentMethodId: w.paymentMethodId,
+    paymentDate: w.day,
+    amountMinor: (BigInt(invoice.totalTxnMinor) - collectedMinor + 1n).toString(),
+    allocations: [
+      {
+        invoiceId: invoice.invoiceId,
+        appliedMinor: (BigInt(invoice.totalTxnMinor) - collectedMinor + 1n).toString(),
+        releasedBeforeMinor: collectedMinor.toString(),
+        invoiceTotalTxnMinor: invoice.totalTxnMinor,
+        invoiceTotalBaseMinor: invoice.totalBaseMinor,
+      },
+    ],
+  });
+  overAppliedStatus = overApplied.status;
+  overAppliedBody = JSON.stringify(overApplied.body);
 
   step = 'arm G — a collection dated before the invoice, and one dated tomorrow';
   // A payment cannot be made before the debt exists, and it cannot be made
@@ -1256,6 +1310,30 @@ describe(CLAIM, () => {
     // And it is debt, not credit: nothing has been collected against it.
     expect(row?.isCredit, 'an unpaid invoice with a term was marked as carrying credit').toBe(false);
     expect(row?.settlementState, 'an invoice nobody has paid against is not unpaid').toBe('unpaid');
+  });
+
+  it('ARM H — money ON ACCOUNT is accepted and reduces NO debt', () => {
+    expect(refusedAt).toBeNull();
+    // Zero allocations is lawful by contract — pure on-account money — so
+    // this arm is accepted, not refused. The law is what it must NOT do.
+    expect(onAccountStatus, `money on account was refused: ${onAccountBody}`).toBeLessThan(300);
+    expect(balanceAfterOnAccount, 'the balance was not re-read after the on-account payment').not.toBeNull();
+    expect(balanceAfterOnAccount, 'money applied to no document reduced the debt anyway').toBe(observedBalanceMinor);
+    // A NOTE ON COUPLING, so a later reader is not misled: arms F and G also
+    // assert this same figure is unchanged, and they run after this payment.
+    // If this law fails, those two red as well — and the cause is this case,
+    // not theirs.
+  });
+
+  it('ARM I — an allocation larger than what is left on the invoice is refused', () => {
+    expect(refusedAt).toBeNull();
+    // One minor unit more than remains. Why it matters to a STATEMENT: an
+    // over-applied invoice would carry a credit balance on a document nobody
+    // overpaid — a page that reconciles to itself and describes something
+    // that did not happen.
+    expect(overAppliedStatus, `an allocation beyond the outstanding amount was accepted: ${overAppliedBody}`).toBeGreaterThanOrEqual(400);
+    // And the corpus control: there WAS something left to exceed.
+    expect(BigInt(invoice.totalTxnMinor) - collectedMinor > 0n, 'nothing remained on the invoice, so there was nothing to exceed').toBe(true);
   });
 
   it('ARM G — a collection cannot be dated before its invoice, nor tomorrow, and neither attempt moves the balance', () => {
