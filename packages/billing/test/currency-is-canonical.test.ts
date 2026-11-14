@@ -114,35 +114,71 @@ describe('the canonical currency set', () => {
 });
 
 describe('this package assumes no currency precision', () => {
+  // THE SCAN, factored out so that the prohibition and its witness call THE
+  // SAME CODE. Before this, the witness below carried its own COPY of the
+  // first pattern and the second pattern had no witness at all -- and a
+  // control that exercises a copy certifies the copy, not the law. Both
+  // patterns now live here once, and every caller gets them by calling.
+  //
+  // A power-of-ten literal next to a `/` or `*` is what a hidden precision
+  // looks like in this package: there is no other reason to scale an integer
+  // in minor units.
+  //
+  // `**` is excluded deliberately: `10n ** 18n` in `types.ts` is the MONEY
+  // CAP, an upper bound on an amount, not a scale between a major and a minor
+  // unit. Excluding the exponent operator is the narrowest exclusion that
+  // admits it, and the witnesses below prove the scan still sees a real `*`
+  // and a real `/`, on BOTH sides of the literal.
+  const scalesByPowerOfTen = (source: string): string[] => {
+    const code = blankOut(source);
+    const found: string[] = [];
+    for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) found.push(m[1]);
+    for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) found.push(m[1]);
+    return found;
+  };
+
+  // And the input set, read once and asserted non-empty BEFORE any zero from
+  // it is believed. A scan over no files reports no offences, and that empty
+  // green is indistinguishable from a clean tree unless this says otherwise
+  // (RULE-18: an empty probe is not a zero).
+  const srcFiles = (): string[] => readdirSync(SRC).filter((f) => f.endsWith('.ts'));
+
+  it('scans a non-empty set of source files, so its zero means something', () => {
+    const files = srcFiles();
+    expect(files.length, 'the src/ scan came back with no files to read, so its zero is blind').toBeGreaterThan(10);
+    expect(files, 'the money types are where the cap lives; a scan that cannot see them is not this scan').toContain('types.ts');
+  });
+
   it('divides by no power of ten and multiplies by none', () => {
     const offences: string[] = [];
-    for (const file of readdirSync(SRC).filter((f) => f.endsWith('.ts'))) {
-      const code = blankOut(readFileSync(join(SRC, file), 'utf8'));
-      // A power-of-ten literal next to a `/` or `*` is what a hidden
-      // precision looks like in this package: there is no other reason to
-      // scale an integer in minor units.
-      // `**` is excluded deliberately: `10n ** 18n` in `types.ts` is the
-      // MONEY CAP, an upper bound on an amount, not a scale between a
-      // major and a minor unit. Excluding the exponent operator is the
-      // narrowest exclusion that admits it, and the witness below proves
-      // the scan still sees a real `*` and `/`.
-      for (const m of code.matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)) offences.push(`${file}: scales by ${m[1]}`);
-      for (const m of code.matchAll(/\b(10{1,}0*n?)\s*[*/](?!\*)/g)) offences.push(`${file}: scales by ${m[1]}`);
+    for (const file of srcFiles()) {
+      for (const lit of scalesByPowerOfTen(readFileSync(join(SRC, file), 'utf8'))) {
+        offences.push(`${file}: scales by ${lit}`);
+      }
     }
     expect(offences, 'a file in src/ scales money by a power of ten, which is a currency precision in disguise').toStrictEqual([]);
   });
 
-  it('proves that scan can see a power of ten at all', () => {
+  it('proves that scan can see a power of ten at all, on either side of the operator', () => {
     // The scan above is a prohibition, so it passes loudest when it is
-    // broken. This is its non-vacuity witness: the same patterns, on text
-    // that does scale, must find it.
-    const planted = 'const major = amountMinor / 100n;\nconst back = major * 1000;\n';
-    const found = [...blankOut(planted).matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].map((m) => m[1]);
-    // And the exclusion is narrow: an exponent is not a scale, but a
-    // division by a power of ten right after one still is.
-    expect([...blankOut('const cap = 10n ** 18n;\n').matchAll(/(?<![*/])[*/](?!\*)\s*(10{1,}0*n?)\b/g)].length).toBe(0);
-    expect(found).toStrictEqual(['100n', '1000']);
+    // broken. These are its non-vacuity witnesses, and they call
+    // `scalesByPowerOfTen` itself rather than restating its patterns.
+    //
+    // The literal AFTER the operator -- the shape the old witness covered.
+    expect(scalesByPowerOfTen('const major = amountMinor / 100n;\nconst back = major * 1000;\n')).toStrictEqual(['100n', '1000']);
+    // The literal BEFORE the operator -- the second pattern, which had no
+    // witness at all until now, so nothing proved it was not dead text.
+    expect(scalesByPowerOfTen('const scaled = 100n * amountMinor;\n')).toStrictEqual(['100n']);
+    expect(scalesByPowerOfTen('const scaled = 1000 / amountMinor;\n')).toStrictEqual(['1000']);
+    // And the exclusion is narrow: an exponent is not a scale.
+    expect(scalesByPowerOfTen('const cap = 10n ** 18n;\n')).toStrictEqual([]);
+    // Nor does a number that is not a power of ten count.
+    expect(scalesByPowerOfTen('const third = amountMinor / 3n;\n')).toStrictEqual([]);
     // And the literals are literals, not something the lexer blanked away.
-    expect(numericLiteralsOf(planted)).toStrictEqual(['100n', '1000']);
+    expect(numericLiteralsOf('const major = amountMinor / 100n;\nconst back = major * 1000;\n')).toStrictEqual(['100n', '1000']);
+    // While a power of ten inside a STRING or a COMMENT is not code, and the
+    // blanking is what makes the scan read code only.
+    expect(scalesByPowerOfTen("const s = 'divide / 100n';\n")).toStrictEqual([]);
+    expect(scalesByPowerOfTen('// divide / 100n\n')).toStrictEqual([]);
   });
 });
