@@ -16,6 +16,12 @@ const NAV = [
   // the POS pages enforce `pos.sell` themselves and show `common.noPermission`
   // without trying a command.
   { key: 'pos', path: 'pos' },
+  // MVP-02, and behind no `requires` for the same reason `pos` is not: the
+  // invoice reads name `sales.view`, a Phase 4 key, while this header reads the
+  // Phase 3 grants of `GET /v1/inventory/access` and `Phase3Permission` cannot
+  // express it. So the link shows and the page asks the server, rendering
+  // `common.noPermission` on a 403 rather than hiding on a guess about authority.
+  { key: 'invoices', path: 'invoices' },
   { key: 'catalog', path: 'catalog' },
   // P3-S7 (A-11): shown only to a member holding the matching view permission.
   { key: 'stock', path: 'stock', requires: 'inventory.view' },
