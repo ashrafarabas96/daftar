@@ -502,7 +502,17 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # (`382`, of which the 24 host-condition failures in
 # `test/tool-commands-are-isolated.test.ts` and `test/repo-format-gate.test.ts`
 # are the SAME 24 as before the change), not a sum computed from the dict.
-EXPECTED_TOTAL_CASES = 382
+# 382 -> 388 when the four guards above each gained a positive control: the six
+# cases named at those files' own rows (1 + 1 + 2 + 2). An ADDITION only, and
+# this step refused the push on this figure ALONE after the per-file counts had
+# already been raised -- which is exactly why it is a literal and not a sum:
+# "a total summed from the per-file counts would move with them and could never
+# disagree with them", and here it disagreed and caught the second half of the
+# same omission. The figure is the one the package's own run printed on Windows
+# (`24 failed | 364 passed (388)`, of which the 24 host-condition failures in
+# `test/tool-commands-are-isolated.test.ts` and `test/repo-format-gate.test.ts`
+# are the SAME 24 as before the change), and the runner printed the same 388.
+EXPECTED_TOTAL_CASES = 388
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
