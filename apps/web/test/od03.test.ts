@@ -6,7 +6,7 @@ import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
 import { isS7Key, isS7WebFile, stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { REPO_ROOT } from './helpers/refusal-codes';
-import { customersOnly, referencedKeys } from './helpers/reach';
+import { referencedKeys, saleFlow, type SaleFlow } from './helpers/reach';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
@@ -215,54 +215,69 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   const receivablesKey = (key: string): boolean => RECEIVABLES_CODES.some((code) => key === `error.${code}`);
 
   /**
-   * ── THE CUSTOMER RULES, BY REACH ───────────────────────────────────────
+   * ── THE CUSTOMER RULES COVER THE SALE FLOW, NOT ALL OF S7 ───────────────
    *
-   * This law used to say "no S7 `.tsx` names a customer, no S7 key names one,
-   * a library may set `customerId` from null only" over EVERY S7 file and key.
-   * That is a rule about WORDS and WHERE THEY LIVE; the behaviour it protects
-   * is that the till, stock, purchasing, suppliers and sales surfaces do not
-   * OFFER or NAME a customer. The customers slice is where that idea belongs,
-   * so a text rule over every S7 path fails the day the slice ships — and a
-   * law that fails for the right code is the law that gets disabled. DR-154/4
-   * forbids the exemption, so the carve-out is DERIVED, never listed:
+   * OWNER RULING (DR-154/4, applied by the coordinator, provisional until the
+   * owner's weekly review): no exemption, allowlist or skip for any check, and
+   * the customers slice must be able to name a customer. The old rules said
+   * "no S7 `.tsx`, no S7 key, `customerId` null only" over every S7 file and
+   * namespace — a rule about WHERE WORDS LIVE. Two cheaper restatements were
+   * tried and rejected on measurement:
    *
-   *   - CUSTOMERS-ONLY FILES: reached from a page/layout/route file of the
-   *     `customers` route subtree and from NO other page/layout/route file of
-   *     the app (so a customers view a till page, or the shared header,
-   *     imports is NOT customers-only);
-   *   - SCANNED FILES: every file `isS7WebFile` accepts (the existing
-   *     definition, unchanged) except the customers-only ones. A file that
-   *     nothing imports is scanned, because dead code is not an exemption;
-   *   - SCANNED KEYS: every `isS7Key` catalogue key except those referenced
-   *     ONLY by customers-only files. A reference is a string literal, or a
-   *     template / concatenation that builds a key under a prefix
-   *     (`error.${code}`), which references EVERY key under that prefix.
+   *   - "everything the non-customers surfaces reach" fails, because the shared
+   *     header reads `nav.customers` and every page renders the header;
+   *   - "everything S7 except customers-only files" fails for the same reason.
    *
-   * Nothing is subtracted by path or by key name. The controls are below: a
-   * synthetic tree that has a customers route (main has none yet), and plants
-   * on the repository itself.
+   * So the SUBJECT of these three rules (screen vocabulary, key vocabulary,
+   * the library `customerId`-is-null rule) is redefined as what they were
+   * always protecting: the SALE FLOW's own texts and key space — the till and
+   * cash sale must not offer or name a customer; credit sale lives in the
+   * customers slice. The tax rules and every other T-12 assertion above are
+   * unchanged and still read all of S7.
+   *
+   * The subject is derived from the import graph; nothing is named:
+   *
+   *   - SALE-FLOW ENTRIES: page/layout/route files of the `pos` and `sales`
+   *     route segments;
+   *   - COMMON CHROME: the files every page that renders the shared shell
+   *     reaches (an intersection — see `saleFlow` in `helpers/reach.ts`). The
+   *     header and the shell fall out of that computation; a pre-auth page
+   *     (login) renders no shell and is not one of the pages;
+   *   - SUBJECT FILES: reach(sale-flow entries) minus the chrome, restricted
+   *     to what `isS7WebFile` accepts (the existing definition, unchanged). A
+   *     customers view the till imports is reached, is not chrome, and is
+   *     flagged; customers code the sale flow does not import is not subject;
+   *   - SUBJECT KEYS: every `isS7Key` key referenced from a subject file as a
+   *     literal, or through `prefix.${…}` / `'prefix.' + …` (which references
+   *     every key under the prefix), PLUS the namespaces the sale flow owns:
+   *     `pos.`, `sales.` and `error.` (the refusal texts a till sale can meet).
+   *     A key referenced only by chrome (`nav.customers` through the header's
+   *     `nav.${item.key}`) is not the sale flow's.
+   *
+   * What this gives up, stated: a customer word in the chrome, or in a file
+   * only another surface reaches, is no longer this law's business. The
+   * controls below show it is the sale flow, including the shared components
+   * the till renders, that is covered.
    */
   const CUSTOMER_WORD = /customer|عميل|عملاء|müşteri/i;
+  const SALE_FLOW_NAMESPACES = ['pos.', 'sales.', 'error.'];
   const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
 
   interface CustomerLaw {
-    readonly customersOnly: string[];
-    readonly scanned: string[];
+    readonly flow: SaleFlow;
+    readonly subject: string[];
     readonly screens: string[];
     readonly libraries: string[];
     readonly s7Keys: string[];
-    readonly excludedKeys: string[];
     readonly keys: string[];
     readonly hits: string[];
   }
 
   function customerLaw(files: Record<string, string>, catalogs: Record<string, Record<string, string>>): CustomerLaw {
-    const only = customersOnly(files);
-    const scanned = Object.keys(files)
-      .filter((path) => isS7WebFile(path) && !only.has(path))
-      .sort();
-    const screens = scanned.filter((path) => path.endsWith('.tsx'));
-    const libraries = scanned.filter((path) => !path.endsWith('.tsx'));
+    const flow = saleFlow(files);
+    const subject = [...flow.subject].filter((path) => isS7WebFile(path)).sort();
+    const screens = subject.filter((path) => path.endsWith('.tsx'));
+    const libraries = subject.filter((path) => !path.endsWith('.tsx'));
     const hits: string[] = [];
     for (const path of screens) if (CUSTOMER_WORD.test(stripTsComments(files[path] ?? ''))) hits.push(`screen ${path}`);
     for (const path of libraries) {
@@ -273,25 +288,18 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       }
     }
     const s7Keys = [...new Set(Object.values(catalogs).flatMap((catalog) => Object.keys(catalog)))].filter((key) => isS7Key(key)).sort();
-    const fromCustomers = referencedKeys(
-      [...only].map((path) => files[path] ?? ''),
+    const referenced = referencedKeys(
+      subject.map((path) => files[path] ?? ''),
       s7Keys,
     );
-    const fromRest = referencedKeys(
-      Object.keys(files)
-        .filter((path) => !only.has(path))
-        .map((path) => files[path] ?? ''),
-      s7Keys,
-    );
-    const excludedKeys = [...fromCustomers].filter((key) => !fromRest.has(key)).sort();
-    const keys = s7Keys.filter((key) => !excludedKeys.includes(key));
+    const keys = s7Keys.filter((key) => referenced.has(key) || SALE_FLOW_NAMESPACES.some((prefix) => key.startsWith(prefix)));
     for (const key of keys) {
       if (receivablesKey(key)) continue;
       for (const [locale, catalog] of Object.entries(catalogs)) {
         if (key in catalog && CUSTOMER_WORD.test(`${key} ${catalog[key]}`)) hits.push(`key ${locale}: ${key}`);
       }
     }
-    return { customersOnly: [...only].sort(), scanned, screens, libraries, s7Keys, excludedKeys, keys, hits };
+    return { flow, subject, screens, libraries, s7Keys, keys, hits };
   }
 
   function repositorySources(): Record<string, string> {
@@ -307,22 +315,35 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     return out;
   }
 
-  const SYNTHETIC_CATALOG = { en: { 'pos.title': 'Till', 'customers.title': 'Customers', 'stock.title': 'Stock' } };
+  const SYNTHETIC_CATALOG = { en: { 'pos.title': 'Till', 'customers.title': 'Customers', 'stock.title': 'Stock', 'nav.stock': 'Stock' } };
   const A = 'apps/web/src/app/[locale]';
   const TILL = 'apps/web/src/views/pos/TillView.tsx';
+  const HEADER = `${A}/AppHeader.tsx`;
+  const PANEL = 'apps/web/src/views/common/Panel.tsx';
   const CV = 'apps/web/src/views/customers';
-  /** A web tree that contains a customers route, which main does not yet. */
+  /**
+   * A web tree that contains a customers route, which main does not yet. Every
+   * merchant page renders the header; login does not. `Panel` is a shared
+   * component the till and a stock page both render, and is NOT chrome,
+   * because the customers page does not.
+   */
   function syntheticTree(extra: Record<string, string> = {}): Record<string, string> {
     return {
       [`${A}/pos/till/page.tsx`]:
-        "import { TillView } from '@/views/pos/TillView';\nimport { PageShell } from '../../AppHeader';\nexport default () => TillView;",
-      [`${A}/stock/page.tsx`]: "import { StockView } from '../../../views/stock/StockView';\nexport default () => StockView;",
-      [`${A}/AppHeader.tsx`]: "import { pickLabel } from '@/lib/shared-label';\nexport const PageShell = () => pickLabel;",
+        "import { TillView } from '@/views/pos/TillView';\nimport { PageShell } from '../../AppHeader';\nexport default () => PageShell + TillView;",
+      [`${A}/stock/page.tsx`]:
+        "import { StockView } from '../../../views/stock/StockView';\nimport { PageShell } from '../AppHeader';\nexport default () => PageShell + StockView;",
+      [`${A}/customers/page.tsx`]:
+        "import { CustomerListView } from '@/views/customers/CustomerListView';\nimport { PageShell } from '../AppHeader';\nexport default () => PageShell + CustomerListView;",
+      [`${A}/login/page.tsx`]: "import { tiny } from '@/lib/tiny';\nexport default () => tiny;",
+      'apps/web/src/lib/tiny.ts': 'export const tiny = 1;',
+      [HEADER]: "import { pickLabel } from '@/lib/shared-label';\nexport const PageShell = () => pickLabel;",
       'apps/web/src/lib/shared-label.ts': 'export const pickLabel = 1;',
-      [TILL]: "import { sell } from '@/lib/phase4-pos-api';\nexport const TillView = () => t('pos.title') + sell;",
-      'apps/web/src/views/stock/StockView.tsx': "export const StockView = () => t('stock.title');",
+      [PANEL]: 'export const Panel = () => 1;',
+      [TILL]:
+        "import { sell } from '@/lib/phase4-pos-api';\nimport { Panel } from '@/views/common/Panel';\nexport const TillView = () => t('pos.title') + sell + Panel;",
+      'apps/web/src/views/stock/StockView.tsx': "import { Panel } from '@/views/common/Panel';\nexport const StockView = () => t('stock.title') + Panel;",
       'apps/web/src/lib/phase4-pos-api.ts': 'export const sell = { customerId: null };',
-      [`${A}/customers/page.tsx`]: "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView;",
       [`${CV}/CustomerListView.tsx`]:
         "import { CustomerAccountView } from './CustomerAccountView';\nexport const CustomerListView = () => t('customers.title') + CustomerAccountView;",
       [`${CV}/CustomerAccountView.tsx`]: 'export const CustomerAccountView = () => customer.name;',
@@ -330,142 +351,134 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     };
   }
 
-  it('REACH, unit level: the customers-only set is derived, the till is scanned, and a customer word in the till is flagged', () => {
-    const tree = syntheticTree();
-    const clean = customerLaw(tree, SYNTHETIC_CATALOG);
-    // POSITIVE control on the synthetic tree: it scanned the till and passed.
+  it('SALE FLOW, unit level: the chrome and the subject are computed, and a customer word in the subject is flagged', () => {
+    const clean = customerLaw(syntheticTree(), SYNTHETIC_CATALOG);
+    // POSITIVE controls on the synthetic tree.
     expect(clean.hits).toEqual([]);
-    expect(clean.customersOnly).toEqual([`${A}/customers/page.tsx`, `${CV}/CustomerAccountView.tsx`, `${CV}/CustomerListView.tsx`]);
-    expect(clean.scanned).toEqual(
-      Object.keys(tree)
-        .filter((path) => isS7WebFile(path) && !clean.customersOnly.includes(path))
-        .sort(),
-    );
-    expect(clean.scanned).toContain(TILL);
-    expect(clean.libraries).toContain('apps/web/src/lib/phase4-pos-api.ts');
-    expect(clean.keys).toEqual(['pos.title', 'stock.title']);
-    expect(clean.excludedKeys).toEqual(['customers.title']);
-    // NEGATIVE: a customer word planted in a till screen.
+    expect(clean.flow.entries).toEqual([`${A}/pos/till/page.tsx`]);
+    expect([...clean.flow.chrome].sort()).toEqual([HEADER, 'apps/web/src/lib/shared-label.ts']);
+    expect(clean.flow.chromePages).not.toContain(`${A}/login/page.tsx`);
+    expect(clean.flow.chromePages).toContain(`${A}/customers/page.tsx`);
+    expect(clean.subject).toEqual([`${A}/pos/till/page.tsx`, 'apps/web/src/lib/phase4-pos-api.ts', PANEL, TILL].sort());
+    expect(clean.keys).toEqual(['pos.title']);
+    // The header is derived chrome: a word in it is not the sale flow's; the same word in the till, or in the shared Panel, is.
+    expect(customerLaw(syntheticTree({ [HEADER]: 'export const PageShell = () => customer.nav;' }), SYNTHETIC_CATALOG).hits).toEqual([]);
+    // NEGATIVE 1: a customer word in the till.
     expect(customerLaw(syntheticTree({ [TILL]: 'export const TillView = () => customer.name;' }), SYNTHETIC_CATALOG).hits).toEqual([`screen ${TILL}`]);
-    // The same word in a comment is not a name (comments are stripped, as before).
+    // NEGATIVE 2: a customer word in a shared component the till renders that is NOT the chrome.
+    expect(customerLaw(syntheticTree({ [PANEL]: 'export const Panel = () => customer.name;' }), SYNTHETIC_CATALOG).hits).toEqual([`screen ${PANEL}`]);
+    // A surface the sale flow does not reach is not its subject.
+    expect(
+      customerLaw(syntheticTree({ 'apps/web/src/views/stock/StockView.tsx': 'export const StockView = () => customer.name;' }), SYNTHETIC_CATALOG).hits,
+    ).toEqual([]);
+    // Comments are stripped, as before.
     expect(customerLaw(syntheticTree({ [TILL]: '// walk-in, not a customer\nexport const TillView = 1;' }), SYNTHETIC_CATALOG).hits).toEqual([]);
-    // NEGATIVE: a library that sets customerId to a buyer, and one that names a balance.
+    // Libraries: a buyer under customerId, and a customer balance.
     expect(
       customerLaw(syntheticTree({ 'apps/web/src/lib/phase4-pos-api.ts': 'export const sell = { customerId: chosen.id };' }), SYNTHETIC_CATALOG).hits,
     ).toEqual(['library customerId apps/web/src/lib/phase4-pos-api.ts: chosen.id']);
     expect(customerLaw(syntheticTree({ 'apps/web/src/lib/phase4-pos-api.ts': 'export const customerBalance = 1;' }), SYNTHETIC_CATALOG).hits).toEqual([
       'library vocabulary apps/web/src/lib/phase4-pos-api.ts: customerBalance',
     ]);
-    // Files `isS7WebFile` accepts that no entry imports are NOT exempt: dead code is not a carve-out.
-    expect(customerLaw(syntheticTree({ 'apps/web/src/lib/phase4-unused-api.ts': 'export const customerBalance = 1;' }), SYNTHETIC_CATALOG).hits).toEqual([
-      'library vocabulary apps/web/src/lib/phase4-unused-api.ts: customerBalance',
-    ]);
+    // Customers code the sale flow does not import is not its subject, dead or not.
     expect(
       customerLaw(syntheticTree({ [`${CV}/CustomerOrphan.tsx`]: 'export const CustomerOrphan = () => customer.balance;' }), SYNTHETIC_CATALOG).hits,
-    ).toEqual([`screen ${CV}/CustomerOrphan.tsx`]);
+    ).toEqual([]);
   });
 
-  it('REACH, unit level: a customers view that a till page, or the shared header, imports is no longer customers-only and is flagged', () => {
-    // Directly: the till page imports a customers view.
+  it('SALE FLOW, unit level: a customers view a sale-flow page imports becomes subject and is flagged', () => {
     const direct = customerLaw(
       syntheticTree({
-        [`${A}/pos/till/page.tsx`]: "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView;",
+        [`${A}/pos/till/page.tsx`]:
+          "import { CustomerListView } from '@/views/customers/CustomerListView';\nimport { PageShell } from '../../AppHeader';\nexport default () => PageShell + CustomerListView;",
       }),
       SYNTHETIC_CATALOG,
     );
-    // The customers page still reaches it, but a non-customers entry does too.
-    expect(direct.customersOnly).toEqual([`${A}/customers/page.tsx`]);
+    expect(direct.subject).toEqual(expect.arrayContaining([`${CV}/CustomerListView.tsx`, `${CV}/CustomerAccountView.tsx`]));
     expect(direct.hits).toEqual(
       expect.arrayContaining([`screen ${CV}/CustomerAccountView.tsx`, `screen ${CV}/CustomerListView.tsx`, 'key en: customers.title']),
     );
-    // Through a NON-S7 shared file (the header): the same.
-    const viaShared = customerLaw(
+    // Through the shared Panel, which is not chrome. (A customers view that EVERY merchant page reached would itself be chrome:
+    // the badge here is imported by the Panel alone.)
+    const viaPanel = customerLaw(
       syntheticTree({
-        [`${A}/AppHeader.tsx`]: "import { CustomerAccountView } from '@/views/customers/CustomerAccountView';\nexport const PageShell = CustomerAccountView;",
+        [PANEL]: "import { Badge } from '@/views/customers/CustomerBadge';\nexport const Panel = Badge;",
+        [`${CV}/CustomerBadge.tsx`]: 'export const Badge = () => customer.name;',
       }),
       SYNTHETIC_CATALOG,
     );
-    expect(viaShared.hits).toEqual([`screen ${CV}/CustomerAccountView.tsx`]);
-    // Through a relative import written with a directory index.
+    expect(viaPanel.hits).toEqual(expect.arrayContaining([`screen ${CV}/CustomerBadge.tsx`]));
+    // Through a directory index.
     const viaIndex = customerLaw(
       syntheticTree({
-        [`${A}/stock/page.tsx`]: "import { X } from '../../../views/customers';\nexport default () => X;",
+        [TILL]: "import { X } from '../customers';\nexport const TillView = () => X;",
         [`${CV}/index.ts`]: "export { CustomerAccountView as X } from './CustomerAccountView';",
       }),
       SYNTHETIC_CATALOG,
     );
-    expect(viaIndex.hits).toEqual(expect.arrayContaining([`screen ${CV}/CustomerAccountView.tsx`, `screen ${A}/stock/page.tsx`]));
-    // The customers route's own page is not a till entry and is not flagged while it is customers-only.
+    expect(viaIndex.hits).toEqual(expect.arrayContaining([`screen ${CV}/CustomerAccountView.tsx`]));
+    // The customers page, reaching its own views only, is not flagged.
     expect(customerLaw(syntheticTree(), SYNTHETIC_CATALOG).hits).toEqual([]);
   });
 
-  it('REACH, unit level: a key built at run time references every key under its prefix', () => {
-    const catalog = { en: { ...SYNTHETIC_CATALOG.en, 'error.sale.customer_required': 'Choose a customer', 'error.sale.ok': 'Fine' } };
-    // POSITIVE: nothing references the planted key at all, and it is scanned and flagged — an unreferenced key is not an exemption.
-    expect(customerLaw(syntheticTree(), catalog).hits).toEqual(['key en: error.sale.customer_required']);
-    // NEGATIVE: the till BUILDS `error.${code}`; the planted key is flagged though no literal names it.
-    const dynamic = customerLaw(syntheticTree({ [TILL]: 'export const TillView = (code) => t(`error.${code}`);' }), catalog);
-    expect(dynamic.hits).toEqual(['key en: error.sale.customer_required']);
-    expect(dynamic.keys).toContain('error.sale.ok');
-    // A concatenation builds a key as well.
-    expect(customerLaw(syntheticTree({ [TILL]: "export const TillView = (code) => t('error.' + code);" }), catalog).hits).toEqual([
-      'key en: error.sale.customer_required',
+  it('SALE FLOW, unit level: keys — owned namespaces, run-time prefixes, and chrome-only keys', () => {
+    const catalog = {
+      en: { ...SYNTHETIC_CATALOG.en, 'error.sale.customer_required': 'Choose a customer', 'error.sale.ok': 'Fine', 'pos.buyer': 'Choose a customer' },
+    };
+    // An owned-namespace key is the sale flow's though no file names it.
+    expect(customerLaw(syntheticTree(), catalog).hits).toEqual(['key en: error.sale.customer_required', 'key en: pos.buyer']);
+    // A key built at run time references every key under its prefix, in a namespace the flow does not own.
+    const dynamicCatalog = { en: { ...SYNTHETIC_CATALOG.en, 'invoices.status.customerOwes': 'Customer owes' } };
+    expect(customerLaw(syntheticTree(), dynamicCatalog).hits).toEqual([]);
+    expect(customerLaw(syntheticTree({ [PANEL]: 'export const Panel = (s) => t(`invoices.status.${s}`);' }), dynamicCatalog).hits).toEqual([
+      'key en: invoices.status.customerOwes',
     ]);
-    // A key ONLY a customers-only file builds is the customers slice's, and is not scanned...
-    const onlyCustomers = customerLaw(
-      syntheticTree({ [`${CV}/CustomerAccountView.tsx`]: 'export const CustomerAccountView = (code) => t(`error.${code}`);' }),
-      {
-        en: { ...catalog.en, 'error.sale.ok': 'Fine' },
-      },
-    );
-    expect(onlyCustomers.excludedKeys).toEqual(expect.arrayContaining(['error.sale.customer_required', 'error.sale.ok']));
-    expect(onlyCustomers.hits).toEqual([]);
-    // ...and the day a till file builds the same prefix, it is.
-    const both = customerLaw(
-      syntheticTree({
-        [`${CV}/CustomerAccountView.tsx`]: 'export const CustomerAccountView = (code) => t(`error.${code}`);',
-        'apps/web/src/views/stock/StockView.tsx': 'export const StockView = (code) => t(`error.${code}`);',
-      }),
-      catalog,
-    );
-    expect(both.hits).toEqual(['key en: error.sale.customer_required']);
-    // The shared header builds `nav.${key}`: `nav.customers` is an S7 nav key naming a customer, so it is flagged.
-    // This is deliberate and OPEN (it is the header's business to decide), not worked around by name.
-    const header = customerLaw(syntheticTree({ [`${A}/AppHeader.tsx`]: 'export const PageShell = (item) => t(`nav.${item.key}`);' }), {
-      en: { ...SYNTHETIC_CATALOG.en, 'nav.customers': 'Customers' },
-    });
-    expect(header.hits).toEqual(['key en: nav.customers']);
+    expect(customerLaw(syntheticTree({ [PANEL]: "export const Panel = (s) => t('invoices.status.' + s);" }), dynamicCatalog).hits).toEqual([
+      'key en: invoices.status.customerOwes',
+    ]);
+    // The header builds `nav.${key}`: `nav.customers` is chrome-only, so it is not the sale flow's — and the day the till builds it too, it is.
+    const navCatalog = { en: { ...SYNTHETIC_CATALOG.en, 'nav.customers': 'Customers' } };
+    const nav = { [HEADER]: 'export const PageShell = (item) => t(`nav.${item.key}`);' };
+    expect(customerLaw(syntheticTree(nav), navCatalog).hits).toEqual([]);
+    expect(customerLaw(syntheticTree({ ...nav, [PANEL]: 'export const Panel = (item) => t(`nav.${item.key}`);' }), navCatalog).hits).toEqual([
+      'key en: nav.customers',
+    ]);
+    // Customers-only key references do not make a key the sale flow's.
+    expect(customerLaw(syntheticTree(), SYNTHETIC_CATALOG).keys).not.toContain('customers.title');
   });
 
-  it('REACH, repository: no scanned screen, library or key names a customer', () => {
+  it('SALE FLOW, repository: no subject screen, library or key names a customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
+    const { flow } = law;
     // POSITIVE controls — a law that passes on an empty set is dead.
-    // The file scope is every isS7WebFile file minus the derived customers-only set.
-    const s7Files = Object.keys(files)
-      .filter((path) => isS7WebFile(path))
-      .sort();
-    expect(s7Files.length).toBeGreaterThan(40);
-    expect(law.scanned).toEqual(s7Files.filter((path) => !law.customersOnly.includes(path)));
+    expect(flow.entries.length, 'no sale-flow entry was found').toBeGreaterThan(1);
+    expect(flow.chrome.size, 'no chrome was computed').toBeGreaterThan(3);
+    // The exclusion is DERIVED, not named: the header and shell fall out of the intersection.
+    expect(flow.chrome).toContain(HEADER);
+    expect(files[HEADER]).toMatch(/export (?:function|const) PageShell\b/);
+    // A pre-auth page renders no shell and is not one of the pages; a merchant page outside the S7 segments is.
+    expect(flow.chromePages).not.toContain(`${A}/login/page.tsx`);
+    expect(flow.chromePages).toContain(`${A}/structure/page.tsx`);
+    expect(flow.merchantPages.length).toBeGreaterThan(10);
     for (const path of [
       'apps/web/src/views/pos/TillView.tsx',
       'apps/web/src/views/pos/RegisterView.tsx',
-      'apps/web/src/views/pos/registry.ts',
-      'apps/web/src/views/structure/WarehouseBranches.tsx',
-      'apps/web/src/views/catalog/registry.tsx',
       'apps/web/src/lib/phase4-pos-api.ts',
       'apps/web/src/views/stock/parts.tsx',
     ]) {
-      expect(law.scanned, path).toContain(path);
+      expect(law.subject, path).toContain(path);
+      expect(flow.chrome.has(path), path).toBe(false);
     }
-    expect(law.screens.length, 'the scan ran over too few screens').toBeGreaterThan(10);
-    expect(law.libraries.length).toBeGreaterThan(2);
-    // The key scope is main's count of S7 keys, minus only keys referenced exclusively by customers-only files.
-    const mainKeys = Object.keys(en).filter((key) => isS7Key(key));
-    expect(mainKeys.length).toBeGreaterThan(500);
-    expect(law.s7Keys).toEqual(mainKeys.slice().sort());
-    expect(law.keys.length).toBe(mainKeys.length - law.excludedKeys.length);
+    expect(law.screens.length, 'the scan ran over too few screens').toBeGreaterThan(5);
+    expect(law.libraries.length).toBeGreaterThan(1);
+    expect(law.keys.length, "no key is the sale flow's").toBeGreaterThan(50);
     expect(law.keys).toContain('pos.title');
+    expect(
+      Object.keys(en)
+        .filter((key) => key.startsWith('pos.'))
+        .every((key) => law.keys.includes(key)),
+    ).toBe(true);
     // The law itself.
     expect(law.hits).toEqual([]);
     // The receivables exemption is not vacuous and not a prefix: it covers a
@@ -475,9 +488,9 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(RECEIVABLES_CODES.length).toBeGreaterThan(0);
   });
 
-  it('REACH, repository: a scanned library sets customerId from null only, and names no other customer vocabulary', () => {
+  it('SALE FLOW, repository: a subject library sets customerId from null only, and names no other customer vocabulary', () => {
     const law = customerLaw(repositorySources(), { ar, en, tr });
-    expect(law.libraries.length).toBeGreaterThan(2);
+    expect(law.libraries.length).toBeGreaterThan(1);
     expect(law.libraries).toContain('apps/web/src/lib/phase4-pos-api.ts');
     // `SaleCommitSchema` requires `customerId`, and `null` IS the walk-in a
     // till sale is. A library may name a receivables refusal CODE
