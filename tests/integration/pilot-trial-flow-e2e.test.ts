@@ -319,6 +319,19 @@ interface ReceivableBody {
 /** The per-currency half of each receivable answer, kept for the laws below. */
 let observedByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] = [];
 let otherByCurrency: readonly { readonly currency: string; readonly txnMinor: string }[] | null = null;
+/** The fields this suite reads off one row of the open-invoices page. */
+interface OpenInvoiceRow {
+  readonly invoiceId: string;
+  readonly currency: string;
+  readonly totalTxnMinor: string;
+  readonly outstandingTxnMinor: string;
+  readonly settlementState: string;
+  readonly isCredit: boolean;
+  readonly hasExplicitDueDate: boolean;
+}
+/** The flow customer's still-open documents, and arm B's customer's. */
+let openInvoices: readonly OpenInvoiceRow[] = [];
+let otherOpenInvoices: readonly OpenInvoiceRow[] | null = null;
 /** Arm C: what the server answered a sale on account that names nobody. */
 let creditWithNobodyStatus: number | null = null;
 let creditWithNobodyBody = '';
@@ -456,6 +469,22 @@ beforeAll(async () => {
   observedByCurrency = readBody.byCurrency;
   balanceWasRead = true;
 
+  step = 'step 4b — the SAME money read a second way, per invoice';
+  // A second INDEPENDENT read of the same debt, at the document level: this
+  // page derives each figure through `invoice_outstanding(...)` and never from
+  // a stored column, so it is not the customer total repeated — it is the
+  // same money reached by another path. A balance that agreed with itself and
+  // with nothing else would be a figure this suite could not cross-check at
+  // all, and `asOf` is supplied rather than defaulted because a read whose
+  // date the server resolved answers a different question either side of
+  // local midnight.
+  const openPage = await w.t.request.get(`/v1/customers/${customerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
+  if (openPage.status >= 300) {
+    refusedAt = `step 4b — the open-invoices read was refused with ${openPage.status}: ${JSON.stringify(openPage.body)}`;
+    return;
+  }
+  openInvoices = (openPage.body as { items: readonly OpenInvoiceRow[] }).items;
+
   // ── the two arms, driven AFTER the flow's own figure is read ─────────────
   // Nothing below may disturb the flow above: the zero collection is refused
   // and writes nothing, and the surplus arm uses a SECOND customer with its
@@ -512,6 +541,8 @@ beforeAll(async () => {
       const otherBody = otherRead.body as ReceivableBody;
       otherBalanceMinor = BigInt(otherBody.baseMinor);
       otherByCurrency = otherBody.byCurrency;
+      const otherOpen = await w.t.request.get(`/v1/customers/${otherCustomerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
+      if (otherOpen.status < 300) otherOpenInvoices = (otherOpen.body as { items: readonly OpenInvoiceRow[] }).items;
     }
   }
   step = 'arm C — a sale ON ACCOUNT that names nobody';
@@ -734,6 +765,36 @@ describe(CLAIM, () => {
     ).toBe(true);
   });
 
+  it('1-4c. THE SAME MONEY, READ A SECOND WAY: the invoice itself says what is left on it', () => {
+    expect(refusedAt).toBeNull();
+    // Two independent reads of one debt. This page derives every figure
+    // through `invoice_outstanding(...)` and never from a stored column, so
+    // agreement here is agreement between two paths — not a number repeating
+    // itself.
+    expect(openInvoices.length, 'the customer owes something and no document explains it').toBe(1);
+    const row = openInvoices[0];
+    expect(row?.invoiceId, 'the open document is not the invoice this flow committed').toBe(invoice.invoiceId);
+    expect(row?.currency).toBe(invoiceCurrency);
+    expect(row?.totalTxnMinor, 'the document total moved after the collections, and a collection does not change a total').toBe(invoice.totalTxnMinor);
+    expect(row?.outstandingTxnMinor, 'what is left on the invoice disagrees with the sale minus the collections').toBe(
+      (BigInt(invoice.totalTxnMinor) - collectedMinor).toString(),
+    );
+    // AND IT AGREES WITH THE CUSTOMER TOTAL, which is the cross-check: one
+    // invoice in one currency, so the two reads must land on the same figure.
+    expect(row?.outstandingTxnMinor, 'the invoice and the customer total disagree about the same money').toBe(observedByCurrency[0]?.txnMinor);
+    // The state is DERIVED and it is the state this flow produced: paid in
+    // part, not unpaid and not settled. A suite that read `unpaid` here would
+    // be reading a page that forgot both collections.
+    expect(row?.settlementState, 'the settlement state is not what two partial collections produce').toBe('partial');
+    // AND THE CREDIT FLAG IS FALSE: this row is debt. A page that marked a
+    // part-paid invoice as a credit balance would show the merchant money it
+    // does not have.
+    expect(row?.isCredit, 'a part-paid invoice was marked as carrying credit').toBe(false);
+    // And the sale named no due date, so the page says so in its own field
+    // rather than through an age of zero.
+    expect(row?.hasExplicitDueDate, 'the invoice reports a stated due date it never had').toBe(false);
+  });
+
   it('3b. A REPLAY IS NOT MONEY: the same collection sent twice is answered as a replay, and the balance does not move', () => {
     expect(refusedAt).toBeNull();
     // POSITIVE CONTROL ON THE REPLAY ITSELF. A `201` from the second send
@@ -818,6 +879,13 @@ describe(CLAIM, () => {
     // live case that a correspondence between the two sides would have
     // reddened.
     expect(closureOffencesIn(new Map([[invoiceCurrency, 0n]]), new Map()), 'a settled currency was read as an offence').toStrictEqual([]);
+    // AND THE DOCUMENT-LEVEL READ AGREES: a settled invoice is not an OPEN
+    // invoice, so arm B's customer has no open document at all. This is the
+    // second path saying the same thing as the zero above, and a page that
+    // still listed the invoice would mean one of the two reads is wrong about
+    // whether anything is outstanding.
+    expect(otherOpenInvoices, 'arm B never read the second open-invoices page').not.toBeNull();
+    expect(otherOpenInvoices ?? [], 'a fully settled invoice is still listed as open').toStrictEqual([]);
     expect(
       closureOffencesIn(new Map([[invoiceCurrency, 1n]]), new Map()).length,
       'a settled currency whose statement does not close at zero was accepted',
