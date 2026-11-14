@@ -94,6 +94,16 @@ describe('§16 — no posting vocabulary appears in this package code', () => {
    */
   const POSTING_WORDS = ['journal', 'journalEntry', 'journal_entries', 'postEntry', 'doubleEntry', 'debit', 'credit_note', 'trialBalance', 'chartOfAccounts'];
 
+  /**
+   * THE SCAN, factored out so the law and its control call the same code.
+   * Written inline, the only thing a witness could do was restate it, and a
+   * control that exercises a copy certifies the copy.
+   */
+  const postingWordsIn = (source: string): string[] => {
+    const code = blankOut(source).toLowerCase();
+    return POSTING_WORDS.filter((w) => code.includes(w.toLowerCase()));
+  };
+
   it('the words ARE present in prose, so the blanking is doing the work', () => {
     const raw = SOURCES.map(([, s]) => s)
       .join('\n')
@@ -102,13 +112,26 @@ describe('§16 — no posting vocabulary appears in this package code', () => {
     expect(raw).toContain('posts nothing');
   });
 
+  it('proves the scan can see a posting word in CODE, and ignores one in prose', () => {
+    // The positive control this law went without. Without it, a `blankOut`
+    // that blanked too much would make every case below vacuously green, and
+    // the prose case above would not notice: it reads the RAW source.
+    expect(postingWordsIn('const journal = 1;\n')).toStrictEqual(['journal']);
+    expect(postingWordsIn('postEntry(x);\n')).toStrictEqual(['postEntry']);
+    // Two at once, so the filter is not a one-hit special case.
+    expect(postingWordsIn('debit(journal);\n').sort()).toStrictEqual(['debit', 'journal']);
+    // And the exclusions the law depends on: a word in a comment or a string
+    // is documentation, not a posting call.
+    expect(postingWordsIn('// this posts no journal entry\n')).toStrictEqual([]);
+    expect(postingWordsIn("const why = 'it posts to no journal';\n")).toStrictEqual([]);
+    // A word that is not in the list is not invented.
+    expect(postingWordsIn('const invoice = 1;\n')).toStrictEqual([]);
+  });
+
   it('and none of them appears in code', () => {
     const offences: string[] = [];
     for (const [file, source] of SOURCES) {
-      const code = blankOut(source).toLowerCase();
-      for (const w of POSTING_WORDS) {
-        if (code.includes(w.toLowerCase())) offences.push(`${file}: ${w}`);
-      }
+      for (const w of postingWordsIn(source)) offences.push(`${file}: ${w}`);
     }
     expect(offences, 'posting vocabulary reached the code of a package that must not post').toEqual([]);
   });
@@ -126,13 +149,32 @@ describe('PART 26 — a missing credential can never become a fake success', () 
    * the fake — the fall-back would have to be written at the call site, in
    * daylight, by someone typing the fake's name.
    */
+  const PROVIDER_SELECTORS = ['createProvider', 'getProvider', 'resolveProvider', 'defaultProvider', 'providerFor', 'PROVIDER_REGISTRY', 'process.env'];
+
+  /** Factored for the same reason: the control must run the law, not a copy. */
+  const providerSelectorsIn = (source: string): string[] => {
+    const code = blankOut(source);
+    return PROVIDER_SELECTORS.filter((w) => code.includes(w));
+  };
+
+  const mentionsFake = (source: string): boolean => blankOut(source).includes('FakePaymentProvider');
+
+  it('proves both provider scans can fire, and that prose does not trip them', () => {
+    // The two laws below assert an absence over the real tree. These are the
+    // fabricated violating inputs that prove each one would speak.
+    expect(providerSelectorsIn('const p = getProvider();\n')).toStrictEqual(['getProvider']);
+    expect(providerSelectorsIn('const k = process.env.KEY;\n')).toStrictEqual(['process.env']);
+    expect(providerSelectorsIn('// never call getProvider here\n')).toStrictEqual([]);
+    expect(providerSelectorsIn('const p = chargeCard();\n')).toStrictEqual([]);
+    expect(mentionsFake('const p = new FakePaymentProvider();\n')).toBe(true);
+    expect(mentionsFake('// not even FakePaymentProvider\n')).toBe(false);
+    expect(mentionsFake('const p = new RealProvider();\n')).toBe(false);
+  });
+
   it('contains no provider factory, registry or default', () => {
     const offences: string[] = [];
     for (const [file, source] of SOURCES) {
-      const code = blankOut(source);
-      for (const w of ['createProvider', 'getProvider', 'resolveProvider', 'defaultProvider', 'providerFor', 'PROVIDER_REGISTRY', 'process.env']) {
-        if (code.includes(w)) offences.push(`${file}: ${w}`);
-      }
+      for (const w of providerSelectorsIn(source)) offences.push(`${file}: ${w}`);
     }
     expect(offences, 'src/ selects a provider, so a missing credential has somewhere to fall back to').toEqual([]);
   });
@@ -141,10 +183,15 @@ describe('PART 26 — a missing credential can never become a fake success', () 
     // If a real code path named `FakePaymentProvider`, that path is the
     // fall-back this rule forbids.
     const leaks: string[] = [];
+    const examined: string[] = [];
     for (const [file, source] of SOURCES) {
       if (file === 'fake-provider.ts' || file === 'index.ts') continue;
-      if (blankOut(source).includes('FakePaymentProvider')) leaks.push(file);
+      examined.push(file);
+      if (mentionsFake(source)) leaks.push(file);
     }
+    // Two files are skipped by name, so the scan must still have a set left
+    // to read: otherwise "no leaks" would only mean "nothing was looked at".
+    expect(examined.length, 'every module was skipped, so this law read nothing').toBeGreaterThan(5);
     expect(leaks, 'a module other than the fake itself reaches for the fake').toEqual([]);
   });
 
