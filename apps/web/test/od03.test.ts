@@ -6,7 +6,7 @@ import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
 import { isS7Key, isS7WebFile, stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { REPO_ROOT } from './helpers/refusal-codes';
-import { referencedKeys, saleFlow, type SaleFlow } from './helpers/reach';
+import { entryPoints, importsOf, reachedFrom, referencedKeys, saleFlow, saleFlowEntries, type SaleFlow } from './helpers/reach';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
@@ -254,6 +254,16 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    *     A key referenced only by chrome (`nav.customers` through the header's
    *     `nav.${item.key}`) is not the sale flow's.
    *
+   * EXPECTED STATE WHEN THE CUSTOMERS SLICE LANDS. Green: the customers pages
+   * and views (nothing in the sale flow imports them); `nav.customers` and any
+   * key only the header builds; `views/customers/registry.*` fixtures (a
+   * registry nothing imports is not reached). Red, by design: a till or
+   * cash-sale page that imports a customers view or a shared component naming
+   * one; any `error.`, `pos.` or `sales.` key whose name or text offers a
+   * customer, other than the registered receivables refusal codes; a customers
+   * page that does not render the shared shell (the chrome would compute to
+   * nothing and the positive controls below fail loudly, never silently).
+   *
    * What this gives up, stated: a customer word in the chrome, or in a file
    * only another surface reaches, is no longer this law's business. The
    * controls below show it is the sale flow, including the shared components
@@ -288,8 +298,10 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       }
     }
     const s7Keys = [...new Set(Object.values(catalogs).flatMap((catalog) => Object.keys(catalog)))].filter((key) => isS7Key(key)).sort();
+    // Keys are read from EVERY subject file, S7 or not: a shared non-S7 file the till reaches
+    // (and that is not chrome by computation) is the sale flow's text all the same.
     const referenced = referencedKeys(
-      subject.map((path) => files[path] ?? ''),
+      [...flow.subject].map((path) => files[path] ?? ''),
       s7Keys,
     );
     const keys = s7Keys.filter((key) => referenced.has(key) || SALE_FLOW_NAMESPACES.some((prefix) => key.startsWith(prefix)));
@@ -447,12 +459,173 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(customerLaw(syntheticTree(), SYNTHETIC_CATALOG).keys).not.toContain('customers.title');
   });
 
+  /**
+   * The boundaries of the reach computation, each with a control that turns
+   * RED when the boundary moves. (Each was also shown red against a planted
+   * mutation of `helpers/reach.ts` or of `customerLaw`; see the PR notes.)
+   */
+  const STRUCTURE = `${A}/structure/page.tsx`;
+  const BADGE = `${CV}/CustomerBadge.tsx`;
+  const importBadge = "import { Badge } from '@/views/customers/CustomerBadge';\n";
+
+  it('BOUNDARY (a): the chrome is computed over ALL pages, so a customers view the S7 pages share is not chrome unless every shell page reaches it', () => {
+    // Till, stock and customers pages all reach the badge; a merchant page OUTSIDE the S7 segments (structure) renders the shell and does not.
+    const shared = syntheticTree({
+      [STRUCTURE]: "import { PageShell } from '../AppHeader';\nexport default () => PageShell;",
+      [BADGE]: 'export const Badge = () => customer.name;',
+      [TILL]: `${importBadge}export const TillView = () => Badge;`,
+      'apps/web/src/views/stock/StockView.tsx': `${importBadge}export const StockView = () => Badge;`,
+      [`${CV}/CustomerListView.tsx`]: `${importBadge}export const CustomerListView = () => Badge;`,
+    });
+    const law = customerLaw(shared, SYNTHETIC_CATALOG);
+    expect(law.flow.chromePages).toContain(STRUCTURE);
+    expect(law.flow.chrome.has(BADGE)).toBe(false);
+    expect(law.hits).toEqual(expect.arrayContaining([`screen ${BADGE}`]));
+    // And when the page outside the S7 segments reaches it too, it genuinely is on every shell page: chrome, not flagged.
+    const everywhere = customerLaw(
+      syntheticTree({
+        ...shared,
+        [STRUCTURE]: `${importBadge}import { PageShell } from '../AppHeader';\nexport default () => PageShell + Badge;`,
+      }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(everywhere.flow.chrome.has(BADGE)).toBe(true);
+    expect(everywhere.hits.some((hit) => hit.includes('CustomerBadge'))).toBe(false);
+    // A pre-auth page renders no shell and is not a shell page, however it is placed.
+    expect(law.flow.chromePages).not.toContain(`${A}/login/page.tsx`);
+  });
+
+  it('BOUNDARY (b): a key a non-S7 shared file reads is the sale flow’s unless that file is chrome by computation', () => {
+    const catalog = { en: { ...SYNTHETIC_CATALOG.en, 'invoices.note.customerOwes': 'Customer owes' } };
+    const COPY = 'apps/web/src/lib/shared-copy.ts';
+    expect(isS7WebFile(COPY)).toBe(false);
+    const read = {
+      [COPY]: "export const copy = (t) => t('invoices.note.customerOwes');",
+      [TILL]: "import { copy } from '@/lib/shared-copy';\nexport const TillView = () => copy;",
+      [`${CV}/CustomerListView.tsx`]: "import { copy } from '@/lib/shared-copy';\nexport const CustomerListView = () => copy;",
+    };
+    // Read by the till and by the customers page, not by every shell page: the sale flow's.
+    expect(customerLaw(syntheticTree(read), catalog).hits).toEqual(['key en: invoices.note.customerOwes']);
+    // Read by every shell page: chrome by computation, so not the sale flow's.
+    const everyPage = customerLaw(
+      syntheticTree({
+        ...read,
+        [STRUCTURE]: "import { PageShell } from '../AppHeader';\nimport { copy } from '@/lib/shared-copy';\nexport default () => PageShell + copy;",
+        'apps/web/src/views/stock/StockView.tsx': "import { copy } from '@/lib/shared-copy';\nexport const StockView = () => copy;",
+      }),
+      catalog,
+    );
+    expect(everyPage.flow.chrome.has(COPY)).toBe(true);
+    expect(everyPage.hits).toEqual([]);
+  });
+
+  it('BOUNDARY (c): the sale-flow and customers route matchers are anchored at [locale]', () => {
+    const paths = [
+      `${A}/pos/customers/page.tsx`,
+      `${A}/(shop)/pos/page.tsx`,
+      `${A}/sales/page.tsx`,
+      `${A}/customers/pos/page.tsx`,
+      `${A}/reports/pos/page.tsx`,
+      `${A}/poster/page.tsx`,
+      'apps/web/src/views/pos/page.tsx',
+    ];
+    expect(saleFlowEntries(paths)).toEqual([`${A}/(shop)/pos/page.tsx`, `${A}/pos/customers/page.tsx`, `${A}/sales/page.tsx`]);
+    // `pos/customers/page.tsx` is a SALE-FLOW page that happens to have `customers` in its path: it is not a customers entry,
+    // so a customers view it imports is flagged. `customers/pos/page.tsx` is a customers page: not a sale-flow entry.
+    const shell = "import { PageShell } from '../../AppHeader';\n";
+    const underPos = customerLaw(
+      syntheticTree({
+        [`${A}/pos/customers/page.tsx`]: `${shell}import { CustomerAccountView } from '@/views/customers/CustomerAccountView';\nexport default () => PageShell + CustomerAccountView;`,
+      }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(underPos.hits).toEqual(expect.arrayContaining([`screen ${CV}/CustomerAccountView.tsx`]));
+    const overPos = customerLaw(
+      syntheticTree({
+        [`${A}/customers/pos/page.tsx`]: `${shell}import { CustomerAccountView } from '@/views/customers/CustomerAccountView';\nexport default () => PageShell + CustomerAccountView;`,
+      }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(overPos.flow.entries).toEqual([`${A}/pos/till/page.tsx`]);
+    expect(overPos.hits).toEqual([]);
+  });
+
+  it('BOUNDARY (d): an import the walk cannot follow FAILS the walk instead of being dropped', () => {
+    const walk = (till: string): Record<string, string> => syntheticTree({ [TILL]: till });
+    const unresolved: Record<string, string> = {
+      'a `.js` suffix on a TypeScript source': "import { x } from './model.js';\nexport const TillView = x;",
+      'an alias the walk does not know': "import { x } from '~/lib/phase4-pos-api';\nexport const TillView = x;",
+      'a path that names no file': "import { x } from '@/lib/not-there';\nexport const TillView = x;",
+      'a computed dynamic import': 'export const TillView = (n) => import(`@/views/${n}`);',
+      'a relative path that names no file': "import { x } from '../nowhere';\nexport const TillView = x;",
+    };
+    for (const [what, source] of Object.entries(unresolved)) {
+      expect(() => customerLaw(walk(source), SYNTHETIC_CATALOG), what).toThrow(/could not resolve/);
+      expect(() => reachedFrom(walk(source), [`${A}/pos/till/page.tsx`]), what).toThrow(/could not resolve/);
+    }
+    // Data and packages are not holes.
+    expect(() =>
+      customerLaw(
+        walk("import cat from '@/messages/en.json';\nimport { useState } from 'react';\nimport 'server-only';\nexport const TillView = () => cat + useState;"),
+        SYNTHETIC_CATALOG,
+      ),
+    ).not.toThrow();
+    expect(importsOf(TILL, "import('@/lib/shared-label');", syntheticTree()).resolved).toEqual(['apps/web/src/lib/shared-label.ts']);
+    // A hole in a file nothing reaches is not walked.
+    expect(() => customerLaw(syntheticTree({ 'apps/web/src/lib/stray.ts': "import { x } from '~/nope';" }), SYNTHETIC_CATALOG)).not.toThrow();
+  });
+
+  it('BOUNDARY (e): the framework special files and the middleware are entries', () => {
+    const special = [
+      'global-error',
+      'forbidden',
+      'unauthorized',
+      'opengraph-image',
+      'twitter-image',
+      'icon',
+      'apple-icon',
+      'sitemap',
+      'robots',
+      'manifest',
+      'error',
+      'not-found',
+      'loading',
+      'template',
+      'default',
+    ].map((name) => `${A}/pos/${name}.tsx`);
+    expect(saleFlowEntries(special)).toEqual([...special].sort());
+    expect(saleFlowEntries([`${A}/pos/icon2.tsx`, `${A}/pos/opengraph-image1.ts`])).toHaveLength(2);
+    expect(saleFlowEntries([`${A}/pos/helper.tsx`, `${A}/pos/pos-page-kit.ts`])).toEqual([]);
+    expect(entryPoints(['apps/web/src/middleware.ts', `${A}/pos/page.tsx`, 'apps/web/src/lib/csp.ts', 'apps/web/src/views/pos/page.tsx'])).toEqual(
+      ['apps/web/src/middleware.ts', `${A}/pos/page.tsx`].sort(),
+    );
+    // A customers view imported by one of those special files is reached from the sale flow and flagged.
+    for (const name of ['global-error', 'forbidden', 'opengraph-image']) {
+      const law = customerLaw(
+        syntheticTree({
+          [`${A}/pos/${name}.tsx`]: "import { CustomerAccountView } from '@/views/customers/CustomerAccountView';\nexport default () => CustomerAccountView;",
+        }),
+        SYNTHETIC_CATALOG,
+      );
+      expect(law.hits, name).toEqual(expect.arrayContaining([`screen ${CV}/CustomerAccountView.tsx`]));
+    }
+  });
+
   it('SALE FLOW, repository: no subject screen, library or key names a customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
     const { flow } = law;
     // POSITIVE controls — a law that passes on an empty set is dead.
     expect(flow.entries.length, 'no sale-flow entry was found').toBeGreaterThan(1);
+    // The walk has no hole anywhere in the app: every entry the framework has (middleware included) resolves completely,
+    // and the one alias the build knows is the one the walk resolves.
+    const everyEntry = entryPoints(Object.keys(files));
+    expect(everyEntry).toContain('apps/web/src/middleware.ts');
+    expect(reachedFrom(files, everyEntry).size).toBeGreaterThan(Object.keys(files).length / 2);
+    const tsconfig = JSON.parse(readFileSync(join(REPO_ROOT, 'apps', 'web', 'tsconfig.json'), 'utf8')) as {
+      compilerOptions: { paths?: Record<string, unknown> };
+    };
+    expect(Object.keys(tsconfig.compilerOptions.paths ?? {}), 'a new path alias the import walk does not resolve').toEqual(['@/*']);
     expect(flow.chrome.size, 'no chrome was computed').toBeGreaterThan(3);
     // The exclusion is DERIVED, not named: the header and shell fall out of the intersection.
     expect(flow.chrome).toContain(HEADER);
