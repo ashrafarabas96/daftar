@@ -423,10 +423,28 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     # at 10^18 and past it, colliding identities, a non-bigint amount, another
     # business's row, a lower-case currency, and an instant ON the ledger's
     # last.
+    # ROUND: the four guards below each GAINED a positive control, and this
+    # step refused the push by name until these counts moved -- which is the
+    # step working, not failing: it pins what each NAME contributes and not the
+    # set of names, so four files that grew by a case each would otherwise have
+    # passed on an unchanged total. Counts RAISED, none lowered and no case
+    # removed, each addition a control that asserts the law's own input set
+    # before any zero from it is believed:
+    #   currency-is-canonical 5 -> 6   one: the src/ file list is non-empty and
+    #     holds types.ts, so the scan's zero is not blind.
+    #   db-refusals 7 -> 8             one: the DDL read is over 2000 bytes and
+    #     carries CHECK lines, a named CONSTRAINT CHECK and a policy WITH
+    #     CHECK, so an empty read cannot report "no anonymous CHECK".
+    #   no-hardcoded-pricing 9 -> 11   two: arms A and C assert their PREDICATE
+    #     and not only their extractor -- a membership test that answers
+    #     "allowed" for everything used to pass every case.
+    #   no-merchant-posting 10 -> 12   two: the posting-word and provider-factory
+    #     scans speak for themselves, and the fake-leak law proves it did not
+    #     skip every module it was given.
     "test/credit-write-off.test.ts": 38,
     "test/credit.test.ts": 24,
-    "test/currency-is-canonical.test.ts": 5,
-    "test/db-refusals-name-their-defence.test.ts": 7,
+    "test/currency-is-canonical.test.ts": 6,
+    "test/db-refusals-name-their-defence.test.ts": 8,
     "test/dunning-window-bound.test.ts": 7,
     "test/dunning.test.ts": 26,
     "test/error-codes-are-live.test.ts": 8,
@@ -436,8 +454,8 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/invoice.test.ts": 13,
     "test/law-bytes-are-pinned.test.ts": 1,
     "test/lexer.test.ts": 7,
-    "test/no-hardcoded-pricing.test.ts": 9,
-    "test/no-merchant-posting.test.ts": 10,
+    "test/no-hardcoded-pricing.test.ts": 11,
+    "test/no-merchant-posting.test.ts": 12,
     "test/period.test.ts": 19,
     "test/plan-change-currency-lock.test.ts": 11,
     "test/plan-change.test.ts": 11,
