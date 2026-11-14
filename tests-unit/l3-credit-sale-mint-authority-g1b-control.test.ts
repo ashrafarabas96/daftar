@@ -221,6 +221,105 @@ describe('G1-B — the mint refuses a credit sale to a member without receivable
     ]);
   });
 
+  /**
+   * THE OTHER GATES OF THE SAME MINT, each of which had ZERO negative control
+   * anywhere in the tree before this block.
+   *
+   * Measured, not assumed: `grep -rl` over `tests/` and `tests-unit/` for
+   * `'sales.create is required to commit a sale'`, `'a sale may only be posted
+   * for the business the membership resolved'` and `'a sale may only be
+   * committed for a branch in the member branch scope'` returned NOTHING, and
+   * the probe is sighted — the same grep for `'Missing permission:
+   * payments.collect'` names the integration suite (RULE-11: an empty probe is
+   * not a zero until a positive control says the probe can see).
+   *
+   * They are here and not in a separate file because they are arms of the same
+   * method and the same authority. They are separate `it`s rather than one,
+   * because a gate that fails should fail BY NAME.
+   */
+
+  /**
+   * TWO gates carry the SAME sentence — one over the invoice facts
+   * (`:89-91`), one over the sale facts (`:92-94`) — and a shared message is
+   * exactly how one of a pair gets deleted silently. So each of the four
+   * fields gets its own arm, and the pair is distinguished by WHICH fact set
+   * is made foreign, not by the message.
+   *
+   * What stands behind these gates if they go is NOT another permission
+   * refusal: `deriveSaleCommitPostings` would throw
+   * `accounting.payload_invalid` for the mismatch between the two fact sets.
+   * That is a payload error, not an authority refusal, and it would not fire
+   * at all for a pair that is consistent with each other and foreign to the
+   * membership — which is the case these arms rule out.
+   */
+  it.each([
+    ['the invoice is another business', (): [SaleInvoiceFacts, SaleCogsFacts] => [{ ...creditInvoice(), businessId: randomUUID() }, cogsFacts()]],
+    ['the invoice is another tenant', (): [SaleInvoiceFacts, SaleCogsFacts] => [{ ...creditInvoice(), tenantId: randomUUID() }, cogsFacts()]],
+    ['the sale is another business', (): [SaleInvoiceFacts, SaleCogsFacts] => [creditInvoice(), { ...cogsFacts(), businessId: randomUUID() }]],
+    ['the sale is another tenant', (): [SaleInvoiceFacts, SaleCogsFacts] => [creditInvoice(), { ...cogsFacts(), tenantId: randomUUID() }]],
+  ])('§5 no authority is minted when %s than the membership resolved', (_name, facts) => {
+    const { svc, minter } = serviceWith();
+    const [invoice, cogs] = facts();
+    let thrown: unknown;
+    try {
+      svc.authorizeSaleCommit(membershipWith(allKeysExcept()), invoice, cogs);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(
+      thrown,
+      'a posting authority was minted across the tenancy boundary, or refused by something other than the authority check: ' +
+        `${thrown instanceof Error ? `${thrown.constructor.name}: ${thrown.message}` : String(thrown)}`,
+    ).toBeInstanceOf(ForbiddenException);
+    expect((thrown as ForbiddenException).message).toContain('a sale may only be posted for the business the membership resolved');
+    expect(minter.minted, 'the refused cross-tenancy sale minted an assertion anyway').toEqual([]);
+  });
+
+  it('§6 no authority is minted for a branch outside an assigned member scope, and the SAME member mints inside it', () => {
+    const outside = serviceWith();
+    const assignedElsewhere: MembershipContext = { ...membershipWith(allKeysExcept()), branchScopeMode: 'assigned', allowedBranchIds: [randomUUID()] };
+    let thrown: unknown;
+    try {
+      outside.svc.authorizeSaleCommit(assignedElsewhere, creditInvoice(), cogsFacts());
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown, `an assigned member minted a sale authority for a branch outside their scope`).toBeInstanceOf(ForbiddenException);
+    expect((thrown as ForbiddenException).message).toContain('a sale may only be committed for a branch in the member branch scope');
+    expect(outside.minter.minted).toEqual([]);
+
+    // THE CONTROL: the same member, the same facts, the branch IN scope. The
+    // gate is the scope and not the `assigned` mode itself.
+    const inside = serviceWith();
+    const assignedHere: MembershipContext = { ...membershipWith(allKeysExcept()), branchScopeMode: 'assigned', allowedBranchIds: [BRANCH] };
+    expect(
+      inside.svc.authorizeSaleCommit(assignedHere, creditInvoice(), cogsFacts()).assertions.length,
+      'THE CONTROL FAILED: an assigned member cannot mint even for a branch IN their scope, so the refusal above is about the mode and not the branch',
+    ).toBe(2);
+  });
+
+  it('§7 no authority is minted without sales.create, on either settlement shape', () => {
+    const withoutCreate = membershipWith(allKeysExcept('sales.create'));
+    for (const [shape, invoice] of [
+      ['credit', creditInvoice()],
+      ['cash', cashInvoice()],
+    ] as const) {
+      const { svc, minter } = serviceWith();
+      let thrown: unknown;
+      try {
+        svc.authorizeSaleCommit(withoutCreate, invoice, cogsFacts());
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown, `a ${shape} sale minted an authority for a member without sales.create`).toBeInstanceOf(ForbiddenException);
+      expect(
+        (thrown as ForbiddenException).message,
+        `the ${shape} refusal does not name sales.create, so it may be the credit gate answering instead`,
+      ).toContain('sales.create is required to commit a sale');
+      expect(minter.minted).toEqual([]);
+    }
+  });
+
   it('§4 the gate is the credit bit and not the customer: a credit invoice with every other fact identical is the only arm refused', () => {
     // A guard that happened to refuse BOTH arms would pass §1 and prove
     // nothing. §2 above already shows the cash arm mints; this names the
