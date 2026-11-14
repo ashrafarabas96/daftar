@@ -213,10 +213,58 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
 
   const receivablesKey = (key: string): boolean => RECEIVABLES_CODES.some((code) => key === `error.${code}`);
 
+  /**
+   * THE CUSTOMERS SLICE (MVP-02; migration 0091 / DR-142 approved by the owner).
+   * This test used to say "the screen that names one ships with the customers
+   * slice" — and this is that slice: the read-only customers list. The exemption
+   * is an EXACT allowlist, not a pattern anyone can grow into:
+   *   - files: the one client library `phase4-customers-api.ts`, and the files
+   *     under `views/customers/` and `app/[locale]/customers/` (the slash is part
+   *     of the prefix, so `views/customersX/` and `views/pos/` are NOT covered);
+   *   - keys: `nav.customers` and `customers.*` (so `pos.customer.*` is NOT covered).
+   * Every other assertion below is unchanged, and the library rule (`customerId`
+   * only from `null`) still applies to ALL libraries, this one included.
+   */
+  const CUSTOMERS_SLICE_LIBRARY = 'apps/web/src/lib/phase4-customers-api.ts';
+  // MVP-02, the customer account screen: its own client library, exact like the one above.
+  const CUSTOMER_ACCOUNT_LIBRARY = 'apps/web/src/lib/phase4-customer-account-api.ts';
+  const CUSTOMERS_SLICE_DIRS = ['apps/web/src/views/customers/', 'apps/web/src/app/[locale]/customers/'];
+  const customersSliceFile = (path: string): boolean =>
+    path === CUSTOMERS_SLICE_LIBRARY || path === CUSTOMER_ACCOUNT_LIBRARY || CUSTOMERS_SLICE_DIRS.some((dir) => path.startsWith(dir));
+  const customersSliceKey = (key: string): boolean => key === 'nav.customers' || key.startsWith('customers.');
+
+  it('the customers-slice exemption is exact and not vacuous', () => {
+    // Fires on what it must cover...
+    expect(customersSliceFile('apps/web/src/views/customers/CustomerListView.tsx')).toBe(true);
+    expect(customersSliceFile('apps/web/src/app/[locale]/customers/page.tsx')).toBe(true);
+    expect(customersSliceFile(CUSTOMERS_SLICE_LIBRARY)).toBe(true);
+    expect(customersSliceFile(CUSTOMER_ACCOUNT_LIBRARY)).toBe(true);
+    expect(customersSliceFile('apps/web/src/app/[locale]/customers/[customerId]/page.tsx')).toBe(true);
+    expect(customersSliceKey('customers.list.title')).toBe(true);
+    expect(customersSliceKey('customers.account.held')).toBe(true);
+    expect(customersSliceKey('nav.customers')).toBe(true);
+    // ...and on nothing else.
+    expect(customersSliceFile('apps/web/src/views/pos/PosView.tsx')).toBe(false);
+    expect(customersSliceFile('apps/web/src/views/customersX/A.tsx')).toBe(false);
+    expect(customersSliceFile('apps/web/src/lib/phase4-pos-api.ts')).toBe(false);
+    expect(customersSliceFile('apps/web/src/lib/phase4-customers-api.ts.bak')).toBe(false);
+    expect(customersSliceFile('apps/web/src/lib/phase4-customer-account-api.ts.bak')).toBe(false);
+    expect(customersSliceKey('pos.customer.pick')).toBe(false);
+    expect(customersSliceKey('nav.customersX')).toBe(false);
+    expect(customersSliceKey('error.customer_payment.arithmetic_invalid')).toBe(false);
+    // It covers real files and real keys, and the exempted files really do name
+    // a customer, so deleting the exemption would fail below.
+    const sources = s7Sources();
+    const covered = Object.entries(sources).filter(([path]) => customersSliceFile(path));
+    expect(covered.length, 'the exemption covers no file').toBeGreaterThanOrEqual(4);
+    expect(covered.some(([, src]) => /customer/i.test(stripTsComments(src)))).toBe(true);
+    expect(Object.keys(en).filter(customersSliceKey).length, 'the exemption covers no key').toBeGreaterThanOrEqual(4);
+  });
+
   it('no S7 screen names a customer, and no S7 key does except to answer a receivables refusal', () => {
     const catalogHits = Object.entries({ ar, en, tr }).flatMap(([locale, catalog]) =>
       Object.entries(catalog)
-        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
+        .filter(([key, value]) => isS7Key(key) && !receivablesKey(key) && !customersSliceKey(key) && /customer|عميل|عملاء|müşteri/i.test(`${key} ${value}`))
         .map(([key]) => `${locale}: ${key}`),
     );
     expect(catalogHits).toEqual([]);
@@ -225,11 +273,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     const exempted = Object.keys(en).filter((key) => isS7Key(key) && receivablesKey(key));
     expect(exempted.length, 'the exemption covers no key, so it is hiding nothing and should be deleted').toBe(RECEIVABLES_CODES.length);
     expect(RECEIVABLES_CODES.length).toBeGreaterThan(0);
-    // No SCREEN names a customer: the screen that names one ships with the
-    // customers slice, and until then no merchant surface offers the idea.
+    // No SCREEN names a customer except the customers slice's own (see the
+    // allowlist above): no other merchant surface offers the idea.
     const screens = Object.entries(s7Sources()).filter(([path]) => path.endsWith('.tsx'));
     expect(screens.length).toBeGreaterThan(10);
-    expect(screens.filter(([, src]) => /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
+    expect(screens.filter(([path, src]) => !customersSliceFile(path) && /customer/i.test(stripTsComments(src))).map(([path]) => path)).toEqual([]);
   });
 
   it('a client library may carry the walk-in customerId, and may set it from nothing but null', () => {
@@ -250,11 +298,15 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // `customerBalance` identifier, because the exemption is the exact
     // registered code strings and nothing else.
     const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
-    const other = libraries.flatMap(([path, src]) =>
-      [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
-        .map((m) => `${path}: ${m[0]}`)
-        .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
-    );
+    // The customers slice's own files are the one place allowed to name a
+    // customer; the customerId-only check above still covered them.
+    const other = libraries
+      .filter(([path]) => !customersSliceFile(path))
+      .flatMap(([path, src]) =>
+        [...stripTsComments(src).matchAll(/\b[Cc]ustomer\w*(?:\.[a-z_]+)?/g)]
+          .map((m) => `${path}: ${m[0]}`)
+          .filter((hit) => hit.endsWith(': customerId') === false && codeToken.test(hit.slice(hit.indexOf(': ') + 2)) === false),
+      );
     expect(other).toEqual([]);
   });
 
