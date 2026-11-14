@@ -37,6 +37,7 @@ describe('the web scope the guards read is not empty (floor measured on the tree
 });
 
 describe('static-guards on apps/web/src (R1, R6b, R14, R17) — the real script over a planted tree', () => {
+  // Measured: the guard's logic on a temp copy of the tree, NOT that CI reaches the guard.
   let box: Sandbox;
   beforeAll(() => {
     box = createSandbox();
@@ -91,6 +92,7 @@ describe('static-guards on apps/web/src (R1, R6b, R14, R17) — the real script 
 });
 
 describe('R17 posting-surface called directly with a web path', () => {
+  // Measured: the guard's logic on a temp copy of the tree, NOT that CI reaches the guard.
   const schema = readdirSync(MIGRATIONS)
     .filter((f) => f.endsWith('.sql'))
     .sort()
@@ -212,6 +214,9 @@ describe('check-localization (parity, empty, raw key, t() scan) — the real scr
   });
 
   it('pins the live template-literal t() calls the scan cannot read (10 outside AppHeader, whose nav keys are enumerated)', () => {
+    // The red here is INTENTIONAL when a new template-literal t() call appears: its key is checked by no gate.
+    // The only exits: convert the call to a single-quoted literal key, or update the number with the old and
+    // the new value stated in the commit message. Never raise it silently.
     let live = 0;
     for (const f of walk(WEB_SRC, /\.(ts|tsx)$/)) {
       if (f.endsWith('AppHeader.tsx')) continue;
