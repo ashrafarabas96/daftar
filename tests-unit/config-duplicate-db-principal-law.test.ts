@@ -8,14 +8,20 @@ import { loadConfig } from '../apps/api/src/config';
  * WHY THIS FILE EXISTS, MEASURED RATHER THAN READ. `DR-145` applies to every
  * guard over a file L4 owns, and a guard is proved by PLANTING, not by reading
  * the test that looks like it covers it. Four missing-refusal seeds went into
- * `config.ts` one at a time (the whole unit lane run against each, the tree
- * proved green first — 29 files / 246 cases — and restored byte for byte
- * after):
+ * `config.ts` one at a time, with the whole unit lane run against each and the
+ * tree restored byte for byte after:
  *
  *   AC  `TRUST_PROXY=true` no longer refused in production  -> unit lane GREEN
  *   AD  accounting key may equal the provisioning key       -> unit lane GREEN
  *   AE  provisioning key may be under 32 bytes              -> unit lane GREEN
  *   AF  two DB principals may share one credential          -> unit lane GREEN
+ *
+ * THE TREE EACH NUMBER BELONGS TO, since a count that names no tree cannot be
+ * reproduced (review of this PR, finding 1, which was right): those four seeds
+ * ran in the `l4-security-gates` worktree on `sec/rel11-secret-scan-scope-law`,
+ * whose unit lane is 29 files / 246 cases — that branch carries its own law
+ * files. THIS branch's unit lane is 29 files / 238 cases with this file, and 28
+ * files / 233 cases without it. Both measured, each on the tree it names.
  *
  * Four greens are not four gaps, and saying so would be the overstatement this
  * file exists to avoid. Three of them ARE covered — by laws that cannot run
@@ -40,6 +46,27 @@ import { loadConfig } from '../apps/api/src/config';
  * those boundaries is gone — while the process starts, serves, and reports
  * nothing. That is a silent collapse of privilege separation, which is the
  * class of defect a startup refusal exists for.
+ *
+ * HOW MUCH OF §31 THIS FILE REACHES, counted rather than implied (review
+ * finding 2: an earlier comment here claimed the "SET", and the claim was
+ * wider than the measurement). The §31 map holds six members, so fifteen
+ * unordered pairs. ELEVEN of them cannot be built in any fixture, because a
+ * mode refusal fires first and the process never reaches §31 — measured, with
+ * the refusals' own words:
+ *
+ *   merchant-api + PLATFORM_DATABASE_URL    -> "must NOT be set in
+ *                   PROCESS_MODE=merchant-api (merchant API has no platform
+ *                   authority)"
+ *   merchant-api + WORKER_DATABASE_URL      -> "... has no worker authority"
+ *   merchant-api + RECONCILER_DATABASE_URL  -> "only the reconciler process
+ *                   holds reconciliation authority"
+ *
+ * and a worker holds only its own URL, a reconciler only its own. So the
+ * reachable pairs are the three inside a merchant surface (app, identity,
+ * resolver) and the one inside a platform surface (platform, identity): FOUR
+ * of fifteen. This file pins all four. The other eleven are held by those mode
+ * refusals, not by §31, and a law that claimed them would be claiming a
+ * configuration no deployment can express.
  *
  * NO SECRET HERE: every URL is an obvious placeholder with no authority
  * anywhere outside this file, and every key is `Buffer.alloc`-filled — the
@@ -84,29 +111,62 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://app.example.com',
 };
 
+/**
+ * A platform API that is otherwise complete and correct, in production. It
+ * carries no app pool, no provisioner and no assertion keys, because a platform
+ * surface is REFUSED those (TD-14, §8) — which is why the platform pair needs
+ * its own fixture rather than a tweak of the merchant one.
+ */
+const PLATFORM_PROD: NodeJS.ProcessEnv = {
+  NODE_ENV: 'production',
+  PROCESS_MODE: 'platform-api',
+  PLATFORM_DATABASE_URL: 'postgresql://daftar_platform:x@db/daftar',
+  IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',
+  JWT_SECRET: 'production-secret-with-at-least-32-characters',
+  REDIS_URL: 'redis://redis:6379',
+  CREDENTIAL_KMS_ENDPOINT: 'https://kms.example.com/encrypt',
+  CREDENTIAL_KMS_TOKEN: 'kms-bridge-token-with-at-least-32-characters!!',
+  CORS_ORIGINS: 'https://admin.example.com',
+};
+
+const DUP = /duplicates .* — every DB principal must use distinct credentials/;
+
 describe('§31: two database roles may not be one credential', () => {
-  // DUP-0. The positive control comes first and it is not a formality: without
-  // it, every refusal below could be the fixture failing for a reason this
-  // file is not about, and each would read as a pass.
-  it('POSITIVE CONTROL: the fixture itself starts, with distinct principals', () => {
+  // DUP-0. The positive controls come first, and they are not a formality:
+  // without them every refusal below could be a fixture failing for a reason
+  // this file is not about, and each would read as a pass.
+  it('POSITIVE CONTROL: both fixtures start, with distinct principals', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD })).not.toThrow();
+    expect(() => loadConfig({ ...PLATFORM_PROD })).not.toThrow();
   });
 
-  // DUP-A. The pair no OTHER refusal covers. `config.ts` names three role
-  // pairs explicitly (platform vs app `:472`, identity `:494`, provisioner
-  // `:522`); app-vs-resolver is covered by §31 ALONE, so it is the pair that
-  // measures §31 rather than its neighbours.
-  it('REFUSES the app role and the resolver role sharing one credential', () => {
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(/RESOLVER_DATABASE_URL/);
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(/duplicates APP_DATABASE_URL/);
+  // DUP-A. The two pairs §31 holds ALONE. `config.ts` names three role pairs
+  // explicitly (platform vs app `:472`, identity `:494`, provisioner `:522`),
+  // and the resolver appears in none of them — so these two pairs measure §31
+  // rather than its neighbours.
+  it('REFUSES app=resolver and identity=resolver, by §31 alone', () => {
+    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(
+      /RESOLVER_DATABASE_URL: duplicates APP_DATABASE_URL/,
+    );
+    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL })).toThrow(
+      /RESOLVER_DATABASE_URL: duplicates IDENTITY_DATABASE_URL/,
+    );
   });
 
-  // DUP-B. A second uncovered pair, so the claim is about the SET and not
-  // about one favoured variable: a law that only ever reddens on
-  // `RESOLVER_DATABASE_URL` would pass a §31 that had quietly shrunk to one
-  // comparison.
-  it('REFUSES the identity role and the resolver role sharing one credential', () => {
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL })).toThrow(/duplicates IDENTITY_DATABASE_URL/);
+  // DUP-B. The other two reachable pairs. Each ALSO has a refusal of its own
+  // (`:494`), and `fail` accumulates rather than throwing on the first problem,
+  // so BOTH clauses appear — measured, not assumed. The point of asserting them
+  // here is that §31's clause is present IN ADDITION to the specific one: a §31
+  // that had quietly shrunk to the resolver would still satisfy `:494` and
+  // would leave these two pairs resting on a single comparison.
+  it('REFUSES app=identity and platform=identity, with the §31 clause present too', () => {
+    const merchantPair = { ...MERCHANT_PROD, IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
+    expect(() => loadConfig(merchantPair)).toThrow(/must be distinct from APP_DATABASE_URL/);
+    expect(() => loadConfig(merchantPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates APP_DATABASE_URL/);
+
+    const platformPair = { ...PLATFORM_PROD, IDENTITY_DATABASE_URL: PLATFORM_PROD.PLATFORM_DATABASE_URL };
+    expect(() => loadConfig(platformPair)).toThrow(/must be distinct from APP_DATABASE_URL and PLATFORM_DATABASE_URL/);
+    expect(() => loadConfig(platformPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates PLATFORM_DATABASE_URL/);
   });
 
   // DUP-C. The refusal names the SECOND variable and reports the first, which
@@ -122,15 +182,16 @@ describe('§31: two database roles may not be one credential', () => {
     }
     expect(message).toContain('RESOLVER_DATABASE_URL');
     expect(message).toContain('duplicates APP_DATABASE_URL');
-    expect(message).toContain('every DB principal must use distinct credentials');
+    expect(message).toMatch(DUP);
   });
 
-  // DUP-D. THE OTHER FACE OF THE BOUNDARY (`DR-145`): a change that §31 is NOT
-  // about must NOT redden this file. A different password on the same host and
-  // database is a DIFFERENT principal — §31 compares credentials, and reading
-  // it as "no two roles may share a host" would refuse every real single-server
-  // deployment.
-  it('NEGATIVE CONTROL: distinct credentials on the same host and database still start', () => {
+  // DUP-D. THE OTHER FACE OF THE BOUNDARY (`DR-145`): a change §31 is NOT about
+  // must not redden this file. The same role with a different password is a
+  // different CREDENTIAL on the same host and database — and §31 compares the
+  // credential string, so reading it as "no two roles may share a host" would
+  // refuse every real single-server deployment. (Review finding 3: the earlier
+  // comment here called this "a different principal", which is not what it is.)
+  it('NEGATIVE CONTROL: a different credential on the same host and database still starts', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:y@db/daftar' })).not.toThrow();
   });
 });
