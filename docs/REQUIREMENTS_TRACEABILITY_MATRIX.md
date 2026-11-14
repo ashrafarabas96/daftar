@@ -117,6 +117,8 @@
 | SEC-003 | لا Fix مباشر في Production؛ Repair بأدوات رسمية | 147–148 | P0 | Ops | Process review | Dry-run+Backup+Audit+Verify | Documented |
 | SEC-004 | Rate limiting + Input validation + Secrets management | — | P0 | API | Security tests | 429/رفض/لا أسرار في الكود | Documented |
 | SEC-005 | Branch protection + CI Gate + Code Review checklist | 90–92 | P0 | CI/CD | CI | لا merge مع فشل | Documented |
+| SEC-006 | لا `JWT_SECRET`/`JWT_KEYS` في عملية `PROCESS_MODE=worker` (SEC-01) | — | P0 | Config/Deploy | رفض الإقلاع (`config.ts:199-209`) + حارس الجرد؛ **والإثبات الحي**: زوج أحمر ثم أخضر على بيئة منشورة | الشق الأول: عامل مع أحدهما لا يُقلع. الشق الثاني: لا ملف نشر في الجرد يمرّر السر | **Landed, not ready** — الشق الحي ناقص، لا بيئة منشورة (`SEC-01-DEPLOY`) |
+| SEC-007 | حواجز الإطلاق REL-09 (HSTS/CSP) وREL-10 (CORS) وTD-24 وCROSSSLOT | — | P0 | API/Infra | اختبارات كل حاجز (#69 #70 #46 #77) | كل حاجز حيّ على بيئة منشورة بدليل | **Landed, not ready** — نزلت في `main` ولم تُوقَّع بوّابة |
 
 ## SUB — الاشتراكات
 
