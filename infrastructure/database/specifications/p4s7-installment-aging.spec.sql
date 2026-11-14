@@ -1,3 +1,99 @@
+-- ███████████████████████████████████████████████████████████████████████████
+-- ██                                                                       ██
+-- ██  THIS FILE IS AN UNAPPLIED DESIGN. IT IS NOT A MIGRATION AND IT IS    ██
+-- ██  NOT THE LAW. DO NOT APPLY IT TO A MIGRATED DATABASE.                 ██
+-- ██                                                                       ██
+-- ███████████████████████████████████████████████████████████████████████████
+--
+-- WHERE IT MAY AND MAY NOT BE EXECUTED — A GENERAL PROHIBITION WITH EXACTLY
+-- ONE NAMED EXCEPTION, SO THAT THE PROHIBITION IS OBEYABLE AND THEREFORE OBEYED:
+--
+--   * ALLOWED, and only this: a THROW-AWAY `scratch` database that this
+--     file's own suites build from the real migrations, run it against, and
+--     drop. That is the one purpose it exists for, and those suites are the
+--     reason it is neither deleted nor renamed.
+--   * FORBIDDEN on ANY MIGRATED DATABASE — development, staging or production,
+--     local or remote, yours or anyone's. There is no case in which applying
+--     this file to a database that carries the numbered migrations is correct.
+--
+-- The owner's words are «it is not executed on any database». They are written
+-- out here as the general rule plus its single named exception rather than as a
+-- flat absolute, because a flat absolute WOULD BE FALSE BY MEASUREMENT — the
+-- suites listed at the foot of this header do execute it, in `scratch` — and a
+-- prohibition that is visibly disobeyed every test run is read as decoration,
+-- which then discredits the sentences around it. Read this as the prohibition
+-- the owner gave, with its boundary named, NOT as a narrowing of it.
+--
+-- OWNER DECISION DR-106 (2026-11-07): «`0084` is the live law of receivables
+-- aging, and this specification is a design for the future, not a law.»
+--
+-- WHAT THAT MEANS, CONCRETELY, AND WHY IT IS WRITTEN AT THE TOP OF THE FILE:
+--
+--   * The `customer_ar_aging` definition in section 3a of this file IS NOT THE
+--     LAW. The law is the body shipped by
+--     `infrastructure/database/migrations/0084_phase4_ar_fixed_cost_and_open_invoice_page.sql`
+--     at `:705..:739` — 35 lines, which that same migration installs after
+--     `DROP FUNCTION public.customer_ar_aging(UUID, UUID, DATE, INTEGER[])` at
+--     `:478` retires the `0075` body.
+--
+--   * The two bodies carry THE SAME signature, language, volatility and
+--     `search_path` and DIFFERENT laws: the one below is 551 lines and reads
+--     `has_active_installment_plan` off the invoice row, so it is an aging law
+--     that reckons with instalment plans. The live one does not. Nobody has
+--     compared the two bodies' OUTPUT on the same data; what is measured is
+--     that the texts and the inputs differ.
+--
+--   * Because the definition below says `CREATE OR REPLACE`, APPLYING THIS
+--     FILE TO A TREE THAT HAS RUN THE MIGRATIONS SUBSTITUTES A LIVE FINANCIAL
+--     READ WITHOUT ANY WARNING. Customer receivables aging is a figure a
+--     merchant invoices against. That is the whole reason this header exists.
+--
+--   * No numbered migration creates any instalment table or routine — zero,
+--     measured across all 87 migration files. This file's instalment objects
+--     exist only in the scratch databases its own suites build.
+--
+-- WHAT THIS FILE IS STILL FOR, AND WHY IT IS NEITHER DELETED NOR RENAMED:
+-- twelve tracked files consume it, nine of them computing its path in code
+-- (`INSTALLMENT_REMEDY_SPEC` in `apps/api/src/modules/selling/selling-errors.ts`
+-- is production code), and `scripts/guards/p4s7-body-digests.ts` matches this
+-- file's routine HEADS as literal strings to digest their bodies. Renaming the
+-- file, renaming the routine, or dropping `OR REPLACE` from it each break a
+-- measured consumer, so DR-106 §2's other option — marking, unmistakably — is
+-- what was taken. Deletion is in the owner's stop-and-ask list (DR-103 II/4).
+--
+-- THE AUTOMATIC GUARD THAT BACKS THIS HEADER: DR-106 §2.1, implemented in
+-- `scripts/guards/sealed-function-replacement.ts` and asserted by
+-- `tests/guards/dr106-sealed-function-replacement-law.test.ts`. It fails if any
+-- file outside `infrastructure/database/migrations/` gains a replacement of a
+-- function name that ANY NUMBERED MIGRATION creates — 295 names across all 87
+-- migration files, measured, not the sealed subset alone.
+--
+-- THAT SCOPE IS THE OWNER'S DECISION OF 2026-11-08 («yes, widen it»), appended
+-- to DR-106, AND THIS PARAGRAPH PREVIOUSLY STATED THE SUPERSEDED ONE. As first
+-- shipped the guard was hinged on «a name a SEALED migration (<= `frozenThrough`)
+-- creates», which protected 277 names from the 80 sealed migrations and left
+-- unprotected every routine first created after `0079`: EIGHTEEN names, and
+-- SEVENTEEN OF THEM MOVE MONEY — among them `customer_collect_payment`,
+-- `customer_apply_credit`, `payment_complete`, `payment_closure_verify`,
+-- `invoice_settlement_verify` (the routine that attests an invoice was
+-- settled), `customer_credit_consume` and the three
+-- `accounting_customer_*_entry_complete` posting checks. A file outside
+-- `migrations/` could have replaced any of them and the guard would have
+-- stayed green. That measured exposure is why the owner widened it.
+--
+-- The occurrence below is pinned in that guard's measured baseline — 51
+-- occurrences in 42 (file, function) pairs — so a NEW one is red and named by
+-- file, line and function. BY THE OWNER'S DECISION THIS FILE'S ENTRY STAYS
+-- PINNED: the routine is not renamed, `OR REPLACE` is not removed, and the
+-- entry is not emptied out.
+--
+-- ANY FUTURE MOVE TO INSTALMENT AGING IS A NEW NUMBERED MIGRATION, after the
+-- instalment-plan tables are built, with a `daftar-finance` review, and with
+-- THE TWO BODIES' OUTPUT COMPARED ON THE SAME DATA BEFORE THE SUBSTITUTION
+-- (DR-106 §2.3). Not by applying this file.
+--
+-- ███████████████████████████████████████████████████████████████████████████
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- P4-S7 — INSTALLMENT AGING GRANULARITY: THE DDL SPECIFICATION.
 --
