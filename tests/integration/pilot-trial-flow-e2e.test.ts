@@ -351,6 +351,11 @@ let termDueDate = '';
 let termSaleStatus: number | null = null;
 let termSaleBody = '';
 let termOpenInvoices: readonly OpenInvoiceRow[] | null = null;
+/** Arm F: the cross-customer allocation, and both balances read after it. */
+let crossCustomerStatus: number | null = null;
+let crossCustomerBody = '';
+let payerBalanceAfterCross: bigint | null = null;
+let targetBalanceAfterCross: bigint | null = null;
 /** The flow customer's still-open documents, and arm B's customer's. */
 let openInvoices: readonly OpenInvoiceRow[] = [];
 let otherOpenInvoices: readonly OpenInvoiceRow[] | null = null;
@@ -622,6 +627,46 @@ beforeAll(async () => {
   if (termSale.status < 300) {
     const termPage = await w.t.request.get(`/v1/customers/${termCustomerId}/open-invoices?asOf=${w.day}`).set(w.headers).send();
     if (termPage.status < 300) termOpenInvoices = (termPage.body as { items: readonly OpenInvoiceRow[] }).items;
+  }
+
+  step = "arm F — money offered against ANOTHER customer's invoice";
+  // The one misattribution that would ruin a statement without contradicting
+  // it: the money is real, the invoice is real, and the two belong to
+  // different people. The estate refuses it by name —
+  // `invoice_settlement.customer_mismatch`, "a payment settles invoices of
+  // its own customer only" (`0081:736`, `:1998`) — and this arm is what
+  // proves that refusal reaches the merchant rather than living in a
+  // migration comment.
+  //
+  // The allocation's expectation fields never travel: the request body
+  // carries four keys per leg, so the invoice totals passed here cannot
+  // influence what the server is asked.
+  const targetInvoice = (termOpenInvoices ?? [])[0];
+  if (targetInvoice !== undefined) {
+    const cross = await collectPayment(w.t, w.headers, {
+      paymentId: randomUUID(),
+      customerId,
+      paymentMethodId: w.paymentMethodId,
+      paymentDate: w.day,
+      amountMinor: '100',
+      allocations: [
+        {
+          invoiceId: targetInvoice.invoiceId,
+          appliedMinor: '100',
+          releasedBeforeMinor: '0',
+          invoiceTotalTxnMinor: targetInvoice.totalTxnMinor,
+          invoiceTotalBaseMinor: targetInvoice.totalTxnMinor,
+        },
+      ],
+    });
+    crossCustomerStatus = cross.status;
+    crossCustomerBody = JSON.stringify(cross.body);
+    // Both balances re-read AFTER it, because the refusal's status code is
+    // not the law — the law is that no money moved on either side.
+    const payerAgain = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
+    if (payerAgain.status < 300) payerBalanceAfterCross = BigInt((payerAgain.body as ReceivableBody).baseMinor);
+    const targetAgain = await w.t.request.get(`/v1/customers/${termCustomerId}/receivable`).set(w.headers).send();
+    if (targetAgain.status < 300) targetBalanceAfterCross = BigInt((targetAgain.body as ReceivableBody).baseMinor);
   }
 }, 240_000);
 
@@ -1174,6 +1219,31 @@ describe(CLAIM, () => {
     // And it is debt, not credit: nothing has been collected against it.
     expect(row?.isCredit, 'an unpaid invoice with a term was marked as carrying credit').toBe(false);
     expect(row?.settlementState, 'an invoice nobody has paid against is not unpaid').toBe('unpaid');
+  });
+
+  it("ARM F — money offered against another customer's invoice is refused, and NO balance moves", () => {
+    expect(refusedAt).toBeNull();
+    // CORPUS CONTROL: the arm needs a real invoice belonging to someone else.
+    expect(termOpenInvoices?.length, "arm F had no other customer's invoice to aim at").toBe(1);
+    expect(crossCustomerStatus, `a payment was allocated to another customer's invoice: ${crossCustomerBody}`).toBeGreaterThanOrEqual(400);
+    // The code is asserted and not just the status, because this estate names
+    // the refusal: "a payment settles invoices of its own customer only".
+    expect(crossCustomerBody, 'the refusal does not name the mismatch').toContain('customer_mismatch');
+    // AND THE LAW THAT MATTERS. A status code is a message; a balance is
+    // money. This misattribution is the one that would leave a statement
+    // perfectly self-consistent and still wrong — the payer's debt reduced by
+    // money that went to someone else's invoice, and the other customer's
+    // debt reduced by money they never paid. So both are re-read after the
+    // refusal and both must be exactly where they were.
+    expect(payerBalanceAfterCross, "the payer's balance was not re-read").not.toBeNull();
+    expect(payerBalanceAfterCross, "the refused payment moved the payer's own balance").toBe(observedBalanceMinor);
+    expect(targetBalanceAfterCross, "the target's balance was not re-read").not.toBeNull();
+    // That customer has exactly one invoice and nothing has ever been
+    // collected against it, so their whole receivable IS its total — which is
+    // what the figure must still be.
+    const untouched = BigInt((termOpenInvoices ?? [])[0]?.totalTxnMinor ?? '-1');
+    expect(untouched > 0n, 'the untouched total came back as nothing, so the comparison below would be about zero').toBe(true);
+    expect(targetBalanceAfterCross, "the refused payment moved the other customer's balance").toBe(untouched);
   });
 
   it('OWED — the statement route is read through this file once it reaches a tree this suite shares', () => {
