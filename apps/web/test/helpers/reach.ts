@@ -24,14 +24,14 @@ const ENTRY_FILE =
 /** The one file outside `app/` Next.js runs on every request. */
 const MIDDLEWARE = `${WEB_SRC}/middleware.ts`;
 
-const SEGMENT_FILE = (segments: readonly string[]): RegExp => new RegExp(String.raw`^${WEB_SRC}/app/\[locale\]/(?:\([^/]+\)/)?(?:${segments.join('|')})/`);
+/**
+ * A file under the `customers` route segment: anchored at `[locale]`, with one
+ * optional route group in front. `pos/customers/…` and `reports/customers/…`
+ * are NOT the customers route; `customers/pos/…` is.
+ */
+const CUSTOMERS_ROUTE = new RegExp(String.raw`^${WEB_SRC}/app/\[locale\]/(?:\([^/]+\)/)?customers/`);
 
-/** The merchant route segments (the guard's own list, `customers` included). Anchored at `[locale]`: `pos/customers/…` is `pos`. */
-const MERCHANT_ROUTE = SEGMENT_FILE(MERCHANT_ROUTE_SEGMENTS);
-/** The till / cash-sale flow's route segments: the two the S7 guard names for selling. */
-const SALE_FLOW_ROUTE = SEGMENT_FILE(['pos', 'sales']);
-
-for (const segment of ['pos', 'sales']) if (!MERCHANT_ROUTE_SEGMENTS.includes(segment)) throw new Error(`the S7 route segments no longer name \`${segment}\``);
+if (!MERCHANT_ROUTE_SEGMENTS.includes('customers')) throw new Error('the S7 route segments no longer name `customers`');
 
 const isEntry = (path: string): boolean => (path.startsWith(`${WEB_SRC}/app/`) && ENTRY_FILE.test(path)) || path === MIDDLEWARE;
 
@@ -40,9 +40,10 @@ export function entryPoints(paths: readonly string[]): string[] {
   return paths.filter(isEntry).sort();
 }
 
-/** The route and special files of the sale flow: the entries the customer rules are about. */
-export function saleFlowEntries(paths: readonly string[]): string[] {
-  return paths.filter((path) => isEntry(path) && SALE_FLOW_ROUTE.test(path)).sort();
+/** The entries of the customers route subtree, and EVERY other entry of the app (S7 segment or not, middleware included). */
+export function splitEntryPoints(paths: readonly string[]): { customers: string[]; other: string[] } {
+  const all = entryPoints(paths);
+  return { customers: all.filter((path) => CUSTOMERS_ROUTE.test(path)), other: all.filter((path) => !CUSTOMERS_ROUTE.test(path)) };
 }
 
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)(['"])([^'"\n]+)\1/g;
@@ -104,55 +105,20 @@ export function reachedFrom(files: Readonly<Record<string, string>>, entries: re
   return seen;
 }
 
-const intersection = (sets: readonly Set<string>[]): Set<string> =>
-  sets.length === 0 ? new Set() : new Set([...(sets[0] as Set<string>)].filter((path) => sets.every((set) => set.has(path))));
-
-export interface SaleFlow {
-  /** Page files of the merchant route segments (the first estimate of "a page that renders the chrome"). */
-  readonly merchantPages: string[];
-  /** Every page of the whole app that reaches all of the chrome candidates: the pages that render the shared chrome. */
-  readonly chromePages: string[];
-  /** Files every chrome page reaches (the header, the shell, shared infrastructure): COMPUTED, never named. */
-  readonly chrome: Set<string>;
-  readonly entries: string[];
-  /** reach(sale-flow entries) minus the chrome: the files whose own texts are the sale flow's. */
-  readonly subject: Set<string>;
-}
-
 /**
- * The SUBJECT of the customer rules: the sale flow's own files.
+ * The files only the customers route subtree uses: reached from a customers
+ * entry and from NO other entry of the app (any page, layout, route handler or
+ * special file anywhere under `app/`, and the middleware). This is the one
+ * place a customer may be named, derived from the import graph and not from
+ * any list.
  *
- * - chrome candidates: files reached from EVERY page of the merchant route
- *   segments (an intersection);
- * - chrome pages: the merchant pages, plus every OTHER page of the app (not
- *   only the S7 segments) that reaches all the candidates some such other page
- *   also reaches, so a pre-auth page that renders no shell (login) is not one,
- *   and a merchant page outside the S7 segments (structure) is — even when the
- *   S7 pages happen to share a file no other page does;
- * - chrome: the intersection over the chrome pages, which is what the shell
- *   and everything it pulls in have in common with every such page;
- * - subject: reach(sale-flow entries) minus the chrome.
- *
- * More chrome pages can only shrink the chrome, never grow it, so adding a
- * page makes the subject larger, not smaller.
+ * Monotone by construction: an entry that is not under `customers` can only
+ * add to what "every other entry" reaches, so it can only shrink this set.
  */
-export function saleFlow(files: Readonly<Record<string, string>>): SaleFlow {
-  const paths = Object.keys(files);
-  const pages = paths.filter((path) => isEntry(path) && /(?:^|\/)page\.tsx?$/.test(path)).sort();
-  const reach = new Map(pages.map((page) => [page, reachedFrom(files, [page])]));
-  const merchantPages = pages.filter((page) => MERCHANT_ROUTE.test(page));
-  const reachOf = (page: string): Set<string> => reach.get(page) as Set<string>;
-  const candidates = intersection(merchantPages.map(reachOf));
-  // The shell is what the merchant pages share AND some page outside the merchant segments shares too. A file only the
-  // merchant segments reach (a customers view all of them import) is not evidence of a shell, and must not be allowed to
-  // disqualify a page outside the segments that does render it.
-  const others = pages.filter((page) => !merchantPages.includes(page));
-  const shell = [...candidates].filter((file) => others.some((page) => reachOf(page).has(file)));
-  const chromePages = [...merchantPages, ...others.filter((page) => shell.length > 0 && shell.every((file) => reachOf(page).has(file)))].sort();
-  const chrome = intersection(chromePages.map((page) => reach.get(page) as Set<string>));
-  const entries = saleFlowEntries(paths);
-  const subject = new Set([...reachedFrom(files, entries)].filter((path) => !chrome.has(path)));
-  return { merchantPages, chromePages, chrome, entries, subject };
+export function customersOnly(files: Readonly<Record<string, string>>): Set<string> {
+  const { customers, other } = splitEntryPoints(Object.keys(files));
+  const shared = reachedFrom(files, other);
+  return new Set([...reachedFrom(files, customers)].filter((path) => !shared.has(path)));
 }
 
 const KEY_LITERAL = /(['"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1/g;
