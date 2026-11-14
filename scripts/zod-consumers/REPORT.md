@@ -5,11 +5,11 @@ Scope: `apps/**`, `tests/**`, `packages/**`, `tests-unit/**`, `scripts/**` (the 
 
 ## Totals (informational: they move whenever unrelated code adds a `.find(`)
 
-classified sites: 540 — safe: 507, intended: 33
+classified sites: 552 — safe: 519, intended: 33
 
-by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=406, formatter=13, index=2, issues-access=35, length=7, method=18
+by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=418, formatter=13, index=2, issues-access=35, length=7, method=18
 
-by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=430
+by rule: HAND=52, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=440
 
 `needs-fixing` sites: 0
 
@@ -56,6 +56,8 @@ by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUAR
 | tests/browser/seed.ts | find-shift | `const found = list(accounts, 'items').find((a) => field(a, 'systemKey') === key);` | safe | tests/browser/** reads the browser gate's OWN issue records (kind/detail per step), not zod issues. |
 | tests/golden-regression/phase1/06-web-contract.golden.test.ts | issues-access | ``${a.client}: response DTO mismatch ${JSON.stringify(parsed.success ? null : parsed.error.issues)} for ${JSON.` | safe | Failure MESSAGE only: the assertion is `parsed.success`; issues are stringified for the reader and never branched on. This parses a SERVER RESPONSE against a client DTO, not a request. |
 | tests/golden-regression/phase1/07-admin-contract.golden.test.ts | issues-access | ``${a.client}: response DTO mismatch ${JSON.stringify(parsed.success ? null : parsed.error.issues)} for ${JSON.` | safe | Failure MESSAGE only (assertion is `parsed.success`); parses a server response against a DTO. |
+| tests/guards/l3-customer-statement.test.ts | find-shift | `const credit = res.items.find((r) => r.entryKind === 'credit');` | safe | A `.find(` over `res.items`, the statement rows the read returned, picking the credit row by its kind; the receiver is a page of statement rows, not a validation-issue collection, so no zod order or count can affect it (the receiver rule missed it only because `.parse(` of the query schema sits in the adjacent statement). |
+| tests/guards/l3-customer-statement.test.ts | find-shift | `const stmt = captured.find((c) => /UNION ALL/i.test(c.sql));` | safe | A `.find(` over `captured`, the SQL statements a recording fake received, picking the one containing UNION ALL; the receiver is an array of SQL text, not a validation-issue collection, so no zod order or count can affect it (the receiver rule missed it only because `.parse(` of the query schema sits in the adjacent statement). |
 | tests/guards/p4s4-settlement-surface-laws.test.ts | find-shift | `const other = ROW_LOCK_ONLY_ROUTINES.find((r) => r !== fn) as string;` | safe | finds a routine name in a constant list |
 | tests/guards/p4s4-standard-aging-not-due-band.test.ts | issues-access | `if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');` | safe | Membership of a path in a list (`toContain`): independent of order and of how many other issues exist. |
 | tests/guards/p4s4-standard-aging-not-due-band.test.ts | method | `if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');` | safe | Membership of a path in a list (`toContain`): independent of order and of how many other issues exist. |

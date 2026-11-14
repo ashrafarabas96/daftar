@@ -515,3 +515,54 @@ export interface CustomerOpenInvoicesDto {
   items: CustomerOpenInvoiceDto[];
   nextCursor: string | null;
 }
+
+/** One statement row: a sales document, a payment, a payment allocation, a held credit, or a credit application (five kinds). */
+export interface CustomerAccountStatementEntryDto {
+  entryKind: 'invoice' | 'payment' | 'payment_allocation' | 'credit' | 'credit_application';
+  entryId: string;
+  /** Civil date `YYYY-MM-DD` of the event. */
+  entryDate: string;
+  /** The invoice's own number; for an application, the number of the invoice it was applied to. */
+  documentNumber: string | null;
+  /** A related record: the invoice of an application, the origin payment of a credit. */
+  relatedId: string | null;
+  currency: string;
+  /** Stored amounts. A debit and a credit are separate statements, never one signed figure. */
+  debitTxnMinor: string | null;
+  creditTxnMinor: string | null;
+  /** The row's own stored amount in its currency (a held credit carries this and neither side). */
+  amountTxnMinor: string | null;
+  amountBaseMinor: string | null;
+  /**
+   * ONLY on a `credit` row (null on every other kind): the customer's credit
+   * BALANCE, as the STORED remaining the product maintains, and the amount the
+   * credit was born with. They are never the row's `amountTxnMinor` (null
+   * here), never a debit or a credit of the receivable, and never part of
+   * `outstanding`: nothing is netted against it (DR-114/(ب)). One row per credit.
+   */
+  customerCreditRemainingTxnMinor: string | null;
+  customerCreditRemainingBaseMinor: string | null;
+  customerCreditOriginalTxnMinor: string | null;
+  reference: string | null;
+}
+
+/** The authoritative figure, straight from the reader of record -- one entry per currency, never summed here. */
+export interface CustomerAccountStatementOutstandingDto {
+  currency: string | null;
+  txnMinor: string | null;
+  baseMinor: string;
+}
+
+/**
+ * `GET /v1/customers/:customerId/account-statement` -- requires `receivables.view`.
+ * There is deliberately NO per-row running balance: `outstanding` is the only
+ * balance and it is `customer_ar_outstanding(...)`'s own answer.
+ */
+export interface CustomerAccountStatementDto {
+  customerId: string;
+  /** `outstanding` is the customer's WHOLE balance, never the total of this page. */
+  outstandingScope: 'whole_customer';
+  items: CustomerAccountStatementEntryDto[];
+  outstanding: CustomerAccountStatementOutstandingDto[];
+  nextCursor: string | null;
+}

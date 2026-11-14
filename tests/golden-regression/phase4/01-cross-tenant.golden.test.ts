@@ -85,6 +85,7 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/customer-payments/:paymentId',
   'GET /v1/customers',
   'GET /v1/customers/:customerId',
+  'GET /v1/customers/:customerId/account-statement',
   'GET /v1/customers/:customerId/credits',
   'GET /v1/customers/:customerId/open-invoices',
   'GET /v1/customers/:customerId/receivable',
@@ -519,6 +520,7 @@ describe('the enumeration is checked, not trusted (G-02)', () => {
     // other slices: a filter would have silently swallowed
     // `GET /v1/customers/:customerId/receivable` the day somebody widened it.
     for (const route of RECEIVABLES_ROUTES) expect(PHASE4_ROUTES, `${route} is declared a receivables route but is not on the surface`).toContain(route);
+    // 4 = the receivables routes with their OWN sections below (2 writes, the payment read, the credits read); it moves when one of those is added or removed, NOT when a generic-loop customer read is added.
     expect(RECEIVABLES_ROUTES.length, 'the receivables surface is empty, so its whole section below would prove nothing').toBe(4);
     expect(
       PHASE4_ROUTES.filter((r) => !isGenericReadRoute(r)).sort(),

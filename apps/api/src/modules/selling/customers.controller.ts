@@ -1,12 +1,19 @@
 import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
-import type { CustomerAgingDto, CustomerDto, CustomerOpenInvoicesDto, CustomerPageDto, CustomerReceivableDto } from '@daftar/shared-contracts';
+import type {
+  CustomerAgingDto,
+  CustomerDto,
+  CustomerOpenInvoicesDto,
+  CustomerPageDto,
+  CustomerReceivableDto,
+  CustomerAccountStatementDto,
+} from '@daftar/shared-contracts';
 import { Membership } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { strictUuidParam } from '../inventory/canonical-id';
 import { CustomerReadService } from './customer-reads';
 import { sellingRefusal } from './selling-errors';
 import { phase4Permission } from './selling-permissions';
-import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoicesQuerySchema } from './selling.schemas';
+import { CustomerAgingQuerySchema, CustomerListQuerySchema, CustomerOpenInvoicesQuerySchema, CustomerAccountStatementQuerySchema } from './selling.schemas';
 
 /**
  * The customer READ routes of P4-S1 (lock P4-AL-35, P4-AL-54; `OD-P4-03`
@@ -100,6 +107,24 @@ export class CustomersController {
     const id = strictUuidParam(customerId, 'customerId');
     this.assertBusinessWide(m);
     return this.reads.openInvoices(m, id, CustomerOpenInvoicesQuerySchema.parse(query));
+  }
+
+  /**
+   * The customer's statement: every sales document, payment, held credit and
+   * credit application, oldest first, as a keyset page. Requires
+   * `receivables.view` and business-wide scope (it spans every branch). No
+   * running balance per row: the one authoritative figure is `outstanding`.
+   */
+  @Get(':customerId/account-statement')
+  @phase4Permission('receivables.view')
+  async accountStatement(
+    @Membership() m: MembershipContext,
+    @Param('customerId') customerId: string,
+    @Query() query: unknown,
+  ): Promise<CustomerAccountStatementDto> {
+    const id = strictUuidParam(customerId, 'customerId');
+    this.assertBusinessWide(m);
+    return this.reads.accountStatement(m, id, CustomerAccountStatementQuerySchema.parse(query));
   }
 
   /**
