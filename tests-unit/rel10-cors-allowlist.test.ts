@@ -161,4 +161,99 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     expect(main).toContain('parseCorsOrigins(config.CORS_ORIGINS)');
     expect(main).not.toContain('CORS_ORIGINS.split(');
   });
+
+  it('the allowlist does not also hand out credentials', () => {
+    // The allowlist decides WHICH origins may call. `credentials` decides
+    // whether the browser attaches cookies and `Authorization` to those calls
+    // and lets the page read the response. Turning it on makes every origin on
+    // the list a session-bearing caller, and this API authenticates with a
+    // bearer token the front end holds — it needs no cookie from a browser to
+    // be sent automatically.
+    //
+    // It is `false` in the bootstrap and nothing held it there, so a later
+    // edit could flip it in one word with no test going red. Measured as red
+    // before this law: with `credentials: true` in `main.ts` this assertion
+    // fails and the rest of the suite stays green, which is exactly the hole
+    // it closes.
+    const main = readFileSync(join(resolve(__dirname, '..'), 'apps/api/src/main.ts'), 'utf8');
+    // Positive control first: the probe is reading a bootstrap that configures
+    // CORS at all, so a passing assertion below cannot be a missing file.
+    expect(main).toContain('app.enableCors(');
+
+    // The claim is about the ARGUMENT of that call, not about the file's text.
+    // Read over the whole file, a comment mentioning `credentials: false`
+    // elsewhere would have kept this green above a real call passing a value
+    // from config — a false green, which is the one direction a security law
+    // must never fail in. (Review of this PR, finding 1.)
+    const call = /app\.enableCors\(([\s\S]*?)\n\s*\}\);/.exec(main);
+    expect(call, 'the enableCors call could not be located to read its argument').not.toBeNull();
+    const raw = call?.[1] ?? '';
+    expect(raw).not.toBe('');
+
+    // COMMENTS ARE STRIPPED BEFORE THE CLAIM. Narrowing to the argument shrank
+    // the false green; it did not close it. Two routes survived and were
+    // measured: a comment INSIDE the options object saying `credentials: false`
+    // above a value read from the environment, and — if the call is ever
+    // reformatted onto one line, losing the `\n });` this capture ends at — an
+    // over-capture running to the next `});` in the file, where any later
+    // mention of `credentials: false` in a comment would do. Stripping closes
+    // both, because only code can satisfy the claim now.
+    // (Second review of this PR, finding 2.)
+    const options = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    expect(options).not.toBe('');
+
+    // THE CAPTURE DID NOT RUN PAST THE CALL. Measured, the third review found
+    // the one route that stripping left open: reformat `enableCors` onto a
+    // single line and the capture, which ends at `\n });`, runs on to the next
+    // one in the file — 157 characters instead of 81 — carrying whatever lies
+    // between. These two assertions bound it by STRUCTURE, which the length
+    // bound below cannot do here: from the call to the end of the file is only
+    // 340 characters, under any length a growing options object could live
+    // with. What follows the call is the listen and the log line, so their
+    // absence is what proves the capture stopped where the call stops.
+    expect(options).not.toContain('app.listen');
+    expect(options).not.toContain('logger.');
+
+    // A SECOND `credentials:` KEY IS REFUSED IN THE RAW TEXT TOO, not only
+    // after stripping. The review measured the last route that stayed green: a
+    // duplicate key whose second — and at runtime winning — occurrence sits on
+    // a line carrying `//` inside a string literal such as 'https://ops…', so
+    // stripping removed the relaxation along with the rest of that line and
+    // left one `false` behind. Counting on the raw text closes it without
+    // leaning on `no-dupe-keys` in another gate to catch it for us.
+    expect([...raw.matchAll(/credentials\s*:/g)]).toHaveLength(1);
+
+    // The located text really is this call's argument:
+    //  - the allowlist parse lives inside it, and nothing else in the file
+    //    calls `parseCorsOrigins`;
+    //  - and it is SHORT. An absolute bound is the one that can fail: a
+    //    successful capture is shorter than the file by construction, so
+    //    comparing it to the file's length asserted nothing at all, and the
+    //    comment that claimed otherwise was wrong. (Second review, finding 1.)
+    expect(options).toContain('parseCorsOrigins');
+    expect(options.length).toBeLessThan(400);
+
+    // Exactly one `credentials:` key, so a second mention cannot mask the one
+    // that counts.
+    expect([...options.matchAll(/credentials\s*:/g)]).toHaveLength(1);
+    expect(options).toContain('credentials: false');
+    expect(options).not.toContain('credentials: true');
+
+    // AND ONE MORE CONSEQUENCE. The sentence that stood here was WRONG, and
+    // the third review measured it: it said reformatting the call onto a
+    // single line makes this case fail. It did not — the capture simply ran
+    // past the call and stayed GREEN at 157 characters. It fails now, because
+    // the two structural assertions above refuse a capture that swallowed the
+    // listen and the log line. So the consequence is real only since those
+    // were added, and the answer to it is to move this expectation with the
+    // reformat — never to widen the pattern until it matches whatever the file
+    // now says.
+    //
+    // CONSEQUENCE, named here because whoever it reddens reads this file and
+    // not a card: moving these options into a constant or another module makes
+    // this case fail for a reason that is not a security relaxation. That is
+    // failing CLOSED, and it is deliberate — the claim is that the bootstrap's
+    // own call carries `credentials: false`. Whoever moves the options moves
+    // this expectation with them, in the same commit.
+  });
 });
