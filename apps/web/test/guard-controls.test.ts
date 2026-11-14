@@ -67,7 +67,13 @@ describe('static-guards on apps/web/src (R1, R6b, R14, R17) — the real script 
 
   it('every planted violation goes red under the right rule, in its own file', () => {
     for (const [rel, src] of Object.entries(PLANTS)) box.put(rel, src);
-    const { status, out } = box.run('static-guards.ts');
+    let result: { status: number | null; out: string };
+    try {
+      result = box.run('static-guards.ts');
+    } finally {
+      for (const rel of Object.keys(PLANTS)) box.restore(rel);
+    }
+    const { status, out } = result;
     expect(status).toBe(1);
     const money = hits(out, 'money-no-number-conversion', '__plant_money.ts');
     expect(money).toHaveLength(2); // lines 3 and 4; the comment and Number(rows.length) stay clean
@@ -77,7 +83,6 @@ describe('static-guards on apps/web/src (R1, R6b, R14, R17) — the real script 
     expect(hits(out, 'no-direct-db', '__plant_role.ts')).toHaveLength(1);
     expect(hits(out, 'no-migration-creds-in-runtime', '__plant_migcreds.ts')).toHaveLength(1);
     expect(hits(out, 'posting-surface', '__plant_ledger.ts')).toHaveLength(1);
-    for (const rel of Object.keys(PLANTS)) box.restore(rel);
   });
 
   it('removing the plants turns the same tree green again', () => {
@@ -181,19 +186,38 @@ describe('check-localization (parity, empty, raw key, t() scan) — the real scr
     ],
   ];
   it.each(scenarios)('%s goes red', (_name, plant, expected) => {
-    plant();
-    const { status, out } = box.run('check-localization.ts');
-    for (const rel of [MSG('ar'), MSG('en'), MSG('tr'), PLANT_T]) box.restore(rel);
+    let result: { status: number | null; out: string };
+    try {
+      plant();
+      result = box.run('check-localization.ts');
+    } finally {
+      for (const rel of [MSG('ar'), MSG('en'), MSG('tr'), PLANT_T]) box.restore(rel);
+    }
+    const { status, out } = result;
     expect(out).toMatch(expected);
     expect(status).toBe(1);
   });
 
-  it('DOCUMENTED BLIND SPOT: the t() scan accepts single quotes only, so double-quote and template-literal calls to unknown keys pass', () => {
-    box.put('apps/web/src/__plant_blind.ts', 'export const f = (t: (k: string) => string, n: string) => [t("zz.dq_unknown"), t(`zz.tpl_${n}`)];\n');
-    const { status, out } = box.run('check-localization.ts');
-    box.restore('apps/web/src/__plant_blind.ts');
+  it('DOCUMENTED BLIND SPOT: the t() scan reads single-quoted keys only, so a template-literal call to an unknown key passes', () => {
+    let result: { status: number | null; out: string };
+    try {
+      box.put('apps/web/src/__plant_blind.ts', 'export const f = (t: (k: string) => string, n: string) => t(`zz.tpl_${n}`);\n');
+      result = box.run('check-localization.ts');
+    } finally {
+      box.restore('apps/web/src/__plant_blind.ts');
+    }
     // Asserts the CURRENT behaviour, so closing the gap shows up as a deliberate change to this test.
-    expect(out).not.toMatch(/zz\.(dq_unknown|tpl_)/);
-    expect(status).toBe(0);
+    expect(result.out).not.toMatch(/zz\.tpl_/);
+    expect(result.status).toBe(0);
+  });
+
+  it('pins the live template-literal t() calls the scan cannot read (10 outside AppHeader, whose nav keys are enumerated)', () => {
+    let live = 0;
+    for (const f of walk(WEB_SRC, /\.(ts|tsx)$/)) {
+      if (f.endsWith('AppHeader.tsx')) continue;
+      live += [...readFileSync(f, 'utf8').matchAll(/\bt\(\s*`/g)].length;
+    }
+    // Measured: 10. Raising this number means a NEW call whose key no gate checks; lower it only when the scan learns templates.
+    expect(live).toBe(10);
   });
 });

@@ -39,7 +39,12 @@ function runT10(name: string, planted: Record<string, string> | null): Record<st
     })};`,
   );
   const outFile = join(dir, `${name}.json`);
-  spawnSync(process.execPath, [VITEST_MJS, 'run', '--config', cfg, '--reporter=json', `--outputFile=${outFile}`], { cwd: WEB, encoding: 'utf8' });
+  const child = spawnSync(process.execPath, [VITEST_MJS, 'run', '--config', cfg, '--reporter=json', `--outputFile=${outFile}`], {
+    cwd: WEB,
+    encoding: 'utf8',
+    timeout: 120_000,
+  });
+  if (child.error || child.signal) throw new Error(`child vitest did not finish: ${child.error?.message ?? child.signal}`);
   const report = JSON.parse(readFileSync(outFile, 'utf8')) as { testResults: { assertionResults: { title: string; status: string }[] }[] };
   const out: Record<string, string> = {};
   for (const r of report.testResults) for (const a of r.assertionResults) out[a.title] = a.status;

@@ -48,7 +48,8 @@ export function createSandbox(): Sandbox {
       else rmSync(join(root, rel), { force: true });
     },
     run(script) {
-      const r = spawnSync(process.execPath, [TSX_CLI, join(root, 'scripts', script)], { cwd: root, encoding: 'utf8' });
+      const r = spawnSync(process.execPath, [TSX_CLI, join(root, 'scripts', script)], { cwd: root, encoding: 'utf8', timeout: 120_000 });
+      if (r.error || r.signal) throw new Error(`guard script did not finish: ${r.error?.message ?? r.signal}`);
       return { status: r.status, out: `${r.stdout}${r.stderr}`.split('\\').join('/') };
     },
     dispose() {
