@@ -6,7 +6,7 @@ import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
 import { isS7Key, isS7WebFile, stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { REPO_ROOT } from './helpers/refusal-codes';
-import { customersOnly, entryPoints, importsOf, reachedFrom, referencedKeys } from './helpers/reach';
+import { SOURCE_FILE, customersOnly, entryPoints, importsOf, reachedFrom, referencedKeys, unresolvedKeyConstructions } from './helpers/reach';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
@@ -231,19 +231,29 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    *     `customers` route segment (anchored at `[locale]`);
    *   - EVERY OTHER ENTRY: every other file Next.js enters — pages, layouts,
    *     route handlers and special files anywhere under `app/` (S7 segments
-   *     or not), and `src/middleware.ts`;
+   *     or not), and `src/middleware.ts` and the instrumentation hooks, in any
+   *     source extension (`tsconfig` has `allowJs`);
    *   - CUSTOMERS-ONLY FILES: reach(customers entries) minus reach(every other
    *     entry). A customers view a till page, the shared header or the
-   *     middleware imports is NOT customers-only;
+   *     middleware imports is NOT customers-only. To these join the CONSUMERS:
+   *     a file no entry reaches at all (a `views/<area>/registry.ts`, which
+   *     `loadViewRegistries` requires in every views folder and no page
+   *     imports) that imports at least one customers-only file, repeatedly;
+   *     what else it imports (the shared `defineView`) does not matter;
    *   - SCANNED FILES: every file `isS7WebFile` accepts (the existing
    *     definition, unchanged) except the customers-only ones. A file nothing
-   *     imports is scanned, because dead code is not an exemption;
+   *     imports and that imports no customers-only file is scanned, because
+   *     dead code is not an exemption, wherever it lives;
    *   - SCANNED KEYS: every `isS7Key` catalogue key except those referenced
    *     ONLY by customers-only files. A reference is a string literal, or a
    *     template / concatenation that builds a key under a prefix
    *     (`error.${code}`, `nav.${item.key}`), which references EVERY key under
    *     that prefix; the references of every file that is not customers-only
-   *     count, S7 or not.
+   *     count, S7 or not. The excuse FAILS CLOSED: a key the rest of the tree
+   *     builds in a way no prefix pattern resolves (`ns + '.buyer'`,
+   *     `${ns}.buyer`, `.concat('.buyer')`, `.join('.')`, `${a}.${b}` inside a
+   *     `t(…)` call) is assumed to cover every key it could, so those keys are
+   *     scanned. Every locale of every scanned key is read.
    *
    * Adding a page that is not under `customers` can only GROW the scanned set
    * (it adds to what "every other entry" reaches). Adding a customers page can
@@ -299,6 +309,9 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
         .filter((path) => !only.has(path))
         .map((path) => files[path] ?? ''),
       s7Keys,
+      // Fail CLOSED: a key the rest of the tree builds in a way the extractor cannot resolve (`${ns}.buyer`,
+      // `ns + '.buyer'`, `.join('.')`) is assumed to cover every key it could, so it is never excused.
+      { closed: true },
     );
     const excludedKeys = [...fromCustomers].filter((key) => !fromRest.has(key)).sort();
     const keys = s7Keys.filter((key) => !excludedKeys.includes(key));
@@ -317,7 +330,8 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) walk(full);
-        else if (/\.tsx?$/.test(entry)) out[relative(REPO_ROOT, full).split('\\').join('/')] = readFileSync(full, 'utf8');
+        // Every source file the build compiles, not only `.ts`/`.tsx`: `tsconfig` has `allowJs`.
+        else if (SOURCE_FILE.test(entry)) out[relative(REPO_ROOT, full).split('\\').join('/')] = readFileSync(full, 'utf8');
       }
     };
     walk(join(REPO_ROOT, 'apps', 'web', 'src'));
@@ -331,6 +345,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   const PANEL = 'apps/web/src/views/common/Panel.tsx';
   const CV = 'apps/web/src/views/customers';
   const ACCOUNT = `${CV}/CustomerAccountView.tsx`;
+  const REGISTRY = `${CV}/registry.ts`;
   const importAccount = "import { CustomerAccountView } from '@/views/customers/CustomerAccountView';\n";
   /** A web tree that contains a customers route, which main does not yet. */
   function syntheticTree(extra: Record<string, string> = {}): Record<string, string> {
@@ -350,6 +365,15 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       [`${CV}/CustomerListView.tsx`]:
         "import { CustomerAccountView } from './CustomerAccountView';\nexport const CustomerListView = () => t('customers.title') + CustomerAccountView;",
       [ACCOUNT]: 'export const CustomerAccountView = () => customer.name;',
+      // The layout `loadViewRegistries` requires: a `registry.ts` in EVERY views folder, which no page imports, and which imports
+      // the shared `defineView` as well as its own views.
+      'apps/web/src/lib/phase3-format.ts': 'export const defineView = (v) => v;',
+      'apps/web/src/views/pos/registry.ts':
+        "import { defineView } from '@/lib/phase3-format';\nimport { TillView } from './TillView';\nexport const VIEW_REGISTRY = [defineView(TillView)];",
+      'apps/web/src/views/stock/registry.ts':
+        "import { defineView } from '@/lib/phase3-format';\nimport { StockView } from './StockView';\nexport const VIEW_REGISTRY = [defineView(StockView)];",
+      [REGISTRY]:
+        "import { defineView } from '@/lib/phase3-format';\nimport { CustomerListView } from './CustomerListView';\nexport const VIEW_REGISTRY = [defineView(CustomerListView, { customerId: 'c1' })];",
       ...extra,
     };
   }
@@ -359,7 +383,10 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     const clean = customerLaw(tree, SYNTHETIC_CATALOG);
     // POSITIVE controls on the synthetic tree.
     expect(clean.hits).toEqual([]);
-    expect(clean.customersOnly).toEqual([`${A}/customers/page.tsx`, ACCOUNT, `${CV}/CustomerListView.tsx`].sort());
+    // The customers registry is imported by no page, and joins by importing a customers-only view (see BOUNDARY (g)).
+    expect(clean.customersOnly).toEqual([`${A}/customers/page.tsx`, ACCOUNT, `${CV}/CustomerListView.tsx`, REGISTRY].sort());
+    // The till and stock registries import the shared `defineView` and their own (scanned) views: they stay scanned.
+    for (const path of ['apps/web/src/views/pos/registry.ts', 'apps/web/src/views/stock/registry.ts']) expect(clean.scanned, path).toContain(path);
     expect(clean.scanned).toEqual(
       Object.keys(tree)
         .filter((path) => isS7WebFile(path) && !clean.customersOnly.includes(path))
@@ -573,7 +600,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       'loading',
       'template',
       'default',
+      'global-not-found',
     ].map((name) => `${A}/pos/${name}.tsx`);
+    const rootEntries = ['middleware', 'instrumentation', 'instrumentation-client'].map((name) => `apps/web/src/${name}.ts`);
+    expect(entryPoints(rootEntries)).toEqual([...rootEntries].sort());
+    expect(entryPoints(['apps/web/src/instrumentation-hook.ts', 'apps/web/src/lib/instrumentation.ts'])).toEqual([]);
     expect(entryPoints(special)).toEqual([...special].sort());
     expect(entryPoints([`${A}/pos/icon2.tsx`, `${A}/pos/opengraph-image1.ts`])).toHaveLength(2);
     expect(entryPoints([`${A}/pos/helper.tsx`, `${A}/pos/pos-page-kit.ts`])).toEqual([]);
@@ -637,6 +668,150 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(customerLaw(customersAdded, SYNTHETIC_CATALOG).scanned).not.toContain(`${CV}/Dead.tsx`);
   });
 
+  it('BOUNDARY (g): a registry no page imports joins the customers slice by importing its views — and dead code that does not, stays scanned', () => {
+    const tree = syntheticTree();
+    const clean = customerLaw(tree, SYNTHETIC_CATALOG);
+    // The registry imports the shared `defineView` (a scanned file) AND a customers-only view, sets a non-null customerId, names a
+    // customer: it is the slice's own file, and the law is not red for the layout `loadViewRegistries` requires.
+    expect(clean.customersOnly).toContain(REGISTRY);
+    expect(clean.hits).toEqual([]);
+    expect(clean.scanned).not.toContain(REGISTRY);
+    // A file importing that consumer is a consumer too.
+    const chain = customerLaw(
+      syntheticTree({ [`${CV}/fixtures.ts`]: "import { VIEW_REGISTRY } from './registry';\nexport const customerFixtures = VIEW_REGISTRY;" }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(chain.customersOnly).toContain(`${CV}/fixtures.ts`);
+    expect(chain.hits).toEqual([]);
+    // NEGATIVE: dead code that imports a scanned file and names a customer is flagged.
+    const dead = customerLaw(
+      syntheticTree({ 'apps/web/src/views/pos/dead.ts': "import { TillView } from './TillView';\nexport const Dead = [TillView, customer.name];" }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(dead.hits).toEqual(['library vocabulary apps/web/src/views/pos/dead.ts: customer.name']);
+    // NEGATIVE: living in the customers folder is no exemption: an unreached file there that imports no customers-only file stays scanned.
+    const loose = customerLaw(
+      syntheticTree({ [`${CV}/loose.ts`]: "import { defineView } from '@/lib/phase3-format';\nexport const customerLoose = defineView;" }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(loose.customersOnly).not.toContain(`${CV}/loose.ts`);
+    expect(loose.hits).toEqual(['library vocabulary apps/web/src/views/customers/loose.ts: customerLoose']);
+    // NEGATIVE: the till imports the view the registry imports: the view stops being customers-only, and so does the claim of the registry.
+    const smuggled = customerLaw(
+      syntheticTree({
+        [`${A}/pos/till/page.tsx`]: "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView;",
+      }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(smuggled.customersOnly).not.toContain(REGISTRY);
+    expect(smuggled.hits).toEqual(
+      expect.arrayContaining([`screen ${CV}/CustomerListView.tsx`, 'library vocabulary apps/web/src/views/customers/registry.ts: CustomerListView']),
+    );
+  });
+
+  it('BOUNDARY (h): keys FAIL CLOSED — a key built in a way the extractor cannot resolve is never excused', () => {
+    const catalog = { en: { ...SYNTHETIC_CATALOG.en, 'stock.buyer': 'Choose a customer' } };
+    const customersPage = {
+      [`${A}/customers/page.tsx`]:
+        "import { CustomerListView } from '@/views/customers/CustomerListView';\nexport default () => CustomerListView + t('stock.buyer');",
+    };
+    // The customers page names `stock.buyer` and nothing else does: it is the slice's and is excused.
+    expect(customerLaw(syntheticTree(customersPage), catalog).excludedKeys).toContain('stock.buyer');
+    expect(customerLaw(syntheticTree(customersPage), catalog).hits).toEqual([]);
+    // ...unless the till builds a key ending `.buyer` in a way no prefix pattern resolves.
+    const constructions: Record<string, string> = {
+      'a concatenation with a dynamic head': "export const TillView = (NS) => t(NS + '.buyer');",
+      'a template with a dynamic head': 'export const TillView = (ns) => t(`${ns}.buyer`);',
+      'a concatenation in the middle': "export const TillView = (a, b) => t('x.' + a + '.buyer');",
+      'a concat method': "export const TillView = (a) => t(a.concat('.buyer'));",
+      'a join on a dot': "export const TillView = (a) => t([a, 'buyer'].join('.'));",
+      'a template of two variables': 'export const TillView = (a, b) => t(`${a}.${b}`);',
+    };
+    for (const [what, view] of Object.entries(constructions)) {
+      const law = customerLaw(syntheticTree({ ...customersPage, [TILL]: view }), catalog);
+      // A wildcard construction disables EVERY excuse (the slice's own keys are scanned too); a tailed one only the keys it could end.
+      const wildcard = what === 'a join on a dot' || what === 'a template of two variables';
+      expect(law.hits, what).toEqual(wildcard ? ['key en: customers.title', 'key en: stock.buyer'] : ['key en: stock.buyer']);
+    }
+    // PRECISION: a construction whose tail cannot end in that key does not disable the excuse...
+    expect(customerLaw(syntheticTree({ ...customersPage, [TILL]: "export const TillView = (NS) => t(NS + '.other');" }), catalog).hits).toEqual([]);
+    // ...and a recognised leading prefix is resolved as before (`stock.${x}` covers `stock.buyer`).
+    expect(customerLaw(syntheticTree({ ...customersPage, [TILL]: 'export const TillView = (x) => t(`stock.${x}`);' }), catalog).hits).toEqual([
+      'key en: stock.buyer',
+    ]);
+    // A construction in a customers-only file never WIDENS the excuse: nothing else names `stock.buyer`, so it is scanned and flagged.
+    const widened = customerLaw(
+      syntheticTree({
+        [ACCOUNT]: "export const CustomerAccountView = (NS) => t(NS + '.buyer') + customer.name;",
+        [`${A}/customers/page.tsx`]: customersPage[`${A}/customers/page.tsx`] ?? '',
+      }),
+      catalog,
+    );
+    expect(widened.hits).toEqual([]);
+    expect(unresolvedKeyConstructions("t(NS + '.buyer'); t(`${a}.title`); t(`${a}.${b}`); t(`error.${c}`);")).toEqual({
+      tails: ['.buyer', '.title'],
+      wildcard: true,
+    });
+    expect(unresolvedKeyConstructions("t('stock.buyer'); t(`error.${c}`); const p = base + '/x'; const j = a + 'b';")).toEqual({ tails: [], wildcard: false });
+  });
+
+  it('BOUNDARY (i): entries in any source extension and the newer Next special files are entries', () => {
+    const view = `${importAccount}export default () => CustomerAccountView;`;
+    const cjs = "const { CustomerAccountView } = require('@/views/customers/CustomerAccountView');\nmodule.exports = CustomerAccountView;";
+    const reaching: Record<string, Record<string, string>> = {
+      'a .js page': { [`${A}/pos/extra/page.js`]: view },
+      'a .jsx page': { [`${A}/pos/extra/page.jsx`]: view },
+      'a .mjs route': { [`${A}/pos/extra/route.mjs`]: view },
+      'a .cjs route': { [`${A}/pos/extra/route.cjs`]: cjs },
+      'a global-not-found': { [`${A}/global-not-found.tsx`]: view },
+      'an instrumentation hook': { 'apps/web/src/instrumentation.ts': view },
+      'a client instrumentation hook': { 'apps/web/src/instrumentation-client.js': view },
+      'a .js middleware': { 'apps/web/src/middleware.js': view },
+    };
+    for (const [what, extra] of Object.entries(reaching)) {
+      const law = customerLaw(syntheticTree(extra), SYNTHETIC_CATALOG);
+      expect(law.customersOnly, what).not.toContain(ACCOUNT);
+      expect(law.hits, what).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
+    }
+    // A plain `.js` module the till imports is walked, and what it imports is reached.
+    const viaJs = customerLaw(
+      syntheticTree({ [TILL]: "import { x } from './helper.js';\nexport const TillView = x;", 'apps/web/src/views/pos/helper.js': view }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(viaJs.hits).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
+    // ...and one imported WITHOUT its extension, which is how the build resolves it.
+    for (const ext of ['js', 'jsx', 'mjs', 'cjs']) {
+      const bare = customerLaw(
+        syntheticTree({ [TILL]: "import { x } from './helper';\nexport const TillView = x;", [`apps/web/src/views/pos/helper.${ext}`]: view }),
+        SYNTHETIC_CATALOG,
+      );
+      expect(bare.hits, ext).toEqual(expect.arrayContaining([`screen ${ACCOUNT}`]));
+    }
+    // The customers route's own `.js` entry is still the customers route.
+    const own = customerLaw(syntheticTree({ [`${A}/customers/extra/page.js`]: view }), SYNTHETIC_CATALOG);
+    expect(own.customersOnly).toContain(`${A}/customers/extra/page.js`);
+    expect(own.hits).toEqual([]);
+    expect(
+      entryPoints([`${A}/pos/page.js`, `${A}/pos/layout.jsx`, `${A}/pos/route.mjs`, `${A}/pos/route.cjs`, `${A}/pos/page.css`, `${A}/pos/page.json`]),
+    ).toHaveLength(4);
+  });
+
+  it('BOUNDARY (j): every locale is checked, not only the first', () => {
+    const clean = {
+      en: { 'pos.title': 'Till', 'pos.note': 'Note' },
+      ar: { 'pos.title': 'الصندوق', 'pos.note': 'ملاحظة' },
+      tr: { 'pos.title': 'Kasa', 'pos.note': 'Not' },
+    };
+    expect(customerLaw(syntheticTree(), clean).hits).toEqual([]);
+    expect(customerLaw(syntheticTree(), { ...clean, ar: { ...clean.ar, 'pos.note': 'ملاحظة العميل' } }).hits).toEqual(['key ar: pos.note']);
+    expect(customerLaw(syntheticTree(), { ...clean, tr: { ...clean.tr, 'pos.note': 'Müşteri notu' } }).hits).toEqual(['key tr: pos.note']);
+    expect(customerLaw(syntheticTree(), { ...clean, en: { ...clean.en, 'pos.note': 'Customer note' } }).hits).toEqual(['key en: pos.note']);
+    // A key that exists in one locale only.
+    expect(customerLaw(syntheticTree(), { ...clean, tr: { ...clean.tr, 'pos.buyer': 'Not' }, ar: { ...clean.ar, 'pos.customerNote': 'x' } }).hits).toEqual([
+      'key ar: pos.customerNote',
+    ]);
+  });
+
   it('REACH, repository: the scope is every S7 file and key except the derived customers-only set, and none names a customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
@@ -675,7 +850,8 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     expect(law.screens.length, 'the scan ran over too few screens').toBeGreaterThan(10);
     expect(law.libraries.length).toBeGreaterThan(2);
     // The key scope is main's count of S7 keys, minus only keys referenced exclusively by customers-only files.
-    const mainKeys = Object.keys(en).filter((key) => isS7Key(key));
+    // Counted over all three catalogues: a key present in one locale only is still a key of the law's scope.
+    const mainKeys = [...new Set([...Object.keys(ar), ...Object.keys(en), ...Object.keys(tr)])].filter((key) => isS7Key(key));
     expect(mainKeys.length).toBeGreaterThan(500);
     expect(law.s7Keys).toEqual(mainKeys.slice().sort());
     expect(law.keys.length).toBe(mainKeys.length - law.excludedKeys.length);

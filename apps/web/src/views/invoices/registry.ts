@@ -4,10 +4,11 @@
  *
  * ── WHY THIS FILE IS `.ts` AND NOT `.tsx`, measured ──────────────────────
  * `InvoiceSummaryDto` carries `customerId`, so a fixture must set it. T-12
- * (`apps/web/test/od03.test.ts`, the customer rules — the `SALE FLOW` tests)
- * refuses the token `customer` in a screen (`.tsx`) of the sale flow, while its
- * library rule (allowed values: `CUSTOMER_ID_ALLOWED` in that file) admits the
- * one spelling `customerId`, set from `null`. A `.ts` registry is a library by
+ * (`apps/web/test/od03.test.ts`, the tests whose names start `REACH`) refuses
+ * the token `customer` in every S7 screen (`.tsx`) except the files only the
+ * customers route uses, while its library rule (allowed values:
+ * `CUSTOMER_ID_ALLOWED` in that file) admits the one spelling `customerId`,
+ * set from `null`. A `.ts` registry is a library by
  * `isS7WebFile`, so the walk-in id is legal here and would not be three lines
  * away in a `.tsx`. `loadViewRegistries` (`test/helpers/render.tsx`) accepts
  * either extension, and `defineView` needs no JSX: it takes the component and
@@ -23,8 +24,9 @@
  * was, and what the money review caught.
  *
  * The invoice DETAIL view is not registered here, same law: an `InvoiceDto`
- * fixture would have to name `customerSnapshot`, which no file in `apps/web`
- * may do — not a `.tsx` by the screen rule, not a `.ts` by the library rule.
+ * fixture would have to name `customerSnapshot`, which no S7 file outside the
+ * customers route may do — not a `.tsx` by the screen rule, not a `.ts` by the
+ * library rule.
  * Card: `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
  */
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
