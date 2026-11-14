@@ -268,8 +268,16 @@ BEGIN
   v_intent := split_part(current_setting('app.inventory_assertion', true), '.', 7);
 
   -- The business scope is in the predicate, so another merchant's customer
-  -- is not found rather than updated; the RESTRICTIVE read policy
-  -- (`0075:410`) is the second, independent refusal of the same thing.
+  -- is not found rather than updated. ONE refusal, not two: measured on the
+  -- tree, `0075:410` is RESTRICTIVE but its USING admits
+  -- `current_user = 'daftar_inventory_internal'` (`0075:411`), and
+  -- `inventory_internal_read` (`0075:419-420`) is PERMISSIVE `USING (true)`,
+  -- so for THIS owner the policies do not scope the read at all. The
+  -- predicate below is the only barrier here, which is why the business id
+  -- comes from the signed assertion (step 9 of `0054` pins
+  -- `app.business_id` on the actor) and never from an argument. The INSERT
+  -- side is different and the claim there stands: `0075:412` has no
+  -- exemption for this role.
   SELECT c.revision, c.last_intent_sha256 INTO v_row FROM customers c WHERE c.business_id = v_business AND c.id = p_customer_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'customer.not_found: the customer does not exist in this business' USING ERRCODE = 'P0001';
