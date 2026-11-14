@@ -28,8 +28,10 @@
  *
  * **It does not open.** The row is not clickable and there is no `onOpen`: the
  * invoice DETAIL screen is not in this tree, because an `InvoiceDto` fixture
- * must name `customerSnapshot` and T-12 (`test/od03.test.ts:216`, `:235`)
- * refuses that vocabulary in every file of `apps/web`. A row that pushed
+ * must name `customerSnapshot` and T-12 (`test/od03.test.ts`, the tests whose
+ * names start `REACH`: every S7 file except the files only the customers route
+ * uses, and every S7 catalogue key, exactly as on main) refuses that
+ * vocabulary in an invoice screen. A row that pushed
  * `/invoices/:id` today would land the merchant on a 404 — which is the defect
  * `phase4-pos-api.ts`'s header records at scale (six planned endpoints, 36
  * browser-gate failures, every one a 404). So the row stays inert until the
