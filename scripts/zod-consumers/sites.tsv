@@ -223,6 +223,7 @@ scripts/test-census.ts	220	errors-access	safe	R-RECEIVER	for (const error of mod
 scripts/test-census.ts	314	find-shift	safe	R-RECEIVER	source: `vitest collect, ${PROJECTS.find((p) => p.id === rule.project)?.config ?? rule.project}`,
 scripts/test-census.ts	366	find-shift	safe	R-RECEIVER	const arg = (name: string): string | undefined => argv.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
 tests-unit/browser-pacer-route-coverage.test.ts	27	find-shift	safe	R-RECEIVER	const row = (c: RouteCoverage) => c.table().find((r) => r.route === KEY);
+tests-unit/npm-audit-minimatch-override.test.ts	93	find-shift	safe	R-RECEIVER	const key = Object.keys(pkg.overrides ?? {}).find((k) => k.startsWith('minimatch@'));
 tests-unit/td24-ci-redis-service-law.test.ts	144	find-shift	safe	R-RECEIVER	const line = (serviceLines ?? []).find((l) => l.trim().startsWith('image:'));
 tests-unit/td24-ci-redis-service-law.test.ts	162	find-shift	safe	R-RECEIVER	const run = stepLines.find((l) => l.trim().startsWith('run:'));
 tests-unit/td24-ci-redis-service-law.test.ts	199	find-shift	safe	R-RECEIVER	const url = step.env.find((l) => l.trim().startsWith('REDIS_URL:'));
