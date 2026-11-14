@@ -63,9 +63,15 @@
  * red only with both gone — and that was wrong against the assertion written
  * twenty lines below it, measured on `9e100e61` by an independent review. A
  * false sentence in a header is read as a judgement, so it is corrected here
- * rather than left standing beside a correct test. G1-B STILL HAS NO NEGATIVE
- * CONTROL ANYWHERE: that is an open gap in this lane's queue, not a claim this
- * suite closes.
+ * rather than left standing beside a correct test. G1-B IS NOT CONTROLLED BY
+ * THIS SUITE and cannot be: nothing an HTTP request can carry reaches
+ * `authorizeSaleCommit` without passing G1-A first. Its negative control is
+ * `tests-unit/l3-credit-sale-mint-authority-g1b-control.test.ts`, which calls
+ * the method directly — so G1-A is not on its path — and which was proved
+ * sighted by deleting `sale-posting.service.ts:86-88` (blob
+ * `3f27e827` → `238ac154`): the control went RED reporting that the
+ * authority had been MINTED for `["sale","invoice"]`, and green again on the
+ * restored blob. Neither file is sufficient alone.
  *
  * ── CLAIM 2: `payments.collect` IS THE KEY TO THE MONEY ───────────────────
  *
