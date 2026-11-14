@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
-import { MERCHANT_ROUTE_SEGMENTS, stripTsComments } from '../../../../scripts/guards/merchant-jargon';
+import ts from 'typescript';
+import { MERCHANT_ROUTE_SEGMENTS } from '../../../../scripts/guards/merchant-jargon';
 
 /**
  * The import graph of `apps/web/src`, for laws that are about REACH rather
@@ -8,6 +9,10 @@ import { MERCHANT_ROUTE_SEGMENTS, stripTsComments } from '../../../../scripts/gu
  * Pure: it takes a map of repository-relative `/`-separated path -> source, so
  * the same functions run over the real tree and over a synthetic one that
  * contains a route the repository does not have yet.
+ *
+ * Sources are PARSED, not pattern-matched: an import is an import declaration,
+ * an `export … from`, a dynamic `import()` or a `require()` call — never text
+ * that merely looks like one inside a string or a comment.
  */
 
 const WEB_SRC = 'apps/web/src';
@@ -36,6 +41,12 @@ const ROOT_ENTRY = new RegExp(String.raw`^${WEB_SRC}/(?:middleware|instrumentati
  * are NOT the customers route; `customers/pos/…` is.
  */
 const CUSTOMERS_ROUTE = new RegExp(String.raw`^${WEB_SRC}/app/\[locale\]/(?:\([^/]+\)/)?customers/`);
+/**
+ * A Next.js INTERCEPTING route segment: `(.)x`, `(..)x`, `(..)(..)x`, `(...)x`.
+ * `customers/(..)pos/x/page.tsx` renders at `/pos/x`, not under `/customers`, so
+ * it is not the customers route whatever folder it lives in.
+ */
+const INTERCEPTING_SEGMENT = /\/\(\.{1,3}\)/;
 
 if (!MERCHANT_ROUTE_SEGMENTS.includes('customers')) throw new Error('the S7 route segments no longer name `customers`');
 
@@ -46,18 +57,113 @@ export function entryPoints(paths: readonly string[]): string[] {
   return paths.filter(isEntry).sort();
 }
 
+/** True for an entry that renders under `/customers`: in the customers folder and not intercepting a route elsewhere. */
+export function isCustomersEntry(path: string): boolean {
+  return CUSTOMERS_ROUTE.test(path) && !INTERCEPTING_SEGMENT.test(path);
+}
+
 /** The entries of the customers route subtree, and EVERY other entry of the app (S7 segment or not, middleware included). */
 export function splitEntryPoints(paths: readonly string[]): { customers: string[]; other: string[] } {
   const all = entryPoints(paths);
-  return { customers: all.filter((path) => CUSTOMERS_ROUTE.test(path)), other: all.filter((path) => !CUSTOMERS_ROUTE.test(path)) };
+  return { customers: all.filter(isCustomersEntry), other: all.filter((path) => !isCustomersEntry(path)) };
 }
 
-const EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'];
-const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+|\brequire\s*\(\s*)(['"])([^'"\n]+)\1/g;
-/** `import(expr)` whose argument is not a plain string: its target cannot be known. */
-const COMPUTED_IMPORT = /\bimport\s*\(\s*(?!['"\s])[^)]*\)/g;
 /** A package: a name or an `@scope/name`. Anything else that is not relative is an alias this walk does not know. */
 const PACKAGE = /^(?:[A-Za-z][\w.-]*|@[A-Za-z0-9][\w.-]*\/)/;
+const EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'];
+
+/** Everything one parse of one file tells the laws. */
+interface Parsed {
+  /** Module specifiers of real imports (declarations, `export … from`, `import()`/`require()` of a literal). */
+  readonly specifiers: string[];
+  /** `import(expr)` / `require(expr)` whose argument is not a plain string: the target cannot be known. */
+  readonly computed: string[];
+  /** Every string literal that could be a catalogue key (the text of each string / no-substitution template). */
+  readonly literals: string[];
+  /** Key prefixes a template (`` `error.${code}` ``) or concatenation (`'error.' + code`) builds at run time. */
+  readonly prefixes: string[];
+  /** Key-position arguments (`t(arg)`, `translate(locale, arg)`) and key constructions this file makes that no literal or prefix reads. */
+  readonly opaque: string[];
+}
+
+const KEY_PREFIX_ONLY = /^[A-Za-z][\w-]*(?:\.[\w-]+)*\.$/;
+const KEY_TAIL = /^\.[\w-]+(?:\.[\w-]+)*$/;
+const cache = new Map<string, Parsed>();
+
+const isStringLike = (node: ts.Node): node is ts.StringLiteral | ts.NoSubstitutionTemplateLiteral =>
+  ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node);
+
+/** The leftmost operand of a `+` chain. */
+function leftmost(node: ts.Expression): ts.Expression {
+  let current = node;
+  while (ts.isBinaryExpression(current) && current.operatorToken.kind === ts.SyntaxKind.PlusToken) current = current.left;
+  return current;
+}
+
+/**
+ * Is a key-position argument something a literal or a leading prefix explains? A plain string; a template whose static head is a
+ * key prefix (`` `error.${code}` ``); a concatenation that starts with one (`'error.' + code`); a conditional of such. Anything
+ * else — an identifier, a call, a member, `'pos' + '.buyer'`, `` `${ns}.${leaf}` `` — is opaque.
+ */
+function explained(node: ts.Expression): boolean {
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node) || ts.isSatisfiesExpression(node))
+    return explained(node.expression);
+  if (isStringLike(node)) return true;
+  if (ts.isTemplateExpression(node)) return KEY_PREFIX_ONLY.test(node.head.text);
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+    const head = leftmost(node);
+    return isStringLike(head) && KEY_PREFIX_ONLY.test(head.text);
+  }
+  if (ts.isConditionalExpression(node)) return explained(node.whenTrue) && explained(node.whenFalse);
+  return false;
+}
+
+function parse(path: string, source: string): Parsed {
+  const cached = cache.get(`${path}\0${source}`);
+  if (cached !== undefined) return cached;
+  const file = ts.createSourceFile(path, source, ts.ScriptTarget.ES2022, true);
+  const out = { specifiers: [], computed: [], literals: [], prefixes: [], opaque: [] } as { -readonly [K in keyof Parsed]: Parsed[K] };
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) out.specifiers.push(node.moduleSpecifier.text);
+    else if (ts.isExportDeclaration(node) && node.moduleSpecifier !== undefined && ts.isStringLiteral(node.moduleSpecifier))
+      out.specifiers.push(node.moduleSpecifier.text);
+    else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference) && ts.isStringLiteral(node.moduleReference.expression)) {
+      out.specifiers.push(node.moduleReference.expression.text);
+    } else if (ts.isCallExpression(node)) {
+      const callee = node.expression;
+      const first = node.arguments[0];
+      const loads = callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === 'require');
+      if (loads) {
+        if (first !== undefined && isStringLike(first)) out.specifiers.push(first.text);
+        else out.computed.push(node.getText(file));
+      }
+      if (ts.isIdentifier(callee) && (callee.text === 't' || callee.text === 'translate')) {
+        const key = callee.text === 't' ? first : node.arguments[1];
+        if (key !== undefined && !explained(key)) out.opaque.push(`${callee.text}(${key.getText(file)})`);
+      }
+      // `[a, 'buyer'].join('.')` and `a.concat('.buyer')` build a key whatever calls them.
+      if (ts.isPropertyAccessExpression(callee) && first !== undefined && isStringLike(first)) {
+        if (callee.name.text === 'join' && first.text === '.') out.opaque.push(node.getText(file));
+        if (callee.name.text === 'concat' && KEY_TAIL.test(first.text)) out.opaque.push(node.getText(file));
+      }
+    } else if (isStringLike(node)) {
+      out.literals.push(node.text);
+    } else if (ts.isTemplateExpression(node)) {
+      if (KEY_PREFIX_ONLY.test(node.head.text)) out.prefixes.push(node.head.text);
+    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      const head = leftmost(node);
+      if (isStringLike(head) && KEY_PREFIX_ONLY.test(head.text)) out.prefixes.push(head.text);
+      // `x + '.buyer'`: a key tail on a non-literal head.
+      if (isStringLike(node.right) && KEY_TAIL.test(node.right.text) && !isStringLike(node.left) && !(isStringLike(head) && KEY_PREFIX_ONLY.test(head.text))) {
+        out.opaque.push(node.getText(file));
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  cache.set(`${path}\0${source}`, out);
+  return out;
+}
 
 /**
  * What `source` imports. `resolved` are files in `files`, found the way the
@@ -68,10 +174,9 @@ const PACKAGE = /^(?:[A-Za-z][\w.-]*|@[A-Za-z0-9][\w.-]*\/)/;
  */
 export function importsOf(path: string, source: string, files: Readonly<Record<string, string>>): { resolved: string[]; unresolved: string[] } {
   const resolved: string[] = [];
-  const unresolved: string[] = [];
-  const text = stripTsComments(source);
-  for (const m of text.matchAll(IMPORT_SPECIFIER)) {
-    const spec = m[2] ?? '';
+  const parsed = parse(path, source);
+  const unresolved: string[] = [...parsed.computed];
+  for (const spec of parsed.specifiers) {
     if (spec.endsWith('.json')) continue;
     let base: string;
     if (spec.startsWith('@/')) base = `${WEB_SRC}/${spec.slice(2)}`;
@@ -86,7 +191,6 @@ export function importsOf(path: string, source: string, files: Readonly<Record<s
     if (hit === undefined) unresolved.push(spec);
     else resolved.push(hit);
   }
-  for (const m of text.matchAll(COMPUTED_IMPORT)) unresolved.push(m[0]);
   return { resolved, unresolved };
 }
 
@@ -115,19 +219,21 @@ export function reachedFrom(files: Readonly<Record<string, string>>, entries: re
 /**
  * The files only the customers route subtree uses: reached from a customers
  * entry and from NO other entry of the app (any page, layout, route handler or
- * special file anywhere under `app/`, and the middleware). This is the one
- * place a customer may be named, derived from the import graph and not from
- * any list.
+ * special file anywhere under `app/`, an intercepting route in the customers
+ * folder, and the middleware). This is the one place a customer may be named,
+ * derived from the import graph and not from any list.
  *
  * CONSUMERS. A file no entry reaches at all (a view registry, which
  * `loadViewRegistries` requires in every `views/<area>/` and no page imports; a
  * test fixture) belongs to the slice whose views it imports. So an unreached
- * file that imports at least one customers-only file joins the set, repeatedly
- * (a file importing such a consumer is a consumer too). It does NOT matter what
- * else it imports: a registry imports the shared `defineView` as well. An
- * unreached file that imports NO customers-only file stays out, however it
- * names a customer: dead code is not an exemption, and a file that imports only
- * scanned files is a scanned file's neighbour, not the customers slice's.
+ * file that REALLY imports (an import declaration, `export … from`, `import()`
+ * or `require()` — not text in a string or a comment) at least one customers-only
+ * file joins the set, repeatedly (a file importing such a consumer is a
+ * consumer too). It does NOT matter what else it imports: a registry imports
+ * the shared `defineView` as well. An unreached file that imports NO
+ * customers-only file stays out, however it names a customer: dead code is not
+ * an exemption. RESIDUAL, stated: an otherwise-dead file that really imports a
+ * customers-only file is excused with the slice.
  *
  * Monotone by construction: an entry that is not under `customers` can only
  * add to what "every other entry" reaches, so it can only shrink this set (the
@@ -153,99 +259,34 @@ export function customersOnly(files: Readonly<Record<string, string>>): Set<stri
   return only;
 }
 
-const KEY_LITERAL = /(['"`])([A-Za-z][\w-]*(?:\.[\w-]+)+)\1/g;
-/** `` `error.${code}` `` and `'error.' + code`: a namespace prefix that completes at run time. */
-const KEY_PREFIX = /(?:`([A-Za-z][\w-]*(?:\.[\w-]+)*\.)\$\{|(['"])([A-Za-z][\w-]*(?:\.[\w-]+)*\.)\2\s*\+)/g;
-
 /**
- * The catalogue keys a set of sources refers to: every `a.b` string literal
- * that is a key, and — for a key built at run time — EVERY key under the
- * prefix a template or concatenation names. A dynamic reference is a
- * reference to the whole prefix, because the code cannot be shown to avoid any
- * member of it.
+ * The catalogue keys a set of sources refers to: every string that is a key,
+ * and — unless `literalsOnly` — EVERY key under the prefix a template or
+ * concatenation names (`` `error.${code}` ``, `'error.' + code`): the code
+ * cannot be shown to avoid any member of it.
  *
- * FAIL CLOSED (`closed: true`, for the files that decide whether a key is
- * excused): a key built at run time in a way this extractor cannot resolve to
- * a literal or to a leading prefix is assumed to cover every key it COULD
- * cover — `` `${ns}.buyer` ``, `ns + '.buyer'`, `.concat('.buyer')` cover every
- * key ending in that tail; `` `${a}.${b}` `` and `.join('.')` cover every key.
- * A key the rest of the tree might build is therefore never excused.
+ * `literalsOnly` is for the files that ask to be EXCUSED (the customers-only
+ * ones): an excuse needs the specific key spelled out, never a whole prefix.
  */
-const TEMPLATE = /`((?:\\.|\$\{[^}]*\}|[^`\\$]|\$(?!\{))*)`/g;
-const TEMPLATE_EXPR = /\$\{[^}]*\}/g;
-const KEY_PREFIX_ONLY = /^[A-Za-z][\w-]*(?:\.[\w-]+)*\.$/;
-const CONCAT_TAIL = /[\w$)\]]\s*\+\s*(['"])(\.[\w-]+(?:\.[\w-]+)*)\1/g;
-const CONCAT_METHOD_TAIL = /\.concat\(\s*(['"])(\.[\w-]+(?:\.[\w-]+)*)\1/g;
-const JOIN_DOT = /\.join\(\s*(['"])\.\1\s*\)/;
-
-export interface DynamicKeys {
-  readonly tails: string[];
-  readonly wildcard: boolean;
-}
-
-/** The text of every call `t( … )` in `text`, parentheses balanced: the places a catalogue key is read. */
-function translationCallArguments(text: string): string[] {
-  const out: string[] = [];
-  for (const m of text.matchAll(/(?<![\w$.])t\(/g)) {
-    let depth = 1;
-    let i = (m.index ?? 0) + m[0].length;
-    const start = i;
-    for (; i < text.length && depth > 0; i++) {
-      if (text[i] === '(') depth++;
-      else if (text[i] === ')') depth--;
-    }
-    out.push(text.slice(start, i - 1));
-  }
-  return out;
-}
-
-/** A tail that could end a catalogue key: dotted words only, so CSS, paths and numbers are not read as keys. */
-const KEY_TAIL = /^\.[\w-]+(?:\.[\w-]+)*$/;
-
-/**
- * The key constructions in `source` that a leading-prefix reading cannot
- * resolve. A TAIL (`ns + '.buyer'`, `` `${ns}.buyer` ``, `.concat('.buyer')`) is
- * read anywhere in the file, so a key built in a variable and passed on is
- * still seen. A WILDCARD (`.join('.')` anywhere; `` `${a}.${b}` `` inside a
- * `t(…)` call) could be any key. A template of two variables outside a `t(…)`
- * call is not read as a key: `${whole}.${fraction}` formats an amount.
- */
-export function unresolvedKeyConstructions(source: string): DynamicKeys {
-  const text = stripTsComments(source);
-  const tails = new Set<string>();
-  let wildcard = JOIN_DOT.test(text);
-  const readTemplates = (scope: string, inCall: boolean): void => {
-    for (const m of scope.matchAll(TEMPLATE)) {
-      const body = m[1] ?? '';
-      if (!body.includes('${')) continue;
-      const statics = body.split(TEMPLATE_EXPR);
-      if (KEY_PREFIX_ONLY.test(statics[0] ?? '')) continue;
-      const tail = statics[statics.length - 1] ?? '';
-      if (KEY_TAIL.test(tail)) tails.add(tail);
-      else if (inCall && statics.every((s) => s === '' || s === '.') && statics.includes('.')) wildcard = true;
-    }
-  };
-  readTemplates(text, false);
-  for (const argument of translationCallArguments(text)) readTemplates(argument, true);
-  for (const m of text.matchAll(CONCAT_TAIL)) tails.add(m[2] ?? '');
-  for (const m of text.matchAll(CONCAT_METHOD_TAIL)) tails.add(m[2] ?? '');
-  return { tails: [...tails].sort(), wildcard };
-}
-
-export function referencedKeys(sources: readonly string[], catalogKeys: readonly string[], options: { closed?: boolean } = {}): Set<string> {
+export function referencedKeys(sources: readonly string[], catalogKeys: readonly string[], options: { literalsOnly?: boolean } = {}): Set<string> {
   const known = new Set(catalogKeys);
   const out = new Set<string>();
-  for (const source of sources) {
-    const text = stripTsComments(source);
-    for (const m of text.matchAll(KEY_LITERAL)) if (known.has(m[2] ?? '')) out.add(m[2] ?? '');
-    for (const m of text.matchAll(KEY_PREFIX)) {
-      const prefix = m[1] ?? m[3] ?? '';
-      for (const key of catalogKeys) if (key.startsWith(prefix)) out.add(key);
+  sources.forEach((source, index) => {
+    const parsed = parse(`#${index}.tsx`, source);
+    for (const literal of parsed.literals) if (known.has(literal)) out.add(literal);
+    if (options.literalsOnly !== true) {
+      for (const prefix of parsed.prefixes) for (const key of catalogKeys) if (key.startsWith(prefix)) out.add(key);
     }
-    if (options.closed === true) {
-      const dynamic = unresolvedKeyConstructions(text);
-      for (const key of catalogKeys) if (dynamic.wildcard || dynamic.tails.some((tail) => key.endsWith(tail))) out.add(key);
-    }
-  }
+  });
   return out;
+}
+
+/**
+ * The key-position arguments and key constructions in `sources` that no literal
+ * or leading prefix explains: `t(k)`, `t(a + b)`, `t('pos' + '.buyer')`,
+ * `` t(`${ns}.${leaf}`) ``, `t(copy.key)`, `x + '.buyer'`, `.join('.')`. Any one
+ * of them means the file could read ANY key, so no key may be excused.
+ */
+export function opaqueKeyUses(sources: readonly string[]): string[] {
+  return sources.flatMap((source, index) => parse(`#${index}.tsx`, source).opaque);
 }
