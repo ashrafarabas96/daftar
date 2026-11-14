@@ -286,7 +286,7 @@ function checkNames(ciText: string): Map<string, string> {
     const id = /^ {2}([A-Za-z0-9_-]+):$/.exec(lines[i] ?? '')?.[1];
     if (id === undefined) continue;
     const raw = /^ {4}name:\s*(.+?)\s*$/m.exec(jobText(ciText, id))?.[1];
-    const name = raw?.replace(/^(['\"])(.*)\1$/, '$2');
+    const name = raw?.replace(/^(['"])(.*)\1$/, '$2');
     out.set(id, name ?? id);
   }
   return out;
