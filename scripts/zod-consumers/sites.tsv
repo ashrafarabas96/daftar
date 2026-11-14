@@ -215,8 +215,8 @@ scripts/phase4-s1-gate.ts	2773	find-shift	safe	R-RECEIVER	const evidence = argv.
 scripts/phase4-s2-gate.ts	648	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s3-gate.ts	521	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/phase4-s4-gate.ts	785	find-shift	safe	R-RECEIVER	declaredInvoiceEdges(sql, child).find(
-scripts/phase4-s4-gate.ts	2683	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
-scripts/phase4-s4-gate.ts	3747	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
+scripts/phase4-s4-gate.ts	2691	find-shift	safe	R-RECEIVER	const block = describeBlocks(read(root, row.suite)).find((b) => b.title === row.title);
+scripts/phase4-s4-gate.ts	3755	find-shift	safe	R-RECEIVER	const rootArg = args.find((a) => a.startsWith('--root='));
 scripts/plan-evidence/discover-plan-claims.ts	426	find-shift	safe	R-RECEIVER	const outArg = args.find((a) => a.startsWith('--out='))?.slice('--out='.length);
 scripts/plan-evidence/target-cluster.ts	186	find-shift	safe	R-RECEIVER	const dbArg = args.find((a) => a.startsWith('--database='))?.slice('--database='.length);
 scripts/test-census.ts	220	errors-access	safe	R-RECEIVER	for (const error of module.errors()) problems.push(`${file}: ${error.message}`);

@@ -2328,6 +2328,14 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     suite: 'tests/guards/required-ci-chain-composition.test.ts',
     title: 'the reader really reads the workflow (a parser that drops a key makes every claim below vacuous)',
   },
+  {
+    suite: 'tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts',
+    title: 'P4-S4 — the allocation cap and the once-per-invoice rule of POST /v1/customer-payments',
+    // Four cases today, and the floor is recorded because the two the cap owns
+    // are written with a template title: a case silently dropped would leave
+    // the block's title standing and the cap unproved.
+    cases: 4,
+  },
   { suite: 'tests/integration/p4s4-allocation-journal-binding.test.ts', title: 'P4-S4 one journal entry per allocation, bound by the allocation’s own id' },
   { suite: 'tests/integration/p4s4-cash-invoice-ar.test.ts', title: 'P4-S4 a cash sale to a named customer is not a receivable' },
   { suite: 'tests/integration/p4s4-checkout-owner-replay.test.ts', title: '§A the lawful checkout' },
