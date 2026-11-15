@@ -358,19 +358,19 @@ tests/integration/p3c-td20-default-warehouse-name.test.ts	369	find-shift	safe	R-
 tests/integration/p3c-td20-default-warehouse-name.test.ts	374	find-shift	safe	R-RECEIVER	after.find((r) => r.business === businessId && r.branch === branchId && r.isDefault),
 tests/integration/p3c-td20-default-warehouse-name.test.ts	378	find-shift	safe	R-RECEIVER	[must(before.find((r) => r.business === ar.businessId && r.branch === ar.branchId && r.isDefault)).id, MAIN.ar],
 tests/integration/p3c-td20-default-warehouse-name.test.ts	379	find-shift	safe	R-RECEIVER	[must(before.find((r) => r.business === tr.businessId && r.branch === tr.branchId && r.isDefault)).id, MAIN.tr],
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	88	formatter	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	88	issues-access	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	88	body-consumer	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	91	issues-access	safe	R-PROSE	* carrying `details.issues`, G2 by carrying `details.reason`, and G3 by
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	91	body-consumer	safe	R-PROSE	* carrying `details.issues`, G2 by carrying `details.reason`, and G3 by
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	137	formatter	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	137	issues-access	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	137	body-consumer	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	161	issues-access	safe	HAND	return JSON.stringify([r.status, r.code, r.receivablesCode, r.reason, [...r.issues].sort()]);
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	247	formatter	safe	R-PROSE	* instead of a `ZodError`'s `issues`, and this failed:
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	284	formatter	safe	R-PROSE	// thing only a `ZodError` puts in the envelope, and it names the array.
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	288	issues-access	safe	HAND	overR.issues,
-tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	306	issues-access	safe	HAND	expect(atR.issues, `the ${at.length}-leg refusal did not come from zod, so it carries no issues: ${JSON.stringify(atR.issues)}`).toStrictEqual([]);
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	107	formatter	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	107	issues-access	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	107	body-consumer	safe	R-PROSE	* `ZodError` into `400 VALIDATION_FAILED` with `details.issues`, and an
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	110	issues-access	safe	R-PROSE	* carrying `details.issues`, G2 by carrying `details.reason`, and G3 by
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	110	body-consumer	safe	R-PROSE	* carrying `details.issues`, G2 by carrying `details.reason`, and G3 by
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	156	formatter	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	156	issues-access	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	156	body-consumer	safe	R-PROSE	/** `details.issues`, flattened to `path:code`, which only a `ZodError` carries. */
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	180	issues-access	safe	HAND	return JSON.stringify([r.status, r.code, r.receivablesCode, r.reason, [...r.issues].sort()]);
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	266	formatter	safe	R-PROSE	* instead of a `ZodError`'s `issues`, and this failed:
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	303	formatter	safe	R-PROSE	// thing only a `ZodError` puts in the envelope, and it names the array.
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	307	issues-access	safe	HAND	overR.issues,
+tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts	325	issues-access	safe	HAND	expect(atR.issues, `the ${at.length}-leg refusal did not come from zod, so it carries no issues: ${JSON.stringify(atR.issues)}`).toStrictEqual([]);
 tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	581	find-shift	safe	R-RECEIVER	standardSweep.find((s) => s.days === 0),
 tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	586	find-shift	safe	R-RECEIVER	standardSweep.find((s) => s.days === 1),
 tests/integration/p4s4-customer-aging-oldest-band-live.test.ts	677	issues-access	safe	HAND	expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');

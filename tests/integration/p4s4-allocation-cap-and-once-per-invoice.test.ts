@@ -13,6 +13,25 @@
  * the suite tree, so the two zeros are about these two rules and not about a
  * grep that could never have matched (RULE-3, RULE-11).
  *
+ * ── WHAT THIS FILE DOES NOT ASSERT, NAMED RATHER THAN IMPLIED ─────────────
+ *
+ * The two bounds here are the ALLOCATION CAP (a count: 0..50) and "once per
+ * invoice". Neither is a money bound, and two money bounds are measured as
+ * being outside this file, so that its title cannot be read as covering them:
+ *
+ *   1. SUM OF LEGS <= AMOUNT RECEIVED is enforced, at
+ *      `receivables-payload.ts:272`
+ *      (`if (total > input.amountMinor) invalid(...)`), and NOT asserted
+ *      anywhere in this file: every case here allocates exactly the amount on
+ *      purpose, so none of them crosses that line.
+ *   2. SUM OF LEGS <= WHAT THE INVOICE STILL OWES is NOT in this layer at all:
+ *      `receivables-payload.ts` holds no invoice balance to compare against
+ *      (its only `amountMinor` bounds are `:262`, `:272`, `:273`), so an
+ *      over-application beyond an invoice's remainder is refused, if at all,
+ *      somewhere this file never reaches. WHETHER it is refused is NOT_RUN
+ *      here, and it is a merchant-visible accounting question, so it is a card
+ *      and a line in the owner queue, not a claim in this header.
+ *
  * ── WHY A POSITIVE CONTROL IN EVERY `it`, AND WHY NOT 50 REAL INVOICES ─────
  *
  * "51 allocations are refused" is satisfied by a server that refuses the
@@ -335,8 +354,23 @@ describe('P4-S4 — the allocation cap and the once-per-invoice rule of POST /v1
    *
    * G1 stands in front of G2 for every client, so this is the only place G2
    * can be measured without disabling G1. The call is the one the service
-   * makes (`customer-payment.service.ts:576`) and `assertAllocations` is its
+   * makes (`customer-payment.service.ts:580`) and `assertAllocations` is its
    * first statement (`receivables-payload.ts:301`).
+   *
+   * AND WHY IT STAYS HERE, since it needs no cluster: this suite's
+   * `globalSetup` brings a database up for the three cases around it, so this
+   * pure one pays that cost and does not run on a developer machine without a
+   * cluster. It is kept beside its siblings because the cap is ONE contract
+   * read at two layers, and splitting the pair across two runners is how the
+   * HTTP case and the payload case drift apart. Moving it to `tests-unit/**`
+   * is a card of its own, named by an independent money review, NOT a claim
+   * that this placement is the better one.
+   *
+   * A NOTE THAT USED TO SAY
+   * `:576` IS CORRECTED HERE, not deleted (DR-103/3): `:576` is a comment
+   * line, the call begins at `:580`, and an independent money review measured
+   * that before I did. A line number that names a comment is a claim the code
+   * does not answer, which is what RULE-3 forbids.
    *
    * PLANT THAT MADE THIS RED: G2's comparison widened to
    * `a.length > CUSTOMER_PAYMENT_MAX_ALLOCATIONS + 1` at
