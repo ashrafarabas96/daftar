@@ -952,5 +952,13 @@
   "customers.collect.another": "Receive another payment",
   "customers.collect.alreadyRecorded": "This payment was already recorded. Here is what was saved; do not enter it again.",
   "customers.collect.storedUnreadable": "This payment may already have been saved, and we could not show it. Do not enter it again: read it again first.",
-  "customers.collect.readAgain": "Show the saved payment"
+  "customers.collect.readAgain": "Show the saved payment",
+  "nav.invoices": "Invoices",
+  "invoices.list.title": "Invoices",
+  "invoices.list.empty": "No invoices yet",
+  "invoices.list.sellSomething": "Make a sale",
+  "invoices.list.dated": "Dated {date}",
+  "invoices.status.draft": "Not issued yet",
+  "invoices.status.open": "Issued",
+  "invoices.status.void": "Cancelled"
 }
