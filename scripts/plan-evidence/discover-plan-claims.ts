@@ -133,6 +133,37 @@ export function phaseOf(path: string): string {
   return 'cross-phase';
 }
 
+/**
+ * A LINE NEVER CARRIES ITS TERMINATOR.
+ *
+ * Measured, not assumed. On a CRLF checkout of this same tree the generator
+ * reported 416 hits / 106 plan gates where the LF checkout reports 429 / 119:
+ * thirteen plan gates silently absent, all thirteen reached through the
+ * ASSIGNMENT seed below. The reason is one regex, not the file format:
+ *
+ *   ASSIGN = /^\s*([A-Za-z_$][\w$]*)\s*=\s*(.*)$/
+ *
+ * `.` does not match `\r` and `$` without `m` anchors at the absolute end of
+ * the string, so on `before = await capture(scope)\r` the match fails outright
+ * and `before` is never seeded as plan-derived. `expect(before.subplanRelations
+ * …)` then reads as an ordinary assertion. Probed directly: ASSIGN.exec on the
+ * LF line captures the right-hand side, on the same line plus `\r` it returns
+ * null, while DECL and every SIGNAL still match — so exactly one matcher moved.
+ *
+ * A gate that disappears is the whole failure mode this generator exists to
+ * end, and the P4-S3 defect it was built for hid in precisely this way: not
+ * wrong, unseen. So the terminator is removed once, here, where bytes become
+ * lines — rather than hardened regex by regex, which leaves the next regex to
+ * rediscover it. `\r\n?` covers CRLF and a lone CR both.
+ *
+ * This is not a formatting preference: nothing is written back and no file on
+ * disk is touched. It is the line-splitting rule the whole discovery rule above
+ * is stated in terms of.
+ */
+export function toLines(text: string): string[] {
+  return text.replace(/\r\n?/g, '\n').split('\n');
+}
+
 const DECL = /^\s*(?:export\s+)?(?:default\s+)?(?:async\s+)?(function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/;
 const IDENT = /[A-Za-z_$][\w$]*/g;
 
@@ -298,7 +329,7 @@ export function discover(root: string): Hit[] {
     if (!existsSync(abs)) continue;
     let lines: string[];
     try {
-      lines = readFileSync(abs, 'utf8').split('\n');
+      lines = toLines(readFileSync(abs, 'utf8'));
     } catch {
       continue;
     }

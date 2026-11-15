@@ -19,7 +19,7 @@ export default function InvoicesPage({ params }: { params: Promise<{ locale: Loc
   const router = useRouter();
   const signedIn = useInvoiceSession(locale);
   const [phase, setPhase] = useState<InvoicePhase>('loading');
-  const [invoices, setInvoices] = useState<InvoiceSummaryDto[] | null>(null);
+  const [invoices, setInvoices] = useState<InvoiceSummaryDto[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -52,7 +52,7 @@ export default function InvoicesPage({ params }: { params: Promise<{ locale: Loc
     setErrorKey(null);
     try {
       const page = await listInvoices({ limit: INVOICE_PAGE_SIZE, cursor });
-      setInvoices((current) => [...(current ?? []), ...page.items]);
+      setInvoices((current) => [...current, ...page.items]);
       setCursor(page.nextCursor);
     } catch (error) {
       setErrorKey(refusalKey(error));

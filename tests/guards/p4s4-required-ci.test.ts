@@ -1237,9 +1237,10 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
   it('RP-EC-F red: a table row NO step of the required job names takes the derivation below its FLOOR and is refused', () => {
     // The workflow side of the same correction. The suite is present and
     // still attributed to this slice; only the steps that named it are gone —
-    // EVERY one of them, because the required job names this suite from three
-    // step blocks (the measured step and DR-98's two negative controls) and
-    // removing one of three is not the loss this case plants. The
+    // EVERY one of them, because the required job names this suite from FOUR
+    // step blocks (the measured step and DR-98's three negative controls: the
+    // client-side one, which must leave P4-B green, and the two in-database
+    // ones) and removing one of four is not the loss this case plants. The
     // directory that covers it (`perf:phase2:s8` names the whole of
     // `tests/performance`) is run by no step of any job, which is exactly why
     // directory reachability is not enough for a MEASURED row — and the floor
@@ -1255,7 +1256,7 @@ describe("P4-S4 — the evidence table's MEMBERSHIP is derived from the tree, no
     });
     // The plant applied, proven before its result is read: EVERY step naming
     // the suite is gone — not only the measured one — because the required job
-    // names it from three step blocks and one removal is not the loss.
+    // names it from four step blocks and one removal is not the loss.
     expect(removed, 'the plant removed no step block, so the loss it plants never happened').toBeGreaterThan(0);
     expect(workflowNamedSuites(dir), 'the required job still names the suite, so the plant did not reproduce the loss').not.toContain(row?.suite ?? '');
     const found = evidenceCoverageProblems(dir);

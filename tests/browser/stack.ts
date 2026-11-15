@@ -25,6 +25,7 @@ import { join } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
 import { Pool } from 'pg';
 import { ensureEmbeddedPgBinariesExecutable } from '../../scripts/ensure-embedded-pg-binaries';
+import type { PortReservation } from './config';
 import { runMigrations } from '../../apps/api/src/infra/migrate';
 
 export const ROOT = join(__dirname, '..', '..');
@@ -123,8 +124,10 @@ async function assertPortFree(port: number, what: string): Promise<void> {
           reject(
             new Error(
               `port ${port} is already in use on ${host}; refusing to start ${what}. ` +
-                `A previous gate run on this machine was probably killed before it could stop its own processes — ` +
-                `the ports are fixed, so the next run inherits the collision.`,
+                `The gate takes each port from the kernel and holds it until this very server binds ` +
+                `(config.ts, reservePorts), so a collision here means either a port pinned through ` +
+                `BROWSER_PG_PORT / BROWSER_API_PORT / BROWSER_WEB_PORT that something else already holds, ` +
+                `or a process from an earlier run that outlived it.`,
             ),
           );
           return;
@@ -153,7 +156,11 @@ function startProcess(cmd: string, args: string[], cwd: string, env: NodeJS.Proc
  * server may own (directly under /tmp or the CI runner's temp directory); it is
  * deleted first, so the database is always new.
  */
-export async function startStack(ports: StackPorts, pgDir: string, logDir: string): Promise<Stack> {
+export async function startStack(reservation: PortReservation, pgDir: string, logDir: string): Promise<Stack> {
+  const ports: StackPorts = reservation.ports;
+  for (const role of ['pg', 'api', 'web'] as const) {
+    if (ports[role] <= 0) throw new Error(`the ${role} port was never resolved (${ports[role]}); reservePorts must hand out a real port`);
+  }
   mkdirSync(logDir, { recursive: true });
   if (existsSync(pgDir)) rmSync(pgDir, { recursive: true, force: true });
   process.env['PG_DIR'] = pgDir;
@@ -171,6 +178,10 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
     onLog: (m: unknown) => pgLog.write(`${String(m)}\n`),
     onError: (m: unknown) => pgLog.write(`ERROR ${String(m)}\n`),
   });
+  // The reservation held this port from the moment the gate started; it is
+  // let go here, in the breath before PostgreSQL binds it, and the api and web
+  // ports stay held through the minutes of migrations and seeding that follow.
+  await reservation.release('pg');
   await pg.initialise();
   await pg.start();
   const children: ChildProcess[] = [];
@@ -178,6 +189,7 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
     for (const child of children.reverse()) await stopChild(child);
     await pg.stop();
     rmSync(pgDir, { recursive: true, force: true });
+    await reservation.releaseAll();
   };
   try {
     await pg.createDatabase('daftar');
@@ -222,6 +234,7 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
       TRUSTED_PROXIES: '127.0.0.1,::1',
       LOG_LEVEL: 'warn',
     };
+    await reservation.release('api');
     await assertPortFree(ports.api, 'the merchant API');
     const apiLog = join(logDir, 'api.log');
     const api = startProcess(process.execPath, ['dist/main.js'], join(ROOT, 'apps/api'), apiEnv, apiLog);
@@ -238,6 +251,7 @@ export async function startStack(ports: StackPorts, pgDir: string, logDir: strin
     };
     // The production entry, exactly as `npm start` runs it: Node's own type
     // stripping, no flags, no loader.
+    await reservation.release('web');
     await assertPortFree(ports.web, 'the web server');
     const webLog = join(logDir, 'web.log');
     const web = startProcess(process.execPath, ['server.mts'], join(ROOT, 'apps/web'), webEnv, webLog);
