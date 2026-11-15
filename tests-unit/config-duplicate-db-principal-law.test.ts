@@ -47,26 +47,34 @@ import { loadConfig } from '../apps/api/src/config';
  * nothing. That is a silent collapse of privilege separation, which is the
  * class of defect a startup refusal exists for.
  *
- * HOW MUCH OF §31 THIS FILE REACHES, counted rather than implied (review
- * finding 2: an earlier comment here claimed the "SET", and the claim was
- * wider than the measurement). The §31 map holds six members, so fifteen
- * unordered pairs. ELEVEN of them cannot be built in any fixture, because a
- * mode refusal fires first and the process never reaches §31 — measured, with
- * the refusals' own words:
+ * HOW MUCH OF §31 THIS FILE REACHES, counted rather than implied.
  *
- *   merchant-api + PLATFORM_DATABASE_URL    -> "must NOT be set in
- *                   PROCESS_MODE=merchant-api (merchant API has no platform
- *                   authority)"
- *   merchant-api + WORKER_DATABASE_URL      -> "... has no worker authority"
- *   merchant-api + RECONCILER_DATABASE_URL  -> "only the reconciler process
- *                   holds reconciliation authority"
+ * A previous version of this paragraph claimed that ELEVEN of the fifteen
+ * pairs "cannot be built in any fixture, because a mode refusal fires first
+ * and the process never reaches §31 — measured". **That was false, and the
+ * contradiction was already in this file**, at the DUP-B arms below: `fail`
+ * ACCUMULATES and does not throw at the first defect, so a mode refusal does
+ * not stop §31 from running. Measured, in a production `merchant-api`:
  *
- * and a worker holds only its own URL, a reconciler only its own. So the
- * reachable pairs are the three inside a merchant surface (app, identity,
- * resolver) and the one inside a platform surface (platform, identity): FOUR
- * of fifteen. This file pins all four. The other eleven are held by those mode
- * refusals, not by §31, and a law that claimed them would be claiming a
- * configuration no deployment can express.
+ *   WORKER_DATABASE_URL = APP_DATABASE_URL     -> "must NOT be set in
+ *       PROCESS_MODE=merchant-api (merchant API has no worker authority);
+ *       WORKER_DATABASE_URL: duplicates APP_DATABASE_URL — every DB principal
+ *       must use distinct credentials"      ← BOTH clauses, in one message
+ *   RECONCILER_DATABASE_URL = APP_DATABASE_URL -> both, likewise
+ *   PLATFORM_DATABASE_URL  = APP_DATABASE_URL  -> both, likewise
+ *
+ * So all fifteen pairs are constructible, every one of them in `merchant-api`
+ * alone, and the earlier count was an artefact of reading the code's order
+ * instead of running it.
+ *
+ * WHAT THIS FILE PINS, and the criterion it is chosen by: not all fifteen
+ * pairs — that would be bulk, not coverage — but at least one pair for EVERY
+ * MEMBER of the §31 map. With the DUP-E arms added for the three names above,
+ * all six members (`APP`, `PLATFORM`, `IDENTITY`, `RESOLVER`, `WORKER`,
+ * `RECONCILER`) appear in a pinned pair. **Shrinking the map therefore reddens
+ * this file**, which is the property the old paragraph gave away: under it,
+ * `WORKER` and `RECONCILER` could have been dropped from the separation set
+ * with this law still green.
  *
  * NO SECRET HERE: every URL is an obvious placeholder with no authority
  * anywhere outside this file, and every key is `Buffer.alloc`-filled — the
@@ -194,6 +202,30 @@ describe('§31: two database roles may not be one credential', () => {
   it('NEGATIVE CONTROL: a different credential on the same host and database still starts', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: 'postgresql://daftar_resolver:y@db/daftar' })).not.toThrow();
   });
+
+  // DUP-E. THE THREE MEMBERS NOTHING HELD. A mode refusal does not stop §31
+  // from running, because `fail` accumulates — so the names a production
+  // `merchant-api` is forbidden to carry still reach the duplicate check, and
+  // their membership of the map is pinnable. Without these arms, `WORKER` and
+  // `RECONCILER` could be dropped from the separation set with this file still
+  // green, which is exactly what the review found.
+  const forbiddenInMerchant: readonly { readonly name: string; readonly mode: RegExp }[] = [
+    { name: 'WORKER_DATABASE_URL', mode: /WORKER_DATABASE_URL: must NOT be set in PROCESS_MODE=merchant-api/ },
+    { name: 'RECONCILER_DATABASE_URL', mode: /RECONCILER_DATABASE_URL: must NOT be set in PROCESS_MODE=merchant-api/ },
+    { name: 'PLATFORM_DATABASE_URL', mode: /PLATFORM_DATABASE_URL: must NOT be set in PROCESS_MODE=merchant-api/ },
+  ];
+
+  for (const { name, mode } of forbiddenInMerchant) {
+    it(`§31 reaches ${name} even where the mode forbids it, and BOTH clauses appear`, () => {
+      const env = { ...MERCHANT_PROD, [name]: MERCHANT_PROD.APP_DATABASE_URL ?? '' };
+      // The mode clause: without asserting it, this arm would pass against a
+      // loader that had stopped refusing the name in this mode at all.
+      expect(() => loadConfig(env)).toThrow(mode);
+      // And the §31 clause, which is this file's subject: it is what proves
+      // the name is still a member of the separation set.
+      expect(() => loadConfig(env)).toThrow(new RegExp(`${name}: duplicates APP_DATABASE_URL — every DB principal must use distinct credentials`));
+    });
+  }
 });
 
 /**
