@@ -220,7 +220,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    * place outside the walk-in till that sends a REAL `customerId` to
    * `POST /v1/sales`. The exemption is an EXACT allowlist of this slice's own
    * files and keys, and nothing grows into it by prefix:
-   *   - files: the seven paths below, each by its full path;
+   *   - files: the six paths below, each by its full path;
    *   - keys: the three `sales.credit.*` keys that say "customer" in words;
    *   - `customerId` may, in these files only, also be set from the names in
    *     `CREDIT_SALE_CUSTOMER_ID`: the request field's type, the plan's input,

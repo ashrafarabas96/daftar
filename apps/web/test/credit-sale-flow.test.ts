@@ -15,6 +15,7 @@ import {
   creditSaleRefusalKey,
   type CreditSaleScreenState,
 } from '@/views/sales/credit-sale-flow';
+import { VIEW_REGISTRY } from '@/views/sales/registry';
 
 /**
  * The credit sale's plan and send logic, outside React.
@@ -34,7 +35,7 @@ import {
  */
 
 const CUSTOMER = '7c1f0a52-3b7e-4d0a-9a53-0f2b6f1c7a01';
-const WAREHOUSE = 'a1b2c3d4-0001-4a7b-8c9d-0000000000w1';
+const WAREHOUSE = 'a1b2c3d4-0001-4a7b-8c9d-0000000000a1';
 
 function counter() {
   let n = 0;
@@ -350,6 +351,142 @@ describe('creditSaleRefusalKey — the text a refusal on THIS screen shows', () 
     expect(creditSaleRefusalKey(new TypeError('Failed to fetch'))).toBe(FALLBACK_ERROR_KEY);
     // The idempotency conflict is never shown as text: the flow reads the stored sale instead.
     expect(Object.keys(CREDIT_SALE_REFUSAL_KEYS)).not.toContain(ALREADY_STORED_CODE);
+  });
+});
+
+/**
+ * The registry's saved and stored sales claim to be the server's answer, so
+ * every derived figure is RECOMPUTED here from the fixture's own inputs with
+ * BigInt — a hand-typed wrong number goes red. The arithmetic is restated
+ * independently of the server, rule for rule:
+ * - gross = HALF_EVEN(qtyQ4 × unit price minor / 10^4) (`sale-commit.service.ts:642`);
+ * - base total = HALF_EVEN(total × rate scaled to 10^10 / 10^10)
+ *   (`packages/accounting/src/fx.ts` `convertToBaseMinor`, both currencies at
+ *   2 minor digits), or the total itself when the rate source is `base`;
+ * - line base shares = largest remainder over the line nets, ties to the lower
+ *   line (`splitBaseByLargestRemainder`), so Σ shares = base total EXACTLY.
+ */
+describe('the registry sale fixtures are the server’s arithmetic, recomputed', () => {
+  const halfEvenDiv = (n: bigint, d: bigint): bigint => {
+    const neg = n < 0n;
+    const a = neg ? -n : n;
+    let q = a / d;
+    const r = a - q * d;
+    if (2n * r > d || (2n * r === d && q % 2n !== 0n)) q += 1n;
+    return neg ? -q : q;
+  };
+  const scaled = (text: string, scale: number): bigint => {
+    const m = /^(\d+)(?:\.(\d+))?$/.exec(text);
+    if (m === null || (m[2] ?? '').length > scale) throw new Error(`not a decimal at scale ${scale}: ${text}`);
+    return BigInt(`${m[1] ?? ''}${(m[2] ?? '').padEnd(scale, '0')}`);
+  };
+  const largestRemainder = (total: bigint, parts: readonly bigint[]): bigint[] => {
+    const sum = parts.reduce((a, b) => a + b, 0n);
+    const shares = parts.map((p) => (total * p) / sum);
+    const rems = parts.map((p) => (total * p) % sum);
+    let residue = total - shares.reduce((a, b) => a + b, 0n);
+    const order = parts.map((_, i) => i).sort((a, b) => ((rems[a] ?? 0n) === (rems[b] ?? 0n) ? a - b : (rems[a] ?? 0n) > (rems[b] ?? 0n) ? -1 : 1));
+    for (const i of order) {
+      if (residue === 0n) break;
+      shares[i] = (shares[i] ?? 0n) + 1n;
+      residue -= 1n;
+    }
+    return shares;
+  };
+
+  const sales: [string, SaleDto][] = VIEW_REGISTRY.flatMap((entry) =>
+    entry.fixtures.flatMap((f) => {
+      const p = f.props as { result?: SaleDto | null; stored?: SaleDto | null };
+      return [p.result, p.stored].filter((s): s is SaleDto => s != null).map((s): [string, SaleDto] => [f.name, s]);
+    }),
+  );
+
+  it('finds the saved and stored sales it checks', () => {
+    expect(sales.map(([name]) => name).sort()).toEqual([
+      'already recorded: the stored sale is shown',
+      'saved earlier: the same sale sent again',
+      'saved, no pay-by date',
+      'saved, with a pay-by date',
+    ]);
+  });
+
+  it.each(sales)('%s: every derived figure is what the server computes from the inputs', (_name, sale) => {
+    let subtotal = 0n;
+    let discount = 0n;
+    let tax = 0n;
+    for (const l of sale.lines) {
+      const gross = halfEvenDiv(scaled(l.quantity, 4) * BigInt(l.unitPriceTxnMinor), 10n ** 4n);
+      expect(l.grossTxnMinor, `line ${l.lineNo} gross`).toBe(gross.toString(10));
+      expect(l.netTxnMinor, `line ${l.lineNo} net`).toBe((gross - BigInt(l.discountTxnMinor)).toString(10));
+      subtotal += gross;
+      discount += BigInt(l.discountTxnMinor);
+      tax += BigInt(l.taxMinor);
+    }
+    expect(sale.subtotalTxnMinor).toBe(subtotal.toString(10));
+    expect(sale.discountTxnMinor).toBe(discount.toString(10));
+    expect(sale.taxMinor).toBe(tax.toString(10));
+    const total = subtotal - discount + tax;
+    expect(sale.totalTxnMinor).toBe(total.toString(10));
+    const base = sale.rateSource === 'base' ? total : halfEvenDiv(total * scaled(sale.sourceToBaseRate, 10), 10n ** 10n);
+    if (sale.rateSource === 'base') expect(sale.sourceToBaseRate).toBe('1');
+    expect(sale.totalBaseMinor).toBe(base.toString(10));
+    const shares = largestRemainder(
+      base,
+      sale.lines.map((l) => BigInt(l.netTxnMinor)),
+    );
+    expect(sale.lines.map((l) => l.baseShareMinor)).toEqual(shares.map((s) => s.toString(10)));
+    expect(sale.lines.reduce((a, l) => a + BigInt(l.baseShareMinor), 0n)).toBe(base);
+    expect(sale.invoice.totalTxnMinor).toBe(sale.totalTxnMinor);
+    expect(sale.invoice.totalBaseMinor).toBe(sale.totalBaseMinor);
+  });
+
+  it('the large sale’s figures, as absolute values (above 2^53, so never a float)', () => {
+    const saved = sales.find(([name]) => name === 'saved, with a pay-by date')?.[1];
+    if (saved === undefined) throw new Error('no saved fixture');
+    expect(BigInt(saved.totalTxnMinor) > 2n ** 53n).toBe(true);
+    // 98765431209828542 × 1.250 = 123456789012285677.5: a tie, HALF_EVEN goes to the even ...678.
+    expect(saved.lines.map((l) => l.grossTxnMinor)).toEqual(['60000', '123456789012285678']);
+    expect(saved.totalTxnMinor).toBe('123456789012345678');
+    // 123456789012345678 × 3.14159 = 387850613793295058.548…, not a tie.
+    expect(saved.totalBaseMinor).toBe('387850613793295059');
+    expect(saved.invoice.totalBaseMinor).toBe('387850613793295059');
+    // Floors 188495 and 387850613793106563 leave a residue of 1, which goes to
+    // line 2 (remainder 74074073407380288 beats 49382715604965390).
+    expect(saved.lines.map((l) => l.baseShareMinor)).toEqual(['188495', '387850613793106564']);
+  });
+
+  it('a different sale is a different invoice: its own invoice id, number and line ids', () => {
+    const bySale = new Map<string, SaleDto>();
+    for (const [, s] of sales) bySale.set(s.saleId, s);
+    const distinct = [...bySale.values()];
+    expect(distinct.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(distinct.map((s) => s.invoice.invoiceId)).size).toBe(distinct.length);
+    expect(new Set(distinct.map((s) => s.invoice.number.documentNumber)).size).toBe(distinct.length);
+    expect(new Set(distinct.flatMap((s) => s.lines.map((l) => l.lineId))).size).toBe(distinct.reduce((n, s) => n + s.lines.length, 0));
+  });
+
+  it('every id in the fixtures, and in this suite, is a UUID', () => {
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const ids: [string, string][] = [];
+    const walk = (value: unknown, path: string): void => {
+      if (Array.isArray(value)) value.forEach((v, i) => walk(v, `${path}[${i}]`));
+      else if (value !== null && typeof value === 'object') {
+        for (const [k, v] of Object.entries(value)) {
+          if (/Ids?$/.test(k)) {
+            // null and '' are "none chosen" (a form with no warehouse), not an id.
+            for (const id of Array.isArray(v) ? v : [v]) if (id !== null && id !== '') ids.push([`${path}.${k}`, String(id)]);
+          } else walk(v, `${path}.${k}`);
+        }
+      }
+    };
+    for (const entry of VIEW_REGISTRY) for (const f of entry.fixtures) walk(f.props, `${entry.name}/${f.name}`);
+    expect(ids.length).toBeGreaterThan(50);
+    for (const kind of ['saleId', 'lineId', 'invoiceId', 'warehouseId', 'productId', 'customerId'])
+      expect(
+        ids.some(([p]) => p.endsWith(`.${kind}`)),
+        kind,
+      ).toBe(true);
+    for (const [path, id] of [...ids, ['CUSTOMER', CUSTOMER], ['WAREHOUSE', WAREHOUSE]] as const) expect(id, path).toMatch(UUID);
   });
 });
 

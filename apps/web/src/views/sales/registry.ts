@@ -135,9 +135,21 @@ const TYPED_FORM = { form: form({ dueDate: '2026-12-15' }), lines: TYPED };
  * 2^53 minor units on purpose — the screen must re-spell the server's text,
  * never a float — and the two line nets sum to it exactly
  * (60000 + 123456789012285678 = 123456789012345678).
+ *
+ * Every figure is the server's, recomputed in `test/credit-sale-flow.test.ts`:
+ * - gross = HALF_EVEN(qtyQ4 × unitPriceMinor / 10^4)
+ *   (`halfEvenDiv`, `sale-commit.service.ts:636-642`). Line 2 is
+ *   98765431209828542 × 1.250 = 123456789012285677.5, a tie that HALF_EVEN
+ *   takes to the even …678. HALF_UP would also give …678, so this case does
+ *   NOT tell the two rules apart;
+ * - base total = HALF_EVEN(123456789012345678 × 3.14159) =
+ *   HALF_EVEN(387850613793295058.548…) = 387850613793295059;
+ * - base shares by largest remainder over the nets: floors 188495 and
+ *   387850613793106563 leave 1, which goes to line 2 (the larger remainder),
+ *   so 188495 + 387850613793106564 = 387850613793295059 exactly.
  */
 const SAVED: SaleDto = {
-  saleId: '6d6d6d6d-0001-4a7b-8c9d-0000000000s1',
+  saleId: '6d6d6d6d-0001-4a7b-8c9d-0000000000b1',
   status: 'confirmed',
   settlementMode: 'credit',
   customerId: FIXTURE_CUSTOMER_ID,
@@ -149,13 +161,13 @@ const SAVED: SaleDto = {
   discountTxnMinor: '0',
   taxMinor: '0',
   totalTxnMinor: '123456789012345678',
-  totalBaseMinor: '387850300008402771',
+  totalBaseMinor: '387850613793295059',
   sourceToBaseRate: '3.14159',
   rateSource: 'manual',
   rateTimestamp: '2026-11-14T07:30:00Z',
   lines: [
     {
-      lineId: '6d6d6d6d-0002-4a7b-8c9d-0000000000l1',
+      lineId: '6d6d6d6d-0002-4a7b-8c9d-0000000000c1',
       lineNo: 1,
       productId: RICE.productId,
       variantId: null,
@@ -169,7 +181,7 @@ const SAVED: SaleDto = {
       baseShareMinor: '188495',
     },
     {
-      lineId: '6d6d6d6d-0003-4a7b-8c9d-0000000000l2',
+      lineId: '6d6d6d6d-0003-4a7b-8c9d-0000000000c2',
       lineNo: 2,
       productId: OLIVES.productId,
       variantId: OLIVES.variantId,
@@ -180,26 +192,30 @@ const SAVED: SaleDto = {
       discountTxnMinor: '0',
       netTxnMinor: '123456789012285678',
       taxMinor: '0',
-      baseShareMinor: '387850300008214276',
+      baseShareMinor: '387850613793106564',
     },
   ],
   invoice: {
-    invoiceId: '6d6d6d6d-0004-4a7b-8c9d-0000000000i1',
+    invoiceId: '6d6d6d6d-0004-4a7b-8c9d-0000000000d1',
     number: { documentKind: 'invoice', period: '2026', numberSeq: '418', documentNumber: 'S-2026-000418' },
     issueDate: '2026-11-14',
     dueDate: '2026-12-15',
     status: 'open',
     totalTxnMinor: '123456789012345678',
-    totalBaseMinor: '387850300008402771',
+    totalBaseMinor: '387850613793295059',
   },
   cogsBaseMinor: '31415926',
   replayed: false,
 };
 
-/** A small credit sale: one line, 75.00 ILS, no pay-by date. Its line equals its total. */
+/**
+ * A small credit sale: one line, 75.00 ILS, no pay-by date. Its line equals its
+ * total. A different sale, so its own sale, line and invoice ids and its own
+ * invoice number.
+ */
 const SMALL: SaleDto = {
   ...SAVED,
-  saleId: '6d6d6d6d-0005-4a7b-8c9d-0000000000s2',
+  saleId: '6d6d6d6d-0005-4a7b-8c9d-0000000000b2',
   currencyCode: 'ILS',
   subtotalTxnMinor: '7500',
   totalTxnMinor: '7500',
@@ -209,6 +225,7 @@ const SMALL: SaleDto = {
   lines: [
     {
       ...(SAVED.lines[0] as SaleDto['lines'][number]),
+      lineId: '6d6d6d6d-0006-4a7b-8c9d-0000000000c3',
       quantity: '1',
       unitPriceTxnMinor: '7500',
       grossTxnMinor: '7500',
@@ -216,7 +233,14 @@ const SMALL: SaleDto = {
       baseShareMinor: '7500',
     },
   ],
-  invoice: { ...SAVED.invoice, dueDate: null, totalTxnMinor: '7500', totalBaseMinor: '7500' },
+  invoice: {
+    ...SAVED.invoice,
+    invoiceId: '6d6d6d6d-0007-4a7b-8c9d-0000000000d2',
+    number: { documentKind: 'invoice', period: '2026', numberSeq: '419', documentNumber: 'S-2026-000419' },
+    dueDate: null,
+    totalTxnMinor: '7500',
+    totalBaseMinor: '7500',
+  },
 };
 
 /** The stored sale as `GET /v1/sales/:saleId` reads it back. */
