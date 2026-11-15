@@ -3782,6 +3782,15 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
       let holder: PoolClient | undefined;
       let v: PoolClient | undefined;
+      // THE PLANTED HOLDER'S OWN FINGERPRINT (RULE-27). Arm 2 is the positive
+      // control for the holder reading, and without this the control passes
+      // whenever the reading names ANYBODY -- including the `autovacuum
+      // worker` on `pg_catalog.pg_attribute` the P4-S1 lane measured, which
+      // this probe never planted. The pid is taken ON THE HOLDER'S OWN
+      // CONNECTION, after its snapshot is open and BEFORE the `DELETE`, so it
+      // is fixed before any result that it judges is read.
+      let holderPid: string | null = null;
+      let holderPidError: string | null = null;
       try {
         await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
         await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
@@ -3798,6 +3807,11 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           holder = await holderPool.connect();
           await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
           await holder.query('SELECT count(*) FROM public.dr101_probe');
+          try {
+            holderPid = String((await holder.query<{ pid: string }>('SELECT pg_backend_pid()::text AS pid')).rows[0]?.pid ?? '');
+          } catch (e) {
+            holderPidError = err(e);
+          }
         }
         // The `DELETE` reports its OWN xid, in the same statement, so that the
         // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
@@ -3886,6 +3900,8 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
           probe_db: PROBE_DB,
           occupants: occupants['list'] ?? null,
           occupants_error: occupants['error'] ?? null,
+          holder_pid: holderPid,
+          holder_pid_error: holderPidError,
           base,
           inflated,
           delete_error: deleted.error,
@@ -6060,6 +6076,28 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       held(a['holder_no_wait']).length,
       `the holder reading saw nobody in the arm that holds a snapshot by construction, so it is blind and cannot excuse arm 1: ${JSON.stringify(a['holder_no_wait'])}`,
     ).toBeGreaterThan(0);
+    //    ...AND IT MUST BE THE HOLDER THIS ARM PLANTED, BY PID (RULE-27).
+    //    «The reading named somebody» is not «the reading named the planting»:
+    //    the P4-S1 lane measured an `autovacuum worker` on
+    //    `pg_catalog.pg_attribute` entering a cutoff, and a control satisfied
+    //    by a stranger would pass on a tree where the instrument cannot see
+    //    the planting at all. The pid was fixed on the holder's own
+    //    connection BEFORE the `DELETE`, so it is not read off the result it
+    //    judges.
+    expect(
+      a['holder_no_wait']['holder_pid_error'],
+      `the planted holder's own pid could not be read, so arm 2's control has no fingerprint: ${String(a['holder_no_wait']['holder_pid_error'])}`,
+    ).toBeNull();
+    const plantedPid = String(a['holder_no_wait']['holder_pid'] ?? '');
+    expect(plantedPid, 'arm 2 planted a holder but recorded no pid for it, so nothing ties the reading to the planting').not.toBe('');
+    expect(
+      held(a['holder_no_wait']).filter((b) => b['kind'] === 'snapshot' && String(b['pid']) === plantedPid).length,
+      `the holder reading named somebody, but NOT the snapshot this arm planted (pid ${plantedPid}), so it is not reading the planting: ${JSON.stringify(held(a['holder_no_wait']))}`,
+    ).toBeGreaterThan(0);
+    //    AND THE NEGATIVE CONTROL ON THE FINGERPRINT ITSELF: arm 1 plants
+    //    nothing, so it must carry NO pid. A pid here would mean the two arms
+    //    were not the contrast they are read as (RULE-11).
+    expect(a['no_holder']['holder_pid'], 'the control arm reported a planted holder, so the two arms are not the contrast they are read as').toBeNull();
     //    AND THE BRANCH SELECTION HAS ITS OWN CONTROLS, as a pure function of
     //    a record -- two that must be excused and two that must NOT be. The
     //    last is the one that keeps the law a law: no truncation AND nobody
