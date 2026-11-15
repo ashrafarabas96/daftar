@@ -10,7 +10,9 @@
  * that is not minor-unit text, every age band outside the 0,30,60,90 set, a
  * band list of the wrong length, a held amount below zero, and an as-of date
  * — on the aging answer or on the open-invoices answer — that is not the one
- * asked for. The page treats any finding as a failed load.
+ * asked for, a day count that is not a whole number, and an aging answer in a
+ * base currency other than the balance's. The page treats any finding as a
+ * failed load.
  */
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -92,9 +94,14 @@ export function unreadableAccount(answers: Answers, asOf: string): string[] {
     amount(`aging.buckets[${i}].baseMinor`, bucket.baseMinor);
     bucket.byCurrency.forEach((line, j) => amount(`aging.buckets[${i}].byCurrency[${j}].txnMinor`, line.txnMinor));
   });
+  // The bands and the balance are worded in ONE base currency; two would be two totals the screen cannot reconcile.
+  if (answers.aging.baseCurrency !== answers.receivable.baseCurrency) out.push('aging.baseCurrency');
   answers.openInvoices.forEach((invoice, i) => {
     amount(`openInvoices[${i}].outstandingTxnMinor`, invoice.outstandingTxnMinor);
     amount(`openInvoices[${i}].totalTxnMinor`, invoice.totalTxnMinor);
+    // A day count is a whole number of civil days; a fraction or NaN is not one. Below zero is real (dated after as-of).
+    if (!Number.isInteger(invoice.daysPastDue)) out.push(`openInvoices[${i}].daysPastDue`);
+    if (!Number.isInteger(invoice.ageDays)) out.push(`openInvoices[${i}].ageDays`);
   });
   answers.credits.forEach((held, i) => {
     // A held amount is what is LEFT of it, so below zero is not a figure the screen can word.

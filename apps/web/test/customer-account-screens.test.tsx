@@ -54,7 +54,9 @@ const F_HUGE = 'an amount beyond 2^53';
 const F_REFUSED = 'show more was refused, with the rows still on screen';
 const F_CAPPED = 'more held amounts than one read returns';
 const F_CAPPED_SPENT = 'the read returned its full 200 held amounts and every one is used up';
-const FIXTURES = [F_OWES, F_HELD, F_MULTI, F_ZERO, F_HUGE, F_REFUSED, F_CAPPED, F_CAPPED_SPENT];
+const F_NETS_TO_ZERO = 'the base total nets to zero across two currencies, but ILS is still owed';
+const F_HELD_LATER = 'a credit on an invoice dated after the as-of day';
+const FIXTURES = [F_OWES, F_HELD, F_MULTI, F_ZERO, F_HUGE, F_REFUSED, F_CAPPED, F_CAPPED_SPENT, F_NETS_TO_ZERO, F_HELD_LATER];
 
 const entry = (): ViewEntry => {
   const found = CUSTOMER_VIEWS.find((e) => e.name === VIEW);
@@ -341,6 +343,23 @@ describe('a negative balance is money held for the customer', () => {
     expect(text(render(F_ZERO))).toContain(en['customers.account.owes.nothing']);
     expect(text(render(F_OWES))).not.toContain(en['customers.account.owes.nothing']);
   });
+
+  it('a base total of zero is "nothing owed" only when every currency line is zero too', () => {
+    const p = propsOf(F_NETS_TO_ZERO);
+    // The case: base zero, one currency owed, one in the customer's favour.
+    expect(splitMinorSign(p.receivable.baseMinor)?.sign).toBe('zero');
+    const signs = p.receivable.byCurrency.map((l) => splitMinorSign(l.txnMinor)?.sign);
+    expect(signs).toEqual(['positive', 'negative']);
+    for (const locale of LOCALES) {
+      const shown = text(render(F_NETS_TO_ZERO, locale));
+      const nothing = CATALOGS[locale]['customers.account.owes.nothing'] as string;
+      expect(shown, `${locale}: no "nothing owed" above a line that owes`).not.toContain(nothing);
+      // The line that owes is still on screen, verbatim.
+      expect(ltrRuns(render(F_NETS_TO_ZERO, locale)), locale).toContain(fm('367250', 'ILS', locale));
+      // Positive control: a true zero still says it.
+      expect(text(render(F_ZERO, locale)), locale).toContain(nothing);
+    }
+  });
 });
 
 describe('two sources, two sentences (DR-114(b))', () => {
@@ -435,6 +454,32 @@ describe('the open invoices and the age bands', () => {
     expect(ltrRuns(render(F_OWES))).toEqual(expect.arrayContaining(['45', '1']));
     // A day count of 0 or below is never printed as "N days late".
     expect(ltrRuns(render(F_OWES))).not.toContain('-1');
+  });
+
+  it('a credit on an invoice dated after the as-of day prints no age, and never a negative number', () => {
+    const p = propsOf(F_HELD_LATER);
+    const row = p.openInvoices[0];
+    if (!row) throw new Error('no row');
+    // The boundary: issued 2026-11-15, as of 2026-11-13, so the server says -2.
+    expect([row.isCredit, row.issueDate, p.aging.asOf, row.ageDays]).toEqual([true, '2026-11-15', '2026-11-13', -2]);
+    for (const locale of LOCALES) {
+      const r = render(F_HELD_LATER, locale);
+      const runs = ltrRuns(r).filter((run) => run !== row.documentNumber);
+      expect(runs, `${locale}: no run carries a minus sign`).not.toContainEqual(expect.stringMatching(/^[-−‐]|[-−‐]\s?\d/));
+      expect(runs, `${locale}: the age is not printed`).not.toContain('2');
+      const later = CATALOGS[locale]['customers.account.invoices.heldOnLaterInvoice'];
+      expect(later, `${locale}: the wording exists`).toBeTypeOf('string');
+      expect(later, `${locale}: it has no number slot`).not.toMatch(/\{/);
+      expect(text(r), locale).toContain(later);
+      // The aged sentence, with ANY number in its slot, is absent.
+      const [head = '', tail = ''] = (CATALOGS[locale]['customers.account.invoices.heldOnInvoice'] as string).split('{days}');
+      const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const agedSentence = new RegExp(`${esc(head)}\\s*\\S+\\s*${esc(tail)}`, 'u');
+      expect(`${head}12${tail}`, `${locale}: positive control, the probe sees an aged sentence`).toMatch(agedSentence);
+      expect(text(r), `${locale}: not the aged sentence`).not.toMatch(agedSentence);
+    }
+    // Positive control: a credit at age 12 still prints its age (F_HELD).
+    expect(ltrRuns(render(F_HELD))).toContain('12');
   });
 
   it('says "no due date" when the invoice states none, and shows the due date when it does', () => {
@@ -593,6 +638,22 @@ describe('the page, its kit and its client', () => {
     expect(unreadableAccount({ ...good, openInvoicesAsOf: '2026-11-12' }, p.aging.asOf)).toEqual(['openInvoices.asOf']);
     const badRow = p.openInvoices.map((i, n) => (n === 0 ? { ...i, outstandingTxnMinor: String(Number.MAX_SAFE_INTEGER + 2) + '.0' } : i));
     expect(unreadableAccount({ ...good, openInvoices: badRow }, p.aging.asOf)).toEqual(['openInvoices[0].outstandingTxnMinor']);
+  });
+
+  it('refuses a day count that is not a whole number, and an aging answer in another base currency', () => {
+    const p = propsOf(F_MULTI);
+    const good = { receivable: p.receivable, aging: p.aging, openInvoices: p.openInvoices, openInvoicesAsOf: p.aging.asOf, credits: p.credits };
+    const rows = (over: Partial<CustomerAccountViewProps['openInvoices'][number]>, at: number) =>
+      p.openInvoices.map((i, n) => (n === at ? { ...i, ...over } : i));
+    expect(unreadableAccount({ ...good, openInvoices: rows({ ageDays: 1.5 }, 0) }, p.aging.asOf)).toEqual(['openInvoices[0].ageDays']);
+    expect(unreadableAccount({ ...good, openInvoices: rows({ daysPastDue: Number.NaN }, 1) }, p.aging.asOf)).toEqual(['openInvoices[1].daysPastDue']);
+    expect(unreadableAccount({ ...good, openInvoices: rows({ daysPastDue: Infinity, ageDays: -0.5 }, 0) }, p.aging.asOf)).toEqual([
+      'openInvoices[0].daysPastDue',
+      'openInvoices[0].ageDays',
+    ]);
+    // A whole negative day count is a real answer (dated after as-of), not a refusal.
+    expect(unreadableAccount({ ...good, openInvoices: rows({ daysPastDue: -2, ageDays: -2 }, 0) }, p.aging.asOf)).toEqual([]);
+    expect(unreadableAccount({ ...good, aging: { ...p.aging, baseCurrency: 'USD' } }, p.aging.asOf)).toEqual(['aging.baseCurrency']);
   });
 
   it('the client reads five routes through the BFF, with no /v1, no write and no other route', () => {

@@ -92,7 +92,7 @@ export function CustomerAccountView(props: CustomerAccountViewProps & ViewBasePr
         <Row label={t('customers.account.owes.total')}>
           <Owed t={t} locale={locale} amountMinor={receivable.baseMinor} currency={receivable.baseCurrency} />
         </Row>
-        {signOf(receivable.baseMinor) === 'zero' ? <Hint>{t('customers.account.owes.nothing')}</Hint> : null}
+        {owesNothing(receivable) ? <Hint>{t('customers.account.owes.nothing')}</Hint> : null}
         {showLines(receivable.byCurrency, receivable.baseMinor, receivable.baseCurrency) ? (
           <>
             <Hint>{t('customers.account.owes.byCurrency')}</Hint>
@@ -184,6 +184,16 @@ function signOf(amountMinor: string): 'negative' | 'zero' | 'positive' {
 }
 
 /**
+ * "Nothing owed" needs EVERY figure to say zero, not only the base total: an
+ * ILS amount owed and a USD amount in the customer's favour can net to 0 in the
+ * base currency, and the screen must not say "nothing owed" above a line that
+ * owes. Signs are read off the text; nothing is added (the money rule is unchanged).
+ */
+function owesNothing(receivable: CustomerAccountViewProps['receivable']): boolean {
+  return signOf(receivable.baseMinor) === 'zero' && receivable.byCurrency.every((line) => signOf(line.txnMinor) === 'zero');
+}
+
+/**
  * A band in the merchant's words, its day numbers the server's own `fromDays`
  * and `toDays`. The page has already refused a band token outside the
  * 0,30,60,90 set and a band missing the bound its sentence names.
@@ -241,7 +251,11 @@ function Row(props: { label: string; children: ReactNode }) {
  * above zero it is "N days late", exactly zero is "due today" (the as-of date IS
  * the due date), below zero is "not due yet" (no number, so nothing is negated).
  * A credit-bearing row is never late (DR-31): it reads as money held, on an
- * invoice that many days old (DR-35).
+ * invoice that many days old (DR-35). Its age below zero means the invoice is
+ * dated after the as-of day (the open-invoice read does not filter by `asOf`):
+ * that row says so in words and prints no number, so no age is ever negated or
+ * clamped. Day counts are whole numbers the page has already checked
+ * (`unreadableAccount`) and are compared as integers; they are not money.
  */
 function InvoiceDates(props: { t: Translate; locale: Locale; invoice: CustomerOpenInvoiceDto }) {
   const { t, locale, invoice } = props;
@@ -256,7 +270,9 @@ function InvoiceDates(props: { t: Translate; locale: Locale; invoice: CustomerOp
       </span>
       <span>
         {invoice.isCredit
-          ? rich(t('customers.account.invoices.heldOnInvoice'), { days: <Ltr>{String(invoice.ageDays)}</Ltr> })
+          ? invoice.ageDays < 0
+            ? t('customers.account.invoices.heldOnLaterInvoice')
+            : rich(t('customers.account.invoices.heldOnInvoice'), { days: <Ltr>{String(invoice.ageDays)}</Ltr> })
           : days > 0
             ? rich(t('customers.account.invoices.daysLate'), { days: <Ltr>{String(days)}</Ltr> })
             : days === 0

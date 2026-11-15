@@ -16,7 +16,9 @@
  *  - an amount beyond 2^53, which a JS number would round;
  *  - "show more" refused with the rows still on screen (the key is one
  *    `refusalKey` really returns for a 403);
- *  - the held-amounts read returning its full 200 rows.
+ *  - the held-amounts read returning its full 200 rows;
+ *  - a base total of zero that is NOT "nothing owed" (two currencies offset);
+ *  - a credit-bearing row whose `ageDays` is below zero (dated after as-of).
  *
  * The figures inside one fixture are made to agree with each other (the bands
  * add up to the balance), but that is a courtesy to the reader and nothing
@@ -241,6 +243,86 @@ const HUGE = account({
   hasMore: false,
 });
 
+/**
+ * The base total nets to ZERO across two currencies: the customer owes in ILS
+ * and is in credit in USD by the same base value. The total row says 0, but
+ * the customer still owes ILS — so "nothing owed" must not appear above the
+ * currency line that says otherwise.
+ */
+const NETS_TO_ZERO = account({
+  customer: { name: 'Dar Al-Kutub', status: 'active' },
+  receivable: {
+    baseMinor: '0',
+    baseCurrency: 'ILS',
+    byCurrency: [
+      { currency: 'ILS', txnMinor: '367250' },
+      { currency: 'USD', txnMinor: '-100000' },
+    ],
+  },
+  aging: {
+    asOf: AS_OF,
+    baseCurrency: 'ILS',
+    buckets: bands(
+      { 'not-due': '-367250', '1-30': '367250' },
+      { 'not-due': [{ currency: 'USD', txnMinor: '-100000' }], '1-30': [{ currency: 'ILS', txnMinor: '367250' }] },
+    ),
+  },
+  openInvoices: [
+    invoice({
+      invoiceId: '7a1c0e10-0009-4000-8000-00000000f001',
+      documentNumber: 'INV-0041',
+      issueDate: '2026-10-20',
+      dueDate: '2026-11-03',
+      totalTxnMinor: '367250',
+      outstandingTxnMinor: '367250',
+      daysPastDue: 10,
+      ageDays: 24,
+    }),
+    invoice({
+      invoiceId: '7a1c0e10-0009-4000-8000-00000000f002',
+      documentNumber: 'INV-0044',
+      issueDate: '2026-11-04',
+      currency: 'USD',
+      totalTxnMinor: '50000',
+      outstandingTxnMinor: '-100000',
+      outstandingBaseMinor: '-367250',
+      settlementState: 'paid',
+      daysPastDue: 0,
+      ageDays: 9,
+      isCredit: true,
+    }),
+  ],
+  credits: [],
+  hasMore: false,
+});
+
+/**
+ * A credit-bearing row on an invoice dated AFTER the as-of day. The open-invoice
+ * reader does not filter by `asOf`, and the as-of day is the browser's, so the
+ * server's own `ageDays` can come back below zero (here -2). The row must not
+ * print a negative age.
+ */
+const HELD_ON_LATER_INVOICE = account({
+  customer: { name: 'مخبز النور', status: 'active' },
+  receivable: { baseMinor: '-8000', baseCurrency: 'ILS', byCurrency: [{ currency: 'ILS', txnMinor: '-8000' }] },
+  aging: { asOf: AS_OF, baseCurrency: 'ILS', buckets: bands({ 'not-due': '-8000' }, { 'not-due': [{ currency: 'ILS', txnMinor: '-8000' }] }) },
+  openInvoices: [
+    invoice({
+      invoiceId: '7a1c0e10-0010-4000-8000-00000000f101',
+      documentNumber: 'INV-0050',
+      issueDate: '2026-11-15',
+      totalTxnMinor: '40000',
+      outstandingTxnMinor: '-8000',
+      settlementState: 'paid',
+      daysPastDue: -2,
+      ageDays: -2,
+      isCredit: true,
+    }),
+  ],
+  credits: [],
+  hasMore: false,
+});
+
 /** 200 held amounts, newest first — what `LIMIT 200` returns when there may be more. */
 const CAPPED_CREDITS: Credit[] = Array.from({ length: 200 }, (_, i) => {
   const n = String(i + 1).padStart(3, '0');
@@ -267,4 +349,6 @@ export const CUSTOMER_ACCOUNT_VIEW: ViewEntry = defineView('CustomerAccountView'
   'show more was refused, with the rows still on screen': account({ errorKey: 'error.FORBIDDEN' }),
   'more held amounts than one read returns': account({ credits: CAPPED_CREDITS, creditsCapped: true, hasMore: false }),
   'the read returned its full 200 held amounts and every one is used up': account({ credits: SPENT_CREDITS, creditsCapped: true, hasMore: false }),
+  'the base total nets to zero across two currencies, but ILS is still owed': NETS_TO_ZERO,
+  'a credit on an invoice dated after the as-of day': HELD_ON_LATER_INVOICE,
 });
