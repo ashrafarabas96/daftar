@@ -12,6 +12,7 @@ const KMS_BRIDGE = {
 
 const PROD_ENV: NodeJS.ProcessEnv = {
   NODE_ENV: 'production',
+  CORS_ORIGINS: 'https://app.example.com', // REL-10: production names its browser origins explicitly
   APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar',
   PLATFORM_DATABASE_URL: 'postgresql://daftar_platform:x@db/daftar',
   IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:x@db/daftar',

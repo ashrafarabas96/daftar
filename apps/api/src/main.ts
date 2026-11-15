@@ -5,7 +5,7 @@ import { MerchantApiModule } from './app/merchant-api.module';
 import { PlatformApiModule } from './app/platform-api.module';
 import { WorkerModule } from './app/worker.module';
 import { ReconcilerModule } from './app/reconciler.module';
-import { loadConfig } from './config';
+import { loadConfig, parseCorsOrigins } from './config';
 import { createLogger } from './infra/logger';
 import { CredentialDeliveryWorker } from './modules/delivery/delivery-worker.service';
 import { AccountingReconciliationWorker } from './modules/accounting/accounting-reconciliation.worker';
@@ -86,8 +86,12 @@ async function bootstrap(): Promise<void> {
         ? PlatformApiModule.register({ config })
         : AppModule.register({ config });
   const app = await NestFactory.create(module, { logger: false });
+  // REL-10: one parse, shared with the gate in `config.ts` that validated this
+  // value at startup — `parseCorsOrigins`. The bootstrap must not split it a
+  // second time: a gate that approves one parse while the server enables
+  // another is not a gate.
   app.enableCors({
-    origin: config.CORS_ORIGINS.split(',').map((o) => o.trim()),
+    origin: [...parseCorsOrigins(config.CORS_ORIGINS)],
     credentials: false,
   });
   await app.listen(config.PORT);

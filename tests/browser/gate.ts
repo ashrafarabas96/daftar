@@ -31,7 +31,8 @@
  *   --out=DIR                   evidence directory (default release/browser)
  *   --build                     build the API and the web app first
  *
- * Ports: BROWSER_PG_PORT, BROWSER_API_PORT, BROWSER_WEB_PORT. The database
+ * Ports: taken from the kernel unless BROWSER_PG_PORT / BROWSER_API_PORT /
+ * BROWSER_WEB_PORT pin them. The database
  * directory: BROWSER_PG_DIR (default /tmp/daftar-browser-pg-<pg port>).
  */
 // FIRST: `embedded-postgres` (imported through ./stack) registers a shutdown
@@ -55,7 +56,7 @@ import {
   VIEWPORTS,
   comboTag,
   pacingDisabled,
-  portsFromEnv,
+  reservePorts,
   type Locale,
   type Viewport,
 } from './config';
@@ -150,7 +151,10 @@ async function pool<T, R>(items: readonly T[], n: number, fn: (item: T) => Promi
 async function main(): Promise<void> {
   const o = parseArgs(process.argv.slice(2));
   const started = Date.now();
-  const ports = portsFromEnv();
+  // Taken from the kernel and held per role until each server binds, so two
+  // gate runs on one machine cannot be handed the same port (config.ts).
+  const reservation = await reservePorts();
+  const ports = reservation.ports;
   if (o.build) {
     execFileSync('npm', ['run', 'build', '-w', '@daftar/api'], { cwd: ROOT, stdio: 'inherit' });
     execFileSync('npm', ['run', 'build', '-w', '@daftar/web'], { cwd: ROOT, stdio: 'inherit' });
@@ -163,7 +167,7 @@ async function main(): Promise<void> {
   console.log(
     `browser gate: locales ${o.locales.join(',')} · viewports ${o.viewports.map((v) => `${v.width}x${v.height}`).join(',')} · touch target ${TOUCH_MIN_PX}px${o.plants.length ? ` · PLANTED ${o.plants.join(',')}` : ''}`,
   );
-  const stack = await startStack(ports, pgDir, join(o.out, 'logs'));
+  const stack = await startStack(reservation, pgDir, join(o.out, 'logs'));
   const records: StepRecord[] = [];
   const coverage = new RouteCoverage();
   let seedMs = 0;

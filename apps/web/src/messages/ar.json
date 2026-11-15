@@ -913,5 +913,13 @@
   "error.invoice_settlement.settlement_inconsistent": "حدث خطأ من جهتنا ولم يُحفظ شيء. أعد المحاولة، وأخبرنا إن تكرّر الأمر.",
   "error.customer_payment.arithmetic_invalid": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
   "error.customer_payment.registry_incomplete": "حدث خطأ من جهتنا. لم يُحفظ شيء. حاول مجددًا، وإن تكرر ذلك فتواصل مع الدعم.",
-  "pos.search.narrow": "نعرض أقرب النتائج. تابع الكتابة لتضييق البحث."
+  "pos.search.narrow": "نعرض أقرب النتائج. تابع الكتابة لتضييق البحث.",
+  "nav.invoices": "الفواتير",
+  "invoices.list.title": "الفواتير",
+  "invoices.list.empty": "لا توجد فواتير بعد",
+  "invoices.list.sellSomething": "أنشئ عملية بيع",
+  "invoices.list.dated": "بتاريخ {date}",
+  "invoices.status.draft": "لم تُصدر بعد",
+  "invoices.status.open": "صادرة",
+  "invoices.status.void": "ملغاة"
 }
