@@ -313,6 +313,13 @@ describe('every discovered plan-shape claim is executed by required CI against p
       expect(unreachedBy(moveStepTo(ci, part), POS_FILE)).toEqual([]);
     });
 
+    it('RED: an unreadable aggregate fails by NAME and does not quietly narrow the set', () => {
+      const planted = ci.replace(/(\n {2}backend-required:[\s\S]*?\n {4})needs:/, '$1needz:');
+      expect(planted, 'the aggregate needs key was not found to corrupt — update this proof').not.toBe(ci);
+      expect(() => requiredJobs(planted)).toThrow('could not read the `needs` list of `backend-required`');
+      expect(() => unreachedBy(planted, POS_FILE)).toThrow('could not read the `needs` list of `backend-required`');
+    });
+
     it('RED: the same step moved to a job the aggregate does not need is not reached', () => {
       expect(unreachedBy(moveStepTo(ci, 'web-admin'), POS_FILE)).toEqual(POS_FILE);
     });
@@ -345,8 +352,9 @@ function jobBlock(ciText: string, id: string): string {
 /**
  * The jobs that count as "the required job": `backend` and every job the
  * aggregate `backend-required` (the check named `backend`) `needs`. If the
- * aggregate or its list cannot be read, the answer is `backend` alone — the
- * narrower reading, so a broken aggregate can only make this contract stricter.
+ * aggregate or its list cannot be read, this THROWS with that reason: reading
+ * `backend` alone instead would fail the contract with a different question
+ * (every moved claim unreached) and a false failure is how a law gets disabled.
  */
 function requiredJobs(ciText: string): string[] {
   const aggregate = jobBlock(ciText, 'backend-required');
@@ -356,6 +364,13 @@ function requiredJobs(ciText: string): string[] {
       ?.split(',')
       .map((s) => s.trim())
       .filter((s) => s !== '') ?? [];
+  if (needs.length === 0) {
+    throw new Error(
+      'plan-evidence contract: could not read the `needs` list of `backend-required` (the check named `backend`), ' +
+        'so the set of required jobs is unknown. Failing by name instead of quietly reading `backend` alone: ' +
+        'a narrower set would redden every claim for the wrong reason.',
+    );
+  }
   return [...new Set(['backend', ...needs])];
 }
 
