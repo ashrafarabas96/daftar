@@ -288,6 +288,27 @@ export const HAND_TABLE: Entry[] = [
     'safe',
     'Membership of a path in a list (`toContain`): independent of order and of how many other issues exist.',
   ),
+  // -- P4-S4 the allocation cap and once-per-invoice (L3). All three read the
+  // test's OWN normalised array, built in `refusalOf` from `details['issues']`
+  // as `path:code` strings; none reads an index, a message, or a count > 0.
+  E(
+    'tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts',
+    'return JSON.stringify([r.status, r.code, r.receivablesCode, r.reason, [...r.issues].sort()]);',
+    'safe',
+    'A refusal digest, and the array is SORTED before it enters the digest, so the order zod no longer promises cannot change the digest. The count can: a second issue would alter it -- and that is intended, since the digest exists to say two refusals DIFFER, and a refusal that grew an issue IS a different refusal a client can see.',
+  ),
+  E(
+    'tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts',
+    'overR.issues,',
+    'safe',
+    "Asserted with `toContain('allocations:too_big')`: membership of one path:code in the list, independent of order and of how many other issues the cap reports.",
+  ),
+  E(
+    'tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts',
+    'expect(atR.issues,',
+    'safe',
+    'Asserted EMPTY (`toStrictEqual([])`), and emptiness is the one thing zod 4.6 cannot change by stopping early: either a ZodError was thrown and the envelope carries issues, or it was not and there are none. The claim is the 404 did not come from zod -- the positive control of the cap assertion above.',
+  ),
 ];
 
 /** Group rules: whole classes of sites that are not zod issues at all. */

@@ -5,11 +5,11 @@ Scope: `apps/**`, `tests/**`, `packages/**`, `tests-unit/**`, `scripts/**` (the 
 
 ## Totals (informational: they move whenever unrelated code adds a `.find(`)
 
-classified sites: 540 — safe: 507, intended: 33
+classified sites: 568 — safe: 535, intended: 33
 
-by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=406, formatter=13, index=2, issues-access=35, length=7, method=18
+by family: body-consumer=10, client-details=6, destructure=2, errors-access=44, find-shift=421, formatter=17, index=2, issues-access=41, length=7, method=18
 
-by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=430
+by rule: HAND=53, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=19, R-RECEIVER=445
 
 `needs-fixing` sites: 0
 
@@ -68,6 +68,9 @@ by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUAR
 | tests/helpers/validation-refusal.ts | formatter | `export function refusalOf(schema: { safeParse: (v: unknown) => { success: boolean; error?: unknown } }, value:` | safe | declares the return type of the refusal helper; reads no issue |
 | tests/helpers/validation-refusal.ts | formatter | `import type { ZodError } from 'zod';` | safe | type import |
 | tests/helpers/validation-refusal.ts | formatter | `return r.success ? null : (r.error as ZodError);` | safe | returns the error whole; the caller hands it to the real filter |
+| tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts | issues-access | `expect(atR.issues, `the ${at.length}-leg refusal did not come from zod, so it carries no issues: ${JSON.string` | safe | Asserted EMPTY (`toStrictEqual([])`), and emptiness is the one thing zod 4.6 cannot change by stopping early: either a ZodError was thrown and the envelope carries issues, or it was not and there are none. The claim is the 404 did not come from zod -- the positive control of the cap assertion above. |
+| tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts | issues-access | `overR.issues,` | safe | Asserted with `toContain('allocations:too_big')`: membership of one path:code in the list, independent of order and of how many other issues the cap reports. |
+| tests/integration/p4s4-allocation-cap-and-once-per-invoice.test.ts | issues-access | `return JSON.stringify([r.status, r.code, r.receivablesCode, r.reason, [...r.issues].sort()]);` | safe | A refusal digest, and the array is SORTED before it enters the digest, so the order zod no longer promises cannot change the digest. The count can: a second issue would alter it -- and that is intended, since the digest exists to say two refusals DIFFER, and a refusal that grew an issue IS a different refusal a client can see. |
 | tests/integration/p4s4-customer-aging-oldest-band-live.test.ts | body-consumer | `expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');` | safe | Membership of a path in the response list (toContain): independent of order and of any other issue. |
 | tests/integration/p4s4-customer-aging-oldest-band-live.test.ts | issues-access | `expect((body.error?.details?.issues ?? []).map((i) => i.path)).toContain('bucketDays');` | safe | Membership of a path in the response list (toContain): independent of order and of any other issue. |
 | tests/performance/phase3-s8-budgets.test.ts | find-shift | `(report.testResults ?? []).find((r) => (r.name ?? '').endsWith(T01)),` | safe | finds a vitest report entry by file name |
