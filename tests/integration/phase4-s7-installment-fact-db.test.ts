@@ -3741,232 +3741,260 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
      * execution, so the `oid` is read from `pg_database` after the `CREATE`
      * and the catalogue is read again after the `DROP` and asserted EMPTY.
      */
-    const PROBE_DB = 'daftar_s7f1_dr101probe';
-    const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
-    dbf['create_error'] = await (async (): Promise<string | null> => {
-      try {
-        // A database left behind by an execution that died is dropped first,
-        // the same way `createScratchDb` does it, so a stale one cannot be
-        // mistaken for this execution's.
-        await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
-        await sup.query(`CREATE DATABASE ${PROBE_DB}`);
-        return null;
-      } catch (e) {
-        return err(e);
-      }
-    })();
-    dbf['created'] = ((
-      await sup.query<Record<string, unknown>>(
-        `SELECT d.oid::text AS oid, d.datname, pg_encoding_to_char(d.encoding) AS encoding, d.datallowconn
-             FROM pg_database d WHERE d.datname = $1`,
-        [PROBE_DB],
-      )
-    ).rows[0] ?? null) as Record<string, unknown> | null;
-    // The probe's pool tolerates idle-client errors for the same reason
-    // `scratchPool` does: the database is dropped `WITH (FORCE)` below, which
-    // terminates whatever is still attached. Every query is awaited, so a
-    // real failure still rejects.
-    const probe = new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 2 });
-    probe.on('error', () => undefined);
-    type ArmOpts = { name: string; holder: 'none' | 'through' };
-    const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
-      const verbose: string[] = [];
-      const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
-        verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
-      };
-      const size = async (): Promise<string> =>
-        String((await probe.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
-      // The holder gets a pool of its OWN rather than a second checkout of
-      // `probe` (`max: 2`): a probe that deadlocked on its own connection
-      // budget would read as the failure it is looking for.
-      const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
-      let holder: PoolClient | undefined;
-      let v: PoolClient | undefined;
-      // THE PLANTED HOLDER'S OWN FINGERPRINT (RULE-27). Arm 2 is the positive
-      // control for the holder reading, and without this the control passes
-      // whenever the reading names ANYBODY -- including the `autovacuum
-      // worker` on `pg_catalog.pg_attribute` the P4-S1 lane measured, which
-      // this probe never planted. The pid is taken ON THE HOLDER'S OWN
-      // CONNECTION, after its snapshot is open and BEFORE the `DELETE`, so it
-      // is fixed before any result that it judges is read.
-      let holderPid: string | null = null;
-      let holderPidError: string | null = null;
-      try {
-        await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
-        await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
-        await probe.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
-        await probe.query('VACUUM public.dr101_probe');
-        const base = await size();
-        await probe.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
-        const inflated = await size();
-        // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
-        // the `DELETE`, which is the one ordering under which the 4400 tail
-        // tuples are dead to everyone else and still visible to it.
-        // `REPEATABLE READ` is what makes the snapshot outlive the statement.
-        if (holderPool !== undefined) {
-          holder = await holderPool.connect();
-          await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-          await holder.query('SELECT count(*) FROM public.dr101_probe');
-          try {
-            holderPid = String((await holder.query<{ pid: string }>('SELECT pg_backend_pid()::text AS pid')).rows[0]?.pid ?? '');
-          } catch (e) {
-            holderPidError = err(e);
-          }
+    // ── TEN REPETITIONS, IN ONE EXECUTION, AND A DEVIANT ONE IS NAMED.
+    //
+    //    The owner's second condition was ten EXECUTIONS; he amended it to ten
+    //    repetitions INSIDE one run, judged on CI, on 2026-11-15. The two are
+    //    not the same evidence and the difference is stated rather than
+    //    smoothed over: ten processes would also vary the cluster's start, and
+    //    ten cycles here share one postmaster. What they do establish is the
+    //    thing the arm was red for -- that the verdict is the same every time
+    //    on one cluster -- and ANY single deviant cycle fails this suite.
+    //
+    //    NOTHING CROSSES A CYCLE BOUNDARY, AND THAT IS MEASURED, NOT HOPED:
+    //    each cycle CREATES its own probe database, runs both arms in it, ENDS
+    //    its pool, DROPS the database and reads `pg_database` again -- so a
+    //    holder, a snapshot or a database left by cycle n would show up as
+    //    cycle n+1's `create_error` or as a non-zero `remaining_after_drop`,
+    //    and the law below asserts both PER CYCLE. Every cycle also carries
+    //    its own number, so a deviant repetition is read by name rather than
+    //    inferred from position.
+    //
+    //    NO CLAIM AND NO LIMIT MOVES FOR THIS: the relation, the 4400-row
+    //    tail, the single `VACUUM`, the `REPEATABLE READ` holder and every
+    //    assertion are what they were for one cycle. Only the number of times
+    //    they are performed changed.
+    const DR101_CYCLES = 10;
+    const dr101Cycles: Record<string, unknown>[] = [];
+    for (let cycle = 1; cycle <= DR101_CYCLES; cycle += 1) {
+      const PROBE_DB = 'daftar_s7f1_dr101probe';
+      const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
+      dbf['create_error'] = await (async (): Promise<string | null> => {
+        try {
+          // A database left behind by an execution that died is dropped first,
+          // the same way `createScratchDb` does it, so a stale one cannot be
+          // mistaken for this execution's.
+          await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+          await sup.query(`CREATE DATABASE ${PROBE_DB}`);
+          return null;
+        } catch (e) {
+          return err(e);
         }
-        // The `DELETE` reports its OWN xid, in the same statement, so that the
-        // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
-        // backends hold a snapshot at least as old as THIS `DELETE`». A
-        // `DELETE` whose xid is not known can only be compared against a
-        // guess. It is a label on a diagnostic, not an input to any wait --
-        // there is no longer a wait.
-        const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
-          try {
-            const r = await probe.query<{ xid: string; n: number }>(
-              `WITH d AS (DELETE FROM public.dr101_probe WHERE id > 1 RETURNING 1)
-               SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
-            );
-            return { error: null, xid: String(r.rows[0]?.xid ?? '') };
-          } catch (e) {
-            return { error: err(e), xid: '' };
-          }
-        })();
-        // WHO HOLDS THE HORIZON -- READ BEFORE THE `VACUUM` AND AGAIN AFTER
-        // IT, WITH THE `DELETE`'S OWN XID AS REFERENT. This is NOT a wait and
-        // nothing inside the probe branches on it: it is the ONE quantity arm
-        // 1's claim rests on, recorded instead of assumed.
-        //
-        // MEASURED on run `43398030298` (`backend`, job `131793746672`, step
-        // «Phase 4 slice gate -- P4-S1»): arm 1 reported
-        // `delete_xid: 230644` while the server printed
-        // `removable cutoff: 230642, which was 3 XIDs old when operation
-        // ended` and «4400 are dead but not yet removable» -- a snapshot AT
-        // LEAST AS OLD AS THE `DELETE` existed in this database, so the tail
-        // pages were not EMPTY and truncation was never PERMITTED. The arm
-        // measured the horizon, not the mechanism, and failed saying «this
-        // probe measures nothing» WITHOUT NAMING WHAT STOPPED IT.
-        //
-        // The owner withdrew the bounded wait on `n_backends = 0 in 4 of 4`;
-        // that premise is now measured FALSE at least once. Nothing here
-        // restores the wait: the reading is what lets the law below tell «the
-        // mechanism is false» from «this execution could not ask», and arm 2
-        // is the positive control that the reading is not blind (RULE-11).
-        const blockersBefore =
-          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
-        // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
-        // wait on and nothing after it to re-issue; the arm's whole claim is
-        // what the server says about that ONE command.
-        const vacuum = await (async (): Promise<string | null> => {
-          try {
-            v = await probe.connect();
-            v.on('notice', onNotice);
-            await v.query('VACUUM (VERBOSE) public.dr101_probe');
-            return null;
-          } catch (e) {
-            return err(e);
-          } finally {
-            if (v !== undefined) {
-              v.removeListener('notice', onNotice);
-              v.release();
-              v = undefined;
+      })();
+      dbf['created'] = ((
+        await sup.query<Record<string, unknown>>(
+          `SELECT d.oid::text AS oid, d.datname, pg_encoding_to_char(d.encoding) AS encoding, d.datallowconn
+               FROM pg_database d WHERE d.datname = $1`,
+          [PROBE_DB],
+        )
+      ).rows[0] ?? null) as Record<string, unknown> | null;
+      // The probe's pool tolerates idle-client errors for the same reason
+      // `scratchPool` does: the database is dropped `WITH (FORCE)` below, which
+      // terminates whatever is still attached. Every query is awaited, so a
+      // real failure still rejects.
+      const probe = new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 2 });
+      probe.on('error', () => undefined);
+      type ArmOpts = { name: string; holder: 'none' | 'through' };
+      const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
+        const verbose: string[] = [];
+        const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
+          verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
+        };
+        const size = async (): Promise<string> =>
+          String((await probe.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
+        // The holder gets a pool of its OWN rather than a second checkout of
+        // `probe` (`max: 2`): a probe that deadlocked on its own connection
+        // budget would read as the failure it is looking for.
+        const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
+        let holder: PoolClient | undefined;
+        let v: PoolClient | undefined;
+        // THE PLANTED HOLDER'S OWN FINGERPRINT (RULE-27). Arm 2 is the positive
+        // control for the holder reading, and without this the control passes
+        // whenever the reading names ANYBODY -- including the `autovacuum
+        // worker` on `pg_catalog.pg_attribute` the P4-S1 lane measured, which
+        // this probe never planted. The pid is taken ON THE HOLDER'S OWN
+        // CONNECTION, after its snapshot is open and BEFORE the `DELETE`, so it
+        // is fixed before any result that it judges is read.
+        let holderPid: string | null = null;
+        let holderPidError: string | null = null;
+        try {
+          await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
+          await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
+          await probe.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
+          await probe.query('VACUUM public.dr101_probe');
+          const base = await size();
+          await probe.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
+          const inflated = await size();
+          // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
+          // the `DELETE`, which is the one ordering under which the 4400 tail
+          // tuples are dead to everyone else and still visible to it.
+          // `REPEATABLE READ` is what makes the snapshot outlive the statement.
+          if (holderPool !== undefined) {
+            holder = await holderPool.connect();
+            await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+            await holder.query('SELECT count(*) FROM public.dr101_probe');
+            try {
+              holderPid = String((await holder.query<{ pid: string }>('SELECT pg_backend_pid()::text AS pid')).rows[0]?.pid ?? '');
+            } catch (e) {
+              holderPidError = err(e);
             }
           }
-        })();
-        const after = await size();
-        const blockersAfter =
-          deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
-        // WHO ELSE IS IN THE PROBE'S OWN DATABASE, BY PID AND BY
-        // `backend_type`. This is the fact the move is FOR, and it is
-        // recorded rather than asserted to be empty: the arm's own two
-        // connections are in it by construction, and a maintenance worker
-        // that appears here is the spoiler this measurement exists to count.
-        const occupants = await (async (): Promise<Record<string, unknown>> => {
-          try {
-            return {
-              list: (
-                await probe.query<{ j: string }>(
-                  `SELECT coalesce(json_agg(json_build_object('pid', pid, 'backend_type', backend_type, 'usename', usename,
-                                                              'backend_xmin', backend_xmin::text, 'state', state) ORDER BY pid)::text, '[]') AS j
-                     FROM pg_stat_activity WHERE datname = current_database()`,
-                )
-              ).rows[0]?.j,
-            };
-          } catch (e) {
-            return { error: err(e) };
+          // The `DELETE` reports its OWN xid, in the same statement, so that the
+          // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
+          // backends hold a snapshot at least as old as THIS `DELETE`». A
+          // `DELETE` whose xid is not known can only be compared against a
+          // guess. It is a label on a diagnostic, not an input to any wait --
+          // there is no longer a wait.
+          const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
+            try {
+              const r = await probe.query<{ xid: string; n: number }>(
+                `WITH d AS (DELETE FROM public.dr101_probe WHERE id > 1 RETURNING 1)
+                 SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
+              );
+              return { error: null, xid: String(r.rows[0]?.xid ?? '') };
+            } catch (e) {
+              return { error: err(e), xid: '' };
+            }
+          })();
+          // WHO HOLDS THE HORIZON -- READ BEFORE THE `VACUUM` AND AGAIN AFTER
+          // IT, WITH THE `DELETE`'S OWN XID AS REFERENT. This is NOT a wait and
+          // nothing inside the probe branches on it: it is the ONE quantity arm
+          // 1's claim rests on, recorded instead of assumed.
+          //
+          // MEASURED on run `43398030298` (`backend`, job `131793746672`, step
+          // «Phase 4 slice gate -- P4-S1»): arm 1 reported
+          // `delete_xid: 230644` while the server printed
+          // `removable cutoff: 230642, which was 3 XIDs old when operation
+          // ended` and «4400 are dead but not yet removable» -- a snapshot AT
+          // LEAST AS OLD AS THE `DELETE` existed in this database, so the tail
+          // pages were not EMPTY and truncation was never PERMITTED. The arm
+          // measured the horizon, not the mechanism, and failed saying «this
+          // probe measures nothing» WITHOUT NAMING WHAT STOPPED IT.
+          //
+          // The owner withdrew the bounded wait on `n_backends = 0 in 4 of 4`;
+          // that premise is now measured FALSE at least once. Nothing here
+          // restores the wait: the reading is what lets the law below tell «the
+          // mechanism is false» from «this execution could not ask», and arm 2
+          // is the positive control that the reading is not blind (RULE-11).
+          const blockersBefore =
+            deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
+          // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
+          // wait on and nothing after it to re-issue; the arm's whole claim is
+          // what the server says about that ONE command.
+          const vacuum = await (async (): Promise<string | null> => {
+            try {
+              v = await probe.connect();
+              v.on('notice', onNotice);
+              await v.query('VACUUM (VERBOSE) public.dr101_probe');
+              return null;
+            } catch (e) {
+              return err(e);
+            } finally {
+              if (v !== undefined) {
+                v.removeListener('notice', onNotice);
+                v.release();
+                v = undefined;
+              }
+            }
+          })();
+          const after = await size();
+          const blockersAfter =
+            deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
+          // WHO ELSE IS IN THE PROBE'S OWN DATABASE, BY PID AND BY
+          // `backend_type`. This is the fact the move is FOR, and it is
+          // recorded rather than asserted to be empty: the arm's own two
+          // connections are in it by construction, and a maintenance worker
+          // that appears here is the spoiler this measurement exists to count.
+          const occupants = await (async (): Promise<Record<string, unknown>> => {
+            try {
+              return {
+                list: (
+                  await probe.query<{ j: string }>(
+                    `SELECT coalesce(json_agg(json_build_object('pid', pid, 'backend_type', backend_type, 'usename', usename,
+                                                                'backend_xmin', backend_xmin::text, 'state', state) ORDER BY pid)::text, '[]') AS j
+                       FROM pg_stat_activity WHERE datname = current_database()`,
+                  )
+                ).rows[0]?.j,
+              };
+            } catch (e) {
+              return { error: err(e) };
+            }
+          })();
+          return {
+            arm: opts.name,
+            holder: opts.holder,
+            probe_db: PROBE_DB,
+            occupants: occupants['list'] ?? null,
+            occupants_error: occupants['error'] ?? null,
+            holder_pid: holderPid,
+            holder_pid_error: holderPidError,
+            base,
+            inflated,
+            delete_error: deleted.error,
+            delete_xid: deleted.xid,
+            vacuum,
+            after,
+            truncated: Number(after) <= Number(base),
+            blockers_before: blockersBefore.blockers,
+            blockers_before_error: blockersBefore.error ?? null,
+            blockers_after: blockersAfter.blockers,
+            blockers_after_error: blockersAfter.error ?? null,
+            verbose,
+          };
+        } catch (e) {
+          return { arm: opts.name, holder: opts.holder, error: err(e), verbose };
+        } finally {
+          if (holder !== undefined) {
+            await holder.query('ROLLBACK').catch(() => undefined);
+            holder.release();
           }
-        })();
-        return {
-          arm: opts.name,
-          holder: opts.holder,
-          probe_db: PROBE_DB,
-          occupants: occupants['list'] ?? null,
-          occupants_error: occupants['error'] ?? null,
-          holder_pid: holderPid,
-          holder_pid_error: holderPidError,
-          base,
-          inflated,
-          delete_error: deleted.error,
-          delete_xid: deleted.xid,
-          vacuum,
-          after,
-          truncated: Number(after) <= Number(base),
-          blockers_before: blockersBefore.blockers,
-          blockers_before_error: blockersBefore.error ?? null,
-          blockers_after: blockersAfter.blockers,
-          blockers_after_error: blockersAfter.error ?? null,
-          verbose,
-        };
-      } catch (e) {
-        return { arm: opts.name, holder: opts.holder, error: err(e), verbose };
-      } finally {
-        if (holder !== undefined) {
-          await holder.query('ROLLBACK').catch(() => undefined);
-          holder.release();
+          if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
+          await probe.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
         }
-        if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
-        await probe.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
-      }
-    };
-    const arms = {
-      // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
-      //    the pages back. Without this arm, arm 2 cannot be told from a
-      //    probe that never truncates at all.
-      no_holder: await arm({ name: 'no_holder', holder: 'none' }),
-      // 2. THE MECHANISM, AND THE REASON THIS CARD LOGS ANYTHING. One
-      //    snapshot held across the `DELETE`: the relation stays inflated,
-      //    the `VACUUM` STILL REPORTS SUCCESS, and `:4979` would pass while
-      //    `:4980` failed. That is the premise the diagnostic logging rests
-      //    on -- a plain `VACUUM` really can abandon truncation silently --
-      //    and it is NOT a claim that this is what happens on `main`, which
-      //    the measurement in `truncationBlockers`'s note disposes of.
-      holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through' }),
-      // ARMS 3 AND 4 ARE GONE. They proved that the withdrawn wait saw its
-      // blocker, cleared, and could have its budget exhausted. With no wait
-      // in the file there is nothing for them to prove, and an arm kept past
-      // its claim is an arm that will be read as a claim.
-    };
-    // THE DATABASE IS CLOSED AND DROPPED HERE, AND ITS DEATH IS READ FROM
-    // THE CATALOGUE. The pool is ended first so the `DROP` has nothing to
-    // terminate; `WITH (FORCE)` is kept anyway, because a holder that failed
-    // to roll back would otherwise leave the database -- and the next
-    // execution would then measure a database this one built.
-    await probe.end().catch(() => undefined);
-    dbf['drop_error'] = await (async (): Promise<string | null> => {
-      try {
-        await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
-        return null;
-      } catch (e) {
-        return err(e);
-      }
-    })();
-    dbf['remaining_after_drop'] = (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_database WHERE datname = $1`, [PROBE_DB])).rows[0]?.n;
-    // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
-    // that PASSES is the control, and a control whose text is never shown
-    // cannot be read against the arm that fails. The database's own record
-    // is printed beside them, since a drop that failed is a fact about the
-    // CLUSTER and the next execution inherits it.
-    for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
-    console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
-    return { ...arms, db: dbf };
+      };
+      const arms = {
+        // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
+        //    the pages back. Without this arm, arm 2 cannot be told from a
+        //    probe that never truncates at all.
+        no_holder: await arm({ name: 'no_holder', holder: 'none' }),
+        // 2. THE MECHANISM, AND THE REASON THIS CARD LOGS ANYTHING. One
+        //    snapshot held across the `DELETE`: the relation stays inflated,
+        //    the `VACUUM` STILL REPORTS SUCCESS, and `:4979` would pass while
+        //    `:4980` failed. That is the premise the diagnostic logging rests
+        //    on -- a plain `VACUUM` really can abandon truncation silently --
+        //    and it is NOT a claim that this is what happens on `main`, which
+        //    the measurement in `truncationBlockers`'s note disposes of.
+        holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through' }),
+        // ARMS 3 AND 4 ARE GONE. They proved that the withdrawn wait saw its
+        // blocker, cleared, and could have its budget exhausted. With no wait
+        // in the file there is nothing for them to prove, and an arm kept past
+        // its claim is an arm that will be read as a claim.
+      };
+      // THE DATABASE IS CLOSED AND DROPPED HERE, AND ITS DEATH IS READ FROM
+      // THE CATALOGUE. The pool is ended first so the `DROP` has nothing to
+      // terminate; `WITH (FORCE)` is kept anyway, because a holder that failed
+      // to roll back would otherwise leave the database -- and the next
+      // execution would then measure a database this one built.
+      await probe.end().catch(() => undefined);
+      dbf['drop_error'] = await (async (): Promise<string | null> => {
+        try {
+          await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+          return null;
+        } catch (e) {
+          return err(e);
+        }
+      })();
+      dbf['remaining_after_drop'] = (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_database WHERE datname = $1`, [PROBE_DB])).rows[0]?.n;
+      // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
+      // that PASSES is the control, and a control whose text is never shown
+      // cannot be read against the arm that fails. The database's own record
+      // is printed beside them, since a drop that failed is a fact about the
+      // CLUSTER and the next execution inherits it.
+      for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
+      console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
+      dr101Cycles.push({ cycle, ...arms, db: dbf });
+    }
+    return { cycles: dr101Cycles, cycle_count: dr101Cycles.length, cycles_declared: DR101_CYCLES };
   })();
 
   writeMeasurements(M);
@@ -5957,298 +5985,326 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
    * NEVER on `installment_plans`. No §R7 reading, no §R17 reading and no
    * `first['bytes']` is touched by either of them.
    */
-  it('DR-101 THE MECHANISM, with its negative control', () => {
-    const p = (M['DR101_truncation_probe'] ?? {}) as Record<string, unknown>;
-    const arms = ['no_holder', 'holder_no_wait'] as const;
-    const a = Object.fromEntries(arms.map((k) => [k, (p[k] ?? {}) as Record<string, unknown>])) as Record<(typeof arms)[number], Record<string, unknown>>;
-    // ── THE PROBE'S OWN DATABASE IS PROVEN BORN AND PROVEN GONE, FROM
-    //    `pg_database` AND NOT BY INFERENCE (DR-101, the owner's second
-    //    condition). A block that fails to drop its database poisons the
-    //    cluster for the next execution, which would then measure a database
-    //    THIS one built -- so the drop is a fact of record, not a hope in a
-    //    `finally`.
-    const dbf = (p['db'] ?? {}) as Record<string, unknown>;
-    const born = (dbf['created'] ?? null) as Record<string, unknown> | null;
-    expect(dbf['create_error'], `the probe's own database could not be created: ${String(dbf['create_error'])}`).toBeNull();
-    expect(born, `nothing in pg_database answered for ${String(dbf['probe_db'])}, so the arms below did not run where they claim`).not.toBeNull();
-    expect(String(born?.['datname'] ?? ''), 'the catalogue named a different database than the probe asked for').toBe(String(dbf['probe_db']));
-    expect(String(born?.['oid'] ?? ''), 'the created database reported no oid, so its birth is an inference').not.toBe('');
-    // AND IT IS NOT THE SUITE'S OWN DATABASE, which is the whole point of the
-    // move: `daftar_s7f1_fact` carries the migrated schema whose CATALOGUES
-    // the autovacuum daemon visits, and a worker there held the horizon on
-    // run `43398030298`.
-    expect(String(dbf['probe_db']), "the probe measured in the suite's own database, so the horizon is not its own").not.toBe(String(dbf['suite_db']));
-    expect(dbf['drop_error'], `the probe's own database could not be dropped: ${String(dbf['drop_error'])}`).toBeNull();
-    expect(dbf['remaining_after_drop'], 'the probe database survived the block, so the next execution inherits this one').toBe(0);
-    // BOTH ARMS RAN, DELETED, AND ACTUALLY INFLATED FIRST. A probe whose
-    // relation never grew would pass arm 1 and fail arm 2 for no reason at
-    // all.
-    for (const k of arms) {
-      expect(a[k]['error'], `arm ${k} did not run: ${String(a[k]['error'])}`).toBeUndefined();
-      expect(a[k]['delete_error'], `arm ${k}'s DELETE failed: ${String(a[k]['delete_error'])}`).toBeNull();
-      expect(String(a[k]['delete_xid']), `arm ${k} did not report its DELETE's xid, so its holder reading has no referent`).not.toBe('');
-      expect(Number(a[k]['inflated']), `arm ${k} never inflated its relation`).toBeGreaterThan(Number(a[k]['base']));
-      // AND IT RAN WHERE IT SAYS IT RAN. Every reading below -- the cutoff,
-      // the blockers, the occupants -- is scoped to a connection's own
-      // database, so an arm that ran elsewhere would answer about a horizon
-      // it does not share with its own holder.
-      expect(a[k]['probe_db'], `arm ${k} did not report the database it ran in`).toBe(String(dbf['probe_db']));
-      expect(a[k]['occupants_error'], `arm ${k}'s occupant reading errored, so «who else was in the probe's database» is unanswered`).toBeNull();
-      expect(String(a[k]['occupants'] ?? ''), `arm ${k} read no occupant at all, not even itself, so the reading is blind`).not.toBe('[]');
-      // AND EVERY `VACUUM` REPORTED SUCCESS, which is the whole point: the
-      // return value does not distinguish any of the outcomes below.
-      expect(a[k]['vacuum'], `arm ${k}'s VACUUM errored: ${String(a[k]['vacuum'])}`).toBeNull();
-    }
-    // 1. THE CONTROL, AND ITS PREMISE READ RATHER THAN ASSUMED.
-    //
-    //    Arm 1's claim is: with no older snapshot, a plain `VACUUM` DOES give
-    //    the trailing pages back. «WITH NO OLDER SNAPSHOT» IS A PREMISE ABOUT
-    //    THE CLUSTER, NOT ABOUT THIS TREE, and on run `43398030298` it was
-    //    FALSE: the server's own `removable cutoff: 230642` was two xids
-    //    OLDER than the arm's `delete_xid: 230644`, 4400 tail tuples were
-    //    «dead but not yet removable», and truncation was therefore never
-    //    PERMITTED. The arm failed with «this probe measures nothing» -- a
-    //    sentence that is TRUE and that names no cause -- and that single red
-    //    blocked the `P4-S1` gate for every lane that merges `main`.
-    //
-    //    A LAW THAT REDS ON A PREMISE IT DOES NOT OWN IS A FALSE RED, AND A
-    //    FALSE RED IS HOW A LAW GETS DISABLED. So the premise is MEASURED in
-    //    the same execution and the verdict is three-way. NOTHING IS SKIPPED
-    //    AND NO THRESHOLD MOVES: every execution asserts, and the only
-    //    outcome newly tolerated is the one where the instrument NAMES the
-    //    backend that held the horizon.
-    const heapNotices = (x: Record<string, unknown>): string =>
-      ((x['verbose'] as readonly string[] | undefined) ?? []).filter((l) => l.includes('public.dr101_probe')).join('\n');
-    const held = (x: Record<string, unknown>): readonly Record<string, unknown>[] => [
-      ...((x['blockers_before'] as readonly Record<string, unknown>[] | undefined) ?? []),
-      ...((x['blockers_after'] as readonly Record<string, unknown>[] | undefined) ?? []),
-    ];
-    //    AND A SECOND WITNESS THAT CANNOT GO BLIND: THE SERVER'S OWN CUTOFF.
-    //    `pg_stat_activity` is read from THIS database and names only what is
-    //    still connected when it is read, so it can miss the holder entirely
-    //    -- the P4-S1 lane measured one on run `43523...`-era `#90` as an
-    //    `autovacuum worker` on `pg_catalog.pg_attribute` at
-    //    `backend_xmin = 229965`, a relation and a worker this probe never
-    //    asked about. `removable cutoff` is printed by the `VACUUM` ITSELF
-    //    and is the quantity truncation is actually decided on, so it is the
-    //    witness of record and the activity scan is the corroborating one.
-    //
-    //    MEASURED, in six probe executions of one CI log (`131793746672`) and
-    //    in two here: truncation happens IF AND ONLY IF the cutoff is NEWER
-    //    than the `DELETE`'s own xid. Every truncating execution printed
-    //    `delete_xid + 1`; the one failing execution printed `delete_xid - 2`
-    //    (`230642` against `230644`). THE PAIR OF NUMBERS IS THEREFORE A
-    //    CAUSE, not an inference from a byte count.
-    const cutoffOf = (x: Record<string, unknown>): number | null => {
-      const m = [...heapNotices(x).matchAll(/removable cutoff: (\d+)/g)];
-      // EXACTLY ONE, or none: the probe's heap is vacuumed once, and a second
-      // match would mean the TOAST summary leaked into the filtered text --
-      // the very defect this filter exists to correct.
-      return m.length === 1 ? Number(m[0]?.[1]) : null;
-    };
-    const horizonPassed = (x: Record<string, unknown>): boolean | null => {
-      const c = cutoffOf(x);
-      const d = Number(x['delete_xid']);
-      // `pg_current_xact_id()` is 64-bit and the notice's cutoff is a 32-bit
-      // xid, so the two are comparable only below the first wrap. These
-      // clusters are born per run and never reach it; a tree that does must
-      // be told, not guessed at.
-      if (c === null || !Number.isFinite(d) || d <= 0 || c >= 2 ** 31 || d >= 2 ** 31) return null;
-      return c > d;
-    };
-    type Verdict = 'MECHANISM' | 'ENVIRONMENT_HELD' | 'UNEXPLAINED';
-    const verdictOf = (x: Record<string, unknown>): Verdict =>
-      x['truncated'] === true ? 'MECHANISM' : held(x).length > 0 || horizonPassed(x) === false ? 'ENVIRONMENT_HELD' : 'UNEXPLAINED';
-    //    AND THE READING IS NOT ALLOWED TO BE SILENTLY EMPTY. An errored
-    //    `pg_stat_activity` read returns `[]`, which would read as «nothing
-    //    holds» -- and an empty list that excuses nothing is the same object
-    //    as one that excuses everything (RULE-18 / RULE-19).
-    for (const k of arms) {
-      expect(a[k]['blockers_before_error'], `arm ${k}'s holder reading errored before the VACUUM: ${String(a[k]['blockers_before_error'])}`).toBeNull();
-      expect(a[k]['blockers_after_error'], `arm ${k}'s holder reading errored after the VACUUM: ${String(a[k]['blockers_after_error'])}`).toBeNull();
-    }
-    //    THE BLINDNESS CONTROL, WHICH IS WHAT LICENSES THE BRANCH AT ALL: arm
-    //    2 holds a `REPEATABLE READ` snapshot across its own `DELETE` BY
-    //    CONSTRUCTION, so the SAME instrument must SEE a holder there. If it
-    //    sees none, the instrument is blind, its emptiness in arm 1 means
-    //    nothing, and no execution may be excused by it (RULE-11).
-    expect(
-      held(a['holder_no_wait']).length,
-      `the holder reading saw nobody in the arm that holds a snapshot by construction, so it is blind and cannot excuse arm 1: ${JSON.stringify(a['holder_no_wait'])}`,
-    ).toBeGreaterThan(0);
-    //    ...AND IT MUST BE THE HOLDER THIS ARM PLANTED, BY PID (RULE-27).
-    //    «The reading named somebody» is not «the reading named the planting»:
-    //    the P4-S1 lane measured an `autovacuum worker` on
-    //    `pg_catalog.pg_attribute` entering a cutoff, and a control satisfied
-    //    by a stranger would pass on a tree where the instrument cannot see
-    //    the planting at all. The pid was fixed on the holder's own
-    //    connection BEFORE the `DELETE`, so it is not read off the result it
-    //    judges.
-    expect(
-      a['holder_no_wait']['holder_pid_error'],
-      `the planted holder's own pid could not be read, so arm 2's control has no fingerprint: ${String(a['holder_no_wait']['holder_pid_error'])}`,
-    ).toBeNull();
-    const plantedPid = String(a['holder_no_wait']['holder_pid'] ?? '');
-    expect(plantedPid, 'arm 2 planted a holder but recorded no pid for it, so nothing ties the reading to the planting').not.toBe('');
-    expect(
-      held(a['holder_no_wait']).filter((b) => b['kind'] === 'snapshot' && String(b['pid']) === plantedPid).length,
-      `the holder reading named somebody, but NOT the snapshot this arm planted (pid ${plantedPid}), so it is not reading the planting: ${JSON.stringify(held(a['holder_no_wait']))}`,
-    ).toBeGreaterThan(0);
-    //    AND THE NEGATIVE CONTROL ON THE FINGERPRINT ITSELF: arm 1 plants
-    //    nothing, so it must carry NO pid. A pid here would mean the two arms
-    //    were not the contrast they are read as (RULE-11).
-    expect(a['no_holder']['holder_pid'], 'the control arm reported a planted holder, so the two arms are not the contrast they are read as').toBeNull();
-    //    AND THE BRANCH SELECTION HAS ITS OWN CONTROLS, as a pure function of
-    //    a record -- two that must be excused and two that must NOT be. The
-    //    last is the one that keeps the law a law: no truncation AND nobody
-    //    named is still a red, because then the tree is the only suspect left.
-    const synth = (truncated: boolean, blockers: readonly Record<string, unknown>[]): Record<string, unknown> => ({
-      truncated,
-      blockers_before: blockers,
-      blockers_after: [],
-    });
-    expect(verdictOf(synth(true, [])), 'a truncating arm with a clear horizon is the mechanism itself').toBe('MECHANISM');
-    expect(verdictOf(synth(true, [{ kind: 'snapshot' }])), 'a truncating arm is the mechanism even if somebody was reading').toBe('MECHANISM');
-    expect(verdictOf(synth(false, [{ kind: 'snapshot' }])), 'no truncation WITH a named holder is the environment, not the tree').toBe('ENVIRONMENT_HELD');
-    expect(verdictOf(synth(false, [])), 'no truncation and NOBODY named must stay red, or this branch excuses everything').toBe('UNEXPLAINED');
-    //    AND THE CUTOFF WITNESS HAS THE SAME FOUR, over a record whose
-    //    activity scan is EMPTY -- which is the case `#90` measured and the
-    //    one the scan alone cannot read. The fourth is the plant that must
-    //    NOT be excused: a cutoff the parser could not read is not a licence.
-    const withCutoff = (truncated: boolean, cutoff: string, deleteXid: string): Record<string, unknown> => ({
-      truncated,
-      blockers_before: [],
-      blockers_after: [],
-      delete_xid: deleteXid,
-      verbose: [`INFO: finished vacuuming "x.public.dr101_probe": pages: 0 removed\nremovable cutoff: ${cutoff}, which was 3 XIDs old`],
-    });
-    expect(verdictOf(withCutoff(false, '230642', '230644')), 'a cutoff OLDER than the DELETE is the horizon, named by the server itself').toBe(
-      'ENVIRONMENT_HELD',
-    );
-    expect(verdictOf(withCutoff(false, '230645', '230644')), 'a cutoff NEWER than the DELETE leaves the tree the only suspect').toBe('UNEXPLAINED');
-    expect(verdictOf(withCutoff(false, '230644', '230644')), 'a cutoff EQUAL to the DELETE still sees the tail, so it is the horizon').toBe('ENVIRONMENT_HELD');
-    expect(
-      verdictOf({ truncated: false, blockers_before: [], blockers_after: [], delete_xid: '230644', verbose: [] }),
-      'an unreadable cutoff is not a licence',
-    ).toBe('UNEXPLAINED');
-    //    AND THE PARSER IS PROVEN TO READ THE REAL THING, on both arms of
-    //    this execution, before any verdict of theirs is believed (RULE-18):
-    //    a parser that silently returned `null` would make every arm
-    //    UNEXPLAINED and would read as «the tree is at fault».
-    for (const k of arms) {
-      expect(cutoffOf(a[k]), `the VACUUM's own removable cutoff could not be read for arm ${k}: ${JSON.stringify(a[k]['verbose'])}`).not.toBeNull();
-      expect(horizonPassed(a[k]), `arm ${k}'s cutoff and delete_xid are not comparable, so the witness of record is unreadable`).not.toBeNull();
-    }
-    const v1 = verdictOf(a['no_holder']);
-    expect(
-      v1,
-      `a plain VACUUM did not truncate and NOTHING in this database held a snapshot as old as the DELETE, so the assumption :4980 rests on is false on this tree: ${JSON.stringify(a['no_holder'])}`,
-    ).not.toBe('UNEXPLAINED');
-    // 2. THE MECHANISM: one open snapshot older than the `DELETE` is
-    //    SUFFICIENT to leave the relation at its inflated size -- the exact
-    //    shape of the intermittent CI failure, reproduced on demand.
-    expect(
-      a['holder_no_wait']['truncated'],
-      `an older snapshot did NOT stop the truncation, so this is not the mechanism: ${JSON.stringify(a['holder_no_wait'])}`,
-    ).toBe(false);
-    // ...AND THE SERVER SAYS SO ITSELF, rather than this file inferring a
-    //    cause from two byte counts. BOTH WORDINGS ARE ACCEPTED, and the
-    //    first is the MEASURED one: PostgreSQL 16.15 on this cluster printed
-    //    «4400 are dead but not yet removable» in the per-relation summary,
-    //    where older majors said «N dead row versions cannot be removed yet».
-    //    That spelling is what red this probe on run 42147185172 -- the
-    //    mechanism held and only my pattern was wrong -- and the second is
-    //    kept so a server wording cannot turn a working probe into a false
-    //    red about the mechanism. The PAGE fact is asserted beside it,
-    //    because the wording alone is about TUPLES while `:4980` charges for
-    //    PAGES.
-    //    ── AND THE MATCH IS NARROWED TO THE PROBE'S OWN HEAP SUMMARY, WHICH
-    //       IS A CORRECTION OF A SILENT FALSE POSITIVE IN THIS VERY ARM.
-    //
-    //       `dr101_probe` has a `text` column, so it has a TOAST relation, and
-    //       one `VACUUM` of the table vacuums BOTH and reports BOTH on the
-    //       same connection. The TOAST table is always empty here, so its own
-    //       summary reads `pages: 0 removed, 0 remain` and
-    //       `0 are dead but not yet removable` -- WHICH SATISFIES BOTH
-    //       PATTERNS BELOW ON ITS OWN. Joining every notice into one string
-    //       therefore asserted nothing about the HEAP: had the heap truncated
-    //       in full, the joined text would STILL have matched, out of the
-    //       TOAST entry. MEASURED, not reasoned: in the log of
-    //       `265c9ec1`, arm 2's notices are four, and entry 1
-    //       (`…public.dr101_probe`) and entry 3 (`…pg_toast.pg_toast_27823`)
-    //       EACH match both patterns by themselves.
-    //
-    //       So the notices are filtered to the entries that NAME the probe's
-    //       heap before they are joined, the filtered text is shown NON-EMPTY
-    //       before any match of it is believed (RULE-18 / RULE-19), and the
-    //       `pg_toast` entry is asserted ABSENT from it -- a positive control
-    //       and a negative one, because a filter that silently matched nothing
-    //       would read as «the server said nothing» and a filter that let the
-    //       TOAST line through would be the defect it replaces (RULE-11,
-    //       RULE-27).
-    const saidNoWait = heapNotices(a['holder_no_wait']);
-    expect(
-      saidNoWait.length,
-      `no notice named the probe's own heap, so the matches below would assert nothing: ${JSON.stringify(a['holder_no_wait']['verbose'])}`,
-    ).toBeGreaterThan(0);
-    expect(saidNoWait, "the probe's heap notices leaked a TOAST summary, which satisfies both patterns below on its own").not.toMatch(/pg_toast/);
-    expect(saidNoWait, 'the server did not report the tail as unremovable').toMatch(/dead but not yet removable|cannot be removed yet/);
-    expect(saidNoWait, 'the server did not report that it removed no pages').toMatch(/pages: 0 removed/);
-    //    AND THE MECHANISM ARM IS THE POSITIVE CONTROL FOR THE CUTOFF
-    //    WITNESS: its own holder keeps the cutoff from passing the `DELETE`,
-    //    MEASURED here as `1848` against `delete_xid 1852` and in CI as
-    //    `230650` against `230650`. A witness that read `true` here would be
-    //    reading something other than the horizon (RULE-11).
-    expect(
-      horizonPassed(a['holder_no_wait']),
-      `the mechanism arm held a snapshot across its DELETE and the cutoff passed it anyway, so the cutoff is not reading the horizon: ${JSON.stringify(a['holder_no_wait'])}`,
-    ).toBe(false);
-    //    ...AND THE CONTROL ARM IS HELD TO THE SAME READING, which is what
-    //    makes the pair discriminate: the SAME filter on arm 1 must show the
-    //    heap REMOVING pages. Without this line the filter above could be
-    //    wrong in a way that only ever passes.
-    const saidNoHolder = heapNotices(a['no_holder']);
-    expect(saidNoHolder.length, `no notice named the probe's own heap in the control arm: ${JSON.stringify(a['no_holder']['verbose'])}`).toBeGreaterThan(0);
-    //    AND THE CONTROL ARM IS HELD TO THE READING ITS OWN VERDICT EARNS.
-    //    BOTH BRANCHES ASSERT, AND THE SERVER'S WORDS MUST AGREE WITH THE
-    //    BLOCKER LIST IN EITHER ONE. The branch is not a way out: it is the
-    //    measured dichotomy, and the third case is already red above.
-    if (v1 === 'MECHANISM') {
-      // The premise held, so the pair discriminates: the SAME filter that
-      // shows arm 2 removing nothing must show arm 1 removing pages.
-      expect(a['no_holder']['truncated'], 'the verdict says MECHANISM but the arm did not truncate').toBe(true);
-      // and the server's own cutoff agrees with the outcome: it PASSED the
-      // DELETE. If it did not, truncation and the cutoff disagree and one of
-      // the two readings is wrong.
+  // ── AND THE LAW IS APPLIED TEN TIMES, ONCE PER CYCLE, AS TEN CASES.
+  //
+  //    One case per cycle rather than one case with a loop inside it: a loop
+  //    stops at its first failing assertion, so cycle 3 going red would hide
+  //    whether 4 to 10 agreed with it -- and «which repetition deviated» is
+  //    the whole question ten repetitions are asked to answer. Ten cases
+  //    report ten verdicts, and ANY ONE of them red fails this suite, which
+  //    is the owner's «it fails if a single repetition deviates».
+  //
+  //    THE CYCLE NUMBER IS CARRIED BY THE CASE NAME, NOT INJECTED INTO THE
+  //    ASSERTION TEXTS. Vitest prints the case name with every failure, so a
+  //    deviant cycle is already named where it is read -- and rewriting every
+  //    message to interpolate a counter would be a change to the claims,
+  //    which the owner's condition forbids in the same breath as it asks for
+  //    the ten. What is ADDED, not changed, is the pair of assertions below:
+  //    the probe published exactly ten cycles, and this case's record carries
+  //    its own number -- so a case cannot silently judge another cycle's
+  //    record, or the same one ten times.
+  const DR101_JUDGED_CYCLES = 10;
+  for (let cycle = 1; cycle <= DR101_JUDGED_CYCLES; cycle += 1) {
+    it(`DR-101 THE MECHANISM, with its negative control — cycle ${cycle} of ${DR101_JUDGED_CYCLES}`, () => {
+      const p = (M['DR101_truncation_probe'] ?? {}) as Record<string, unknown>;
+      const published = (p['cycles'] ?? []) as readonly Record<string, unknown>[];
+      expect(published.length, `the probe published ${published.length} cycles, so «ten repetitions» is not what was measured`).toBe(DR101_JUDGED_CYCLES);
+      expect(p['cycles_declared'], 'the probe and this law disagree on how many cycles were asked for').toBe(DR101_JUDGED_CYCLES);
+      const c = (published[cycle - 1] ?? {}) as Record<string, unknown>;
+      expect(c['cycle'], 'this case is judging a record that does not carry its own cycle number').toBe(cycle);
+      const arms = ['no_holder', 'holder_no_wait'] as const;
+      const a = Object.fromEntries(arms.map((k) => [k, (c[k] ?? {}) as Record<string, unknown>])) as Record<(typeof arms)[number], Record<string, unknown>>;
+      // ── THE PROBE'S OWN DATABASE IS PROVEN BORN AND PROVEN GONE, FROM
+      //    `pg_database` AND NOT BY INFERENCE (DR-101, the owner's second
+      //    condition). A block that fails to drop its database poisons the
+      //    cluster for the next execution, which would then measure a database
+      //    THIS one built -- so the drop is a fact of record, not a hope in a
+      //    `finally`.
+      const dbf = (c['db'] ?? {}) as Record<string, unknown>;
+      const born = (dbf['created'] ?? null) as Record<string, unknown> | null;
+      expect(dbf['create_error'], `the probe's own database could not be created: ${String(dbf['create_error'])}`).toBeNull();
+      expect(born, `nothing in pg_database answered for ${String(dbf['probe_db'])}, so the arms below did not run where they claim`).not.toBeNull();
+      expect(String(born?.['datname'] ?? ''), 'the catalogue named a different database than the probe asked for').toBe(String(dbf['probe_db']));
+      expect(String(born?.['oid'] ?? ''), 'the created database reported no oid, so its birth is an inference').not.toBe('');
+      // AND IT IS NOT THE SUITE'S OWN DATABASE, which is the whole point of the
+      // move: `daftar_s7f1_fact` carries the migrated schema whose CATALOGUES
+      // the autovacuum daemon visits, and a worker there held the horizon on
+      // run `43398030298`.
+      expect(String(dbf['probe_db']), "the probe measured in the suite's own database, so the horizon is not its own").not.toBe(String(dbf['suite_db']));
+      expect(dbf['drop_error'], `the probe's own database could not be dropped: ${String(dbf['drop_error'])}`).toBeNull();
+      expect(dbf['remaining_after_drop'], 'the probe database survived the block, so the next execution inherits this one').toBe(0);
+      // BOTH ARMS RAN, DELETED, AND ACTUALLY INFLATED FIRST. A probe whose
+      // relation never grew would pass arm 1 and fail arm 2 for no reason at
+      // all.
+      for (const k of arms) {
+        expect(a[k]['error'], `arm ${k} did not run: ${String(a[k]['error'])}`).toBeUndefined();
+        expect(a[k]['delete_error'], `arm ${k}'s DELETE failed: ${String(a[k]['delete_error'])}`).toBeNull();
+        expect(String(a[k]['delete_xid']), `arm ${k} did not report its DELETE's xid, so its holder reading has no referent`).not.toBe('');
+        expect(Number(a[k]['inflated']), `arm ${k} never inflated its relation`).toBeGreaterThan(Number(a[k]['base']));
+        // AND IT RAN WHERE IT SAYS IT RAN. Every reading below -- the cutoff,
+        // the blockers, the occupants -- is scoped to a connection's own
+        // database, so an arm that ran elsewhere would answer about a horizon
+        // it does not share with its own holder.
+        expect(a[k]['probe_db'], `arm ${k} did not report the database it ran in`).toBe(String(dbf['probe_db']));
+        expect(a[k]['occupants_error'], `arm ${k}'s occupant reading errored, so «who else was in the probe's database» is unanswered`).toBeNull();
+        expect(String(a[k]['occupants'] ?? ''), `arm ${k} read no occupant at all, not even itself, so the reading is blind`).not.toBe('[]');
+        // AND EVERY `VACUUM` REPORTED SUCCESS, which is the whole point: the
+        // return value does not distinguish any of the outcomes below.
+        expect(a[k]['vacuum'], `arm ${k}'s VACUUM errored: ${String(a[k]['vacuum'])}`).toBeNull();
+      }
+      // 1. THE CONTROL, AND ITS PREMISE READ RATHER THAN ASSUMED.
+      //
+      //    Arm 1's claim is: with no older snapshot, a plain `VACUUM` DOES give
+      //    the trailing pages back. «WITH NO OLDER SNAPSHOT» IS A PREMISE ABOUT
+      //    THE CLUSTER, NOT ABOUT THIS TREE, and on run `43398030298` it was
+      //    FALSE: the server's own `removable cutoff: 230642` was two xids
+      //    OLDER than the arm's `delete_xid: 230644`, 4400 tail tuples were
+      //    «dead but not yet removable», and truncation was therefore never
+      //    PERMITTED. The arm failed with «this probe measures nothing» -- a
+      //    sentence that is TRUE and that names no cause -- and that single red
+      //    blocked the `P4-S1` gate for every lane that merges `main`.
+      //
+      //    A LAW THAT REDS ON A PREMISE IT DOES NOT OWN IS A FALSE RED, AND A
+      //    FALSE RED IS HOW A LAW GETS DISABLED. So the premise is MEASURED in
+      //    the same execution and the verdict is three-way. NOTHING IS SKIPPED
+      //    AND NO THRESHOLD MOVES: every execution asserts, and the only
+      //    outcome newly tolerated is the one where the instrument NAMES the
+      //    backend that held the horizon.
+      const heapNotices = (x: Record<string, unknown>): string =>
+        ((x['verbose'] as readonly string[] | undefined) ?? []).filter((l) => l.includes('public.dr101_probe')).join('\n');
+      const held = (x: Record<string, unknown>): readonly Record<string, unknown>[] => [
+        ...((x['blockers_before'] as readonly Record<string, unknown>[] | undefined) ?? []),
+        ...((x['blockers_after'] as readonly Record<string, unknown>[] | undefined) ?? []),
+      ];
+      //    AND A SECOND WITNESS THAT CANNOT GO BLIND: THE SERVER'S OWN CUTOFF.
+      //    `pg_stat_activity` is read from THIS database and names only what is
+      //    still connected when it is read, so it can miss the holder entirely
+      //    -- the P4-S1 lane measured one on run `43523...`-era `#90` as an
+      //    `autovacuum worker` on `pg_catalog.pg_attribute` at
+      //    `backend_xmin = 229965`, a relation and a worker this probe never
+      //    asked about. `removable cutoff` is printed by the `VACUUM` ITSELF
+      //    and is the quantity truncation is actually decided on, so it is the
+      //    witness of record and the activity scan is the corroborating one.
+      //
+      //    MEASURED, in six probe executions of one CI log (`131793746672`) and
+      //    in two here: truncation happens IF AND ONLY IF the cutoff is NEWER
+      //    than the `DELETE`'s own xid. Every truncating execution printed
+      //    `delete_xid + 1`; the one failing execution printed `delete_xid - 2`
+      //    (`230642` against `230644`). THE PAIR OF NUMBERS IS THEREFORE A
+      //    CAUSE, not an inference from a byte count.
+      const cutoffOf = (x: Record<string, unknown>): number | null => {
+        const m = [...heapNotices(x).matchAll(/removable cutoff: (\d+)/g)];
+        // EXACTLY ONE, or none: the probe's heap is vacuumed once, and a second
+        // match would mean the TOAST summary leaked into the filtered text --
+        // the very defect this filter exists to correct.
+        return m.length === 1 ? Number(m[0]?.[1]) : null;
+      };
+      const horizonPassed = (x: Record<string, unknown>): boolean | null => {
+        const c = cutoffOf(x);
+        const d = Number(x['delete_xid']);
+        // `pg_current_xact_id()` is 64-bit and the notice's cutoff is a 32-bit
+        // xid, so the two are comparable only below the first wrap. These
+        // clusters are born per run and never reach it; a tree that does must
+        // be told, not guessed at.
+        if (c === null || !Number.isFinite(d) || d <= 0 || c >= 2 ** 31 || d >= 2 ** 31) return null;
+        return c > d;
+      };
+      type Verdict = 'MECHANISM' | 'ENVIRONMENT_HELD' | 'UNEXPLAINED';
+      const verdictOf = (x: Record<string, unknown>): Verdict =>
+        x['truncated'] === true ? 'MECHANISM' : held(x).length > 0 || horizonPassed(x) === false ? 'ENVIRONMENT_HELD' : 'UNEXPLAINED';
+      //    AND THE READING IS NOT ALLOWED TO BE SILENTLY EMPTY. An errored
+      //    `pg_stat_activity` read returns `[]`, which would read as «nothing
+      //    holds» -- and an empty list that excuses nothing is the same object
+      //    as one that excuses everything (RULE-18 / RULE-19).
+      for (const k of arms) {
+        expect(a[k]['blockers_before_error'], `arm ${k}'s holder reading errored before the VACUUM: ${String(a[k]['blockers_before_error'])}`).toBeNull();
+        expect(a[k]['blockers_after_error'], `arm ${k}'s holder reading errored after the VACUUM: ${String(a[k]['blockers_after_error'])}`).toBeNull();
+      }
+      //    THE BLINDNESS CONTROL, WHICH IS WHAT LICENSES THE BRANCH AT ALL: arm
+      //    2 holds a `REPEATABLE READ` snapshot across its own `DELETE` BY
+      //    CONSTRUCTION, so the SAME instrument must SEE a holder there. If it
+      //    sees none, the instrument is blind, its emptiness in arm 1 means
+      //    nothing, and no execution may be excused by it (RULE-11).
       expect(
-        horizonPassed(a['no_holder']),
-        `the arm truncated while the server's own cutoff had NOT passed the DELETE, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
-      ).toBe(true);
-      expect(saidNoHolder, 'the control arm did not report the heap giving pages back, so the filter is not reading the heap').toMatch(
-        /pages: (?!0 removed)\d+ removed/,
+        held(a['holder_no_wait']).length,
+        `the holder reading saw nobody in the arm that holds a snapshot by construction, so it is blind and cannot excuse arm 1: ${JSON.stringify(a['holder_no_wait'])}`,
+      ).toBeGreaterThan(0);
+      //    ...AND IT MUST BE THE HOLDER THIS ARM PLANTED, BY PID (RULE-27).
+      //    «The reading named somebody» is not «the reading named the planting»:
+      //    the P4-S1 lane measured an `autovacuum worker` on
+      //    `pg_catalog.pg_attribute` entering a cutoff, and a control satisfied
+      //    by a stranger would pass on a tree where the instrument cannot see
+      //    the planting at all. The pid was fixed on the holder's own
+      //    connection BEFORE the `DELETE`, so it is not read off the result it
+      //    judges.
+      expect(
+        a['holder_no_wait']['holder_pid_error'],
+        `the planted holder's own pid could not be read, so arm 2's control has no fingerprint: ${String(a['holder_no_wait']['holder_pid_error'])}`,
+      ).toBeNull();
+      const plantedPid = String(a['holder_no_wait']['holder_pid'] ?? '');
+      expect(plantedPid, 'arm 2 planted a holder but recorded no pid for it, so nothing ties the reading to the planting').not.toBe('');
+      expect(
+        held(a['holder_no_wait']).filter((b) => b['kind'] === 'snapshot' && String(b['pid']) === plantedPid).length,
+        `the holder reading named somebody, but NOT the snapshot this arm planted (pid ${plantedPid}), so it is not reading the planting: ${JSON.stringify(held(a['holder_no_wait']))}`,
+      ).toBeGreaterThan(0);
+      //    AND THE NEGATIVE CONTROL ON THE FINGERPRINT ITSELF: arm 1 plants
+      //    nothing, so it must carry NO pid. A pid here would mean the two arms
+      //    were not the contrast they are read as (RULE-11).
+      expect(a['no_holder']['holder_pid'], 'the control arm reported a planted holder, so the two arms are not the contrast they are read as').toBeNull();
+      //    AND THE BRANCH SELECTION HAS ITS OWN CONTROLS, as a pure function of
+      //    a record -- two that must be excused and two that must NOT be. The
+      //    last is the one that keeps the law a law: no truncation AND nobody
+      //    named is still a red, because then the tree is the only suspect left.
+      const synth = (truncated: boolean, blockers: readonly Record<string, unknown>[]): Record<string, unknown> => ({
+        truncated,
+        blockers_before: blockers,
+        blockers_after: [],
+      });
+      expect(verdictOf(synth(true, [])), 'a truncating arm with a clear horizon is the mechanism itself').toBe('MECHANISM');
+      expect(verdictOf(synth(true, [{ kind: 'snapshot' }])), 'a truncating arm is the mechanism even if somebody was reading').toBe('MECHANISM');
+      expect(verdictOf(synth(false, [{ kind: 'snapshot' }])), 'no truncation WITH a named holder is the environment, not the tree').toBe('ENVIRONMENT_HELD');
+      expect(verdictOf(synth(false, [])), 'no truncation and NOBODY named must stay red, or this branch excuses everything').toBe('UNEXPLAINED');
+      //    AND THE CUTOFF WITNESS HAS THE SAME FOUR, over a record whose
+      //    activity scan is EMPTY -- which is the case `#90` measured and the
+      //    one the scan alone cannot read. The fourth is the plant that must
+      //    NOT be excused: a cutoff the parser could not read is not a licence.
+      const withCutoff = (truncated: boolean, cutoff: string, deleteXid: string): Record<string, unknown> => ({
+        truncated,
+        blockers_before: [],
+        blockers_after: [],
+        delete_xid: deleteXid,
+        verbose: [`INFO: finished vacuuming "x.public.dr101_probe": pages: 0 removed\nremovable cutoff: ${cutoff}, which was 3 XIDs old`],
+      });
+      expect(verdictOf(withCutoff(false, '230642', '230644')), 'a cutoff OLDER than the DELETE is the horizon, named by the server itself').toBe(
+        'ENVIRONMENT_HELD',
       );
-    } else {
-      // The premise did not hold. THE SERVER MUST SAY SO ITSELF, in the same
-      // words arm 2 earns, and the holder must be named: an ENVIRONMENT_HELD
-      // verdict that the server's own summary does not corroborate would be
-      // this file explaining away its own red.
-      expect(
-        saidNoHolder,
-        `arm 1 did not truncate and a holder was named, but the server did not report the tail as unremovable, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
-      ).toMatch(/dead but not yet removable|cannot be removed yet/);
-      expect(saidNoHolder, 'arm 1 did not truncate yet the server reported pages removed, so the size reading and the notices disagree').toMatch(
-        /pages: 0 removed/,
+      expect(verdictOf(withCutoff(false, '230645', '230644')), 'a cutoff NEWER than the DELETE leaves the tree the only suspect').toBe('UNEXPLAINED');
+      expect(verdictOf(withCutoff(false, '230644', '230644')), 'a cutoff EQUAL to the DELETE still sees the tail, so it is the horizon').toBe(
+        'ENVIRONMENT_HELD',
       );
-      // AND THE CUTOFF MUST CARRY THE SAME SENTENCE. This is what keeps the
-      // branch from being an excuse: `ENVIRONMENT_HELD` is only available
-      // when the quantity truncation is DECIDED on had not passed the
-      // `DELETE`. A named holder with a cutoff that HAD passed is a
-      // contradiction, and it stays red.
       expect(
-        horizonPassed(a['no_holder']),
-        `arm 1 did not truncate, but the server's own cutoff HAD passed the DELETE, so nothing in this reading explains the tail: ${JSON.stringify(a['no_holder'])}`,
+        verdictOf({ truncated: false, blockers_before: [], blockers_after: [], delete_xid: '230644', verbose: [] }),
+        'an unreadable cutoff is not a licence',
+      ).toBe('UNEXPLAINED');
+      //    AND THE PARSER IS PROVEN TO READ THE REAL THING, on both arms of
+      //    this execution, before any verdict of theirs is believed (RULE-18):
+      //    a parser that silently returned `null` would make every arm
+      //    UNEXPLAINED and would read as «the tree is at fault».
+      for (const k of arms) {
+        expect(cutoffOf(a[k]), `the VACUUM's own removable cutoff could not be read for arm ${k}: ${JSON.stringify(a[k]['verbose'])}`).not.toBeNull();
+        expect(horizonPassed(a[k]), `arm ${k}'s cutoff and delete_xid are not comparable, so the witness of record is unreadable`).not.toBeNull();
+      }
+      const v1 = verdictOf(a['no_holder']);
+      expect(
+        v1,
+        `a plain VACUUM did not truncate and NOTHING in this database held a snapshot as old as the DELETE, so the assumption :4980 rests on is false on this tree: ${JSON.stringify(a['no_holder'])}`,
+      ).not.toBe('UNEXPLAINED');
+      // 2. THE MECHANISM: one open snapshot older than the `DELETE` is
+      //    SUFFICIENT to leave the relation at its inflated size -- the exact
+      //    shape of the intermittent CI failure, reproduced on demand.
+      expect(
+        a['holder_no_wait']['truncated'],
+        `an older snapshot did NOT stop the truncation, so this is not the mechanism: ${JSON.stringify(a['holder_no_wait'])}`,
       ).toBe(false);
-      console.log(`[DR-101] arm no_holder could not ask: the horizon was held by ${JSON.stringify(held(a['no_holder']))}`);
-    }
-  });
+      // ...AND THE SERVER SAYS SO ITSELF, rather than this file inferring a
+      //    cause from two byte counts. BOTH WORDINGS ARE ACCEPTED, and the
+      //    first is the MEASURED one: PostgreSQL 16.15 on this cluster printed
+      //    «4400 are dead but not yet removable» in the per-relation summary,
+      //    where older majors said «N dead row versions cannot be removed yet».
+      //    That spelling is what red this probe on run 42147185172 -- the
+      //    mechanism held and only my pattern was wrong -- and the second is
+      //    kept so a server wording cannot turn a working probe into a false
+      //    red about the mechanism. The PAGE fact is asserted beside it,
+      //    because the wording alone is about TUPLES while `:4980` charges for
+      //    PAGES.
+      //    ── AND THE MATCH IS NARROWED TO THE PROBE'S OWN HEAP SUMMARY, WHICH
+      //       IS A CORRECTION OF A SILENT FALSE POSITIVE IN THIS VERY ARM.
+      //
+      //       `dr101_probe` has a `text` column, so it has a TOAST relation, and
+      //       one `VACUUM` of the table vacuums BOTH and reports BOTH on the
+      //       same connection. The TOAST table is always empty here, so its own
+      //       summary reads `pages: 0 removed, 0 remain` and
+      //       `0 are dead but not yet removable` -- WHICH SATISFIES BOTH
+      //       PATTERNS BELOW ON ITS OWN. Joining every notice into one string
+      //       therefore asserted nothing about the HEAP: had the heap truncated
+      //       in full, the joined text would STILL have matched, out of the
+      //       TOAST entry. MEASURED, not reasoned: in the log of
+      //       `265c9ec1`, arm 2's notices are four, and entry 1
+      //       (`…public.dr101_probe`) and entry 3 (`…pg_toast.pg_toast_27823`)
+      //       EACH match both patterns by themselves.
+      //
+      //       So the notices are filtered to the entries that NAME the probe's
+      //       heap before they are joined, the filtered text is shown NON-EMPTY
+      //       before any match of it is believed (RULE-18 / RULE-19), and the
+      //       `pg_toast` entry is asserted ABSENT from it -- a positive control
+      //       and a negative one, because a filter that silently matched nothing
+      //       would read as «the server said nothing» and a filter that let the
+      //       TOAST line through would be the defect it replaces (RULE-11,
+      //       RULE-27).
+      const saidNoWait = heapNotices(a['holder_no_wait']);
+      expect(
+        saidNoWait.length,
+        `no notice named the probe's own heap, so the matches below would assert nothing: ${JSON.stringify(a['holder_no_wait']['verbose'])}`,
+      ).toBeGreaterThan(0);
+      expect(saidNoWait, "the probe's heap notices leaked a TOAST summary, which satisfies both patterns below on its own").not.toMatch(/pg_toast/);
+      expect(saidNoWait, 'the server did not report the tail as unremovable').toMatch(/dead but not yet removable|cannot be removed yet/);
+      expect(saidNoWait, 'the server did not report that it removed no pages').toMatch(/pages: 0 removed/);
+      //    AND THE MECHANISM ARM IS THE POSITIVE CONTROL FOR THE CUTOFF
+      //    WITNESS: its own holder keeps the cutoff from passing the `DELETE`,
+      //    MEASURED here as `1848` against `delete_xid 1852` and in CI as
+      //    `230650` against `230650`. A witness that read `true` here would be
+      //    reading something other than the horizon (RULE-11).
+      expect(
+        horizonPassed(a['holder_no_wait']),
+        `the mechanism arm held a snapshot across its DELETE and the cutoff passed it anyway, so the cutoff is not reading the horizon: ${JSON.stringify(a['holder_no_wait'])}`,
+      ).toBe(false);
+      //    ...AND THE CONTROL ARM IS HELD TO THE SAME READING, which is what
+      //    makes the pair discriminate: the SAME filter on arm 1 must show the
+      //    heap REMOVING pages. Without this line the filter above could be
+      //    wrong in a way that only ever passes.
+      const saidNoHolder = heapNotices(a['no_holder']);
+      expect(saidNoHolder.length, `no notice named the probe's own heap in the control arm: ${JSON.stringify(a['no_holder']['verbose'])}`).toBeGreaterThan(0);
+      //    AND THE CONTROL ARM IS HELD TO THE READING ITS OWN VERDICT EARNS.
+      //    BOTH BRANCHES ASSERT, AND THE SERVER'S WORDS MUST AGREE WITH THE
+      //    BLOCKER LIST IN EITHER ONE. The branch is not a way out: it is the
+      //    measured dichotomy, and the third case is already red above.
+      if (v1 === 'MECHANISM') {
+        // The premise held, so the pair discriminates: the SAME filter that
+        // shows arm 2 removing nothing must show arm 1 removing pages.
+        expect(a['no_holder']['truncated'], 'the verdict says MECHANISM but the arm did not truncate').toBe(true);
+        // and the server's own cutoff agrees with the outcome: it PASSED the
+        // DELETE. If it did not, truncation and the cutoff disagree and one of
+        // the two readings is wrong.
+        expect(
+          horizonPassed(a['no_holder']),
+          `the arm truncated while the server's own cutoff had NOT passed the DELETE, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
+        ).toBe(true);
+        expect(saidNoHolder, 'the control arm did not report the heap giving pages back, so the filter is not reading the heap').toMatch(
+          /pages: (?!0 removed)\d+ removed/,
+        );
+      } else {
+        // The premise did not hold. THE SERVER MUST SAY SO ITSELF, in the same
+        // words arm 2 earns, and the holder must be named: an ENVIRONMENT_HELD
+        // verdict that the server's own summary does not corroborate would be
+        // this file explaining away its own red.
+        expect(
+          saidNoHolder,
+          `arm 1 did not truncate and a holder was named, but the server did not report the tail as unremovable, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
+        ).toMatch(/dead but not yet removable|cannot be removed yet/);
+        expect(saidNoHolder, 'arm 1 did not truncate yet the server reported pages removed, so the size reading and the notices disagree').toMatch(
+          /pages: 0 removed/,
+        );
+        // AND THE CUTOFF MUST CARRY THE SAME SENTENCE. This is what keeps the
+        // branch from being an excuse: `ENVIRONMENT_HELD` is only available
+        // when the quantity truncation is DECIDED on had not passed the
+        // `DELETE`. A named holder with a cutoff that HAD passed is a
+        // contradiction, and it stays red.
+        expect(
+          horizonPassed(a['no_holder']),
+          `arm 1 did not truncate, but the server's own cutoff HAD passed the DELETE, so nothing in this reading explains the tail: ${JSON.stringify(a['no_holder'])}`,
+        ).toBe(false);
+        console.log(`[DR-101] arm no_holder could not ask: the horizon was held by ${JSON.stringify(held(a['no_holder']))}`);
+      }
+    });
+  }
 });
