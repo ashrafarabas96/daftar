@@ -917,5 +917,13 @@
   "nav.customers": "Customers",
   "customers.list.title": "Customers",
   "customers.list.empty": "No customers yet",
-  "customers.list.contact": "Contact: {name}"
+  "customers.list.contact": "Contact: {name}",
+  "nav.invoices": "Invoices",
+  "invoices.list.title": "Invoices",
+  "invoices.list.empty": "No invoices yet",
+  "invoices.list.sellSomething": "Make a sale",
+  "invoices.list.dated": "Dated {date}",
+  "invoices.status.draft": "Not issued yet",
+  "invoices.status.open": "Issued",
+  "invoices.status.void": "Cancelled"
 }

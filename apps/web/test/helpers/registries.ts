@@ -17,6 +17,7 @@ export const PAGE_AREAS: Readonly<Record<string, string>> = {
   suppliers: 'suppliers',
   pos: 'pos',
   customers: 'customers',
+  invoices: 'invoices',
 };
 
 /** The page areas present on disk. */
