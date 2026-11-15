@@ -3794,7 +3794,8 @@ jobs:
   # `backend-work`, so exactly one check-run is named `backend`.
   backend-required:
     name: backend
-    needs: [backend, backend-static, backend-gates-p2, backend-golden, backend-ctl-budget-in, backend-ctl-budget-out, backend-ctl-ratio-in, backend-ctl-ratio-out]
+    needs:
+      [backend, backend-static, backend-gates-p2, backend-golden, backend-ctl-budget-in, backend-ctl-budget-out, backend-ctl-ratio-in, backend-ctl-ratio-out]
     if: always()
     runs-on: ubuntu-latest
     steps:
