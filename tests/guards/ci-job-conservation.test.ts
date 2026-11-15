@@ -586,7 +586,7 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED: `if: always()` is removed, so a skipped part would skip the aggregate', () => {
-    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n {4}needs:[^\]]*\]\n) {4}if: always\(\)\n/, '$1');
+    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n(?: {4}#[^\n]*\n)* {4}needs:[^\]]*\]\n) {4}if: always\(\)\n/, '$1');
     expect(planted, 'the if line was not found to remove — update this proof').not.toBe(ci);
     expect(aggregateProblems(planted).join('\n')).toContain('no `if: always()`');
   });
