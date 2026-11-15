@@ -181,7 +181,19 @@ describe('a green run of one lane is not quotable for the other', () => {
     // Asserted over BLANKED source, so the word "exclude" in either
     // config's own prose cannot satisfy or break the law. A text law
     // satisfied by a comment is this project's most repeated defect.
-    expect(blankOut(db)).not.toMatch(/exclude\s*:/);
+    const dbExecutable = blankOut(db);
+    expect(dbExecutable).not.toMatch(/exclude\s*:/);
+    // SIGHTED, and this is the half the line above cannot supply itself: a
+    // blanker that returned nothing -- or that stopped being called on a view
+    // this case then re-derived -- satisfies a `not.toMatch` for free. So the
+    // same view is asserted to STILL CARRY the executable text this config is
+    // read for. A negative assertion over a TRANSFORMED input cannot detect
+    // that the transform stopped; only a positive one on the same view can.
+    // MEASURED, not assumed: the blanker blanks STRING CONTENTS too, so the
+    // path inside `include: [...]` is spaces in this view and only the KEY
+    // is still code. That is what is asserted -- the raw-text assertions
+    // above already hold the path itself.
+    expect(dbExecutable, 'the blanked view carries no `include:` key, so the absence above is vacuous').toMatch(/include:\s*\[/);
   });
 
   it('and no pure test file reaches for a database', () => {

@@ -215,7 +215,14 @@ describe('PART 26 — a missing credential can never become a fake success', () 
     // And there is no refusal code for a decline, because a decline is not a
     // refusal — `test/error-codes-are-live.test.ts` found the dead code that
     // claimed otherwise.
-    expect(stringLiteralsOf(readFileSync(join(SRC, 'errors.ts'), 'utf8'))).not.toContain('billing.provider_declined');
+    const errorLiterals = stringLiteralsOf(readFileSync(join(SRC, 'errors.ts'), 'utf8'));
+    expect(errorLiterals).not.toContain('billing.provider_declined');
+    // SIGHTED on the SAME file. The sighting above is on `ports.ts`, and an
+    // extractor that returned nothing FOR THIS FILE would satisfy the absence
+    // for free -- an absence read out of an empty list is not a measurement
+    // (RULE-18). A code this file certainly declares is therefore asserted
+    // present in the very list the line above reads.
+    expect(errorLiterals, 'no literal was extracted from errors.ts, so the absence above is vacuous').toContain('billing.invariant_violated');
   });
 });
 
