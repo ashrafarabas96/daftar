@@ -32,6 +32,7 @@ import { ADDON_KINDS } from '../src/addons';
 import { decideDunning, DUNNING_OUTCOMES } from '../src/dunning';
 import { FAKE_BEHAVIOURS, FakePaymentProvider } from '../src/fake-provider';
 import { billingPeriodAt } from '../src/period';
+import { BillingError, refuse } from '../src/errors';
 import { BILLING_INTERVALS } from '../src/types';
 import { blankOut } from './helpers/lexer';
 
@@ -53,6 +54,20 @@ function exportedValues(source: string): readonly string[] {
   return names;
 }
 
+/**
+ * The test sources, BLANKED — their comments and string literals replaced with
+ * spaces, so a name that appears only in prose does not count as exercised.
+ *
+ * MEASURED, and it found a live one. Read raw, this law's own arm below was
+ * satisfied for `refuse` — the function EVERY refusal in this package is
+ * thrown through — because its only occurrences across all test sources were
+ * the assertion message "the call was expected to refuse and did not" and two
+ * comments. Nothing named the function. The arm at line 130 of this file
+ * already says "a text law satisfied by a comment is this project's most
+ * repeated defect", and the arm above it was that law. So the probe that found
+ * it is also recorded: of 47 exported values, exactly ONE matched the raw
+ * sources and not the blanked ones, and it was `errors.ts:refuse`.
+ */
 function readAllTestSources(): string {
   const parts: string[] = [];
   const walk = (dir: string): void => {
@@ -65,7 +80,7 @@ function readAllTestSources(): string {
     }
   };
   walk(TEST);
-  return parts.join('\n');
+  return blankOut(parts.join('\n'));
 }
 
 describe('the extractor is not vacuous', () => {
@@ -92,20 +107,59 @@ describe('the extractor is not vacuous', () => {
   });
 });
 
+/**
+ * The exports no test names, as `file:name`. ONE function, called by the arm
+ * below AND by its control: a control that restated this loop would certify
+ * its own copy of it rather than the one the law runs.
+ */
+function unexercisedIn(tests: string): string[] {
+  const unexercised: string[] = [];
+  for (const file of readdirSync(SRC)) {
+    if (!file.endsWith('.ts')) continue;
+    for (const name of exportedValues(readFileSync(join(SRC, file), 'utf8'))) {
+      if (!new RegExp(`\\b${name}\\b`).test(tests)) unexercised.push(`${file}:${name}`);
+    }
+  }
+  return unexercised;
+}
+
 describe('no exported value of this package is unexercised', () => {
   it('every exported function, const and class is named by at least one test file', () => {
-    const tests = readAllTestSources();
-    const unexercised: string[] = [];
-    for (const file of readdirSync(SRC)) {
-      if (!file.endsWith('.ts')) continue;
-      for (const name of exportedValues(readFileSync(join(SRC, file), 'utf8'))) {
-        if (!new RegExp(`\\b${name}\\b`).test(tests)) unexercised.push(`${file}:${name}`);
-      }
-    }
     // Named, not counted: a non-empty list of names is a defect report,
     // while "0 unexercised exports" is a number that could be produced by
     // an extractor that found nothing.
-    expect(unexercised).toEqual([]);
+    expect(unexercisedIn(readAllTestSources())).toEqual([]);
+  });
+
+  it('RED: a name that appears only in prose is NOT read as exercised', () => {
+    // The control of the blanking, and of the arm above, in one: a source in
+    // which every export name occurs ONLY inside a comment and a string must
+    // report them ALL unexercised. Read raw, this answer was `[]` and the law
+    // was satisfied by prose -- which is how `refuse` passed.
+    const prose = ['// priceAddOn decideDunning billingPeriodAt refuse', "const why = 'ADDON_KINDS BILLING_INTERVALS DUNNING_OUTCOMES FAKE_BEHAVIOURS';"].join(
+      '\n',
+    );
+    const named = unexercisedIn(blankOut(prose));
+    expect(named.length, 'a file of pure prose exercises nothing, so every export must be reported').toBeGreaterThan(25);
+    expect(named.join(' '), 'and the report names the export that provoked this case').toContain('errors.ts:refuse');
+    // SIGHTED, and this is the half that makes the answer above mean
+    // something: the same names written as CODE are not reported.
+    const asCode = unexercisedIn(blankOut('const used = [priceAddOn, decideDunning, billingPeriodAt, refuse];'));
+    expect(asCode, 'a name written as code is still reported unexercised, so this reader answers the same way whatever it is given').not.toContain(
+      'errors.ts:refuse',
+    );
+    // AND the arm's own input is the executable half. The two answers above
+    // blank their input at the call site, so they would not notice if
+    // `readAllTestSources` stopped blanking -- and that change is invisible on
+    // today's tree, because `refuse` is now named in code as well. So the
+    // input is read directly, on the exact message that excused `refuse`:
+    const read = readAllTestSources();
+    expect(read, 'an assertion MESSAGE survived into the arm input, so the arm is reading prose again').not.toContain(
+      'the call was expected to refuse and did not',
+    );
+    // SIGHTED: and it did not blank everything, which would also satisfy the
+    // line above while making the arm vacuous.
+    expect(read, 'the executable text is gone from the arm input').toContain('unexercisedIn(');
   });
 
   it('and there are enough of them for that to mean something', () => {
@@ -209,6 +263,35 @@ describe('each exported union constant is the set its validator enforces', () =>
       expect(() => decideDunning(input(outcome))).not.toThrow();
     }
     expect(() => decideDunning(input('pending'))).toThrow();
+  });
+
+  /**
+   * And `refuse` itself, which the arm above found unexercised the moment it
+   * stopped reading prose. It is the fifth entry of the list this `describe`
+   * opens with, for the same reason as the other four: it was exercised
+   * BEHAVIOURALLY all along -- every refusal in this package is thrown through
+   * it -- and NAMED nowhere, so nothing held the one function that turns a
+   * code and a context into the exception a client sees. It is exercised here
+   * rather than excused in an allowlist, which is what keeps the arm above
+   * free of one.
+   */
+  it('refuse', () => {
+    let caught: unknown;
+    try {
+      refuse('billing.invariant_violated', 'a message that must not travel', { businessId: 'b1', invariant: 'x' });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught, 'refuse returned instead of throwing').toBeInstanceOf(BillingError);
+    const error = caught as BillingError;
+    expect(error.code).toBe('billing.invariant_violated');
+    // The context travels and the message does NOT, which is the whole of what
+    // this function is for.
+    expect(error.toSafeJSON()).toEqual({ code: 'billing.invariant_violated', businessId: 'b1', invariant: 'x' });
+    expect(JSON.stringify(error.toSafeJSON())).not.toContain('must not travel');
+    // And its declared default: no context at all is an empty context, not a
+    // thrown reader.
+    expect(() => refuse('billing.invariant_violated', 'm')).toThrow(BillingError);
   });
 
   it('FAKE_BEHAVIOURS', () => {

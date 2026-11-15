@@ -409,7 +409,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/addon-meters.test.ts": 15,
     "test/addons.test.ts": 11,
     "test/collection.test.ts": 20,
-    "test/coverage-truth.test.ts": 9,
+    "test/coverage-truth.test.ts": 11,
     "test/credit-application-currency.test.ts": 7,
     "test/credit-application.test.ts": 18,
     # 26 -> 38 when two independent reviews' blockers were closed on the
@@ -535,7 +535,21 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # 6 passed, the six being the laws themselves). An ADDITION only, and the
 # figure is the one the package's own run printed on Windows (`24 failed |
 # 368 passed (392)`, the 24 host-condition failures being the SAME 24).
-EXPECTED_TOTAL_CASES = 392
+# 392 -> 394 when `test/coverage-truth.test.ts` was measured to be reading
+# PROSE. Its arm "every exported value is named by at least one test file"
+# tested each name against the RAW test sources, and of this package's 47
+# exported values exactly ONE matched the raw sources and not the blanked
+# ones: `errors.ts:refuse`, the function EVERY refusal here is thrown
+# through. Its only occurrences in the suite were the assertion message
+# "the call was expected to refuse and did not" and two comments -- in the
+# very file that says a text law satisfied by a comment is this project's
+# most repeated defect. The arm now reads the blanked half, `refuse` is
+# EXERCISED rather than allowlisted, and a control holds the blanking from
+# both sides. The two cases are named at that file's own row above (9 ->
+# 11). An ADDITION only, and the figure is the one the package's own run
+# printed on Windows after the reformat (`24 failed | 370 passed (394)`,
+# the 24 host-condition failures being the SAME 24).
+EXPECTED_TOTAL_CASES = 394
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
