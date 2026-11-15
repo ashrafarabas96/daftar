@@ -3774,232 +3774,248 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // below requires each window to START AFTER the previous one ENDED, so
       // an overlap is reported rather than assumed away.
       const cycleStartedAt = Date.now();
-      const PROBE_DB = 'daftar_s7f1_dr101probe';
-      const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
-      dbf['create_error'] = await (async (): Promise<string | null> => {
-        try {
-          // A database left behind by an execution that died is dropped first,
-          // the same way `createScratchDb` does it, so a stale one cannot be
-          // mistaken for this execution's.
-          await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
-          await sup.query(`CREATE DATABASE ${PROBE_DB}`);
-          return null;
-        } catch (e) {
-          return err(e);
-        }
-      })();
-      dbf['created'] = ((
-        await sup.query<Record<string, unknown>>(
-          `SELECT d.oid::text AS oid, d.datname, pg_encoding_to_char(d.encoding) AS encoding, d.datallowconn
-               FROM pg_database d WHERE d.datname = $1`,
-          [PROBE_DB],
-        )
-      ).rows[0] ?? null) as Record<string, unknown> | null;
-      // The probe's pool tolerates idle-client errors for the same reason
-      // `scratchPool` does: the database is dropped `WITH (FORCE)` below, which
-      // terminates whatever is still attached. Every query is awaited, so a
-      // real failure still rejects.
-      const probe = new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 2 });
-      probe.on('error', () => undefined);
-      type ArmOpts = { name: string; holder: 'none' | 'through' };
-      const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
-        const verbose: string[] = [];
-        const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
-          verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
-        };
-        const size = async (): Promise<string> =>
-          String((await probe.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
-        // The holder gets a pool of its OWN rather than a second checkout of
-        // `probe` (`max: 2`): a probe that deadlocked on its own connection
-        // budget would read as the failure it is looking for.
-        const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
-        let holder: PoolClient | undefined;
-        let v: PoolClient | undefined;
-        // THE PLANTED HOLDER'S OWN FINGERPRINT (RULE-27). Arm 2 is the positive
-        // control for the holder reading, and without this the control passes
-        // whenever the reading names ANYBODY -- including the `autovacuum
-        // worker` on `pg_catalog.pg_attribute` the P4-S1 lane measured, which
-        // this probe never planted. The pid is taken ON THE HOLDER'S OWN
-        // CONNECTION, after its snapshot is open and BEFORE the `DELETE`, so it
-        // is fixed before any result that it judges is read.
-        let holderPid: string | null = null;
-        let holderPidError: string | null = null;
-        try {
-          await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
-          await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
-          await probe.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
-          await probe.query('VACUUM public.dr101_probe');
-          const base = await size();
-          await probe.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
-          const inflated = await size();
-          // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
-          // the `DELETE`, which is the one ordering under which the 4400 tail
-          // tuples are dead to everyone else and still visible to it.
-          // `REPEATABLE READ` is what makes the snapshot outlive the statement.
-          if (holderPool !== undefined) {
-            holder = await holderPool.connect();
-            await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-            await holder.query('SELECT count(*) FROM public.dr101_probe');
-            try {
-              holderPid = String((await holder.query<{ pid: string }>('SELECT pg_backend_pid()::text AS pid')).rows[0]?.pid ?? '');
-            } catch (e) {
-              holderPidError = err(e);
-            }
+      // AND A CYCLE THAT THROWS IS STILL A PUBLISHED CYCLE. Measured before
+      // this wrapper existed: `dbf['created']` and `dbf['remaining_after_drop']`
+      // read `sup` with no guard of their own, so one unexpected throw at cycle
+      // 3 escaped the loop, took the whole `beforeAll` with it, and ALL TEN
+      // cases would have failed with one setup error -- hiding where cycles 4
+      // to 10 stood. That is the exact damage ten cases exist to prevent,
+      // moved from the loop into the fixture, so it is closed here rather than
+      // assumed closed by the per-field `*_error` fields, which cover only the
+      // statements they wrap.
+      try {
+        const PROBE_DB = 'daftar_s7f1_dr101probe';
+        const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
+        dbf['create_error'] = await (async (): Promise<string | null> => {
+          try {
+            // A database left behind by an execution that died is dropped first,
+            // the same way `createScratchDb` does it, so a stale one cannot be
+            // mistaken for this execution's.
+            await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+            await sup.query(`CREATE DATABASE ${PROBE_DB}`);
+            return null;
+          } catch (e) {
+            return err(e);
           }
-          // The `DELETE` reports its OWN xid, in the same statement, so that the
-          // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
-          // backends hold a snapshot at least as old as THIS `DELETE`». A
-          // `DELETE` whose xid is not known can only be compared against a
-          // guess. It is a label on a diagnostic, not an input to any wait --
-          // there is no longer a wait.
-          const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
-            try {
-              const r = await probe.query<{ xid: string; n: number }>(
-                `WITH d AS (DELETE FROM public.dr101_probe WHERE id > 1 RETURNING 1)
-                 SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
-              );
-              return { error: null, xid: String(r.rows[0]?.xid ?? '') };
-            } catch (e) {
-              return { error: err(e), xid: '' };
-            }
-          })();
-          // WHO HOLDS THE HORIZON -- READ BEFORE THE `VACUUM` AND AGAIN AFTER
-          // IT, WITH THE `DELETE`'S OWN XID AS REFERENT. This is NOT a wait and
-          // nothing inside the probe branches on it: it is the ONE quantity arm
-          // 1's claim rests on, recorded instead of assumed.
-          //
-          // MEASURED on run `43398030298` (`backend`, job `131793746672`, step
-          // «Phase 4 slice gate -- P4-S1»): arm 1 reported
-          // `delete_xid: 230644` while the server printed
-          // `removable cutoff: 230642, which was 3 XIDs old when operation
-          // ended` and «4400 are dead but not yet removable» -- a snapshot AT
-          // LEAST AS OLD AS THE `DELETE` existed in this database, so the tail
-          // pages were not EMPTY and truncation was never PERMITTED. The arm
-          // measured the horizon, not the mechanism, and failed saying «this
-          // probe measures nothing» WITHOUT NAMING WHAT STOPPED IT.
-          //
-          // The owner withdrew the bounded wait on `n_backends = 0 in 4 of 4`;
-          // that premise is now measured FALSE at least once. Nothing here
-          // restores the wait: the reading is what lets the law below tell «the
-          // mechanism is false» from «this execution could not ask», and arm 2
-          // is the positive control that the reading is not blind (RULE-11).
-          const blockersBefore =
-            deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
-          // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
-          // wait on and nothing after it to re-issue; the arm's whole claim is
-          // what the server says about that ONE command.
-          const vacuum = await (async (): Promise<string | null> => {
-            try {
-              v = await probe.connect();
-              v.on('notice', onNotice);
-              await v.query('VACUUM (VERBOSE) public.dr101_probe');
-              return null;
-            } catch (e) {
-              return err(e);
-            } finally {
-              if (v !== undefined) {
-                v.removeListener('notice', onNotice);
-                v.release();
-                v = undefined;
+        })();
+        dbf['created'] = ((
+          await sup.query<Record<string, unknown>>(
+            `SELECT d.oid::text AS oid, d.datname, pg_encoding_to_char(d.encoding) AS encoding, d.datallowconn
+                 FROM pg_database d WHERE d.datname = $1`,
+            [PROBE_DB],
+          )
+        ).rows[0] ?? null) as Record<string, unknown> | null;
+        // The probe's pool tolerates idle-client errors for the same reason
+        // `scratchPool` does: the database is dropped `WITH (FORCE)` below, which
+        // terminates whatever is still attached. Every query is awaited, so a
+        // real failure still rejects.
+        const probe = new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 2 });
+        probe.on('error', () => undefined);
+        type ArmOpts = { name: string; holder: 'none' | 'through' };
+        const arm = async (opts: ArmOpts): Promise<Record<string, unknown>> => {
+          const verbose: string[] = [];
+          const onNotice = (n: { severity: string | undefined; message: string | undefined }): void => {
+            verbose.push(`${String(n.severity ?? 'INFO')}: ${String(n.message ?? '')}`);
+          };
+          const size = async (): Promise<string> =>
+            String((await probe.query<{ n: string }>(`SELECT pg_relation_size('public.dr101_probe')::text AS n`)).rows[0]?.n);
+          // The holder gets a pool of its OWN rather than a second checkout of
+          // `probe` (`max: 2`): a probe that deadlocked on its own connection
+          // budget would read as the failure it is looking for.
+          const holderPool = opts.holder === 'none' ? undefined : new Pool({ connectionString: urlOf(PROBE_DB, 'postgres'), max: 1 });
+          let holder: PoolClient | undefined;
+          let v: PoolClient | undefined;
+          // THE PLANTED HOLDER'S OWN FINGERPRINT (RULE-27). Arm 2 is the positive
+          // control for the holder reading, and without this the control passes
+          // whenever the reading names ANYBODY -- including the `autovacuum
+          // worker` on `pg_catalog.pg_attribute` the P4-S1 lane measured, which
+          // this probe never planted. The pid is taken ON THE HOLDER'S OWN
+          // CONNECTION, after its snapshot is open and BEFORE the `DELETE`, so it
+          // is fixed before any result that it judges is read.
+          let holderPid: string | null = null;
+          let holderPidError: string | null = null;
+          try {
+            await probe.query('DROP TABLE IF EXISTS public.dr101_probe');
+            await probe.query(`CREATE TABLE public.dr101_probe (id bigint PRIMARY KEY, pad text) WITH (autovacuum_enabled = false)`);
+            await probe.query(`INSERT INTO public.dr101_probe SELECT 1, repeat('x', 200)`);
+            await probe.query('VACUUM public.dr101_probe');
+            const base = await size();
+            await probe.query(`INSERT INTO public.dr101_probe SELECT g, repeat('x', 200) FROM generate_series(2, 4401) g`);
+            const inflated = await size();
+            // THE HOLDER TAKES ITS SNAPSHOT HERE: after the inflation and BEFORE
+            // the `DELETE`, which is the one ordering under which the 4400 tail
+            // tuples are dead to everyone else and still visible to it.
+            // `REPEATABLE READ` is what makes the snapshot outlive the statement.
+            if (holderPool !== undefined) {
+              holder = await holderPool.connect();
+              await holder.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+              await holder.query('SELECT count(*) FROM public.dr101_probe');
+              try {
+                holderPid = String((await holder.query<{ pid: string }>('SELECT pg_backend_pid()::text AS pid')).rows[0]?.pid ?? '');
+              } catch (e) {
+                holderPidError = err(e);
               }
             }
-          })();
-          const after = await size();
-          const blockersAfter =
-            deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
-          // WHO ELSE IS IN THE PROBE'S OWN DATABASE, BY PID AND BY
-          // `backend_type`. This is the fact the move is FOR, and it is
-          // recorded rather than asserted to be empty: the arm's own two
-          // connections are in it by construction, and a maintenance worker
-          // that appears here is the spoiler this measurement exists to count.
-          const occupants = await (async (): Promise<Record<string, unknown>> => {
-            try {
-              return {
-                list: (
-                  await probe.query<{ j: string }>(
-                    `SELECT coalesce(json_agg(json_build_object('pid', pid, 'backend_type', backend_type, 'usename', usename,
-                                                                'backend_xmin', backend_xmin::text, 'state', state) ORDER BY pid)::text, '[]') AS j
-                       FROM pg_stat_activity WHERE datname = current_database()`,
-                  )
-                ).rows[0]?.j,
-              };
-            } catch (e) {
-              return { error: err(e) };
+            // The `DELETE` reports its OWN xid, in the same statement, so that the
+            // `pg_stat_activity` reading taken afterwards HAS A REFERENT: «which
+            // backends hold a snapshot at least as old as THIS `DELETE`». A
+            // `DELETE` whose xid is not known can only be compared against a
+            // guess. It is a label on a diagnostic, not an input to any wait --
+            // there is no longer a wait.
+            const deleted = await (async (): Promise<{ error: string | null; xid: string }> => {
+              try {
+                const r = await probe.query<{ xid: string; n: number }>(
+                  `WITH d AS (DELETE FROM public.dr101_probe WHERE id > 1 RETURNING 1)
+                   SELECT pg_current_xact_id()::text AS xid, (SELECT count(*)::int FROM d) AS n`,
+                );
+                return { error: null, xid: String(r.rows[0]?.xid ?? '') };
+              } catch (e) {
+                return { error: err(e), xid: '' };
+              }
+            })();
+            // WHO HOLDS THE HORIZON -- READ BEFORE THE `VACUUM` AND AGAIN AFTER
+            // IT, WITH THE `DELETE`'S OWN XID AS REFERENT. This is NOT a wait and
+            // nothing inside the probe branches on it: it is the ONE quantity arm
+            // 1's claim rests on, recorded instead of assumed.
+            //
+            // MEASURED on run `43398030298` (`backend`, job `131793746672`, step
+            // «Phase 4 slice gate -- P4-S1»): arm 1 reported
+            // `delete_xid: 230644` while the server printed
+            // `removable cutoff: 230642, which was 3 XIDs old when operation
+            // ended` and «4400 are dead but not yet removable» -- a snapshot AT
+            // LEAST AS OLD AS THE `DELETE` existed in this database, so the tail
+            // pages were not EMPTY and truncation was never PERMITTED. The arm
+            // measured the horizon, not the mechanism, and failed saying «this
+            // probe measures nothing» WITHOUT NAMING WHAT STOPPED IT.
+            //
+            // The owner withdrew the bounded wait on `n_backends = 0 in 4 of 4`;
+            // that premise is now measured FALSE at least once. Nothing here
+            // restores the wait: the reading is what lets the law below tell «the
+            // mechanism is false» from «this execution could not ask», and arm 2
+            // is the positive control that the reading is not blind (RULE-11).
+            const blockersBefore =
+              deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
+            // EXACTLY ONE `VACUUM`, ON EVERY PATH. There is nothing before it to
+            // wait on and nothing after it to re-issue; the arm's whole claim is
+            // what the server says about that ONE command.
+            const vacuum = await (async (): Promise<string | null> => {
+              try {
+                v = await probe.connect();
+                v.on('notice', onNotice);
+                await v.query('VACUUM (VERBOSE) public.dr101_probe');
+                return null;
+              } catch (e) {
+                return err(e);
+              } finally {
+                if (v !== undefined) {
+                  v.removeListener('notice', onNotice);
+                  v.release();
+                  v = undefined;
+                }
+              }
+            })();
+            const after = await size();
+            const blockersAfter =
+              deleted.xid === '' ? { blockers: [], error: 'the DELETE reported no xid' } : await truncationBlockers('public.dr101_probe', deleted.xid, probe);
+            // WHO ELSE IS IN THE PROBE'S OWN DATABASE, BY PID AND BY
+            // `backend_type`. This is the fact the move is FOR, and it is
+            // recorded rather than asserted to be empty: the arm's own two
+            // connections are in it by construction, and a maintenance worker
+            // that appears here is the spoiler this measurement exists to count.
+            const occupants = await (async (): Promise<Record<string, unknown>> => {
+              try {
+                return {
+                  list: (
+                    await probe.query<{ j: string }>(
+                      `SELECT coalesce(json_agg(json_build_object('pid', pid, 'backend_type', backend_type, 'usename', usename,
+                                                                  'backend_xmin', backend_xmin::text, 'state', state) ORDER BY pid)::text, '[]') AS j
+                         FROM pg_stat_activity WHERE datname = current_database()`,
+                    )
+                  ).rows[0]?.j,
+                };
+              } catch (e) {
+                return { error: err(e) };
+              }
+            })();
+            return {
+              arm: opts.name,
+              holder: opts.holder,
+              probe_db: PROBE_DB,
+              occupants: occupants['list'] ?? null,
+              occupants_error: occupants['error'] ?? null,
+              holder_pid: holderPid,
+              holder_pid_error: holderPidError,
+              base,
+              inflated,
+              delete_error: deleted.error,
+              delete_xid: deleted.xid,
+              vacuum,
+              after,
+              truncated: Number(after) <= Number(base),
+              blockers_before: blockersBefore.blockers,
+              blockers_before_error: blockersBefore.error ?? null,
+              blockers_after: blockersAfter.blockers,
+              blockers_after_error: blockersAfter.error ?? null,
+              verbose,
+            };
+          } catch (e) {
+            return { arm: opts.name, holder: opts.holder, error: err(e), verbose };
+          } finally {
+            if (holder !== undefined) {
+              await holder.query('ROLLBACK').catch(() => undefined);
+              holder.release();
             }
-          })();
-          return {
-            arm: opts.name,
-            holder: opts.holder,
-            probe_db: PROBE_DB,
-            occupants: occupants['list'] ?? null,
-            occupants_error: occupants['error'] ?? null,
-            holder_pid: holderPid,
-            holder_pid_error: holderPidError,
-            base,
-            inflated,
-            delete_error: deleted.error,
-            delete_xid: deleted.xid,
-            vacuum,
-            after,
-            truncated: Number(after) <= Number(base),
-            blockers_before: blockersBefore.blockers,
-            blockers_before_error: blockersBefore.error ?? null,
-            blockers_after: blockersAfter.blockers,
-            blockers_after_error: blockersAfter.error ?? null,
-            verbose,
-          };
-        } catch (e) {
-          return { arm: opts.name, holder: opts.holder, error: err(e), verbose };
-        } finally {
-          if (holder !== undefined) {
-            await holder.query('ROLLBACK').catch(() => undefined);
-            holder.release();
+            if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
+            await probe.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
           }
-          if (holderPool !== undefined) await holderPool.end().catch(() => undefined);
-          await probe.query('DROP TABLE IF EXISTS public.dr101_probe').catch(() => undefined);
-        }
-      };
-      const arms = {
-        // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
-        //    the pages back. Without this arm, arm 2 cannot be told from a
-        //    probe that never truncates at all.
-        no_holder: await arm({ name: 'no_holder', holder: 'none' }),
-        // 2. THE MECHANISM, AND THE REASON THIS CARD LOGS ANYTHING. One
-        //    snapshot held across the `DELETE`: the relation stays inflated,
-        //    the `VACUUM` STILL REPORTS SUCCESS, and `:4979` would pass while
-        //    `:4980` failed. That is the premise the diagnostic logging rests
-        //    on -- a plain `VACUUM` really can abandon truncation silently --
-        //    and it is NOT a claim that this is what happens on `main`, which
-        //    the measurement in `truncationBlockers`'s note disposes of.
-        holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through' }),
-        // ARMS 3 AND 4 ARE GONE. They proved that the withdrawn wait saw its
-        // blocker, cleared, and could have its budget exhausted. With no wait
-        // in the file there is nothing for them to prove, and an arm kept past
-        // its claim is an arm that will be read as a claim.
-      };
-      // THE DATABASE IS CLOSED AND DROPPED HERE, AND ITS DEATH IS READ FROM
-      // THE CATALOGUE. The pool is ended first so the `DROP` has nothing to
-      // terminate; `WITH (FORCE)` is kept anyway, because a holder that failed
-      // to roll back would otherwise leave the database -- and the next
-      // execution would then measure a database this one built.
-      await probe.end().catch(() => undefined);
-      dbf['drop_error'] = await (async (): Promise<string | null> => {
-        try {
-          await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
-          return null;
-        } catch (e) {
-          return err(e);
-        }
-      })();
-      dbf['remaining_after_drop'] = (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_database WHERE datname = $1`, [PROBE_DB])).rows[0]?.n;
-      // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
-      // that PASSES is the control, and a control whose text is never shown
-      // cannot be read against the arm that fails. The database's own record
-      // is printed beside them, since a drop that failed is a fact about the
-      // CLUSTER and the next execution inherits it.
-      for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
-      console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
-      dr101Cycles.push({ cycle, started_at: cycleStartedAt, ended_at: Date.now(), ...arms, db: dbf });
+        };
+        const arms = {
+          // 1. THE NEGATIVE CONTROL. Nothing holds: a plain `VACUUM` DOES give
+          //    the pages back. Without this arm, arm 2 cannot be told from a
+          //    probe that never truncates at all.
+          no_holder: await arm({ name: 'no_holder', holder: 'none' }),
+          // 2. THE MECHANISM, AND THE REASON THIS CARD LOGS ANYTHING. One
+          //    snapshot held across the `DELETE`: the relation stays inflated,
+          //    the `VACUUM` STILL REPORTS SUCCESS, and `:4979` would pass while
+          //    `:4980` failed. That is the premise the diagnostic logging rests
+          //    on -- a plain `VACUUM` really can abandon truncation silently --
+          //    and it is NOT a claim that this is what happens on `main`, which
+          //    the measurement in `truncationBlockers`'s note disposes of.
+          holder_no_wait: await arm({ name: 'holder_no_wait', holder: 'through' }),
+          // ARMS 3 AND 4 ARE GONE. They proved that the withdrawn wait saw its
+          // blocker, cleared, and could have its budget exhausted. With no wait
+          // in the file there is nothing for them to prove, and an arm kept past
+          // its claim is an arm that will be read as a claim.
+        };
+        // THE DATABASE IS CLOSED AND DROPPED HERE, AND ITS DEATH IS READ FROM
+        // THE CATALOGUE. The pool is ended first so the `DROP` has nothing to
+        // terminate; `WITH (FORCE)` is kept anyway, because a holder that failed
+        // to roll back would otherwise leave the database -- and the next
+        // execution would then measure a database this one built.
+        await probe.end().catch(() => undefined);
+        dbf['drop_error'] = await (async (): Promise<string | null> => {
+          try {
+            await sup.query(`DROP DATABASE IF EXISTS ${PROBE_DB} WITH (FORCE)`);
+            return null;
+          } catch (e) {
+            return err(e);
+          }
+        })();
+        dbf['remaining_after_drop'] = (await sup.query<{ n: number }>(`SELECT count(*)::int AS n FROM pg_database WHERE datname = $1`, [PROBE_DB])).rows[0]?.n;
+        // BOTH ARMS ARE PRINTED, for the same reason the sweep is: the arm
+        // that PASSES is the control, and a control whose text is never shown
+        // cannot be read against the arm that fails. The database's own record
+        // is printed beside them, since a drop that failed is a fact about the
+        // CLUSTER and the next execution inherits it.
+        for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
+        console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
+        dr101Cycles.push({ cycle, started_at: cycleStartedAt, ended_at: Date.now(), cycle_error: null, ...arms, db: dbf });
+      } catch (e) {
+        // The record is published WITHOUT arms: there is nothing to report but
+        // the throw, and the law asserts `cycle_error` is null FIRST, so this
+        // cycle fails as itself while the other nine still return a verdict.
+        dr101Cycles.push({ cycle, started_at: cycleStartedAt, ended_at: Date.now(), cycle_error: err(e) });
+      }
     }
     return { cycles: dr101Cycles, cycle_count: dr101Cycles.length, cycles_declared: DR101_CYCLES };
   })();
@@ -6019,6 +6035,13 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       expect(p['cycles_declared'], 'the probe and this law disagree on how many cycles were asked for').toBe(DR101_JUDGED_CYCLES);
       const c = (published[cycle - 1] ?? {}) as Record<string, unknown>;
       expect(c['cycle'], 'this case is judging a record that does not carry its own cycle number').toBe(cycle);
+      // AND THIS CYCLE RAN TO ITS END. A cycle that threw publishes its record
+      // carrying the throw and nothing else, so it fails HERE, as itself, with
+      // the server's own words -- rather than taking the fixture down and
+      // failing all ten cases with one setup error. This assertion is first for
+      // that reason: every claim below would otherwise report a missing field
+      // as if the measurement had merely disagreed.
+      expect(c['cycle_error'], `this cycle threw instead of completing: ${String(c['cycle_error'])}`).toBeNull();
       // ── AND THE TEN RAN ONE AFTER ANOTHER, MEASURED IN TIME.
       //
       //    These ten CASES do no database work at all -- they read records the
