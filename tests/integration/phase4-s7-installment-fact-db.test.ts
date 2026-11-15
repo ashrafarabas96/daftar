@@ -3767,6 +3767,13 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
     const DR101_CYCLES = 10;
     const dr101Cycles: Record<string, unknown>[] = [];
     for (let cycle = 1; cycle <= DR101_CYCLES; cycle += 1) {
+      // THE CYCLE'S OWN WINDOW, SO SERIALISATION IS A FACT AND NOT A READING
+      // OF THIS FILE'S SHAPE. Ten cycles that overlapped would have ten probe
+      // databases, ten holders and ten horizons live at once on one cluster --
+      // which is the mechanism under test, running against itself. The law
+      // below requires each window to START AFTER the previous one ENDED, so
+      // an overlap is reported rather than assumed away.
+      const cycleStartedAt = Date.now();
       const PROBE_DB = 'daftar_s7f1_dr101probe';
       const dbf: Record<string, unknown> = { probe_db: PROBE_DB, suite_db: DB };
       dbf['create_error'] = await (async (): Promise<string | null> => {
@@ -3992,7 +3999,7 @@ RETURNS BOOLEAN LANGUAGE sql STABLE AS $ov$ SELECT true $ov$`);
       // CLUSTER and the next execution inherits it.
       for (const [k, vrec] of Object.entries(arms)) console.log(`[DR-101] probe ${k}: ${JSON.stringify(vrec)}`);
       console.log(`[DR-101] probe database: ${JSON.stringify(dbf)}`);
-      dr101Cycles.push({ cycle, ...arms, db: dbf });
+      dr101Cycles.push({ cycle, started_at: cycleStartedAt, ended_at: Date.now(), ...arms, db: dbf });
     }
     return { cycles: dr101Cycles, cycle_count: dr101Cycles.length, cycles_declared: DR101_CYCLES };
   })();
@@ -6012,6 +6019,34 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       expect(p['cycles_declared'], 'the probe and this law disagree on how many cycles were asked for').toBe(DR101_JUDGED_CYCLES);
       const c = (published[cycle - 1] ?? {}) as Record<string, unknown>;
       expect(c['cycle'], 'this case is judging a record that does not carry its own cycle number').toBe(cycle);
+      // ── AND THE TEN RAN ONE AFTER ANOTHER, MEASURED IN TIME.
+      //
+      //    These ten CASES do no database work at all -- they read records the
+      //    `beforeAll` already published -- so case-level concurrency could not
+      //    reach a cluster even if it were switched on. The thing that COULD
+      //    overlap is the measurement, and that is what is measured here: the
+      //    published order is 1..10 ascending, and each cycle's window starts
+      //    at or after the previous one's end. Ten overlapping windows would
+      //    mean ten probe databases, ten holders and ten horizons alive at once
+      //    on one cluster -- the mechanism under test running against itself,
+      //    and a deviant cycle nobody could attribute.
+      //
+      //    This is a reading of WHEN the cycles ran, not of how this file is
+      //    written: a law that grepped for `.concurrent` would pass on a file
+      //    whose cycles overlapped for any other reason.
+      expect(
+        published.map((x) => Number(x['cycle'])),
+        'the published cycles are not 1..10 in order, so their order is not their sequence',
+      ).toEqual(Array.from({ length: DR101_JUDGED_CYCLES }, (_x, i) => i + 1));
+      expect(Number(c['started_at']), 'this cycle did not report when it started, so its place in the sequence is an inference').toBeGreaterThan(0);
+      expect(Number(c['ended_at']), 'this cycle did not report when it ended').toBeGreaterThanOrEqual(Number(c['started_at']));
+      if (cycle > 1) {
+        const prev = (published[cycle - 2] ?? {}) as Record<string, unknown>;
+        expect(
+          Number(c['started_at']),
+          `this cycle began before the previous one ended, so the cycles overlapped on one cluster: ${JSON.stringify({ prev_ended_at: prev['ended_at'], started_at: c['started_at'] })}`,
+        ).toBeGreaterThanOrEqual(Number(prev['ended_at']));
+      }
       const arms = ['no_holder', 'holder_no_wait'] as const;
       const a = Object.fromEntries(arms.map((k) => [k, (c[k] ?? {}) as Record<string, unknown>])) as Record<(typeof arms)[number], Record<string, unknown>>;
       // ── THE PROBE'S OWN DATABASE IS PROVEN BORN AND PROVEN GONE, FROM
