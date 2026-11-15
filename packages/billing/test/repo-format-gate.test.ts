@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -45,6 +46,16 @@ const prettier = join(root, 'node_modules', '.bin', 'prettier');
 const config = join(root, '.prettierrc.json');
 const ignore = join(root, '.prettierignore');
 
+/**
+ * The REPOSITORY's prettier, loaded from the repository root the same way the
+ * binary above is located there -- not imported by bare specifier, which would
+ * resolve by hoisting and could silently become some other copy. This package
+ * does not declare prettier, and that is the point: the gate's instrument is
+ * the repository's, and if it is not there this file fails rather than checks
+ * nothing.
+ */
+const repoPrettier = createRequire(join(root, 'package.json'))('prettier') as typeof import('prettier');
+
 describe("the repository's own format gate, over this package", () => {
   it('has the pinned prettier, its config and its ignore file available, or fails loudly', () => {
     const manifest = join(pkg, 'package.json');
@@ -86,4 +97,44 @@ describe("the repository's own format gate, over this package", () => {
     // budget is explicit and generous; the assertion above is untouched, so a
     // genuinely misformatted file still reds it (M98).
   }, 120_000);
+
+  /**
+   * THE TWO CONTROLS THE CLAIM ABOVE NEVER HAD. The comment closing the case
+   * above says "a genuinely misformatted file still reds it (M98)", and
+   * NOTHING IN THIS FILE MEASURED THAT: both cases above are satisfied by a
+   * gate that accepts everything, and the first one is satisfied by four files
+   * merely existing. A format gate that cannot refuse is the fail-open this
+   * file was written to close -- asserted here in prose, never once measured.
+   *
+   * THE DECLARED LIMIT, and it is why these drive a different entry point. They
+   * run the PINNED prettier through its Node API with the REPOSITORY's own
+   * config and ignore file, so they answer on every host. They do NOT exercise
+   * the CLI spawn above: on Windows that spawn cannot even start (`code 1` with
+   * empty output, measured, which is why this file is among the host-condition
+   * failures `tools/law-ran.py` names), so its argv wiring stays the runner's
+   * to judge and is NOT claimed here. What is claimed is the half that was pure
+   * prose -- this prettier, with this config, REFUSES a misformatted file and
+   * ACCEPTS the formatted one, and this ignore file does not place the
+   * package's own sources out of the gate's scope.
+   */
+  it('RED: the pinned prettier with this config refuses a misformatted file, and accepts the formatted one', async () => {
+    const resolved = await repoPrettier.resolveConfig(join(pkg, 'src', 'invoice.ts'), { config });
+    expect(resolved, 'the repository config did not resolve, so the answers below would be prettier defaults rather than this gate').not.toBeNull();
+    const options = { ...resolved, filepath: join(pkg, 'src', 'invoice.ts') };
+    expect(await repoPrettier.check('const  x=1\n', options), 'a misformatted file is ACCEPTED, so this gate can refuse nothing').toBe(false);
+    expect(await repoPrettier.check('const x = 1;\n', options), 'the formatted form is REFUSED, so the answer above is not simply always false').toBe(true);
+  }, 30_000);
+
+  it("RED: this ignore file does not put the package's own sources out of scope", async () => {
+    for (const relative of ['src/invoice.ts', 'test/law-bytes-are-pinned.test.ts']) {
+      const info = await repoPrettier.getFileInfo(join(pkg, relative), { ignorePath: ignore });
+      expect(info.ignored, `${relative} is IGNORED, so the gate above checks it not at all`).toBe(false);
+      expect(info.inferredParser, `${relative} is given no parser, so the gate above would pass over it`).toBe('typescript');
+    }
+    // And the probe is SIGHTED: an ignore file that is not being read at all
+    // answers `ignored: false` for everything, including the one tree it
+    // certainly excludes -- which would make both answers above vacuous.
+    const vendored = await repoPrettier.getFileInfo(join(root, 'node_modules', 'prettier', 'index.cjs'), { ignorePath: ignore });
+    expect(vendored.ignored, 'node_modules is NOT ignored, so this ignore file is not being read and the answers above are blind').toBe(true);
+  }, 30_000);
 });

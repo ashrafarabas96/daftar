@@ -462,7 +462,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/platform-authority-law.test.ts": 9,
     "test/proration-rounding-policy.test.ts": 4,
     "test/proration.test.ts": 21,
-    "test/repo-format-gate.test.ts": 2,
+    "test/repo-format-gate.test.ts": 4,
     "test/subscription-states.test.ts": 6,
     "test/tool-commands-are-isolated.test.ts": 36,
 }
@@ -512,7 +512,17 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # (`24 failed | 364 passed (388)`, of which the 24 host-condition failures in
 # `test/tool-commands-are-isolated.test.ts` and `test/repo-format-gate.test.ts`
 # are the SAME 24 as before the change), and the runner printed the same 388.
-EXPECTED_TOTAL_CASES = 388
+# 388 -> 390 when `test/repo-format-gate.test.ts` finally measured its own
+# claim: the comment closing its second case said a misformatted file still
+# reds the gate, and NOTHING in the file measured that -- both of its cases
+# were satisfied by a gate that accepts everything. The two cases named at
+# that file's own row above (2 -> 4) drive the repository's prettier through
+# its Node API, so they answer on this host too, where the CLI spawn cannot
+# start at all. An ADDITION only, and the figure is the one the package's own
+# run printed on Windows (`24 failed | 366 passed (390)`, of which the 24
+# host-condition failures in `test/tool-commands-are-isolated.test.ts` and
+# `test/repo-format-gate.test.ts` are the SAME 24 as before the change).
+EXPECTED_TOTAL_CASES = 390
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.
