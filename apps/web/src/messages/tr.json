@@ -939,5 +939,13 @@
   "customers.account.invoices.ofTotal": "toplam {total}",
   "customers.account.invoices.state.unpaid": "Ödenmedi",
   "customers.account.invoices.state.partial": "Kısmen ödendi",
-  "customers.account.invoices.state.paid": "Ödendi"
+  "customers.account.invoices.state.paid": "Ödendi",
+  "nav.invoices": "Faturalar",
+  "invoices.list.title": "Faturalar",
+  "invoices.list.empty": "Henüz fatura yok",
+  "invoices.list.sellSomething": "Satış yap",
+  "invoices.list.dated": "Tarih: {date}",
+  "invoices.status.draft": "Henüz kesilmedi",
+  "invoices.status.open": "Kesildi",
+  "invoices.status.void": "İptal edildi"
 }
