@@ -953,6 +953,8 @@
   "customers.collect.alreadyRecorded": "Bu ödeme zaten kaydedilmişti. Kaydedilen bu; tekrar girmeyin.",
   "customers.collect.storedUnreadable": "Bu ödeme zaten kaydedilmiş olabilir ve gösteremedik. Tekrar girmeyin: önce yeniden gösterin.",
   "customers.collect.readAgain": "Kaydedilen ödemeyi göster",
+  "customers.collect.notConfirmed": "Bu ödemenin kaydedildiğini doğrulayamadık. Aynı formda «Ödemeyi kaydet» düğmesine yeniden basın — sayfayı yenilemeyin ve ödemeyi başka bir yerde girmeyin.",
+  "customers.collect.pendingNotFound": "Sayfa yenilenmeden önce burada kaydettiğiniz bir ödeme kayıtlı olarak bulunamadı. Hâlâ kaydetmeniz gerekiyorsa aşağıya girin ve «Ödemeyi kaydet» düğmesine basın.",
   "nav.invoices": "Faturalar",
   "invoices.list.title": "Faturalar",
   "invoices.list.empty": "Henüz fatura yok",

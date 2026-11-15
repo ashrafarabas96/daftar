@@ -953,6 +953,8 @@
   "customers.collect.alreadyRecorded": "This payment was already recorded. Here is what was saved; do not enter it again.",
   "customers.collect.storedUnreadable": "This payment may already have been saved, and we could not show it. Do not enter it again: read it again first.",
   "customers.collect.readAgain": "Show the saved payment",
+  "customers.collect.notConfirmed": "We could not confirm that this payment was saved. Press “Save the payment” again on this same form — do not reload the page or enter the payment anywhere else.",
+  "customers.collect.pendingNotFound": "A payment you were saving here before the page reloaded was not found as saved. If you still need to record it, enter it below and press “Save the payment”.",
   "nav.invoices": "Invoices",
   "invoices.list.title": "Invoices",
   "invoices.list.empty": "No invoices yet",

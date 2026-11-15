@@ -15,9 +15,14 @@
  *     `.strict()`, so only these keys are ever sent;
  *   - every amount is a decimal STRING of minor units, sent as typed by the
  *     plan in `views/customers/collect-payment.ts` and never touched here;
- *   - the payment id is the idempotency key (R-74). The same id travels in the
- *     `idempotency-key` header so a retried request is the same request at
- *     every layer; the API itself keys on the body's ids alone.
+ *   - the payment id in the BODY is the replay key (R-74, P4-AL-30): the API
+ *     proves a replay by that id plus the request's `intent_sha256`
+ *     (`apps/api/src/modules/receivables/receivables-payload.ts`, "no generic
+ *     idempotency-key subsystem"). The `idempotency-key` header below is
+ *     forwarded by the proxy (`app/api/proxy/[...path]/route.ts`, FORWARDED)
+ *     but the receivables module does NOT read it: it is inert, and nothing
+ *     here may rely on it. Keeping the body ids across a retry and a reload
+ *     is `views/customers/collect-flow.ts`'s job.
  *
  * Authorization, business scope and language headers are set by `apiFetch`.
  */
@@ -77,7 +82,8 @@ export const listOpenInvoices = (id: string, q: OpenInvoicesQuery) =>
 
 /**
  * `GET /v1/customer-payments/:paymentId` — a stored payment (`receivables.view`, the key the open-invoice
- * read already needs). Read when a send is refused as already stored under the same id.
+ * read already needs). Read when a send is refused as already stored under the same id, when a send
+ * got no answer or a 5xx, and after a reload that found an unconfirmed send of this customer.
  */
 export const getStoredPayment = (paymentId: string) =>
   apiFetch<CustomerPaymentDto>(`${BFF}/customer-payments/${encodeURIComponent(paymentId)}`, { cache: 'no-store' });

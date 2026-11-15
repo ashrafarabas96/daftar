@@ -12,7 +12,12 @@
  *
  * - The ids are minted when the flow is created, i.e. once per form. A new
  *   flow — a new form, new ids — is created only by a fresh load, which the
- *   view offers only beside a saved or an already-stored payment.
+ *   view offers only beside a saved or an already-stored payment. A reload
+ *   while a send is unconfirmed re-opens THAT send's ids from this tab's
+ *   `sessionStorage` and reads it back before showing the form; a second tab
+ *   or device mints new ids by design (see `collect-flow.ts`).
+ * - No answer or a 5xx is never shown as "nothing was saved": the flow reads
+ *   the payment back by its id.
  * - A refusal sets the refusal text and nothing else.
  * - A 403 on load renders the permission state; on send, the refusal text.
  */
@@ -28,7 +33,15 @@ import { collectPayment, getCustomer, getStoredPayment, listOpenInvoices, type C
 import { PageStateView, type PageStatus } from '@/views/common/feedback';
 import { activeMethodChoices } from '@/views/common/payment-methods';
 import { CollectPaymentView, type CollectFormField } from '@/views/customers/CollectPaymentView';
-import { afterOutcome, beforeSend, createCollectFlow, type CollectFlow, type CollectOutcome, type CollectScreenState } from '@/views/customers/collect-flow';
+import {
+  afterOutcome,
+  beforeSend,
+  createCollectFlow,
+  sessionPendingStore,
+  type CollectFlow,
+  type CollectOutcome,
+  type CollectScreenState,
+} from '@/views/customers/collect-flow';
 import { planCollectPayment, surplusOf, type CollectFormErrors, type CollectRowModel } from '@/views/customers/collect-payment';
 import { PageShell } from '../../../AppHeader';
 import { OPEN_INVOICES_PAGE, loadFailureStatus, useCollectSession } from './collect-page-kit';
@@ -40,7 +53,12 @@ function currencyOptions(rows: readonly CollectRowModel[], baseCurrency: string)
   return [...new Set([...rows.filter((r) => !r.isCredit).map((r) => r.currency), baseCurrency])];
 }
 
-const newFlow = (): CollectFlow => createCollectFlow({ send: collectPayment, readStored: getStoredPayment });
+/**
+ * A flow re-opens the ids of this customer's unconfirmed send from this tab's `sessionStorage`
+ * when there is one (a reload), and mints new ones otherwise; without storage it simply mints.
+ */
+const newFlow = (customerId: string): CollectFlow =>
+  createCollectFlow({ send: collectPayment, readStored: getStoredPayment, pending: { store: sessionPendingStore(), customerId } });
 
 export default function CollectPaymentPage({ params }: { params: Promise<{ locale: Locale; customerId: string }> }) {
   const { locale, customerId } = use(params);
@@ -76,7 +94,11 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
         const loaded = open.items.map(toRow);
         const options = currencyOptions(loaded, baseCurrency);
         const active = activeMethodChoices(pm.items, locale, makeT(locale));
-        flow.current = newFlow();
+        const current = newFlow(customerId);
+        flow.current = current;
+        // A send from before a reload is read back FIRST: found, it is shown as saved; not found, the form
+        // comes with the same ids behind it.
+        const resumed = current.resume();
         setCustomer(c);
         setMethods(pm.items);
         setCursor(open.nextCursor);
@@ -92,13 +114,17 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
             errors: {},
           },
           rows: loaded,
-          busy: false,
+          busy: resumed !== null,
           errorKey: null,
           result: null,
           stored: null,
           storedUnread: false,
         });
         setLoadStatus('ready');
+        if (resumed !== null) {
+          const outcome = await resumed;
+          if (live) setScreen((s) => (s ? afterOutcome(s, outcome) : s));
+        }
       } catch (error) {
         if (live) setLoadStatus(loadFailureStatus(error));
       }

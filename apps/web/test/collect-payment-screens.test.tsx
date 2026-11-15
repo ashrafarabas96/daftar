@@ -7,7 +7,7 @@ import type { ViewFixture } from '@/lib/phase3-format';
 import { refusalKey } from '@/lib/phase3-errors';
 import { VIEW_REGISTRY } from '@/views/customers/registry';
 import type { CollectPaymentViewProps } from '@/views/customers/CollectPaymentView';
-import { STORED_UNREADABLE_KEY } from '@/views/customers/collect-flow';
+import { PENDING_NOT_FOUND_KEY, STORED_UNREADABLE_KEY, UNCONFIRMED_KEY } from '@/views/customers/collect-flow';
 import { stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { LOCALES, elements, renderFixture, textOf, type ElementNode, type Rendered } from './helpers/render';
 
@@ -42,8 +42,11 @@ describe('the registry holds only states the page can reach', () => {
   /**
    * Every error key a fixture shows must be one `refusalKey` produces for an
    * error this page can actually receive: a receivables refusal (the API
-   * attaches `details.receivablesCode`), a payment-method refusal, an
-   * envelope refusal such as a 403, or no answer at all.
+   * attaches `details.receivablesCode`), a payment-method refusal, or an
+   * envelope refusal such as a 403. No answer and a 5xx are NOT refusals: the
+   * flow reads the payment back and shows one of its own keys, so
+   * `error.fallback` / `error.INTERNAL_ERROR` ("nothing was saved") are not
+   * reachable from a send.
    */
   const reachable = new Set<string>([
     refusalKey(new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.amount_exceeds_outstanding' })),
@@ -53,14 +56,16 @@ describe('the registry holds only states the page can reach', () => {
     refusalKey(new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.settlement_changed' })),
     refusalKey(new ApiError(400, 'VALIDATION_FAILED', { receivablesCode: 'customer_payment.allocations_invalid' })),
     refusalKey(new ApiError(403, 'FORBIDDEN')),
-    refusalKey(new ApiError(500, 'INTERNAL_ERROR')),
-    refusalKey(new TypeError('Failed to fetch')),
+    // No answer / a 5xx, read back and not found; and the same after a reload.
+    UNCONFIRMED_KEY,
+    PENDING_NOT_FOUND_KEY,
   ]);
 
-  it('the reachable set is real keys, not the fallback only', () => {
+  it('the reachable set is real keys, and holds no "nothing was saved" text for an unknown outcome', () => {
     expect(reachable).toContain('error.customer_payment.amount_exceeds_outstanding');
     expect(reachable).toContain('error.FORBIDDEN');
-    expect(reachable).toContain('error.fallback');
+    expect(reachable).not.toContain('error.fallback');
+    expect(reachable).not.toContain('error.INTERNAL_ERROR');
   });
 
   it('every fixture error key is reachable', () => {
@@ -133,6 +138,37 @@ describe('Receive a payment — the form', () => {
     expect(labels).toContain(tr('en', 'customers.collect.readAgain'));
     expect(labels).not.toContain(tr('en', 'customers.collect.another'));
     expect(labels).not.toContain(tr('en', 'customers.collect.submit'));
+  });
+
+  it('no answer, and not found when read back: "could not confirm" beside the kept form, never "nothing was saved"', () => {
+    const name = 'no answer, not found when read back: the save is not confirmed, the figures kept';
+    const props = propsOf(name);
+    for (const locale of LOCALES) {
+      const r = render(name, locale);
+      expect(text(r)).toContain(tr(locale, UNCONFIRMED_KEY));
+      expect(text(r)).not.toContain(tr(locale, 'error.fallback'));
+      expect(text(r)).not.toContain(tr(locale, 'error.INTERNAL_ERROR'));
+      expect(inputValues(r)).toContain(props.form.amount);
+      const labels = all(r, 'button').map(textOf);
+      expect(labels).toContain(tr(locale, 'customers.collect.submit'));
+      expect(labels).not.toContain(tr(locale, 'customers.collect.another'));
+    }
+  });
+
+  it('after a reload, an earlier send not found: says so, and offers this form to save the same payment', () => {
+    for (const locale of LOCALES) {
+      const r = render('reloaded, the earlier send not found: the same payment can be saved from this form', locale);
+      expect(text(r)).toContain(tr(locale, PENDING_NOT_FOUND_KEY));
+      expect(all(r, 'button').map(textOf)).toContain(tr(locale, 'customers.collect.submit'));
+    }
+  });
+
+  it('the new texts name the button they point at, in each language', () => {
+    for (const locale of LOCALES) {
+      const button = tr(locale, 'customers.collect.submit');
+      expect(tr(locale, UNCONFIRMED_KEY)).toContain(button);
+      expect(tr(locale, PENDING_NOT_FOUND_KEY)).toContain(button);
+    }
   });
 
   it('no fixture offers a new form while a form is on screen', () => {

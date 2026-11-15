@@ -75,11 +75,28 @@ export interface CollectIds {
   allocationIdFor(invoiceId: string): string;
 }
 
-/** The ids of ONE form. A new form — after a saved payment, or "start again" — mints new ones. */
-export function mintCollectIds(mint: () => string = () => crypto.randomUUID()): CollectIds {
-  const paymentId = mint();
-  const creditId = mint();
-  const allocations = new Map<string, string>();
+/** Every id a form has handed out so far, as plain data: what a reload needs to send the SAME payment. */
+export interface CollectIdsSnapshot {
+  readonly paymentId: string;
+  readonly creditId: string;
+  /** invoiceId → allocationId. */
+  readonly allocations: Readonly<Record<string, string>>;
+}
+
+export interface MintedCollectIds extends CollectIds {
+  snapshot(): CollectIdsSnapshot;
+}
+
+/**
+ * The ids of ONE form. A new form — after a saved payment, or "start again" — mints new ones.
+ * `from` re-opens the ids of a form whose send was never confirmed (a reload): the payment and
+ * credit ids and every allocation id already handed out are taken as they were; only an invoice
+ * never asked for before gets a newly minted allocation id.
+ */
+export function mintCollectIds(mint: () => string = () => crypto.randomUUID(), from?: CollectIdsSnapshot): MintedCollectIds {
+  const paymentId = from?.paymentId ?? mint();
+  const creditId = from?.creditId ?? mint();
+  const allocations = new Map<string, string>(from ? Object.entries(from.allocations) : []);
   return {
     paymentId,
     creditId,
@@ -90,6 +107,7 @@ export function mintCollectIds(mint: () => string = () => crypto.randomUUID()): 
       allocations.set(invoiceId, minted);
       return minted;
     },
+    snapshot: () => ({ paymentId, creditId, allocations: Object.fromEntries(allocations) }),
   };
 }
 

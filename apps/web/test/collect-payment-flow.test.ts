@@ -4,7 +4,16 @@ import { ApiError } from '@/lib/client';
 import type { CollectPaymentRequestDto } from '@/lib/phase4-collect-payment-api';
 import type { MethodChoice } from '@/views/common/payment-methods';
 import { planCollectPayment, type CollectFormModel, type CollectRowModel } from '@/views/customers/collect-payment';
-import { STORED_UNREADABLE_KEY, afterOutcome, createCollectFlow, type CollectScreenState } from '@/views/customers/collect-flow';
+import {
+  PENDING_NOT_FOUND_KEY,
+  STORED_UNREADABLE_KEY,
+  UNCONFIRMED_KEY,
+  afterOutcome,
+  createCollectFlow,
+  pendingKey,
+  type CollectScreenState,
+  type PendingStore,
+} from '@/views/customers/collect-flow';
 
 /**
  * The page's send logic, outside React: the flow the page holds once per form.
@@ -79,6 +88,7 @@ const answerFor = (body: CollectPaymentRequestDto, replayed: boolean): CustomerP
 const CONFLICT = new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.idempotency_conflict' });
 const RETRYABLE = new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.settlement_changed' });
 const REFUSED = new ApiError(409, 'CONFLICT', { receivablesCode: 'customer_payment.amount_exceeds_outstanding' });
+const NOT_FOUND = new ApiError(404, 'NOT_FOUND', { receivablesCode: 'customer_payment.not_found' });
 
 const planner = (f: CollectFormModel, rows: CollectRowModel[]) => (ids: Parameters<typeof planCollectPayment>[0]['ids']) =>
   planCollectPayment({ customerId: CUSTOMER, form: f, rows, method: METHOD, ids });
@@ -100,6 +110,7 @@ describe('createCollectFlow — one set of ids per form', () => {
     const reads: string[] = [];
     const STORED: CustomerPaymentDto = { ...answerFor(planOk(planner(form('100'), [A])), false) };
     let call = 0;
+    let read = 0;
     const flow = createCollectFlow({
       mint: ids.mint,
       send: (body) => {
@@ -109,21 +120,26 @@ describe('createCollectFlow — one set of ids per form', () => {
       },
       readStored: (paymentId) => {
         reads.push(paymentId);
-        return Promise.resolve(STORED);
+        read += 1;
+        // The first read-back, right after the lost answer, does not find it yet; the second does.
+        return read === 1 ? Promise.reject(NOT_FOUND) : Promise.resolve(STORED);
       },
     });
     const mintedAtCreation = ids.count();
 
-    // The first send's fate is unknown (the server saved it; the answer was lost).
+    // The first send's fate is unknown (the server saved it; the answer was lost). It is NOT
+    // reported as "nothing was saved": the flow reads the payment back by its id at once, and
+    // when that read does not find it, says the save could not be confirmed.
     const first = await flow.submit(planner(form('100'), [A]));
-    expect(first).toMatchObject({ kind: 'refused', errorKey: 'error.fallback' });
+    expect(first).toEqual({ kind: 'unconfirmed', errorKey: UNCONFIRMED_KEY });
+    expect(reads).toEqual([sent[0]?.paymentId]);
 
     // The merchant edits a figure and sends again with the SAME form.
     const second = await flow.submit(planner(form('120'), [A]));
     expect(sent).toHaveLength(2);
     expect(sent[1]?.paymentId).toBe(sent[0]?.paymentId);
     expect(sent[1]?.allocations[0]?.allocationId).toBe(sent[0]?.allocations[0]?.allocationId);
-    expect(reads).toEqual([sent[0]?.paymentId]);
+    expect(reads).toEqual([sent[0]?.paymentId, sent[0]?.paymentId]);
     expect(second).toEqual({ kind: 'alreadySaved', payment: STORED });
 
     // No id was minted by any send: only at creation, and once for the one invoice.
@@ -220,6 +236,252 @@ describe('createCollectFlow — one set of ids per form', () => {
     const outcome = await flow.submit(planner(form('1e3'), [A]));
     expect(outcome?.kind).toBe('invalid');
     expect(calls).toBe(0);
+  });
+});
+
+/**
+ * HARM-STOP, not a fix of the underlying defect. A lost answer or a 5xx leaves the send's fate
+ * unknown: the server may have saved the payment. The screen must never say "nothing was saved"
+ * then, and a reload must not mint new ids (a second payment). Whether the SERVER refuses a
+ * second payment sent under a NEW id is not measured here (L3 owns it); this only keeps the ids.
+ */
+describe('createCollectFlow — an unknown outcome is read back, never called "nothing was saved"', () => {
+  const unknownFates: ReadonlyArray<[string, unknown]> = [
+    ['no answer at all', new TypeError('Failed to fetch')],
+    ['500, the first server failure', new ApiError(500, 'INTERNAL_ERROR')],
+    ['503', new ApiError(503, 'SERVICE_UNAVAILABLE')],
+  ];
+
+  for (const [name, failure] of unknownFates) {
+    it(`${name}: the payment is read back by its id; found => shown as already saved`, async () => {
+      const reads: string[] = [];
+      const STORED: CustomerPaymentDto = { ...answerFor(planOk(planner(form('100'), [A])), false) };
+      const flow = createCollectFlow({
+        mint: counter().mint,
+        send: () => Promise.reject(failure),
+        readStored: (id) => (reads.push(id), Promise.resolve(STORED)),
+      });
+      const outcome = await flow.submit(planner(form('100'), [A]));
+      expect(outcome).toEqual({ kind: 'alreadySaved', payment: STORED });
+      expect(reads).toEqual([flow.ids.paymentId]);
+    });
+
+    it(`${name}: not found => "could not confirm", the form and the ids kept, never the "nothing was saved" text`, async () => {
+      const sent: CollectPaymentRequestDto[] = [];
+      const flow = createCollectFlow({
+        mint: counter().mint,
+        send: (body) => (sent.push(body), Promise.reject(failure)),
+        readStored: () => Promise.reject(NOT_FOUND),
+      });
+      const outcome = await flow.submit(planner(form('100'), [A]));
+      expect(outcome).toEqual({ kind: 'unconfirmed', errorKey: UNCONFIRMED_KEY });
+      if (outcome === null) throw new Error('the send was not made');
+      const after = afterOutcome(state(form('100'), [A]), outcome);
+      expect(after.errorKey).toBe(UNCONFIRMED_KEY);
+      expect(after.errorKey).not.toBe('error.fallback');
+      expect(after.errorKey).not.toBe('error.INTERNAL_ERROR');
+      expect(after.form.amount).toBe('100');
+      expect(after.storedUnread).toBe(false);
+      expect(after.stored).toBeNull();
+      expect(after.result).toBeNull();
+      // Pressing Save again from this form re-sends the SAME ids.
+      await flow.submit(planner(form('100'), [A]));
+      expect(sent).toHaveLength(2);
+      expect(sent[1]?.paymentId).toBe(sent[0]?.paymentId);
+      expect(sent[1]?.allocations[0]?.allocationId).toBe(sent[0]?.allocations[0]?.allocationId);
+    });
+  }
+
+  it('the read-back itself fails: "may already be saved, read again", no form; reading again and not finding it gives the form back', async () => {
+    let read = 0;
+    const flow = createCollectFlow({
+      mint: counter().mint,
+      send: () => Promise.reject(new TypeError('Failed to fetch')),
+      readStored: () => ((read += 1), Promise.reject(read === 1 ? new TypeError('Failed to fetch') : NOT_FOUND)),
+    });
+    expect(await flow.submit(planner(form('100'), [A]))).toEqual({ kind: 'storedUnread' });
+    const again = await flow.rereadStored();
+    expect(again).toEqual({ kind: 'unconfirmed', errorKey: UNCONFIRMED_KEY });
+    if (again === null) throw new Error('no read');
+    const after = afterOutcome({ ...state(form('100'), [A]), storedUnread: true, errorKey: STORED_UNREADABLE_KEY }, again);
+    expect(after.storedUnread).toBe(false);
+    expect(after.errorKey).toBe(UNCONFIRMED_KEY);
+  });
+
+  // The boundary: 499 and 404 are the server's own answer (it refused; nothing of this send is stored);
+  // 500 is the first status whose fate is unknown.
+  const explicitRefusals: ReadonlyArray<[string, ApiError]> = [
+    ['409 amount_exceeds_outstanding', REFUSED],
+    ['404 on the send (e.g. the method is gone)', NOT_FOUND],
+    ['403', new ApiError(403, 'FORBIDDEN')],
+    ['499, the last status below 500', new ApiError(499, 'CLIENT_CLOSED')],
+  ];
+  for (const [name, refusal] of explicitRefusals) {
+    it(`${name}: an explicit refusal keeps its own text and reads nothing back`, async () => {
+      let reads = 0;
+      const flow = createCollectFlow({
+        mint: counter().mint,
+        send: () => Promise.reject(refusal),
+        readStored: () => ((reads += 1), Promise.reject(new Error('not asked'))),
+      });
+      const outcome = await flow.submit(planner(form('100'), [A]));
+      expect(outcome?.kind).toBe('refused');
+      expect(reads).toBe(0);
+    });
+  }
+});
+
+function memoryStore(): PendingStore & { readonly map: Map<string, string> } {
+  const map = new Map<string, string>();
+  return {
+    map,
+    get: (k) => map.get(k) ?? null,
+    set: (k, v) => void map.set(k, v),
+    remove: (k) => void map.delete(k),
+  };
+}
+const throwingStore: PendingStore = {
+  get: () => {
+    throw new Error('SecurityError');
+  },
+  set: () => {
+    throw new Error('QuotaExceededError');
+  },
+  remove: () => {
+    throw new Error('SecurityError');
+  },
+};
+
+describe('createCollectFlow — the ids of an unconfirmed send survive a reload', () => {
+  it('a send in flight is remembered per customer; a reload re-uses ITS ids and reads it back first', async () => {
+    const store = memoryStore();
+    const firstSent: CollectPaymentRequestDto[] = [];
+    const before = createCollectFlow({
+      mint: counter().mint,
+      pending: { store, customerId: CUSTOMER },
+      send: (body) => (firstSent.push(body), Promise.reject(new TypeError('Failed to fetch'))),
+      readStored: () => Promise.reject(new TypeError('Failed to fetch')),
+    });
+    expect(before.resumed).toBe(false);
+    await before.submit(planner(form('100'), [A]));
+    expect(store.map.has(pendingKey(CUSTOMER))).toBe(true);
+
+    // The reload: a new flow from a DIFFERENT minter must still carry the remembered ids.
+    const reads: string[] = [];
+    const resent: CollectPaymentRequestDto[] = [];
+    const reloaded = createCollectFlow({
+      mint: () => 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      pending: { store, customerId: CUSTOMER },
+      send: (body) => (resent.push(body), Promise.resolve(answerFor(body, true))),
+      readStored: (id) => (reads.push(id), Promise.reject(NOT_FOUND)),
+    });
+    expect(reloaded.resumed).toBe(true);
+    expect(reloaded.ids.paymentId).toBe(firstSent[0]?.paymentId);
+    expect(reloaded.ids.creditId).toBe(before.ids.creditId);
+    const resumed = await reloaded.resume();
+    expect(reads).toEqual([firstSent[0]?.paymentId]);
+    expect(resumed).toEqual({ kind: 'unconfirmed', errorKey: PENDING_NOT_FOUND_KEY });
+    // Saving again after the reload carries the same payment and allocation ids.
+    const saved = await reloaded.submit(planner(form('100'), [A]));
+    expect(saved?.kind).toBe('saved');
+    expect(resent[0]?.paymentId).toBe(firstSent[0]?.paymentId);
+    expect(resent[0]?.allocations[0]?.allocationId).toBe(firstSent[0]?.allocations[0]?.allocationId);
+    // A confirmed save forgets the ids: the next form is a new payment.
+    expect(store.map.has(pendingKey(CUSTOMER))).toBe(false);
+  });
+
+  it('a reload that finds the payment shows it as already saved and forgets the ids', async () => {
+    const store = memoryStore();
+    const first = createCollectFlow({
+      mint: counter().mint,
+      pending: { store, customerId: CUSTOMER },
+      send: () => Promise.reject(new ApiError(502, 'BAD_GATEWAY')),
+      readStored: () => Promise.reject(new ApiError(503, 'SERVICE_UNAVAILABLE')),
+    });
+    await first.submit(planner(form('100'), [A]));
+    const STORED: CustomerPaymentDto = { ...answerFor(planOk(planner(form('100'), [A])), false) };
+    const reloaded = createCollectFlow({
+      mint: counter().mint,
+      pending: { store, customerId: CUSTOMER },
+      send: () => Promise.reject(new Error('not asked')),
+      readStored: () => Promise.resolve(STORED),
+    });
+    expect(await reloaded.resume()).toEqual({ kind: 'alreadySaved', payment: STORED });
+    expect(store.map.has(pendingKey(CUSTOMER))).toBe(false);
+  });
+
+  it('the remembered ids are per customer: another customer gets new ones', async () => {
+    const store = memoryStore();
+    const first = createCollectFlow({
+      mint: counter().mint,
+      pending: { store, customerId: CUSTOMER },
+      send: () => Promise.reject(new TypeError('x')),
+      readStored: () => Promise.reject(NOT_FOUND),
+    });
+    await first.submit(planner(form('100'), [A]));
+    const other = createCollectFlow({
+      mint: () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      pending: { store, customerId: '9d2e0b63-4c8f-4e1b-8b64-1a3c7d2e8b02' },
+      send: () => Promise.reject(new Error('x')),
+      readStored: () => Promise.reject(new Error('x')),
+    });
+    expect(other.resumed).toBe(false);
+    expect(other.ids.paymentId).not.toBe(first.ids.paymentId);
+    expect(other.resume()).toBeNull();
+  });
+
+  it('an explicit refusal of a send whose fate was never unknown forgets the ids; one after an unknown fate keeps them', async () => {
+    const clean = memoryStore();
+    const refusedOnly = createCollectFlow({
+      mint: counter().mint,
+      pending: { store: clean, customerId: CUSTOMER },
+      send: () => Promise.reject(REFUSED),
+      readStored: () => Promise.reject(new Error('not asked')),
+    });
+    await refusedOnly.submit(planner(form('100'), [A]));
+    expect(clean.map.has(pendingKey(CUSTOMER))).toBe(false);
+
+    const doubtful = memoryStore();
+    let call = 0;
+    const flow = createCollectFlow({
+      mint: counter().mint,
+      pending: { store: doubtful, customerId: CUSTOMER },
+      send: () => ((call += 1), Promise.reject(call === 1 ? new TypeError('x') : REFUSED)),
+      readStored: () => Promise.reject(NOT_FOUND),
+    });
+    await flow.submit(planner(form('100'), [A]));
+    await flow.submit(planner(form('100'), [A]));
+    expect(doubtful.map.has(pendingKey(CUSTOMER))).toBe(true);
+  });
+
+  it('a corrupted or foreign record is not taken as ids', () => {
+    for (const junk of ['not json', '{"paymentId":"x","creditId":"y","allocations":{}}', '[]', 'null', '{"paymentId":1}']) {
+      const store = memoryStore();
+      store.map.set(pendingKey(CUSTOMER), junk);
+      const flow = createCollectFlow({
+        mint: () => 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+        pending: { store, customerId: CUSTOMER },
+        send: () => Promise.reject(new Error('x')),
+        readStored: () => Promise.reject(new Error('x')),
+      });
+      expect(flow.resumed, junk).toBe(false);
+      expect(flow.ids.paymentId).toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    }
+  });
+
+  it('works with no storage at all, and with a storage that throws on every call', async () => {
+    for (const store of [null, throwingStore]) {
+      let sends = 0;
+      const flow = createCollectFlow({
+        mint: counter().mint,
+        pending: { store, customerId: CUSTOMER },
+        send: (body) => ((sends += 1), Promise.resolve(answerFor(body, false))),
+        readStored: () => Promise.reject(new Error('not asked')),
+      });
+      expect(flow.resumed).toBe(false);
+      expect((await flow.submit(planner(form('100'), [A])))?.kind).toBe('saved');
+      expect(sends).toBe(1);
+    }
   });
 });
 

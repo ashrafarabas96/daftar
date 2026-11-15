@@ -4,9 +4,11 @@
  *
  * Every fixture is a state the page can reach:
  *
- * - each `errorKey` is one `refusalKey` produces for an answer this page can
- *   receive (a receivables refusal carries `details.receivablesCode`; a 403 is
- *   `error.FORBIDDEN`; no answer at all is `error.fallback`) — asserted in
+ * - each `errorKey` is one `refusalKey` produces for an explicit refusal this
+ *   page can receive (a receivables refusal carries `details.receivablesCode`;
+ *   a 403 is `error.FORBIDDEN`), or one of the flow's own keys: no answer or a
+ *   5xx is read back, never shown as a refusal (`UNCONFIRMED_KEY`,
+ *   `PENDING_NOT_FOUND_KEY`, `STORED_UNREADABLE_KEY`) — asserted in
  *   `test/collect-payment-screens.test.tsx`;
  * - `surplus` is not written by hand: it is `surplusOf` of the fixture's own
  *   form and rows, exactly as the page derives it;
@@ -19,7 +21,7 @@ import type { CustomerPaymentResultDto, PaymentMethodDto } from '@daftar/shared-
 import { defineView, type ViewEntry } from '@/lib/phase3-format';
 import { CollectPaymentView, type CollectPaymentViewProps } from './CollectPaymentView';
 import { surplusOf, type CollectFormModel, type CollectRowModel } from './collect-payment';
-import { afterOutcome, type CollectScreenState } from './collect-flow';
+import { PENDING_NOT_FOUND_KEY, UNCONFIRMED_KEY, afterOutcome, type CollectScreenState } from './collect-flow';
 
 const noop = (): void => undefined;
 
@@ -219,8 +221,15 @@ export const VIEW_REGISTRY: readonly ViewEntry[] = [
       }),
     ),
     'already recorded, but it could not be read': view(afterOutcome(screen(TYPED_OVER_DUE), { kind: 'storedUnread' })),
-    'no answer: the figures are kept for a retry': view({ ...TYPED_OVER_DUE, errorKey: 'error.fallback' }),
-    'server failure: the figures are kept for a retry': view({ ...TYPED_OVER_DUE, errorKey: 'error.INTERNAL_ERROR' }),
+    // No answer, or a 5xx: the fate of the send is unknown. The flow reads the payment back by its id; NOT found,
+    // the screen says the save could not be confirmed (never "nothing was saved") and keeps the form and the ids.
+    'no answer, not found when read back: the save is not confirmed, the figures kept': view(
+      afterOutcome(screen(TYPED_OVER_DUE), { kind: 'unconfirmed', errorKey: UNCONFIRMED_KEY }),
+    ),
+    // The page was reloaded while a send was unconfirmed: the same ids were re-opened and the send read back, not found.
+    'reloaded, the earlier send not found: the same payment can be saved from this form': view(
+      afterOutcome(screen({ form: form(), rows: [OLDEST, NEWER] }), { kind: 'unconfirmed', errorKey: PENDING_NOT_FOUND_KEY }),
+    ),
     'saved, with the rest held for the customer': view({ result: SAVED }),
     'saved earlier: the same payment sent again': view({ result: { ...SAVED, credit: null, amountMinor: '100000', replayed: true } }),
     'saved, held for the customer in full': view({ result: { ...SAVED, allocations: [], amountMinor: '25000' } }),
