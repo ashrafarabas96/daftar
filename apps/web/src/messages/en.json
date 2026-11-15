@@ -935,7 +935,7 @@
   "customers.account.invoices.daysLate": "{days} days late",
   "customers.account.invoices.dueToday": "Due today",
   "customers.account.invoices.notDueYet": "Not due yet",
-  "customers.account.invoices.heldOnInvoice": "Balance in the customer's favour on an invoice {days} days old",
+  "customers.account.invoices.heldOnInvoice": "Credit balance on an invoice {days} days old",
   "customers.account.invoices.heldOnLaterInvoice": "Balance in the customer's favour on an invoice dated after the figures' date",
   "customers.account.invoices.ofTotal": "of {total}",
   "customers.account.invoices.state.unpaid": "Not paid",

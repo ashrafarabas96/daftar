@@ -377,9 +377,10 @@ describe('two sources, two sentences (DR-114(b))', () => {
   });
 
   it('the credit-bearing invoice row keeps DR-35’s shape: a balance, on an invoice N days old', () => {
-    expect(ar['customers.account.invoices.heldOnInvoice']).toBe('رصيد للعميل على فاتورة عمرها {days} يومًا');
-    expect(en['customers.account.invoices.heldOnInvoice']).toMatch(/^Balance .* on an invoice \{days\} days old$/);
-    expect(tr['customers.account.invoices.heldOnInvoice']).toMatch(/bakiye/i);
+    // The owner's literal (DR-35, DR-114(b)), verbatim: not a paraphrase, not a pattern.
+    expect(ar['customers.account.invoices.heldOnInvoice']).toBe('رصيد دائن على فاتورة عمرها {days} يومًا');
+    expect(en['customers.account.invoices.heldOnInvoice']).toBe('Credit balance on an invoice {days} days old');
+    expect(tr['customers.account.invoices.heldOnInvoice']).toBe('{days} günlük faturada alacak bakiyesi');
   });
 });
 

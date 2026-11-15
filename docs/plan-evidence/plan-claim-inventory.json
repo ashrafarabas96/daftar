@@ -1820,7 +1820,7 @@
     },
     {
       "file": "tests/browser/invariants.ts",
-      "line": 247,
+      "line": 251,
       "phase": "cross-phase",
       "signals": ["node-type"],
       "kind": "mention",

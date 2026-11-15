@@ -935,7 +935,7 @@
   "customers.account.invoices.daysLate": "{days} gün gecikmiş",
   "customers.account.invoices.dueToday": "Bugün ödenmeli",
   "customers.account.invoices.notDueYet": "Vadesi henüz gelmedi",
-  "customers.account.invoices.heldOnInvoice": "{days} günlük bir faturada müşteri lehine bakiye",
+  "customers.account.invoices.heldOnInvoice": "{days} günlük faturada alacak bakiyesi",
   "customers.account.invoices.heldOnLaterInvoice": "Tutarların tarihinden sonra düzenlenmiş bir faturada müşteri lehine bakiye",
   "customers.account.invoices.ofTotal": "toplam {total}",
   "customers.account.invoices.state.unpaid": "Ödenmedi",
