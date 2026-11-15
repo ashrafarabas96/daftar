@@ -221,7 +221,25 @@ export const CustomerOpenInvoicesQuerySchema = z
   })
   .strict();
 
+/**
+ * `GET /v1/customers/:customerId/account-statement`. Keyset only: there is no `offset`
+ * key. The cursor is the composite continuation key of the chronological order
+ * `(entry date, kind rank, entry id)` -- `YYYY-MM-DD:<1..5>:<uuid>` -- because
+ * one uuid cannot name a position across five tables without a resolving read.
+ */
+const accountStatementCursor = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}:[1-5]:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, 'must be a statement cursor');
+
+export const CustomerAccountStatementQuerySchema = z
+  .object({
+    cursor: accountStatementCursor.optional(),
+    limit: limit.optional(),
+  })
+  .strict();
+
 export type CustomerListQuery = z.infer<typeof CustomerListQuerySchema>;
+export type CustomerAccountStatementQuery = z.infer<typeof CustomerAccountStatementQuerySchema>;
 export type CustomerAgingQuery = z.infer<typeof CustomerAgingQuerySchema>;
 export type CustomerOpenInvoicesQuery = z.infer<typeof CustomerOpenInvoicesQuerySchema>;
 

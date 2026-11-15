@@ -12,6 +12,8 @@ import type {
   CustomerOpenInvoicesDto,
   CustomerPageDto,
   CustomerReceivableDto,
+  CustomerAccountStatementDto,
+  CustomerAccountStatementEntryDto,
 } from '@daftar/shared-contracts';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
@@ -19,7 +21,7 @@ import { readBaseCurrency } from '../inventory/inventory-stock-read';
 import { likeEscaped } from '../inventory/read-scope';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { sellingRefusal } from './selling-errors';
-import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery } from './selling.schemas';
+import type { CustomerAgingQuery, CustomerListQuery, CustomerOpenInvoicesQuery, CustomerAccountStatementQuery } from './selling.schemas';
 
 /**
  * The customer READ surface of P4-S1 (lock §4 source-of-truth matrix, P4-AL-06,
@@ -641,6 +643,162 @@ export class CustomerReadService {
       if (r.currency_code !== null && r.txn_minor !== null) byCurrency.push({ currency: r.currency_code, txnMinor: r.txn_minor });
     }
     return { customerId, baseMinor: baseMinor.toString(), baseCurrency, byCurrency };
+  }
+
+  /**
+   * `GET /v1/customers/:customerId/account-statement` — one row per credit
+   * sales document, payment, payment allocation, held credit and credit
+   * application of the customer, oldest first.
+   *
+   * THE STATEMENT CLOSES ON THE READER OF RECORD. The debit side holds only
+   * what `customer_ar_outstanding` counts (an OPEN invoice of a CREDIT sale:
+   * the predicate of `invoice_outstanding`, `0080`/`0084`); a cash-settled or
+   * void invoice is not a debt and is not a debit row. The credit side holds
+   * only what is APPLIED to such a document, in that document's own currency —
+   * one row per payment allocation and per credit application, the stored
+   * `invoice_amount_applied_minor`, which is the very column the reader sums.
+   * So, per currency, debit minus credit is what `outstanding` states, and no
+   * retained (unapplied) money is posted a second time. The payment as
+   * received and the retained credit are stated rows with NEITHER side. The
+   * credit row states the customer's credit BALANCE, the STORED
+   * `remaining_amount_minor` (a stored column read as it is, never computed
+   * here), beside its original amount, in fields named for what they are, and
+   * its `amountTxnMinor` is null so it cannot be read as a debt or a payment.
+   * One row per credit: no total across credits (that would be a sum), and
+   * nothing is netted against the receivable (DR-114/(ب)). Every
+   * amount carries its own `currency`; a column is never summed across them.
+   *
+   * The order is `(entry date, kind rank, entry id)` and the continuation is
+   * that same triple, so a page boundary can neither repeat nor skip a row and
+   * there is no `OFFSET` (budget `P4-D`). This read adds nothing up and carries
+   * NO per-row running balance (P4-AL-07). `outstanding` is the customer's
+   * WHOLE balance (never the page's total), handed through unchanged.
+   */
+  async accountStatement(m: MembershipContext, customerId: string, q: CustomerAccountStatementQuery): Promise<CustomerAccountStatementDto> {
+    const row = await findCustomer(this.db, this.scope(m), customerId);
+    if (row === null) throw sellingRefusal('customer.not_found');
+    const size = q.limit ?? DEFAULT_LIMIT;
+    const [cDate, cRank, cId] = q.cursor === undefined ? [null, null, null] : (q.cursor.split(':') as [string, string, string]);
+
+    const outstanding = await this.db.scoped<{ currency_code: string | null; txn_minor: string | null; base_minor: string }>(
+      this.scope(m),
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor, r.base_minor::text AS base_minor
+         FROM customer_ar_outstanding($1::uuid, $2::uuid) r
+        ORDER BY r.currency_code NULLS FIRST`,
+      [m.businessId, customerId],
+    );
+
+    const found = await this.db.scoped<
+      QueryResultRow & {
+        entry_kind: CustomerAccountStatementEntryDto['entryKind'];
+        entry_id: string;
+        entry_date_text: string;
+        kind_rank: number;
+        document_number: string | null;
+        related_id: string | null;
+        currency_code: string;
+        debit_txn_minor: string | null;
+        credit_txn_minor: string | null;
+        amount_txn_minor: string | null;
+        amount_base_minor: string | null;
+        credit_original_txn_minor: string | null;
+        credit_remaining_txn_minor: string | null;
+        credit_remaining_base_minor: string | null;
+        reference: string | null;
+      }
+    >(
+      this.scope(m),
+      `SELECT s.entry_kind, s.entry_id, to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date_text, s.kind_rank,
+              s.document_number, s.related_id, s.currency_code,
+              s.debit_txn_minor, s.credit_txn_minor, s.amount_txn_minor, s.amount_base_minor,
+              s.credit_original_txn_minor, s.credit_remaining_txn_minor, s.credit_remaining_base_minor, s.reference
+         FROM (
+              SELECT 1 AS kind_rank, 'invoice'::text AS entry_kind, i.id AS entry_id, i.issue_date AS entry_date,
+                     i.document_number, NULL::uuid AS related_id, i.currency_code::text AS currency_code,
+                     i.total_txn_minor::text AS debit_txn_minor, NULL::text AS credit_txn_minor,
+                     i.total_txn_minor::text AS amount_txn_minor, i.total_base_minor::text AS amount_base_minor,
+                     NULL::text AS credit_original_txn_minor, NULL::text AS credit_remaining_txn_minor, NULL::text AS credit_remaining_base_minor,
+                     NULL::text AS reference
+                FROM invoices i
+                JOIN sales sl ON sl.business_id = i.business_id AND sl.id = i.sale_id
+               WHERE i.business_id = $1 AND i.customer_id = $2
+                 AND i.document_kind = 'invoice' AND i.status = 'open' AND sl.settlement_mode = 'credit'
+              UNION ALL
+              SELECT 2, 'payment', p.id, p.payment_date,
+                     NULL::text, NULL::uuid, p.currency_code::text,
+                     NULL::text, NULL::text,
+                     p.amount_minor::text, p.base_amount_minor::text,
+                     NULL::text, NULL::text, NULL::text,
+                     p.reference
+                FROM payments p
+               WHERE p.business_id = $1 AND p.customer_id = $2
+              UNION ALL
+              SELECT 3, 'payment_allocation', pa.id, p.payment_date,
+                     ai.document_number, pa.invoice_id, pa.invoice_currency::text,
+                     NULL::text, pa.invoice_amount_applied_minor::text,
+                     pa.invoice_amount_applied_minor::text, pa.invoice_carrying_base_released_minor::text,
+                     NULL::text, NULL::text, NULL::text,
+                     p.reference
+                FROM payment_allocations pa
+                JOIN payments p ON p.business_id = pa.business_id AND p.id = pa.payment_id
+                JOIN invoices ai ON ai.business_id = pa.business_id AND ai.id = pa.invoice_id
+                JOIN sales asl ON asl.business_id = ai.business_id AND asl.id = ai.sale_id
+               WHERE pa.business_id = $1 AND pa.customer_id = $2
+                 AND ai.document_kind = 'invoice' AND ai.status = 'open' AND asl.settlement_mode = 'credit'
+              UNION ALL
+              SELECT 4, 'credit', c.id, c.credit_date,
+                     NULL::text, c.origin_payment_id, c.currency_code::text,
+                     NULL::text, NULL::text,
+                     NULL::text, NULL::text,
+                     c.original_amount_minor::text AS credit_original_txn_minor, c.remaining_amount_minor::text AS credit_remaining_txn_minor,
+                     c.remaining_carrying_base_amount_minor::text AS credit_remaining_base_minor,
+                     NULL::text
+                FROM customer_credits c
+               WHERE c.business_id = $1 AND c.customer_id = $2
+              UNION ALL
+              SELECT 5, 'credit_application', a.id, a.application_date,
+                     ai.document_number, a.invoice_id, a.invoice_currency::text,
+                     NULL::text, a.invoice_amount_applied_minor::text,
+                     a.invoice_amount_applied_minor::text, a.invoice_carrying_base_released_minor::text,
+                     NULL::text, NULL::text, NULL::text,
+                     NULL::text
+                FROM customer_credit_applications a
+                JOIN invoices ai ON ai.business_id = a.business_id AND ai.id = a.invoice_id
+                JOIN sales asl ON asl.business_id = ai.business_id AND asl.id = ai.sale_id
+               WHERE a.business_id = $1 AND a.customer_id = $2
+                 AND ai.document_kind = 'invoice' AND ai.status = 'open' AND asl.settlement_mode = 'credit'
+         ) s
+        WHERE ($3::date IS NULL OR (s.entry_date, s.kind_rank, s.entry_id) > ($3::date, $4::int, $5::uuid))
+        ORDER BY s.entry_date, s.kind_rank, s.entry_id
+        LIMIT $6`,
+      [m.businessId, customerId, cDate, cRank === null ? null : Number.parseInt(cRank, 10), cId, size + 1],
+    );
+
+    const page = found.rows.slice(0, size);
+    const items: CustomerAccountStatementEntryDto[] = page.map((r) => ({
+      entryKind: r.entry_kind,
+      entryId: r.entry_id,
+      entryDate: r.entry_date_text,
+      documentNumber: r.document_number,
+      relatedId: r.related_id,
+      currency: r.currency_code,
+      debitTxnMinor: r.debit_txn_minor,
+      creditTxnMinor: r.credit_txn_minor,
+      amountTxnMinor: r.amount_txn_minor,
+      amountBaseMinor: r.amount_base_minor,
+      customerCreditOriginalTxnMinor: r.credit_original_txn_minor,
+      customerCreditRemainingTxnMinor: r.credit_remaining_txn_minor,
+      customerCreditRemainingBaseMinor: r.credit_remaining_base_minor,
+      reference: r.reference,
+    }));
+    const last = page[page.length - 1];
+    return {
+      customerId,
+      items,
+      outstandingScope: 'whole_customer',
+      outstanding: outstanding.rows.map((r) => ({ currency: r.currency_code, txnMinor: r.txn_minor, baseMinor: r.base_minor })),
+      nextCursor: found.rows.length > size && last !== undefined ? `${last.entry_date_text}:${last.kind_rank}:${last.entry_id}` : null,
+    };
   }
 
   /**
