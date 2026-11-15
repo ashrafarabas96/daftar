@@ -133,7 +133,7 @@ describe('C1.5 §1 — the floor this build requires is the DDL it ships', () =>
   });
 
   it('the ordinal is parsed from the name, and an unplaceable name parses to null rather than to zero', () => {
-    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(86);
+    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(88);
     expect(migrationOrdinal('0083_phase4_ar_outstanding_set_based.sql'), 'a four-digit prefix').toBe(83);
     expect(migrationOrdinal('10000_far_future.sql'), 'a five-digit prefix is placed by VALUE, not by string order').toBe(10_000);
     // The reason the comparison is numeric rather than lexicographic. While
@@ -184,7 +184,7 @@ describe('C1.5 §2 — a database stopped at 0083 is REFUSED, and the same one m
     );
     expect(
       err,
-      `the gate ACCEPTED a database whose greatest applied migration is ${plantedHead}, three migrations below the ${REQUIRED_SCHEMA_MIGRATION} ` +
+      `the gate ACCEPTED a database whose greatest applied migration is ${plantedHead}, five migrations below the ${REQUIRED_SCHEMA_MIGRATION} ` +
         `this build requires. A positional reader of 0083's five-column invoice_outstanding does not fail against 0084's eight-column form — it ` +
         `reads the wrong field and reports a number.`,
     ).not.toBeNull();
@@ -237,7 +237,7 @@ describe('C1.5 §3 — the APPLICATION refuses to boot, so no route is ever moun
       }
       expect(
         boot.ok,
-        `the application BOOTED against a database stopped at ${STOP_AT}. Every money route is mounted and answering, three migrations ahead of ` +
+        `the application BOOTED against a database stopped at ${STOP_AT}. Every money route is mounted and answering, five migrations ahead of ` +
           `the schema underneath them.`,
       ).toBe(false);
       expect(
@@ -338,7 +338,7 @@ describe('C1.5 §4 — an unidentifiable schema is refused, never assumed adequa
 });
 
 describe('C1.5 §5 — the SURFACE half bites where the ledger cannot be read, or lies', () => {
-  it('a database at 0083 whose ledger CLAIMS 0086 is still refused, named on the five-column invoice_outstanding', async () => {
+  it('a database at 0083 whose ledger CLAIMS 0088 is still refused, named on the five-column invoice_outstanding', async () => {
     // This is the case that protects a real deployment. On the live database
     // the API's principal cannot read `schema_migrations` at all (§3), so the
     // ordinal half never runs there and the surface half is the ONLY thing

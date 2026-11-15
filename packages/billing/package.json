@@ -1,0 +1,26 @@
+{
+  "name": "@daftar/billing",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run && python3 -I tools/law-ran.py && python3 -I tools/arms/pinned-now-arm.py tools/seal-check-run.py",
+    "gate:law": "python3 -I tools/law-ran.py",
+    "lint": "eslint src test --max-warnings 0",
+    "test:db": "./test/db/run-db-proof.sh",
+    "gate:arms": "python3 -I tools/arms/pinned-now-arm.py tools/seal-check-run.py"
+  },
+  "dependencies": {
+    "@daftar/domain-core": "*"
+  },
+  "devDependencies": {
+    "@types/pg": "8.15.6",
+    "pg": "8.16.3",
+    "typescript": "5.9.3",
+    "vitest": "4.1.12"
+  }
+}

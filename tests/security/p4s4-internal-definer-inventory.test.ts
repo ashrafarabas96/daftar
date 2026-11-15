@@ -1251,6 +1251,64 @@ const SEALED: readonly (readonly [string, Owner, 'trigger' | 'helper', 'r' | 'w'
   ['warehouses_30_archive_requires_zero_stock()', 'inventory', 'trigger', 'r'],
   ['warehouses_home_branch_maintain()', 'inventory', 'trigger', 'w'],
   ['warehouses_require_home_branch()', 'inventory', 'trigger', 'r'],
+  //
+  // ── 0088's TEN, one row each, by the SEALED rule above ────────────────
+  //
+  // Each of the ten below is a SECURITY DEFINER routine of an internal
+  // principal that `0088_p5_billing_platform_credit_ledger.sql` hands to
+  // `daftar_accounting_internal`, and each carries `REVOKE ALL ON FUNCTION
+  // … FROM PUBLIC` in that same file with NO `GRANT EXECUTE` anywhere in
+  // `migrations/`. So by the DOORS rule — "every SECURITY DEFINER routine
+  // of either internal principal that ANY principal but its owner may
+  // EXECUTE" — not one of them is a door: no principal but the owner may
+  // execute any of them. They are therefore "every other", which is this
+  // SEALED set, and they enter it in the same four-column shape every other
+  // sealed row uses: no new list, no exception, no skip.
+  //
+  // `reads`/`writes` below are not declared: each was measured by running
+  // this file's OWN `strip`, `readsIn` and `writesIn` over the body
+  // `0088` creates, and nine of the ten agree with the independently
+  // written table in `docs/PHASE_4_INTERNAL_DEFINER_INVENTORY.md`.
+  // `lock_grants_in_order` is the tenth and is recorded `rw`: `writesIn`
+  // matches its `FOR UPDATE OF r` row lock, so `rw` is what the law
+  // derives. The page records it `writes: no`. The conflict is NAMED, not
+  // resolved here, because resolving it means changing `writesIn` or the
+  // page, and this addition changes no logic and deletes no line.
+  //
+  // Migration for all ten: `0088_p5_billing_platform_credit_ledger.sql`.
+  // The reason on each row is why an INTERNAL principal owns it, read from
+  // the body `0088` creates and not from its prose.
+  //
+  // 0088_p5_billing_platform_credit_ledger.sql — reads BOTH sides of the credit agreement: SELECT FROM subscription_invoices and FROM
+  // platform_credit_adjustments; elevated so the verdict does not depend on the caller's row-level view of either relation.
+  ['assert_invoice_credit_agrees(uuid)', 'accounting', 'helper', 'r'],
+  // 0088_p5_billing_platform_credit_ledger.sql — takes the grant locks in a fixed order: pg_advisory_xact_lock, then SELECT … FROM
+  // platform_credit_grant_remainders FOR UPDATE OF r; elevated so the ordering sees every grant of the business, not the caller's subset.
+  ['lock_grants_in_order(uuid,uuid,text)', 'accounting', 'helper', 'rw'],
+  // 0088_p5_billing_platform_credit_ledger.sql — compares NEW to OLD and raises; reaches no relation at all, so it is elevated for the LAW and
+  // not for the read: with no relation touched, no policy and no privilege can change its verdict.
+  ['pca_append_only()', 'accounting', 'trigger', '-'],
+  // 0088_p5_billing_platform_credit_ledger.sql — orders an adjustment against its grant's history: pg_advisory_xact_lock, then SELECT FROM
+  // platform_credit_adjustments; elevated so the chronology sees every adjustment of that grant.
+  ['pca_chronology()', 'accounting', 'trigger', 'r'],
+  // 0088_p5_billing_platform_credit_ledger.sql — body is one PERFORM of public.assert_invoice_credit_agrees(NEW.invoice_id) and RETURN NULL;
+  // elevated because the helper it calls has no caller but this owner.
+  ['pca_credit_agrees()', 'accounting', 'trigger', '-'],
+  // 0088_p5_billing_platform_credit_ledger.sql — the only writer of the ten: INSERT INTO and UPDATE platform_credit_grant_remainders, a
+  // FORCE-RLS relation revoked from PUBLIC; elevated to maintain the remainder ledger. It reads no relation.
+  ['pca_maintain_remainder()', 'accounting', 'trigger', 'w'],
+  // 0088_p5_billing_platform_credit_ledger.sql — compares NEW to OLD and raises except on reconciliation; reaches no relation, so it too is
+  // elevated for the law and not for the read.
+  ['sca_append_only_except_reconciliation()', 'accounting', 'trigger', '-'],
+  // 0088_p5_billing_platform_credit_ledger.sql — SELECT FROM subscription_charge_attempts to see whether an earlier attempt is unresolved;
+  // elevated so an unresolved attempt the caller cannot see still blocks the next one.
+  ['sca_no_attempt_while_unresolved()', 'accounting', 'trigger', 'r'],
+  // 0088_p5_billing_platform_credit_ledger.sql — body is one PERFORM of public.assert_invoice_credit_agrees(NEW.id) and RETURN NULL; elevated
+  // because the helper it calls has no caller but this owner.
+  ['si_credit_agrees()', 'accounting', 'trigger', '-'],
+  // 0088_p5_billing_platform_credit_ledger.sql — compares NEW to OLD over the invoice's sealed columns and raises; reaches no relation, so it
+  // is elevated for the law and not for the read.
+  ['si_immutable()', 'accounting', 'trigger', '-'],
 ];
 
 interface Row {

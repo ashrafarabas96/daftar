@@ -157,20 +157,20 @@ jobs:
       - name: Verify exact workspace set
         run: |
           set -e
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/billing packages/shared-contracts packages/design-system; do
             test -f "$ws/package.json" || { echo "MISSING WORKSPACE: $ws"; exit 1; }
           done
           test -f apps/android/settings.gradle.kts || { echo "MISSING: apps/android (Gradle)"; exit 1; }
           node -e "
             const pkg = require('./package.json');
-            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/inventory','packages/shared-contracts','packages/design-system'].sort();
+            const expected = ['apps/api','apps/web','apps/admin','packages/domain-core','packages/accounting','packages/inventory','packages/billing','packages/shared-contracts','packages/design-system'].sort();
             const actual = [...pkg.workspaces].sort();
             if (JSON.stringify(expected) !== JSON.stringify(actual)) {
               console.error('workspace mismatch', { expected, actual });
               process.exit(1);
             }
           "
-          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/shared-contracts packages/design-system; do
+          for ws in apps/api apps/web apps/admin packages/domain-core packages/accounting packages/inventory packages/billing packages/shared-contracts packages/design-system; do
             name=$(node -p "require('./$ws/package.json').name")
             grep -q "\"node_modules/$name\"" package-lock.json || { echo "package-lock missing workspace $name"; exit 1; }
           done
@@ -1302,6 +1302,43 @@ jobs:
         env:
           PG_PORT: '5432'
           P4_S4_CLIENT_DELAY_MS: '200'
+
+      # DR-100, RE-INSERTED BY THE MERGE OF origin/main (edf2b6eb) AND NOT
+      # RE-DESIGNED. The conflict here was ONE hunk and main's side of it was
+      # EMPTY: every step my branch had added around this one -- the golden
+      # suite and the Phase 2 slice gates -- MOVED in main into jobs of their
+      # own (`backend-golden`, `backend-gates-p2`), so keeping my side whole
+      # would have run those gates TWICE. Main's structure is therefore taken
+      # as it stands and only this step is composed back in, because main
+      # carries no billing database lane at all (`test:db:billing` occurs zero
+      # times in main, measured, against one on my branch).
+      #
+      # @daftar/billing's DATABASE lane, on THIS job's postgres:16 service and
+      # in a DATABASE OF ITS OWN (daftar_billing_test), so it cannot touch
+      # `daftar`. Until this step existed the lane reached CI nowhere, while
+      # `test/db/credit-ledger-atomicity.test.ts` asserted a QUERY PLAN -- the
+      # exact shape the plan-evidence contract refuses: a plan claim that only
+      # ever ran on someone's laptop.
+      #
+      # The runner is the SAME script as the local lane, with
+      # P5_EXISTING_SERVER=1 so it builds no cluster of its own. Same SQL files
+      # in the same order, same principal guard, same live-collation assertion,
+      # and the database is created from template0 at the deploy collation. No
+      # continue-on-error and no timeout of its own: a required step of a
+      # required job. The DDL it applies is TEST-ONLY (DR-100 §2) -- billing's
+      # production tables come from migration 0088, never from this file.
+      #
+      # It is a single `npm run`, and the script body NAMES the suite directory
+      # it hands the runner, because that is what the plan-evidence resolver
+      # reads: a `run: |` block or a bare `./script.sh` is invisible to it.
+      - name: Billing DB lane — credit ledger on postgres:16 (own database)
+        run: npm run test:db:billing
+        env:
+          P5_EXISTING_SERVER: '1'
+          PG_PORT: '5432'
+          P5_PG_SUPERUSER: postgres
+          P5_PG_SUPERUSER_PASSWORD: postgres
+          P5_DB_NAME: daftar_billing_test
 
   # -------------------------------------------------------------------------
   # 3. Web + Admin builds.
