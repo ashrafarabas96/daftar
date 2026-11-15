@@ -775,6 +775,15 @@ const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECOR
 // in view, because a statement that writes `sum(` into a reader's argument
 // list is summing money itself and reddened before this card — accepting it
 // would be a weakening of this law, not a repair. The scan lives in
+// A SECOND CLAIM IS CORRECTED HERE, not deleted: the first balanced scan
+// DELETED the name and the parentheses, and an independent money review
+// measured that deleting them glues the tokens on either side, so
+// `customer_ar_aging(a)sum(a.$1)` became `asum(a.$1)` and this law stopped
+// seeing a `sum(` the statement itself wrote. That is the same hidden-violation
+// direction as the defect this card fixed, introduced by the repair. The scan
+// now replaces what it removes with a SPACE: measured over 200,000 generated
+// statements, the deleting removal accepted 2 that the retired expression
+// reddened and the spacing one accepted 0, with the 27 it tightens unchanged.
 // `tests/helpers/reader-of-record-calls.ts`, which is unit-controlled in
 // `tests-unit/l3-reader-of-record-call-strip.test.ts` — including the old
 // expression, kept there as a failing case rather than as a comment — because

@@ -84,7 +84,9 @@ describe('P4-AL-07 — stripping reader-of-record calls out of a statement', () 
     const quoted = "select invoice_outstanding(array[$1], ') not a paren') from t";
     const residue = stripReaderOfRecordCalls(quoted, READERS);
     expect(residue.includes('invoice_outstanding')).toBe(false);
-    expect(residue.trim()).toBe("select array[$1], ') not a paren' from t");
+    // The removed characters are replaced by spaces, so the comparison is on
+    // the TOKENS, not on the run lengths of whitespace between them.
+    expect(residue.replace(/\s+/g, ' ').trim()).toBe("select array[$1], ') not a paren' from t");
   });
 
   it('§7 several calls in one statement all go, and nothing between them is eaten', () => {
@@ -111,6 +113,19 @@ describe('P4-AL-07 — stripping reader-of-record calls out of a statement', () 
     const residue = stripReaderOfRecordCalls(SWALLOWED, READERS);
     expect(residue.includes('coalesce(sum(a),0)'), `residue: ${residue}`).toBe(true);
     expect(/\bsum\s*\(/i.test(residue), 'the repair must be TIGHTER than the defect, never looser').toBe(true);
+  });
+
+  it('§12 ANTI-WEAKENING CONTROL: removing a call may not glue the tokens around it', () => {
+    // Measured by a differential sweep against the old expression: a removal
+    // that DELETES turns this statement into `select asum(a.$1) from t`, where
+    // `\bsum\s*\(` no longer matches, so the law accepts a statement that
+    // sums money -- the same hidden-violation direction as §9, introduced by
+    // the repair itself rather than by the defect it fixed.
+    const glued = 'select customer_ar_aging(a)sum(a.$1) from t';
+    expect(/\bsum\s*\(/i.test(glued.replace(OLD, '')), 'the old expression reddened it').toBe(true);
+    const residue = stripReaderOfRecordCalls(glued, READERS);
+    expect(residue.includes('customer_ar_aging'), 'the name still goes').toBe(false);
+    expect(/\bsum\s*\(/i.test(residue), `the sum the statement wrote must stay visible -- residue: ${residue}`).toBe(true);
   });
 
   it('§11 a nested reader call inside the arguments is removed too', () => {

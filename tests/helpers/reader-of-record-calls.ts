@@ -12,6 +12,9 @@
  *
  * Nested reader calls inside the arguments are still removed: the scan
  * continues just after the opening paren rather than skipping past the close.
+ *
+ * What is removed is replaced by a SPACE and not deleted, so that removing it
+ * cannot glue two tokens into one and hide the `sum(` between them.
  */
 export function stripReaderOfRecordCalls(text: string, readers: readonly string[]): string {
   if (readers.length === 0) return text;
@@ -35,9 +38,16 @@ export function stripReaderOfRecordCalls(text: string, readers: readonly string[
     cursor = openAt + 1;
   }
   if (drop.size === 0) return text;
+  // A SPACE, not a deletion. Deleting the characters closes the gap they left,
+  // so `customer_ar_aging(a)sum(a.$1)` became `asum(a.$1)` and `\bsum\s*\(`
+  // no longer matched a sum the statement itself wrote: a removal that deletes
+  // is a WEAKENING of this law on every text where a token ends right before
+  // the call's `(` or right after its `)`. Measured: 2 such texts in 200,000
+  // generated ones reddened by the old expression and accepted by the deleting
+  // removal, and 0 by this one, with the 27 texts it tightens unchanged.
   let out = '';
   for (let i = 0; i < text.length; i += 1) {
-    if (!drop.has(i)) out += text[i];
+    out += drop.has(i) ? ' ' : text[i];
   }
   return out;
 }
