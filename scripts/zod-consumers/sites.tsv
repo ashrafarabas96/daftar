@@ -14,7 +14,7 @@ apps/api/src/modules/pos/pos-cart.controller.ts	81	find-shift	safe	R-RECEIVER	co
 apps/api/src/modules/purchasing/supplier-balance-reads.ts	434	find-shift	safe	R-RECEIVER	const tail = scan.find((r) => r.tail);
 apps/api/src/modules/receivables/receivables-payload.ts	150	find-shift	safe	R-RECEIVER	const registered = INVENTORY_OPERATION_CODES.find((c) => c === code);
 apps/api/src/modules/tenancy/structure.service.ts	374	find-shift	safe	R-RECEIVER	const member = (await this.listMembers(m)).find((x) => x.userId === userId);
-apps/web/src/app/[locale]/AppHeader.tsx	99	find-shift	safe	R-RECEIVER	const currentName = businesses.find((b) => b.businessId === current)?.name ?? t('nav.switchBusiness');
+apps/web/src/app/[locale]/AppHeader.tsx	105	find-shift	safe	R-RECEIVER	const currentName = businesses.find((b) => b.businessId === current)?.name ?? t('nav.switchBusiness');
 apps/web/src/app/[locale]/catalog/[id]/page.tsx	193	client-details	safe	HAND	<h2 style={{ fontFamily: typography.fontFamily.base, fontSize: typography.size.lg, margin: `${spacing[2]} 0 0` }}>{t('catalog.details')}</h2>
 apps/web/src/app/[locale]/catalog/[id]/page.tsx	340	find-shift	safe	R-RECEIVER	const found = items.items.find((i) => i.productId === productId);
 apps/web/src/app/[locale]/catalog/[id]/page.tsx	363	find-shift	safe	R-RECEIVER	const found = again.items.find((i) => i.productId === productId);
@@ -102,6 +102,9 @@ apps/web/test/bff-session-notice.test.tsx	20	find-shift	safe	R-RECEIVER	const st
 apps/web/test/bff-session-notice.test.tsx	22	find-shift	safe	R-RECEIVER	const button = [...elements(frame)].find((e) => e.tag === 'button');
 apps/web/test/bff-session-retry.test.ts	23	find-shift	safe	R-RECEIVER	const next = answers.shift();
 apps/web/test/csp.test.ts	77	find-shift	safe	R-RECEIVER	const nonceSource = script.find((s) => s.startsWith(`'nonce-`));
+apps/web/test/invoice-screens.test.tsx	57	find-shift	safe	R-RECEIVER	const found = entries.find((e) => e.name === view)?.fixtures.find((f) => f.name === fixture);
+apps/web/test/invoice-screens.test.tsx	152	find-shift	safe	R-RECEIVER	const fixture = INVOICE_VIEWS[0]?.fixtures.find((f) => f.name === ALL)?.props as { invoices: readonly { documentNumber: string }[] };
+apps/web/test/invoice-screens.test.tsx	183	find-shift	safe	R-RECEIVER	const foreign = INVOICE_VIEWS[0]?.fixtures.find((f) => f.name === ALL)?.props as { invoices: readonly { totalBaseMinor: string }[] };
 apps/web/test/platform.test.ts	21	find-shift	safe	R-RECEIVER	const next = responses.shift();
 apps/web/test/pos-receipt-invisible.test.tsx	107	find-shift	safe	R-RECEIVER	const receipt = fixtures.find(({ area, entry }) => area === 'pos' && entry.name === 'SaleDoneView');
 apps/web/test/purchase-leftover.test.tsx	69	find-shift	safe	R-RECEIVER	const found = PURCHASE_VIEWS.find((e) => e.name === 'PurchaseDetailView')?.fixtures.find((f) => f.name === fixture);
