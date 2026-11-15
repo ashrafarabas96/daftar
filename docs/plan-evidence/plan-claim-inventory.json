@@ -88,16 +88,16 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 436,
-    "planGates": 122,
-    "assertions": 32,
-    "files": 55
+    "hits": 431,
+    "planGates": 120,
+    "assertions": 31,
+    "files": 54
   },
   "byPhase": {
     "cross-phase": {
-      "planGates": 53,
-      "assertions": 12,
-      "mentions": 121
+      "planGates": 51,
+      "assertions": 11,
+      "mentions": 119
     },
     "phase-2": {
       "planGates": 0,
@@ -247,12 +247,6 @@
       "assertions": 2,
       "mentions": 14,
       "phase": "phase-4"
-    },
-    "packages/billing/test/db/credit-ledger-atomicity.test.ts": {
-      "planGates": 2,
-      "assertions": 1,
-      "mentions": 2,
-      "phase": "cross-phase"
     },
     "packages/domain-core/test/phase4-s7-installment-aging.test.ts": {
       "planGates": 40,
@@ -450,7 +444,7 @@
   "hits": [
     {
       "file": ".github/workflows/ci.yml",
-      "line": 929,
+      "line": 758,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -458,7 +452,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 935,
+      "line": 764,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "assertion",
@@ -466,7 +460,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 950,
+      "line": 779,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -474,7 +468,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1019,
+      "line": 848,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -482,7 +476,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1022,
+      "line": 851,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "assertion",
@@ -490,7 +484,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1024,
+      "line": 853,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -498,7 +492,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1025,
+      "line": 854,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -506,7 +500,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1036,
+      "line": 865,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -514,7 +508,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1056,
+      "line": 885,
       "phase": "cross-phase",
       "signals": ["collation-dependent-range"],
       "kind": "mention",
@@ -522,7 +516,7 @@
     },
     {
       "file": ".github/workflows/ci.yml",
-      "line": 1059,
+      "line": 888,
       "phase": "cross-phase",
       "signals": ["plan-shape-word"],
       "kind": "mention",
@@ -1223,48 +1217,6 @@
       "signals": ["explain"],
       "kind": "mention",
       "text": "RAISE EXCEPTION 'installment.migration_end_state_invalid: EXPLAIN of the index-independent active-plan count returned no plan at all, so part 9c measured nothing. A law that cannot read its subject is not a law'"
-    },
-    {
-      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
-      "line": 118,
-      "phase": "cross-phase",
-      "signals": ["explain", "plan-cost", "query-plan-json"],
-      "kind": "mention",
-      "text": "const plan = await owner.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${extracted}`, [s.tenantId, s.businessId, s.currency]);"
-    },
-    {
-      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
-      "line": 121,
-      "phase": "cross-phase",
-      "signals": ["query-plan-json"],
-      "kind": "mention",
-      "text": "const lines = plan.rows.map((r) => r['QUERY PLAN']);"
-    },
-    {
-      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
-      "line": 125,
-      "phase": "cross-phase",
-      "signals": [],
-      "kind": "plan-gate",
-      "via": ["sort"],
-      "text": "expect(sort).toBeGreaterThanOrEqual(0);"
-    },
-    {
-      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
-      "line": 126,
-      "phase": "cross-phase",
-      "signals": ["explain"],
-      "kind": "assertion",
-      "text": "// EXPLAIN prints parents before children, so a smaller index is higher"
-    },
-    {
-      "file": "packages/billing/test/db/credit-ledger-atomicity.test.ts",
-      "line": 128,
-      "phase": "cross-phase",
-      "signals": [],
-      "kind": "plan-gate",
-      "via": ["sort"],
-      "text": "expect(lockRows).toBeLessThan(sort);"
     },
     {
       "file": "packages/domain-core/test/phase4-s7-installment-aging.test.ts",
