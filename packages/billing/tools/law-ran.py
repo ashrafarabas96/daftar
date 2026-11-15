@@ -448,7 +448,7 @@ EXPECTED_TEST_FILES: dict[str, int] = {
     "test/dunning-window-bound.test.ts": 7,
     "test/dunning.test.ts": 26,
     "test/error-codes-are-live.test.ts": 8,
-    "test/errors-carry-no-money.test.ts": 6,
+    "test/errors-carry-no-money.test.ts": 8,
     "test/fake-provider.test.ts": 12,
     "test/invoice-states.test.ts": 10,
     "test/invoice.test.ts": 13,
@@ -522,7 +522,20 @@ EXPECTED_TEST_FILES: dict[str, int] = {
 # run printed on Windows (`24 failed | 366 passed (390)`, of which the 24
 # host-condition failures in `test/tool-commands-are-isolated.test.ts` and
 # `test/repo-format-gate.test.ts` are the SAME 24 as before the change).
-EXPECTED_TOTAL_CASES = 390
+# 390 -> 392 when `test/errors-carry-no-money.test.ts` -- a MONEY law, whose
+# subject is the field list of `BillingErrorContext` -- was measured to be
+# reading one declaration shape only. Its three absence cases all read ONE
+# field list, and the reader saw `readonly name?: type;` on a single line and
+# NOTHING ELSE: a member without `readonly` (a modifier, not a declaration),
+# a type spanning lines, a member ended by a line break, and a comment line
+# before it each returned the member INVISIBLE, so `amountMinor?: bigint`
+# written in any of those shapes passed all three laws in silence. The two
+# cases named at that file's own row above (6 -> 8) hold the reader's reach
+# and the offence sets' naming, and they RED on the old reader (2 failed |
+# 6 passed, the six being the laws themselves). An ADDITION only, and the
+# figure is the one the package's own run printed on Windows (`24 failed |
+# 368 passed (392)`, the 24 host-condition failures being the SAME 24).
+EXPECTED_TOTAL_CASES = 392
 # The coordinator's R57-C-01, second half: the directory this step writes the
 # runner's report into is created the same way as the private pack copy, and an
 # OSError there was a traceback too.

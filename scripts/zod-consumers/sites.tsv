@@ -123,6 +123,7 @@ apps/web/test/ux-review-fixes.test.tsx	232	find-shift	safe	R-RECEIVER	const dial
 apps/web/test/ux-review-fixes.test.tsx	242	find-shift	safe	R-RECEIVER	const finish = all(r, 'button').find((b) => textOf(b) === tr('en', 'stock.count.finish'));
 apps/web/test/ux-review-fixes.test.tsx	293	find-shift	safe	R-RECEIVER	const dialog = [...elements(open.frame)].find((e) => e.attrs['role'] === 'dialog');
 apps/web/test/ux-review-fixes.test.tsx	333	find-shift	safe	R-RECEIVER	const pay = all(r, 'button').find((b) => textOf(b) === tr('en', 'payments.submit'));
+packages/billing/test/errors-carry-no-money.test.ts	261	find-shift	safe	R-RECEIVER	const ty = fields.find(([n]) => n === 'amountMinor')?.[1] ?? '';
 packages/billing/test/tool-commands-are-isolated.test.ts	1311	find-shift	safe	R-RECEIVER	const part = parts.shift() as string;
 packages/billing/test/tool-commands-are-isolated.test.ts	1559	find-shift	safe	R-RECEIVER	const sha512 = integrity.split(/\s+/).find((entry) => entry.startsWith('sha512-'));
 packages/billing/test/tool-commands-are-isolated.test.ts	3907	find-shift	safe	R-RECEIVER	const text = fixtures.find(([l]) => l === label)?.[1] ?? '';
