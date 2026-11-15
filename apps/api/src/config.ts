@@ -131,6 +131,80 @@ function isLocalHost(hostname: string): boolean {
   return false;
 }
 
+/** PostgreSQL's default port, which a URL may write out or leave implicit. */
+const DEFAULT_POSTGRES_PORT = '5432';
+
+/**
+ * Percent-decoding applied EXACTLY ONCE, with a malformed escape left alone.
+ *
+ * Once, not repeatedly: `%2578` denotes the literal text `%78`, which is a
+ * DIFFERENT secret from `x` (`%78`). Decoding twice would merge two distinct
+ * passwords into one and refuse a deployment that is correct. And a malformed
+ * escape (`%zz`) makes `decodeURIComponent` throw, so it is returned as written
+ * — a startup refusal must not become a crash inside the refusal check.
+ */
+function decodeOnce(part: string): string {
+  try {
+    return decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+}
+
+/**
+ * THE IDENTITY OF A DATABASE PRINCIPAL, as §31 compares them.
+ *
+ * §31 used to compare the connection strings as TEXT. Measured on `main`
+ * (`0af68e81`), with an otherwise correct production `merchant-api` that
+ * started as the control: of eight spellings of ONE credential, only the
+ * byte-identical one was refused. These all started —
+ *
+ *   `@db:5432/` (the default port written out) · `?sslmode=require` appended ·
+ *   a trailing slash · `postgres://` for `postgresql://` · `@DB/` in another
+ *   case · `%78` for the password `x` · `%61` inside the role name
+ *
+ * — so the law over §31 pinned TEXTUAL EQUALITY, not one credential. Any of
+ * those seven collapses two roles onto one principal while the process starts,
+ * serves and reports nothing, which is the whole class §31 exists to refuse.
+ *
+ * WHAT IS NORMALIZED, and nothing beyond it:
+ *   1. the scheme, case-insensitively, with `postgres` ≡ `postgresql`
+ *   2. the host, lower-cased (DNS is case-insensitive; `URL` keeps the case
+ *      for a non-special scheme, measured)
+ *   3. the port, with `5432` and "absent" the same
+ *   4. the role and the password, percent-decoded ONCE (see `decodeOnce`)
+ *   5. the database path, without a trailing slash
+ * and the QUERY STRING is excluded: `sslmode`, timeouts and pool options
+ * change how a principal connects, never which principal it is.
+ *
+ * WHAT IS DELIBERATELY NOT NORMALIZED, because normalizing is a widening and
+ * each widening can refuse a correct deployment:
+ *   · two different hosts are two principals here — this function resolves no
+ *     DNS and will not assume two names are one server
+ *   · a non-default port is part of the identity
+ *   · two different database names are two principals
+ *   · an unparseable value is returned unchanged, so it still compares as text
+ *     rather than silently matching everything
+ *
+ * Pinned, element by element with a negative control for each, in
+ * `tests-unit/config-db-principal-normalize-law.test.ts`.
+ */
+function dbPrincipalKey(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    // Not a URL: compare it as text, which is what §31 did for everything
+    // before this function existed.
+    return `raw\u0000${raw}`;
+  }
+  const scheme = url.protocol.replace(/:$/, '').toLowerCase();
+  const canonicalScheme = scheme === 'postgres' ? 'postgresql' : scheme;
+  const port = url.port === DEFAULT_POSTGRES_PORT ? '' : url.port;
+  const database = url.pathname.replace(/\/+$/, '');
+  return [canonicalScheme, decodeOnce(url.username), decodeOnce(url.password), url.hostname.toLowerCase(), port, database].join('\u0000');
+}
+
 const EnvSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
@@ -583,7 +657,9 @@ const EnvSchema = z
       }
     }
     // §31: ACTUAL PRINCIPALS MUST DIFFER — no aliasing one role's credentials
-    // for another pool via misconfiguration.
+    // for another pool via misconfiguration. Compared through
+    // `dbPrincipalKey`, NOT as raw text: see that function for what is
+    // normalized and, more importantly, for what deliberately is not.
     const urls: Record<string, string | undefined> = {
       APP_DATABASE_URL: c.APP_DATABASE_URL,
       PLATFORM_DATABASE_URL: c.PLATFORM_DATABASE_URL,
@@ -595,9 +671,10 @@ const EnvSchema = z
     const seen = new Map<string, string>();
     for (const [name, url] of Object.entries(urls)) {
       if (!url) continue;
-      const prior = seen.get(url);
+      const key = dbPrincipalKey(url);
+      const prior = seen.get(key);
       if (prior) fail(name, `duplicates ${prior} — every DB principal must use distinct credentials`);
-      seen.set(url, name);
+      seen.set(key, name);
     }
   });
 
