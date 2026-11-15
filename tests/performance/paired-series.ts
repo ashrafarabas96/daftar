@@ -10,6 +10,28 @@
  *
  * What this does NOT change: the limit, the sample count (200 per side), the
  * warm-up, the percentile (`percentile.ts`) or what the arm accepts.
+ *
+ * THE MEASUREMENT THIS RESTS ON (CI run id: fat-tail p95 / median p95 = ratio,
+ * ms; the seven readable `RATIO — P4-D fat-tail over median` lines of step 25
+ * of `backend-work`, read from each job log with a grep, none of them empty):
+ *   43676171046 (FAILED)  15.063 / 4.666 = 3.228
+ *   43661612247 (FAILED)  16.508 / 5.073 = 3.254
+ *   43667347473           15.577 / 6.331 = 2.461
+ *   43667335514           16.891 / 6.986 = 2.418
+ *   43662919564           17.797 / 8.058 = 2.209
+ *   43667555629           18.764 / 8.228 = 2.280
+ *   43639495189 (main)    23.949 / 9.279 = 2.581
+ * Denominator spread 9.279/4.666 = 1.99x; numerator spread 23.949/15.063 =
+ * 1.59x; the two failures are the two smallest denominators while their
+ * numerators are not elevated. n = 7: this is a reading, not a proof.
+ *
+ * ACCEPTANCE (e): after this lands, publish the new CI values and compare the
+ * denominator spread with 1.99x. If it does not narrow, the diagnosis was
+ * wrong and the remedy is NOT declared successful.
+ *
+ * NOT RUN: the 200-sample Postgres arm (CI Linux only) and its planted-delay
+ * negative control (needs a new knob in `ci.yml`, owned by lane L2). The unit
+ * arms in `tests-unit/paired-series-law.test.ts` cover the logic only.
  */
 import { quantile } from './percentile';
 
