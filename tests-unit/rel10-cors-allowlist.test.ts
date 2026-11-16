@@ -273,11 +273,22 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // `apps/api/src/config.ts` row". That reason is incidental, and it hides
     // the load-bearing part. Measured on the merged tree:
     //
-    //  - zero change follows from the file not being NEW, not from which row
-    //    cites it. The generator counts a test as coverage when it IMPORTS the
-    //    path or NAMES it (`scripts/phase3-review-index.ts:353`), so this file
-    //    is cited by every row it reaches, and a file that already exists on
-    //    `main` moves no count whichever rows those are.
+    //  - zero change does NOT follow from the file not being NEW. That is how
+    //    this bullet first read, and THIS COMMIT FALSIFIED IT: the generator
+    //    counts a test as coverage when it IMPORTS a path or merely NAMES it
+    //    (`scripts/phase3-review-index.ts:353`), so writing
+    //    `scripts/phase3-review-index.ts` into the prose above reached a path
+    //    this file had never reached, and that row moved from
+    //    `2: tests-unit/release-evidence-path-portability,
+    //    security/p3c-review-index` to `3:` with
+    //    `tests-unit/rel10-cors-allowlist` added -- one line, the only line,
+    //    measured by `npm run index:phase3:review` on this tree.
+    //    `check:phase3:review-index` reddened in CI before it was regenerated
+    //    (`backend-work`, step 15/45, run `43832930909`: `line 335: stale
+    //    row`), and that red was MINE, not a flake.
+    //    The rule that survives is narrower: zero change follows from the file
+    //    reaching no path it had not already reached -- being old is not
+    //    enough, and a sentence of PROSE is enough to move a count.
     //  - and `apps/api/src/main.ts` — the file whose text this case reads, the
     //    subject of the whole claim — has NO row in the index: a search of
     //    `docs/PHASE_3_REVIEW_INDEX.md` for `main.ts` returns nothing, because
