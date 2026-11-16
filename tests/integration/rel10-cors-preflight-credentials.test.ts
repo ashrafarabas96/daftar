@@ -110,13 +110,22 @@ const MAIN = join(ROOT, 'apps/api/src/main.ts');
  * it: the page would have told the owner a gate was protected by a test that
  * does not touch it.
  *
- * AND THE FIRST ATTEMPT TO EXPLAIN THAT, HERE, DID IT AGAIN — by writing the
- * file's own path into the explanation. The regenerated page kept the row
- * flipped and the check still passed, so nothing complained; it took reading
- * the generator's needles (path, basename, script name) to see that the
- * sentence describing the trap was setting it. Hence this wording, and hence
- * the rule in its sharpest form: IN A COMMENT, DESCRIBE THE GATE, NEVER NAME
- * IT. Third occurrence today of prose moving a generated count — a stale row,
+ * AND THE FIRST ATTEMPT TO SET THAT OUT, HERE, DID IT AGAIN — by writing the
+ * file's own path into the note. The regenerated page kept the row flipped
+ * and the check still passed, so nothing complained; it took reading the
+ * generator's needles (path, basename, script name) to see that the sentence
+ * describing the trap was setting it.
+ *
+ * AND A THIRD TIME, ON A DIFFERENT GENERATED RECORD — which cannot be set
+ * out HERE at all, because the words that would describe it are the very
+ * signals that record's generator scans comments for: two attempts to
+ * write it down each added a row to a record this law has no business
+ * appearing in, and the second attempt tripped a different signal than the
+ * first. It is written in `.local-context/OWNER_QUEUE_AR.md` instead, with
+ * its numbers. Some findings cannot live in the file they are about.
+ *
+ * Hence the rule in its sharpest form: IN A COMMENT, DESCRIBE THE GATE, NEVER
+ * NAME IT — and that includes the vocabulary a generator reads as a signal. Third occurrence today of prose moving a generated count — a stale row,
  * a `(+N)` cap, and this one, which is the only one that could MISLEAD about
  * a security file rather than merely fail a check.
  */
