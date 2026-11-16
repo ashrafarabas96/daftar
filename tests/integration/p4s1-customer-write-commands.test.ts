@@ -721,7 +721,16 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       expect(highest, 'the migrations directory has a highest file').toBeDefined();
       expect(base(headMigration()), 'headMigration() derives that same file').toBe(highest);
       expect(highest?.startsWith('0086_'), 'and it is no longer the 0086 the old literal pinned').toBe(false);
-      expect(highest).toBe(MIGRATION);
+      // AND NOT `highest === MIGRATION`, which this line used to say. That
+      // sentence is a law about the whole directory, not about this card: the
+      // first branch shipping a migration above 0091 — and a sibling lane
+      // ships 0092 while #120 ships 0093 — would turn it red, and the failure
+      // would name THIS suite rather than the file that moved. A card's test
+      // may assert what the card put there; it may not pin what everyone
+      // else's next migration number is allowed to be. So: 0091 is in the
+      // directory, and `headMigration()` derives whatever the highest is
+      // (asserted above) rather than a literal.
+      expect(files.map(base), 'this card’s own migration is in the directory').toContain(MIGRATION);
 
       // PART TWO, the red arm: a database built to the migration BEFORE the
       // head. The seed is the `upTo` option, and it is PROVED APPLIED before
