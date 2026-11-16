@@ -397,7 +397,7 @@ describe('the registry sale fixtures are the server’s arithmetic, recomputed',
   const sales: [string, SaleDto][] = VIEW_REGISTRY.flatMap((entry) =>
     entry.fixtures.flatMap((f) => {
       const p = f.props as { result?: SaleDto | null; stored?: SaleDto | null };
-      return [p.result, p.stored].filter((s): s is SaleDto => s != null).map((s): [string, SaleDto] => [f.name, s]);
+      return [p.result, p.stored].filter((s): s is SaleDto => s !== undefined && s !== null).map((s): [string, SaleDto] => [f.name, s]);
     }),
   );
 
