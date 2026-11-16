@@ -1,0 +1,997 @@
+{
+  "_note": "All ar and tr entries were drafted following docs/DAFTAR_LOCALIZATION_GLOSSARY.md and require human linguistic review before release. English is the verbatim original admin text.",
+  "ar": {
+    "common.cancel": {
+      "needs_human_review": true
+    },
+    "common.close": {
+      "needs_human_review": true
+    },
+    "common.add": {
+      "needs_human_review": true
+    },
+    "common.create": {
+      "needs_human_review": true
+    },
+    "common.revoke": {
+      "needs_human_review": true
+    },
+    "common.reasonAudited": {
+      "needs_human_review": true
+    },
+    "common.none": {
+      "needs_human_review": true
+    },
+    "common.active": {
+      "needs_human_review": true
+    },
+    "common.revoked": {
+      "needs_human_review": true
+    },
+    "common.expired": {
+      "needs_human_review": true
+    },
+    "common.col.business": {
+      "needs_human_review": true
+    },
+    "common.col.tenant": {
+      "needs_human_review": true
+    },
+    "common.col.reason": {
+      "needs_human_review": true
+    },
+    "common.col.state": {
+      "needs_human_review": true
+    },
+    "common.col.created": {
+      "needs_human_review": true
+    },
+    "common.col.plan": {
+      "needs_human_review": true
+    },
+    "common.col.email": {
+      "needs_human_review": true
+    },
+    "common.col.name": {
+      "needs_human_review": true
+    },
+    "common.col.actor": {
+      "needs_human_review": true
+    },
+    "common.col.description": {
+      "needs_human_review": true
+    },
+    "common.col.version": {
+      "needs_human_review": true
+    },
+    "common.override.feature": {
+      "needs_human_review": true
+    },
+    "common.override.limit": {
+      "needs_human_review": true
+    },
+    "shell.brand": {
+      "needs_human_review": true
+    },
+    "shell.logout": {
+      "needs_human_review": true
+    },
+    "shell.retryNotice": {
+      "needs_human_review": true
+    },
+    "shell.retryAction": {
+      "needs_human_review": true
+    },
+    "nav.overview": {
+      "needs_human_review": true
+    },
+    "nav.tenants": {
+      "needs_human_review": true
+    },
+    "nav.businesses": {
+      "needs_human_review": true
+    },
+    "nav.users": {
+      "needs_human_review": true
+    },
+    "nav.plans": {
+      "needs_human_review": true
+    },
+    "nav.overrides": {
+      "needs_human_review": true
+    },
+    "nav.flags": {
+      "needs_human_review": true
+    },
+    "nav.supportSessions": {
+      "needs_human_review": true
+    },
+    "nav.audit": {
+      "needs_human_review": true
+    },
+    "nav.operations": {
+      "needs_human_review": true
+    },
+    "overview.title": {
+      "needs_human_review": true
+    },
+    "overview.tile.tenants": {
+      "needs_human_review": true
+    },
+    "overview.tile.businesses": {
+      "needs_human_review": true
+    },
+    "overview.tile.users": {
+      "needs_human_review": true
+    },
+    "overview.tile.activeSupportSessions": {
+      "needs_human_review": true
+    },
+    "audit.title": {
+      "needs_human_review": true
+    },
+    "audit.notice": {
+      "needs_human_review": true
+    },
+    "audit.col.time": {
+      "needs_human_review": true
+    },
+    "audit.col.action": {
+      "needs_human_review": true
+    },
+    "audit.col.entity": {
+      "needs_human_review": true
+    },
+    "audit.col.tenantBusiness": {
+      "needs_human_review": true
+    },
+    "audit.col.request": {
+      "needs_human_review": true
+    },
+    "businesses.title": {
+      "needs_human_review": true
+    },
+    "businesses.col.slug": {
+      "needs_human_review": true
+    },
+    "businesses.col.currency": {
+      "needs_human_review": true
+    },
+    "businesses.col.status": {
+      "needs_human_review": true
+    },
+    "businesses.subscription": {
+      "needs_human_review": true
+    },
+    "businesses.dialogTitle": {
+      "needs_human_review": true
+    },
+    "businesses.stateLine": {
+      "needs_human_review": true
+    },
+    "businesses.trialEnds": {
+      "needs_human_review": true
+    },
+    "businesses.periodEnds": {
+      "needs_human_review": true
+    },
+    "businesses.noSubscription": {
+      "needs_human_review": true
+    },
+    "businesses.overrides": {
+      "needs_human_review": true
+    },
+    "flags.title": {
+      "needs_human_review": true
+    },
+    "flags.notice": {
+      "needs_human_review": true
+    },
+    "flags.col.flag": {
+      "needs_human_review": true
+    },
+    "flags.col.updated": {
+      "needs_human_review": true
+    },
+    "flags.col.enabled": {
+      "needs_human_review": true
+    },
+    "flags.newKey": {
+      "needs_human_review": true
+    },
+    "flags.addDisabled": {
+      "needs_human_review": true
+    },
+    "login.title": {
+      "needs_human_review": true
+    },
+    "login.email": {
+      "needs_human_review": true
+    },
+    "login.password": {
+      "needs_human_review": true
+    },
+    "login.submit": {
+      "needs_human_review": true
+    },
+    "login.error.tooMany": {
+      "needs_human_review": true
+    },
+    "login.error.invalid": {
+      "needs_human_review": true
+    },
+    "operations.title": {
+      "needs_human_review": true
+    },
+    "operations.liveness": {
+      "needs_human_review": true
+    },
+    "operations.readiness": {
+      "needs_human_review": true
+    },
+    "operations.unknown": {
+      "needs_human_review": true
+    },
+    "operations.healthy": {
+      "needs_human_review": true
+    },
+    "operations.down": {
+      "needs_human_review": true
+    },
+    "operations.autoRefresh": {
+      "needs_human_review": true
+    },
+    "users.title": {
+      "needs_human_review": true
+    },
+    "users.col.platformRole": {
+      "needs_human_review": true
+    },
+    "overrides.title": {
+      "needs_human_review": true
+    },
+    "overrides.new": {
+      "needs_human_review": true
+    },
+    "overrides.col.override": {
+      "needs_human_review": true
+    },
+    "overrides.col.window": {
+      "needs_human_review": true
+    },
+    "overrides.dialog.newTitle": {
+      "needs_human_review": true
+    },
+    "overrides.dialog.revokeTitle": {
+      "needs_human_review": true
+    },
+    "overrides.field.businessId": {
+      "needs_human_review": true
+    },
+    "overrides.field.kind": {
+      "needs_human_review": true
+    },
+    "overrides.kind.feature": {
+      "needs_human_review": true
+    },
+    "overrides.kind.limit": {
+      "needs_human_review": true
+    },
+    "overrides.field.featureKey": {
+      "needs_human_review": true
+    },
+    "overrides.field.enabled": {
+      "needs_human_review": true
+    },
+    "overrides.bool.true": {
+      "needs_human_review": true
+    },
+    "overrides.bool.false": {
+      "needs_human_review": true
+    },
+    "overrides.field.limitKey": {
+      "needs_human_review": true
+    },
+    "overrides.field.limitValue": {
+      "needs_human_review": true
+    },
+    "overrides.error.createFailed": {
+      "needs_human_review": true
+    },
+    "plans.title": {
+      "needs_human_review": true
+    },
+    "plans.new": {
+      "needs_human_review": true
+    },
+    "plans.col.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.col.featuresLimits": {
+      "needs_human_review": true
+    },
+    "plans.summary": {
+      "needs_human_review": true
+    },
+    "plans.state.published": {
+      "needs_human_review": true
+    },
+    "plans.state.draft": {
+      "needs_human_review": true
+    },
+    "plans.state.sunset": {
+      "needs_human_review": true
+    },
+    "plans.action.diff": {
+      "needs_human_review": true
+    },
+    "plans.action.editDraft": {
+      "needs_human_review": true
+    },
+    "plans.action.publish": {
+      "needs_human_review": true
+    },
+    "plans.action.sunset": {
+      "needs_human_review": true
+    },
+    "plans.action.clone": {
+      "needs_human_review": true
+    },
+    "plans.create.title": {
+      "needs_human_review": true
+    },
+    "plans.create.submit": {
+      "needs_human_review": true
+    },
+    "plans.create.keyLabel": {
+      "needs_human_review": true
+    },
+    "plans.create.displayName": {
+      "needs_human_review": true
+    },
+    "plans.create.note": {
+      "needs_human_review": true
+    },
+    "plans.editor.cloneTitle": {
+      "needs_human_review": true
+    },
+    "plans.editor.editTitle": {
+      "needs_human_review": true
+    },
+    "plans.editor.createDraft": {
+      "needs_human_review": true
+    },
+    "plans.editor.saveDraft": {
+      "needs_human_review": true
+    },
+    "plans.editor.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.editor.features": {
+      "needs_human_review": true
+    },
+    "plans.editor.addFeatureKey": {
+      "needs_human_review": true
+    },
+    "plans.editor.limits": {
+      "needs_human_review": true
+    },
+    "plans.editor.addLimitKey": {
+      "needs_human_review": true
+    },
+    "plans.diff.title": {
+      "needs_human_review": true
+    },
+    "plans.diff.range": {
+      "needs_human_review": true
+    },
+    "plans.diff.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.diff.feature": {
+      "needs_human_review": true
+    },
+    "plans.diff.limit": {
+      "needs_human_review": true
+    },
+    "plans.diff.noChanges": {
+      "needs_human_review": true
+    },
+    "plans.error.loadFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.saveFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.createFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.publishFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.sunsetFailed": {
+      "needs_human_review": true
+    },
+    "support.title": {
+      "needs_human_review": true
+    },
+    "support.col.scope": {
+      "needs_human_review": true
+    },
+    "support.col.expires": {
+      "needs_human_review": true
+    },
+    "support.scope.business": {
+      "needs_human_review": true
+    },
+    "support.scope.tenant": {
+      "needs_human_review": true
+    },
+    "support.state.active": {
+      "needs_human_review": true
+    },
+    "support.dialog.title": {
+      "needs_human_review": true
+    },
+    "support.dialog.submit": {
+      "needs_human_review": true
+    },
+    "support.dialog.notice": {
+      "needs_human_review": true
+    },
+    "tenants.title": {
+      "needs_human_review": true
+    },
+    "tenants.col.businesses": {
+      "needs_human_review": true
+    },
+    "tenants.open": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.title": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.newSession": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.businesses": {
+      "needs_human_review": true
+    },
+    "tenants.error.noSession": {
+      "needs_human_review": true
+    },
+    "tenants.error.loadFailed": {
+      "needs_human_review": true
+    },
+    "tenants.session.title": {
+      "needs_human_review": true
+    },
+    "tenants.session.submit": {
+      "needs_human_review": true
+    },
+    "tenants.session.reason": {
+      "needs_human_review": true
+    },
+    "tenants.session.scope": {
+      "needs_human_review": true
+    },
+    "tenants.session.wholeTenant": {
+      "needs_human_review": true
+    },
+    "tenants.session.business": {
+      "needs_human_review": true
+    },
+    "tenants.session.duration": {
+      "needs_human_review": true
+    },
+    "tenants.session.min30": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour1": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour2": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour4": {
+      "needs_human_review": true
+    }
+  },
+  "tr": {
+    "common.cancel": {
+      "needs_human_review": true
+    },
+    "common.close": {
+      "needs_human_review": true
+    },
+    "common.add": {
+      "needs_human_review": true
+    },
+    "common.create": {
+      "needs_human_review": true
+    },
+    "common.revoke": {
+      "needs_human_review": true
+    },
+    "common.reasonAudited": {
+      "needs_human_review": true
+    },
+    "common.none": {
+      "needs_human_review": true
+    },
+    "common.active": {
+      "needs_human_review": true
+    },
+    "common.revoked": {
+      "needs_human_review": true
+    },
+    "common.expired": {
+      "needs_human_review": true
+    },
+    "common.col.business": {
+      "needs_human_review": true
+    },
+    "common.col.tenant": {
+      "needs_human_review": true
+    },
+    "common.col.reason": {
+      "needs_human_review": true
+    },
+    "common.col.state": {
+      "needs_human_review": true
+    },
+    "common.col.created": {
+      "needs_human_review": true
+    },
+    "common.col.plan": {
+      "needs_human_review": true
+    },
+    "common.col.email": {
+      "needs_human_review": true
+    },
+    "common.col.name": {
+      "needs_human_review": true
+    },
+    "common.col.actor": {
+      "needs_human_review": true
+    },
+    "common.col.description": {
+      "needs_human_review": true
+    },
+    "common.col.version": {
+      "needs_human_review": true
+    },
+    "common.override.feature": {
+      "needs_human_review": true
+    },
+    "common.override.limit": {
+      "needs_human_review": true
+    },
+    "shell.brand": {
+      "needs_human_review": true
+    },
+    "shell.logout": {
+      "needs_human_review": true
+    },
+    "shell.retryNotice": {
+      "needs_human_review": true
+    },
+    "shell.retryAction": {
+      "needs_human_review": true
+    },
+    "nav.overview": {
+      "needs_human_review": true
+    },
+    "nav.tenants": {
+      "needs_human_review": true
+    },
+    "nav.businesses": {
+      "needs_human_review": true
+    },
+    "nav.users": {
+      "needs_human_review": true
+    },
+    "nav.plans": {
+      "needs_human_review": true
+    },
+    "nav.overrides": {
+      "needs_human_review": true
+    },
+    "nav.flags": {
+      "needs_human_review": true
+    },
+    "nav.supportSessions": {
+      "needs_human_review": true
+    },
+    "nav.audit": {
+      "needs_human_review": true
+    },
+    "nav.operations": {
+      "needs_human_review": true
+    },
+    "overview.title": {
+      "needs_human_review": true
+    },
+    "overview.tile.tenants": {
+      "needs_human_review": true
+    },
+    "overview.tile.businesses": {
+      "needs_human_review": true
+    },
+    "overview.tile.users": {
+      "needs_human_review": true
+    },
+    "overview.tile.activeSupportSessions": {
+      "needs_human_review": true
+    },
+    "audit.title": {
+      "needs_human_review": true
+    },
+    "audit.notice": {
+      "needs_human_review": true
+    },
+    "audit.col.time": {
+      "needs_human_review": true
+    },
+    "audit.col.action": {
+      "needs_human_review": true
+    },
+    "audit.col.entity": {
+      "needs_human_review": true
+    },
+    "audit.col.tenantBusiness": {
+      "needs_human_review": true
+    },
+    "audit.col.request": {
+      "needs_human_review": true
+    },
+    "businesses.title": {
+      "needs_human_review": true
+    },
+    "businesses.col.slug": {
+      "needs_human_review": true
+    },
+    "businesses.col.currency": {
+      "needs_human_review": true
+    },
+    "businesses.col.status": {
+      "needs_human_review": true
+    },
+    "businesses.subscription": {
+      "needs_human_review": true
+    },
+    "businesses.dialogTitle": {
+      "needs_human_review": true
+    },
+    "businesses.stateLine": {
+      "needs_human_review": true
+    },
+    "businesses.trialEnds": {
+      "needs_human_review": true
+    },
+    "businesses.periodEnds": {
+      "needs_human_review": true
+    },
+    "businesses.noSubscription": {
+      "needs_human_review": true
+    },
+    "businesses.overrides": {
+      "needs_human_review": true
+    },
+    "flags.title": {
+      "needs_human_review": true
+    },
+    "flags.notice": {
+      "needs_human_review": true
+    },
+    "flags.col.flag": {
+      "needs_human_review": true
+    },
+    "flags.col.updated": {
+      "needs_human_review": true
+    },
+    "flags.col.enabled": {
+      "needs_human_review": true
+    },
+    "flags.newKey": {
+      "needs_human_review": true
+    },
+    "flags.addDisabled": {
+      "needs_human_review": true
+    },
+    "login.title": {
+      "needs_human_review": true
+    },
+    "login.email": {
+      "needs_human_review": true
+    },
+    "login.password": {
+      "needs_human_review": true
+    },
+    "login.submit": {
+      "needs_human_review": true
+    },
+    "login.error.tooMany": {
+      "needs_human_review": true
+    },
+    "login.error.invalid": {
+      "needs_human_review": true
+    },
+    "operations.title": {
+      "needs_human_review": true
+    },
+    "operations.liveness": {
+      "needs_human_review": true
+    },
+    "operations.readiness": {
+      "needs_human_review": true
+    },
+    "operations.unknown": {
+      "needs_human_review": true
+    },
+    "operations.healthy": {
+      "needs_human_review": true
+    },
+    "operations.down": {
+      "needs_human_review": true
+    },
+    "operations.autoRefresh": {
+      "needs_human_review": true
+    },
+    "users.title": {
+      "needs_human_review": true
+    },
+    "users.col.platformRole": {
+      "needs_human_review": true
+    },
+    "overrides.title": {
+      "needs_human_review": true
+    },
+    "overrides.new": {
+      "needs_human_review": true
+    },
+    "overrides.col.override": {
+      "needs_human_review": true
+    },
+    "overrides.col.window": {
+      "needs_human_review": true
+    },
+    "overrides.dialog.newTitle": {
+      "needs_human_review": true
+    },
+    "overrides.dialog.revokeTitle": {
+      "needs_human_review": true
+    },
+    "overrides.field.businessId": {
+      "needs_human_review": true
+    },
+    "overrides.field.kind": {
+      "needs_human_review": true
+    },
+    "overrides.kind.feature": {
+      "needs_human_review": true
+    },
+    "overrides.kind.limit": {
+      "needs_human_review": true
+    },
+    "overrides.field.featureKey": {
+      "needs_human_review": true
+    },
+    "overrides.field.enabled": {
+      "needs_human_review": true
+    },
+    "overrides.bool.true": {
+      "needs_human_review": true
+    },
+    "overrides.bool.false": {
+      "needs_human_review": true
+    },
+    "overrides.field.limitKey": {
+      "needs_human_review": true
+    },
+    "overrides.field.limitValue": {
+      "needs_human_review": true
+    },
+    "overrides.error.createFailed": {
+      "needs_human_review": true
+    },
+    "plans.title": {
+      "needs_human_review": true
+    },
+    "plans.new": {
+      "needs_human_review": true
+    },
+    "plans.col.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.col.featuresLimits": {
+      "needs_human_review": true
+    },
+    "plans.summary": {
+      "needs_human_review": true
+    },
+    "plans.state.published": {
+      "needs_human_review": true
+    },
+    "plans.state.draft": {
+      "needs_human_review": true
+    },
+    "plans.state.sunset": {
+      "needs_human_review": true
+    },
+    "plans.action.diff": {
+      "needs_human_review": true
+    },
+    "plans.action.editDraft": {
+      "needs_human_review": true
+    },
+    "plans.action.publish": {
+      "needs_human_review": true
+    },
+    "plans.action.sunset": {
+      "needs_human_review": true
+    },
+    "plans.action.clone": {
+      "needs_human_review": true
+    },
+    "plans.create.title": {
+      "needs_human_review": true
+    },
+    "plans.create.submit": {
+      "needs_human_review": true
+    },
+    "plans.create.keyLabel": {
+      "needs_human_review": true
+    },
+    "plans.create.displayName": {
+      "needs_human_review": true
+    },
+    "plans.create.note": {
+      "needs_human_review": true
+    },
+    "plans.editor.cloneTitle": {
+      "needs_human_review": true
+    },
+    "plans.editor.editTitle": {
+      "needs_human_review": true
+    },
+    "plans.editor.createDraft": {
+      "needs_human_review": true
+    },
+    "plans.editor.saveDraft": {
+      "needs_human_review": true
+    },
+    "plans.editor.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.editor.features": {
+      "needs_human_review": true
+    },
+    "plans.editor.addFeatureKey": {
+      "needs_human_review": true
+    },
+    "plans.editor.limits": {
+      "needs_human_review": true
+    },
+    "plans.editor.addLimitKey": {
+      "needs_human_review": true
+    },
+    "plans.diff.title": {
+      "needs_human_review": true
+    },
+    "plans.diff.range": {
+      "needs_human_review": true
+    },
+    "plans.diff.trialDays": {
+      "needs_human_review": true
+    },
+    "plans.diff.feature": {
+      "needs_human_review": true
+    },
+    "plans.diff.limit": {
+      "needs_human_review": true
+    },
+    "plans.diff.noChanges": {
+      "needs_human_review": true
+    },
+    "plans.error.loadFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.saveFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.createFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.publishFailed": {
+      "needs_human_review": true
+    },
+    "plans.error.sunsetFailed": {
+      "needs_human_review": true
+    },
+    "support.title": {
+      "needs_human_review": true
+    },
+    "support.col.scope": {
+      "needs_human_review": true
+    },
+    "support.col.expires": {
+      "needs_human_review": true
+    },
+    "support.scope.business": {
+      "needs_human_review": true
+    },
+    "support.scope.tenant": {
+      "needs_human_review": true
+    },
+    "support.state.active": {
+      "needs_human_review": true
+    },
+    "support.dialog.title": {
+      "needs_human_review": true
+    },
+    "support.dialog.submit": {
+      "needs_human_review": true
+    },
+    "support.dialog.notice": {
+      "needs_human_review": true
+    },
+    "tenants.title": {
+      "needs_human_review": true
+    },
+    "tenants.col.businesses": {
+      "needs_human_review": true
+    },
+    "tenants.open": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.title": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.newSession": {
+      "needs_human_review": true
+    },
+    "tenants.dialog.businesses": {
+      "needs_human_review": true
+    },
+    "tenants.error.noSession": {
+      "needs_human_review": true
+    },
+    "tenants.error.loadFailed": {
+      "needs_human_review": true
+    },
+    "tenants.session.title": {
+      "needs_human_review": true
+    },
+    "tenants.session.submit": {
+      "needs_human_review": true
+    },
+    "tenants.session.reason": {
+      "needs_human_review": true
+    },
+    "tenants.session.scope": {
+      "needs_human_review": true
+    },
+    "tenants.session.wholeTenant": {
+      "needs_human_review": true
+    },
+    "tenants.session.business": {
+      "needs_human_review": true
+    },
+    "tenants.session.duration": {
+      "needs_human_review": true
+    },
+    "tenants.session.min30": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour1": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour2": {
+      "needs_human_review": true
+    },
+    "tenants.session.hour4": {
+      "needs_human_review": true
+    }
+  }
+}

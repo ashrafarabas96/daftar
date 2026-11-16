@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { Badge, colors, spacing, typography } from '@daftar/design-system';
+import { useT } from '@/lib/i18n';
 import { Shell } from '../Shell';
 
 interface Health {
@@ -9,6 +10,7 @@ interface Health {
 }
 
 export default function OperationsPage() {
+  const t = useT();
   const [health, setHealth] = useState<Health>({ live: null, ready: null });
 
   useEffect(() => {
@@ -29,16 +31,26 @@ export default function OperationsPage() {
   }, []);
 
   const badge = (v: boolean | null) =>
-    v === null ? <Badge tone="neutral">unknown</Badge> : v ? <Badge tone="success">healthy</Badge> : <Badge tone="danger">down</Badge>;
+    v === null ? (
+      <Badge tone="neutral">{t('operations.unknown')}</Badge>
+    ) : v ? (
+      <Badge tone="success">{t('operations.healthy')}</Badge>
+    ) : (
+      <Badge tone="danger">{t('operations.down')}</Badge>
+    );
 
   return (
     <Shell active="operations">
-      <h1 style={{ fontFamily: typography.fontFamily.base }}>Operations</h1>
+      <h1 style={{ fontFamily: typography.fontFamily.base }}>{t('operations.title')}</h1>
       <div style={{ display: 'flex', gap: spacing[6], fontFamily: typography.fontFamily.base, color: colors.neutral[800] }}>
-        <p>Liveness: {badge(health.live)}</p>
-        <p>Readiness: {badge(health.ready)}</p>
+        <p>
+          {t('operations.liveness')}: {badge(health.live)}
+        </p>
+        <p>
+          {t('operations.readiness')}: {badge(health.ready)}
+        </p>
       </div>
-      <p style={{ color: colors.neutral[500], fontSize: typography.size.sm }}>Auto-refreshes every 15s.</p>
+      <p style={{ color: colors.neutral[500], fontSize: typography.size.sm }}>{t('operations.autoRefresh')}</p>
     </Shell>
   );
 }
