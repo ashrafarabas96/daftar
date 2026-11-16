@@ -369,9 +369,9 @@ tests/integration/p4s4-customer-identity-pin.test.ts	321	find-shift	safe	R-RECEI
 tests/integration/p4s4-customer-identity-pin.test.ts	457	find-shift	safe	R-RECEIVER	(await invoiceChain(ownerPool(), w.shop.businessId, invoiceC2.invoiceId)).find((st) => st.relation === 'customer_credit_applications'),
 tests/integration/p4s4-invoice-settlement-chain.test.ts	331	find-shift	safe	R-RECEIVER	chain.find((s) => s.relation === 'payment_allocations'),
 tests/integration/phase3-s8-negative-controls.test.ts	237	find-shift	safe	R-RECEIVER	accounts.find((a) => a.key === key),
-tests/integration/phase4-s7-installment-fact-db.test.ts	4725	find-shift	safe	R-RECEIVER	(M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
-tests/integration/phase4-s7-installment-fact-db.test.ts	4727	find-shift	safe	R-RECEIVER	expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
-tests/integration/phase4-s7-installment-fact-db.test.ts	5504	find-shift	safe	R-RECEIVER	const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
+tests/integration/phase4-s7-installment-fact-db.test.ts	4946	find-shift	safe	R-RECEIVER	(M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_verified')?.tgdeferrable,
+tests/integration/phase4-s7-installment-fact-db.test.ts	4948	find-shift	safe	R-RECEIVER	expect((M['R1_order'] as readonly { tgname: string; tgdeferrable: boolean }[]).find((t) => t.tgname === 'installment_plans_fact_sync')?.tgdeferrable).toBe(
+tests/integration/phase4-s7-installment-fact-db.test.ts	5725	find-shift	safe	R-RECEIVER	const base = sweep.find((x) => Object.hasOwn(x, 'base_inputs')) as Record<string, unknown> | undefined;
 tests/integration/pos-s3-cart.test.ts	714	find-shift	safe	R-RECEIVER	const ordinal = indexes.find((row) => row.name === POS_CART_UNIQUE_CONSTRAINT);
 tests/integration/pos-s3-cart.test.ts	727	find-shift	safe	R-RECEIVER	const byProduct = indexes.find((row) => row.cols.includes('product_id') && row.cols.includes('variant_id'));
 tests/integration/process-composition.test.ts	237	find-shift	safe	R-RECEIVER	const of = (p: string): ReadonlySet<Ctor> => (COMPOSITIONS.find((c) => c.process === p) as Composition<Ctor>).controllers;
