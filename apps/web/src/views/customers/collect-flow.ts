@@ -33,10 +33,18 @@
  *   not prove the send was dropped (it may still be running on the server),
  *   which is why the text says "could not confirm" and never "not saved".
  *   Any other read failure → `storedUnread` (may be saved; read again).
- * - the ids are remembered in this tab's `sessionStorage`, per customer,
- *   from the moment a send leaves until it is confirmed (saved or already
- *   stored), so a reload re-opens the SAME ids and reads the payment back
- *   before anything else (`resume`).
+ * - the payment id is written into the page ADDRESS (`?payment=<uuid>`,
+ *   `history.replaceState`: no reload, no request) from the moment a send
+ *   leaves until it is confirmed (saved or already stored), so a reload of
+ *   this page re-opens the SAME payment id and reads it back before anything
+ *   else (`resume`). Nothing is kept in browser storage: T-02 / ADR-001
+ *   (`tests/integration/read-s7-static.test.ts`) forbids it, and a UUID in
+ *   the address is not personal data. Only the payment id travels: the
+ *   credit and allocation ids are minted anew after a reload. If that makes
+ *   the request differ from a send the server already stored, the server
+ *   answers `idempotency_conflict` and the stored payment is read and shown
+ *   (above) — the safe direction. If nothing was stored, the payment is
+ *   saved once under the same id.
  * - only an explicit server refusal (status below 500, i.e. the server
  *   answered and refused) keeps its own text.
  *
@@ -45,12 +53,11 @@
  *   `POST /v1/customer-payments` itself (`replayed: true` is confirmed on
  *   other commands, on this one by the code reading only). This is not a
  *   guarantee against a second payment; it is the client keeping the key.
- * - a second tab, another device, or a browser with storage blocked mints
- *   new ids by design: `sessionStorage` is per tab and the page works
- *   without it.
- * - a corrupted stored record is ignored (fresh ids). That direction can
- *   lose the key of an unconfirmed send; it is reachable only by editing
- *   the browser's storage.
+ * - a different tab or device that starts a NEW form (an address without
+ *   `?payment=`) mints new ids by design.
+ * - an address whose `payment` is not one UUID is ignored (fresh ids). That
+ *   direction can lose the key of an unconfirmed send; it is reachable only
+ *   by editing the address by hand.
  *
  * - A refusal changes nothing but the refusal text.
  */
@@ -64,7 +71,6 @@ import {
   type CollectFormErrors,
   type CollectFormModel,
   type CollectIds,
-  type CollectIdsSnapshot,
   type CollectPlan,
   type CollectRowModel,
 } from './collect-payment';
@@ -92,60 +98,62 @@ export type CollectOutcome =
   | { readonly kind: 'unconfirmed'; readonly errorKey: string }
   | { readonly kind: 'refused'; readonly errorKey: string };
 
-/** The few calls of `Storage` the flow uses; any of them may throw (private mode, blocked site data). */
-export interface PendingStore {
-  get(key: string): string | null;
-  set(key: string, value: string): void;
-  remove(key: string): void;
+/** The query parameter that carries the payment id of an unconfirmed send. */
+export const PENDING_PAYMENT_PARAM = 'payment';
+
+/** Where the payment id of an unconfirmed send survives a reload. Every call may fail silently. */
+export interface PendingMarker {
+  /** The remembered payment id, only when it is one UUID; null otherwise. */
+  read(): string | null;
+  write(paymentId: string): void;
+  clear(): void;
 }
 
-/** Where the ids of an unconfirmed send of one customer are kept. */
-export const pendingKey = (customer: string): string => `daftar.collect.pending.${customer}`;
-
-/** This tab's `sessionStorage`, or null when the browser refuses it. */
-export function sessionPendingStore(): PendingStore | null {
-  try {
-    const s = window.sessionStorage;
-    return { get: (k) => s.getItem(k), set: (k, v) => s.setItem(k, v), remove: (k) => s.removeItem(k) };
-  } catch {
-    return null;
-  }
+/** The two parts of `window` the marker touches. */
+export interface AddressWindow {
+  readonly location: { readonly href: string };
+  readonly history: { readonly state: unknown; replaceState(data: unknown, unused: string, url?: string | URL | null): void };
 }
 
-/** A stored record, only when every id in it is a UUID; anything else is not ids. */
-function parseSnapshot(text: string | null): CollectIdsSnapshot | null {
-  if (text === null) return null;
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return null;
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const { paymentId, creditId, allocations } = value as Record<string, unknown>;
-  if (typeof paymentId !== 'string' || !isUuid(paymentId)) return null;
-  if (typeof creditId !== 'string' || !isUuid(creditId)) return null;
-  if (typeof allocations !== 'object' || allocations === null || Array.isArray(allocations)) return null;
-  const entries = Object.entries(allocations as Record<string, unknown>);
-  const valid: Record<string, string> = {};
-  for (const [invoiceId, allocationId] of entries) {
-    if (!isUuid(invoiceId) || typeof allocationId !== 'string' || !isUuid(allocationId)) return null;
-    valid[invoiceId] = allocationId;
-  }
-  return { paymentId, creditId, allocations: valid };
+/**
+ * The page address as the marker: `?payment=<uuid>`, rewritten in place with `history.replaceState`
+ * (the router's own state is passed through untouched), every other part of the address kept.
+ */
+export function urlPendingMarker(win: AddressWindow): PendingMarker {
+  const rewrite = (change: (params: URLSearchParams) => void) => {
+    try {
+      const url = new URL(win.location.href);
+      change(url.searchParams);
+      win.history.replaceState(win.history.state, '', url.href);
+    } catch {
+      // No address to write: the page works on, only a reload will not re-open the id.
+    }
+  };
+  return {
+    read() {
+      try {
+        const value = new URL(win.location.href).searchParams.get(PENDING_PAYMENT_PARAM);
+        return value !== null && isUuid(value) ? value : null;
+      } catch {
+        return null;
+      }
+    },
+    write: (paymentId) => rewrite((params) => params.set(PENDING_PAYMENT_PARAM, paymentId)),
+    clear: () => rewrite((params) => params.delete(PENDING_PAYMENT_PARAM)),
+  };
 }
 
 export interface CollectFlowDeps {
   send: (body: CollectPaymentRequestDto) => Promise<CustomerPaymentResultDto>;
   readStored: (paymentId: string) => Promise<CustomerPaymentDto>;
   mint?: () => string;
-  /** Where the ids of an unconfirmed send survive a reload; `store: null` when there is none. */
-  pending?: { readonly store: PendingStore | null; readonly customerId: string };
+  /** Where the payment id of an unconfirmed send survives a reload; null or absent when there is none. */
+  pending?: PendingMarker | null;
 }
 
 export interface CollectFlow {
   readonly ids: CollectIds;
-  /** True when the ids were re-opened from an unconfirmed send before a reload. */
+  /** True when the payment id was re-opened from an unconfirmed send before a reload. */
   readonly resumed: boolean;
   /** Plan with this flow's ids and send; null when a send or read is already in flight (a double click). */
   submit(plan: (ids: CollectIds) => CollectPlan): Promise<CollectOutcome> | null;
@@ -156,22 +164,13 @@ export interface CollectFlow {
 }
 
 export function createCollectFlow(deps: CollectFlowDeps): CollectFlow {
-  const store = deps.pending?.store ?? null;
-  const key = deps.pending ? pendingKey(deps.pending.customerId) : null;
-  const attempt = <T>(op: (s: PendingStore, k: string) => T): T | null => {
-    if (store === null || key === null) return null;
-    try {
-      return op(store, key);
-    } catch {
-      return null;
-    }
-  };
-  const restored = parseSnapshot(attempt((s, k) => s.get(k)));
+  const marker = deps.pending ?? null;
+  const restored = marker?.read() ?? null;
   const ids = mintCollectIds(deps.mint, restored ?? undefined);
   const guard = createSubmitGuard();
-  const remember = () => attempt((s, k) => s.set(k, JSON.stringify(ids.snapshot())));
-  const forget = () => attempt((s, k) => s.remove(k));
-  // True once any send of these ids may have been saved without our knowing.
+  const remember = () => marker?.write(ids.paymentId);
+  const forget = () => marker?.clear();
+  // True once any send of this payment id may have been saved without our knowing.
   let uncertain = restored !== null;
   let notFoundKey = restored !== null ? PENDING_NOT_FOUND_KEY : UNCONFIRMED_KEY;
 
@@ -196,7 +195,7 @@ export function createCollectFlow(deps: CollectFlowDeps): CollectFlow {
       if (!planned.ok) return Promise.resolve({ kind: 'invalid', errors: planned.errors, invalidRows: planned.invalidRows });
       const body = planned.body;
       return guard.run(async (): Promise<CollectOutcome> => {
-        // Remembered BEFORE the send leaves: a reload during it must re-open these ids.
+        // Written BEFORE the send leaves: a reload during it must re-open this payment id.
         remember();
         try {
           const payment = await withConflictRetry(() => deps.send(body));
@@ -209,7 +208,7 @@ export function createCollectFlow(deps: CollectFlowDeps): CollectFlow {
             notFoundKey = UNCONFIRMED_KEY;
             return readStored();
           }
-          // The server answered and refused: this send stored nothing. Unless an earlier one may have, forget the ids.
+          // The server answered and refused: this send stored nothing. Unless an earlier one may have, forget the id.
           if (!uncertain) forget();
           return { kind: 'refused', errorKey: refusalKey(error) };
         }

@@ -9,10 +9,10 @@ import {
   STORED_UNREADABLE_KEY,
   UNCONFIRMED_KEY,
   afterOutcome,
+  PENDING_PAYMENT_PARAM,
   createCollectFlow,
-  pendingKey,
+  urlPendingMarker,
   type CollectScreenState,
-  type PendingStore,
 } from '@/views/customers/collect-flow';
 
 /**
@@ -331,150 +331,180 @@ describe('createCollectFlow — an unknown outcome is read back, never called "n
   }
 });
 
-function memoryStore(): PendingStore & { readonly map: Map<string, string> } {
-  const map = new Map<string, string>();
-  return {
-    map,
-    get: (k) => map.get(k) ?? null,
-    set: (k, v) => void map.set(k, v),
-    remove: (k) => void map.delete(k),
+/** A window as the marker sees it: an address, and `history.replaceState` writing it (no reload, no request). */
+function fakeWindow(href: string) {
+  const writes: string[] = [];
+  const win = {
+    location: { href },
+    history: {
+      state: { tree: 'next' } as unknown,
+      replaceState(data: unknown, _unused: string, url?: string | URL | null) {
+        if (data !== win.history.state) throw new Error('the router state must be kept');
+        if (url !== undefined && url !== null) {
+          win.location.href = new URL(String(url), win.location.href).href;
+          writes.push(win.location.href);
+        }
+      },
+    },
   };
+  return { win, writes };
 }
-const throwingStore: PendingStore = {
-  get: () => {
+const PAGE = `https://app.example/en/customers/${CUSTOMER}/collect`;
+const brokenWindow = {
+  get location(): { href: string } {
     throw new Error('SecurityError');
   },
-  set: () => {
-    throw new Error('QuotaExceededError');
-  },
-  remove: () => {
-    throw new Error('SecurityError');
+  history: {
+    state: null,
+    replaceState() {
+      throw new Error('SecurityError');
+    },
   },
 };
 
-describe('createCollectFlow — the ids of an unconfirmed send survive a reload', () => {
-  it('a send in flight is remembered per customer; a reload re-uses ITS ids and reads it back first', async () => {
-    const store = memoryStore();
+/**
+ * Only the payment id survives a reload, in the page address (`?payment=<uuid>`); no browser storage
+ * (T-02, ADR-001). The credit and allocation ids may be minted anew: if that makes the request differ
+ * from a send the server already stored, the server answers `idempotency_conflict` and the flow reads
+ * the stored payment (the case at the top of this file) — the safe direction.
+ */
+describe('urlPendingMarker — the payment id of an unconfirmed send, in the page address', () => {
+  it('reads a UUID, writes and clears it with replaceState, and keeps every other part of the address', () => {
+    const { win, writes } = fakeWindow(`${PAGE}?tab=open#top`);
+    const marker = urlPendingMarker(win);
+    expect(marker.read()).toBeNull();
+    marker.write('00000000-0000-4000-8000-000000000001');
+    expect(new URL(win.location.href).searchParams.get(PENDING_PAYMENT_PARAM)).toBe('00000000-0000-4000-8000-000000000001');
+    expect(new URL(win.location.href).searchParams.get('tab')).toBe('open');
+    expect(new URL(win.location.href).hash).toBe('#top');
+    expect(new URL(win.location.href).pathname).toBe(new URL(PAGE).pathname);
+    expect(marker.read()).toBe('00000000-0000-4000-8000-000000000001');
+    marker.clear();
+    expect(new URL(win.location.href).searchParams.has(PENDING_PAYMENT_PARAM)).toBe(false);
+    expect(win.location.href).toBe(`${PAGE}?tab=open#top`);
+    expect(writes).toHaveLength(2);
+  });
+
+  it('anything but one UUID is ignored', () => {
+    for (const junk of ['x', '1', '', '00000000-0000-4000-8000-00000000000', '00000000-0000-4000-8000-0000000000011', '../x', '%00']) {
+      const { win } = fakeWindow(`${PAGE}?${PENDING_PAYMENT_PARAM}=${encodeURIComponent(junk)}`);
+      expect(urlPendingMarker(win).read(), junk).toBeNull();
+    }
+  });
+
+  it('a window that throws on every touch reads nothing and writes nothing, without throwing', () => {
+    const marker = urlPendingMarker(brokenWindow);
+    expect(marker.read()).toBeNull();
+    expect(() => marker.write('00000000-0000-4000-8000-000000000001')).not.toThrow();
+    expect(() => marker.clear()).not.toThrow();
+  });
+});
+
+describe('createCollectFlow — the payment id of an unconfirmed send survives a reload', () => {
+  it('a send leaving writes its payment id; a reload re-uses THAT id and reads it back first', async () => {
+    const { win } = fakeWindow(PAGE);
     const firstSent: CollectPaymentRequestDto[] = [];
     const before = createCollectFlow({
       mint: counter().mint,
-      pending: { store, customerId: CUSTOMER },
+      pending: urlPendingMarker(win),
       send: (body) => (firstSent.push(body), Promise.reject(new TypeError('Failed to fetch'))),
       readStored: () => Promise.reject(new TypeError('Failed to fetch')),
     });
     expect(before.resumed).toBe(false);
     await before.submit(planner(form('100'), [A]));
-    expect(store.map.has(pendingKey(CUSTOMER))).toBe(true);
+    expect(new URL(win.location.href).searchParams.get(PENDING_PAYMENT_PARAM)).toBe(firstSent[0]?.paymentId);
 
-    // The reload: a new flow from a DIFFERENT minter must still carry the remembered ids.
+    // The reload: same address, a DIFFERENT minter. The payment id must still be the first send's.
     const reads: string[] = [];
     const resent: CollectPaymentRequestDto[] = [];
     const reloaded = createCollectFlow({
       mint: () => 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-      pending: { store, customerId: CUSTOMER },
-      send: (body) => (resent.push(body), Promise.resolve(answerFor(body, true))),
+      pending: urlPendingMarker(win),
+      send: (body) => (resent.push(body), Promise.resolve(answerFor(body, false))),
       readStored: (id) => (reads.push(id), Promise.reject(NOT_FOUND)),
     });
     expect(reloaded.resumed).toBe(true);
     expect(reloaded.ids.paymentId).toBe(firstSent[0]?.paymentId);
-    expect(reloaded.ids.creditId).toBe(before.ids.creditId);
-    const resumed = await reloaded.resume();
+    expect(await reloaded.resume()).toEqual({ kind: 'unconfirmed', errorKey: PENDING_NOT_FOUND_KEY });
     expect(reads).toEqual([firstSent[0]?.paymentId]);
-    expect(resumed).toEqual({ kind: 'unconfirmed', errorKey: PENDING_NOT_FOUND_KEY });
-    // Saving again after the reload carries the same payment and allocation ids.
-    const saved = await reloaded.submit(planner(form('100'), [A]));
-    expect(saved?.kind).toBe('saved');
+    // Saving from the resumed form sends the SAME payment id; a confirmed save removes it from the address.
+    expect((await reloaded.submit(planner(form('100'), [A])))?.kind).toBe('saved');
     expect(resent[0]?.paymentId).toBe(firstSent[0]?.paymentId);
-    expect(resent[0]?.allocations[0]?.allocationId).toBe(firstSent[0]?.allocations[0]?.allocationId);
-    // A confirmed save forgets the ids: the next form is a new payment.
-    expect(store.map.has(pendingKey(CUSTOMER))).toBe(false);
+    expect(new URL(win.location.href).searchParams.has(PENDING_PAYMENT_PARAM)).toBe(false);
   });
 
-  it('a reload that finds the payment shows it as already saved and forgets the ids', async () => {
-    const store = memoryStore();
-    const first = createCollectFlow({
-      mint: counter().mint,
-      pending: { store, customerId: CUSTOMER },
-      send: () => Promise.reject(new ApiError(502, 'BAD_GATEWAY')),
-      readStored: () => Promise.reject(new ApiError(503, 'SERVICE_UNAVAILABLE')),
-    });
-    await first.submit(planner(form('100'), [A]));
+  it('after a reload the re-minted credit and allocation ids make the request differ: the server says so and the stored payment is shown', async () => {
+    const { win } = fakeWindow(`${PAGE}?${PENDING_PAYMENT_PARAM}=00000000-0000-4000-8000-000000000001`);
     const STORED: CustomerPaymentDto = { ...answerFor(planOk(planner(form('100'), [A])), false) };
-    const reloaded = createCollectFlow({
+    let read = 0;
+    const flow = createCollectFlow({
+      mint: () => 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+      pending: urlPendingMarker(win),
+      send: () => Promise.reject(CONFLICT),
+      // Not visible yet at the reload (the first send still running), stored by the time of the resend.
+      readStored: () => ((read += 1), read === 1 ? Promise.reject(NOT_FOUND) : Promise.resolve(STORED)),
+    });
+    await flow.resume();
+    expect(await flow.submit(planner(form('100'), [A]))).toEqual({ kind: 'alreadySaved', payment: STORED });
+    expect(new URL(win.location.href).searchParams.has(PENDING_PAYMENT_PARAM)).toBe(false);
+  });
+
+  it('a reload that finds the payment shows it as already saved and removes the id from the address', async () => {
+    const { win } = fakeWindow(`${PAGE}?${PENDING_PAYMENT_PARAM}=00000000-0000-4000-8000-000000000001`);
+    const STORED: CustomerPaymentDto = { ...answerFor(planOk(planner(form('100'), [A])), false) };
+    const flow = createCollectFlow({
       mint: counter().mint,
-      pending: { store, customerId: CUSTOMER },
+      pending: urlPendingMarker(win),
       send: () => Promise.reject(new Error('not asked')),
       readStored: () => Promise.resolve(STORED),
     });
-    expect(await reloaded.resume()).toEqual({ kind: 'alreadySaved', payment: STORED });
-    expect(store.map.has(pendingKey(CUSTOMER))).toBe(false);
+    expect(await flow.resume()).toEqual({ kind: 'alreadySaved', payment: STORED });
+    expect(win.location.href).toBe(PAGE);
   });
 
-  it('the remembered ids are per customer: another customer gets new ones', async () => {
-    const store = memoryStore();
-    const first = createCollectFlow({
-      mint: counter().mint,
-      pending: { store, customerId: CUSTOMER },
-      send: () => Promise.reject(new TypeError('x')),
-      readStored: () => Promise.reject(NOT_FOUND),
-    });
-    await first.submit(planner(form('100'), [A]));
-    const other = createCollectFlow({
-      mint: () => 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
-      pending: { store, customerId: '9d2e0b63-4c8f-4e1b-8b64-1a3c7d2e8b02' },
+  it('a garbage id in the address is ignored: new ids, nothing read back', () => {
+    const { win } = fakeWindow(`${PAGE}?${PENDING_PAYMENT_PARAM}=not-a-uuid`);
+    const flow = createCollectFlow({
+      mint: () => 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      pending: urlPendingMarker(win),
       send: () => Promise.reject(new Error('x')),
-      readStored: () => Promise.reject(new Error('x')),
+      readStored: () => Promise.reject(new Error('not asked')),
     });
-    expect(other.resumed).toBe(false);
-    expect(other.ids.paymentId).not.toBe(first.ids.paymentId);
-    expect(other.resume()).toBeNull();
+    expect(flow.resumed).toBe(false);
+    expect(flow.ids.paymentId).toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
+    expect(flow.resume()).toBeNull();
   });
 
-  it('an explicit refusal of a send whose fate was never unknown forgets the ids; one after an unknown fate keeps them', async () => {
-    const clean = memoryStore();
+  it('an explicit refusal of a send whose fate was never unknown clears the id; one after an unknown fate keeps it', async () => {
+    const clean = fakeWindow(PAGE);
     const refusedOnly = createCollectFlow({
       mint: counter().mint,
-      pending: { store: clean, customerId: CUSTOMER },
+      pending: urlPendingMarker(clean.win),
       send: () => Promise.reject(REFUSED),
       readStored: () => Promise.reject(new Error('not asked')),
     });
     await refusedOnly.submit(planner(form('100'), [A]));
-    expect(clean.map.has(pendingKey(CUSTOMER))).toBe(false);
+    expect(clean.win.location.href).toBe(PAGE);
 
-    const doubtful = memoryStore();
+    const doubtful = fakeWindow(PAGE);
     let call = 0;
     const flow = createCollectFlow({
       mint: counter().mint,
-      pending: { store: doubtful, customerId: CUSTOMER },
+      pending: urlPendingMarker(doubtful.win),
       send: () => ((call += 1), Promise.reject(call === 1 ? new TypeError('x') : REFUSED)),
       readStored: () => Promise.reject(NOT_FOUND),
     });
     await flow.submit(planner(form('100'), [A]));
     await flow.submit(planner(form('100'), [A]));
-    expect(doubtful.map.has(pendingKey(CUSTOMER))).toBe(true);
+    expect(new URL(doubtful.win.location.href).searchParams.get(PENDING_PAYMENT_PARAM)).toBe(flow.ids.paymentId);
   });
 
-  it('a corrupted or foreign record is not taken as ids', () => {
-    for (const junk of ['not json', '{"paymentId":"x","creditId":"y","allocations":{}}', '[]', 'null', '{"paymentId":1}']) {
-      const store = memoryStore();
-      store.map.set(pendingKey(CUSTOMER), junk);
-      const flow = createCollectFlow({
-        mint: () => 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
-        pending: { store, customerId: CUSTOMER },
-        send: () => Promise.reject(new Error('x')),
-        readStored: () => Promise.reject(new Error('x')),
-      });
-      expect(flow.resumed, junk).toBe(false);
-      expect(flow.ids.paymentId).toBe('dddddddd-dddd-4ddd-8ddd-dddddddddddd');
-    }
-  });
-
-  it('works with no storage at all, and with a storage that throws on every call', async () => {
-    for (const store of [null, throwingStore]) {
+  it('works with no marker at all, and with a window that throws on every touch', async () => {
+    for (const pending of [null, urlPendingMarker(brokenWindow)]) {
       let sends = 0;
       const flow = createCollectFlow({
         mint: counter().mint,
-        pending: { store, customerId: CUSTOMER },
+        pending,
         send: (body) => ((sends += 1), Promise.resolve(answerFor(body, false))),
         readStored: () => Promise.reject(new Error('not asked')),
       });

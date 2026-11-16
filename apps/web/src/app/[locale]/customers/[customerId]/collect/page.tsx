@@ -13,9 +13,10 @@
  * - The ids are minted when the flow is created, i.e. once per form. A new
  *   flow — a new form, new ids — is created only by a fresh load, which the
  *   view offers only beside a saved or an already-stored payment. A reload
- *   while a send is unconfirmed re-opens THAT send's ids from this tab's
- *   `sessionStorage` and reads it back before showing the form; a second tab
- *   or device mints new ids by design (see `collect-flow.ts`).
+ *   while a send is unconfirmed re-opens THAT send's payment id from the
+ *   page address (`?payment=<uuid>`, no browser storage) and reads it back
+ *   before showing the form; a different tab or device starting a new form
+ *   mints new ids by design (see `collect-flow.ts`).
  * - No answer or a 5xx is never shown as "nothing was saved": the flow reads
  *   the payment back by its id.
  * - A refusal sets the refusal text and nothing else.
@@ -37,7 +38,7 @@ import {
   afterOutcome,
   beforeSend,
   createCollectFlow,
-  sessionPendingStore,
+  urlPendingMarker,
   type CollectFlow,
   type CollectOutcome,
   type CollectScreenState,
@@ -54,11 +55,11 @@ function currencyOptions(rows: readonly CollectRowModel[], baseCurrency: string)
 }
 
 /**
- * A flow re-opens the ids of this customer's unconfirmed send from this tab's `sessionStorage`
- * when there is one (a reload), and mints new ones otherwise; without storage it simply mints.
+ * A flow re-opens the payment id of an unconfirmed send from the page address when there is one
+ * (a reload), and mints new ids otherwise. The address is this customer's own page, so the id is
+ * this customer's. Called only in an effect, where `window` exists.
  */
-const newFlow = (customerId: string): CollectFlow =>
-  createCollectFlow({ send: collectPayment, readStored: getStoredPayment, pending: { store: sessionPendingStore(), customerId } });
+const newFlow = (): CollectFlow => createCollectFlow({ send: collectPayment, readStored: getStoredPayment, pending: urlPendingMarker(window) });
 
 export default function CollectPaymentPage({ params }: { params: Promise<{ locale: Locale; customerId: string }> }) {
   const { locale, customerId } = use(params);
@@ -94,7 +95,7 @@ export default function CollectPaymentPage({ params }: { params: Promise<{ local
         const loaded = open.items.map(toRow);
         const options = currencyOptions(loaded, baseCurrency);
         const active = activeMethodChoices(pm.items, locale, makeT(locale));
-        const current = newFlow(customerId);
+        const current = newFlow();
         flow.current = current;
         // A send from before a reload is read back FIRST: found, it is shown as saved; not found, the form
         // comes with the same ids behind it.
