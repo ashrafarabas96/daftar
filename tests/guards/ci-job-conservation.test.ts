@@ -819,3 +819,66 @@ describe('the sharded Integration step keeps every file it ran (C-13, grade 3)',
     expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-int-2` has a redis service');
   });
 });
+
+/**
+ * C-14 (DR-170) — the Phase 2 chain is composed by the JOB, not nested in a gate. Required
+ * CI runs `gate:phase2:s1` .. `gate:phase2:s7` as seven separate steps of `backend-gates-p2`,
+ * each of which composes its own predecessors already. P2-S8 used to call `gate:phase2:s7`
+ * again, so the same P2-S1..S7 matrices ran a second time in `backend-work`, and a third time
+ * under `gate:phase3:s1`. Dropping that one call is only sound while (a) every one of the
+ * seven steps exists in `backend-gates-p2` with exactly that command, and (b) the P2-S8 gate
+ * really does not call a P2 gate any more. Both are read here, from the files.
+ */
+function p2NestProblems(ciText: string, gateText: string): string[] {
+  const problems: string[] = [];
+  const blocks = stepBlocks(ciText, 'backend-gates-p2');
+  for (let n = 1; n <= 7; n += 1) {
+    const name = `Phase 2 slice gate — P2-S${n}`;
+    const run = runOf(ciText, 'backend-gates-p2', name);
+    if (blocks.find((b) => b.name === name) === undefined) problems.push(`C-14: \`backend-gates-p2\` has no step "${name}"`);
+    else if (run !== `npm run gate:phase2:s${n}`) problems.push(`C-14: "${name}" runs \`${run ?? ''}\`, expected \`npm run gate:phase2:s${n}\``);
+  }
+  const live = gateText.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const calls = [...live.matchAll(/'gate:phase2:s\d'/g)].map((m) => m[0]);
+  if (calls.length > 0) problems.push(`C-14: the P2-S8 gate calls ${calls.join(', ')}; the chain is composed by \`backend-gates-p2\``);
+  if (!live.includes("'check:migrations'")) problems.push('C-14: the gate text read here has no check:migrations, so the call scan above read the wrong file');
+  return problems;
+}
+
+describe('the Phase 2 chain is composed by the job, not nested in P2-S8 (C-14, DR-170)', () => {
+  const gate = readFileSync(join(ROOT, 'scripts', 'phase2-s8-gate.ts'), 'utf8');
+  const plant = (from: string, to: string) => {
+    const slice = jobText(ci, 'backend-gates-p2');
+    const mutated = slice.replace(from, to);
+    expect(mutated, 'the text to plant was not found — update this proof').not.toBe(slice);
+    return ci.replace(slice, mutated);
+  };
+
+  it('POSITIVE: the committed files satisfy it, and the probe saw seven steps and a gate with a live step list', () => {
+    expect(p2NestProblems(ci, gate)).toEqual([]);
+    expect(stepBlocks(ci, 'backend-gates-p2').filter((b) => /^Phase 2 slice gate — P2-S[1-7]$/.test(b.name))).toHaveLength(7);
+  });
+
+  it('RED: a P2 step is dropped from the job', () => {
+    const planted = plant('name: Phase 2 slice gate — P2-S4', 'name: Phase 2 slice gate — P2-S4 (renamed)');
+    expect(p2NestProblems(planted, gate).join('\n')).toContain('no step "Phase 2 slice gate — P2-S4"');
+  });
+
+  it('RED: a P2 step runs a different command', () => {
+    const planted = plant('run: npm run gate:phase2:s6', 'run: npm run gate:phase2:s5');
+    expect(p2NestProblems(planted, gate).join('\n')).toContain('"Phase 2 slice gate — P2-S6" runs');
+  });
+
+  it('RED: the P2-S8 gate calls the P2-S7 gate again', () => {
+    const nested = gate.replace(
+      "  { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },\n",
+      "  { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },\n  { name: 'P2-S7 gate', cmd: npm, args: ['run', 'gate:phase2:s7'] },\n",
+    );
+    expect(nested).not.toBe(gate);
+    expect(p2NestProblems(ci, nested).join('\n')).toContain("the P2-S8 gate calls 'gate:phase2:s7'");
+  });
+
+  it('NEGATIVE CONTROL: a call named only in a comment is not a call', () => {
+    expect(p2NestProblems(ci, `// npm run 'gate:phase2:s7'\n${gate}`)).toEqual([]);
+  });
+});
