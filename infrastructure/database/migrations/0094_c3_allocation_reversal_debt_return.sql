@@ -190,6 +190,20 @@ CREATE POLICY accounting_internal_read ON allocation_reversals
 -- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER to every runtime
 -- principal and to PUBLIC, at table and at column level
 -- (`phase3-runtime-grant-model.json:62-63`).
+--
+-- AND EACH PRINCIPAL'S REASON, in the sibling's own terms (`0081:608-614`):
+--   * `daftar_app` READS and holds NO DML at all — every write goes through a
+--     routine whose authority was checked (P4-AL-38). That is the owner's
+--     line.
+--   * the inventory principal INSERTS and reads, because the command in §E is
+--     its definer-owned routine. No UPDATE of any kind: unlike
+--     `customer_credits`, nothing on this row is ever revised — §C refuses
+--     UPDATE and DELETE outright — so there is no column to grant.
+--   * the accounting principal READS, and only that, because
+--     `accounting_allocation_reversal_entry_complete()` in §F is judged on
+--     this row: "a validator that cannot read its source row passes
+--     vacuously" (`0081:613-614`). Without this grant that validator would be
+--     the very thing it was written against.
 GRANT INSERT, SELECT ON allocation_reversals TO daftar_inventory_internal;
 GRANT SELECT ON allocation_reversals TO daftar_accounting_internal;
 GRANT SELECT ON allocation_reversals TO daftar_app;
