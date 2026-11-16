@@ -78,6 +78,17 @@ const PULL_REQUEST_ONLY = "github.event_name == 'pull_request'";
 export type WorkflowStep = { readonly name: string; readonly condition: string | null };
 
 /**
+ * A condition that IS there and whose text this reader cannot see, because
+ * YAML put it on the line(s) after `if:`.
+ *
+ * It is a value and not `null` on purpose. `null` here means "no condition,
+ * the step runs on every event", which is the claim this law makes about the
+ * snapshot scan — so reading an unreadable condition as `null` would turn a
+ * gated step into a proof that it is ungated. Unknown must cost, not pass.
+ */
+export const UNREADABLE_CONDITION = '<<a condition whose text is on the following line(s)>>';
+
+/**
  * The steps of one job, read without a YAML dependency on purpose: `js-yaml`
  * is present only transitively here, so a hoisting change in an unrelated
  * dependency would decide whether this law can run. The reader is
@@ -114,8 +125,19 @@ export function stepsOfJob(yamlText: string, jobName: string): readonly Workflow
     if (current === null) continue;
     const named = /^ {8}name: (.*)$/.exec(line);
     if (named !== null && current.name.startsWith('uses:')) current.name = (named[1] ?? '').trim();
-    const cond = /^ {8}if: (.*)$/.exec(line);
-    if (cond !== null) current.condition = (cond[1] ?? '').trim();
+    // `if:` with NO space-and-value after it is valid YAML whose condition
+    // sits on the following line(s). The first version required `if: ` with a
+    // value, so that form left `condition` at `null` and this law swore the
+    // step was unconditional while it was gated — a green in the forbidden
+    // direction, the exact class the file claims to close. (Fifth review,
+    // finding 1.) It is now read as PRESENT BUT UNREADABLE, so every
+    // assertion fails closed: one that wants `null` sees a condition, and one
+    // that wants a particular condition does not get it.
+    const cond = /^ {8}if:(.*)$/.exec(line);
+    if (cond !== null) {
+      const text = (cond[1] ?? '').trim();
+      current.condition = text === '' ? UNREADABLE_CONDITION : text;
+    }
   }
   if (current !== null) steps.push(current);
   return steps;
@@ -177,7 +199,12 @@ export function jobKey(yamlText: string, jobName: string, key: string): string |
 
 export function jobCondition(yamlText: string, jobName: string): string | null | undefined {
   const v = jobKey(yamlText, jobName, 'if');
-  return v === undefined ? undefined : v === null || v === '' ? null : v;
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  // An empty value is `if:` with its text on the following line(s) — present,
+  // not absent. Mapping it to `null` said "this job is ungated" about a job
+  // that was gated. (Fifth review, finding 1.)
+  return v === '' ? UNREADABLE_CONDITION : v;
 }
 
 /**
@@ -377,11 +404,57 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(conditionOf(HYGIENE_STEPS, RANGE_STEP)).toBe(PULL_REQUEST_ONLY);
   });
 
-  it('REL11-E (scope): the workflow really does run on a push to main, so the gap is the condition and not the trigger', () => {
+  it('REL11-E (scope): `push:` names `main` among its branches', () => {
     // By MEANING, not by the line's spelling: `branches:` written as a block
     // list is the same trigger, and a security law must not redden because an
     // equivalent YAML form was chosen. (Review of this PR, finding 4.)
+    //
+    // The name of this case used to say "the workflow really does run on a
+    // push to main", which is WIDER than what it measures: `branches:` alone.
+    // A `paths:` or `paths-ignore:` under `push:` can stop the run without
+    // touching `branches:`, and this assertion would not have noticed. (Fifth
+    // review, finding 2.) The name is narrowed, and the rest is measured in
+    // REL11-E2 instead of implied here.
     expect(pushBranches(WORKFLOW)).toContain('main');
+  });
+
+  it('REL11-E2 (scope): nothing else narrows the push — no path filter, and the scan is not `continue-on-error`', () => {
+    // A path filter under `push:` would mean "runs on a push to main only when
+    // these files changed", so the scan would miss a push that touched
+    // anything else. Read from the `on:` block's own text.
+    const onBlock = WORKFLOW.slice(WORKFLOW.indexOf('\non:'), WORKFLOW.indexOf('\njobs:'));
+    expect(onBlock, 'the on: block was not found, so this case measured nothing').toContain('push:');
+    const pushBlock = onBlock.slice(onBlock.indexOf('  push:'), onBlock.indexOf('  pull_request:'));
+    expect(pushBlock.length, 'the push: block was not isolated').toBeGreaterThan(0);
+    expect(pushBlock).not.toMatch(/^ {4}paths(-ignore)?:/m);
+
+    // And a step that reports failure without failing the job is a gate that
+    // does not gate: "it runs" would stay true while nothing could stop a
+    // push. (Fifth review, finding 2.)
+    const snapshot = HYGIENE_STEPS.find((s) => s.name === SNAPSHOT_STEP);
+    expect(snapshot, 'the snapshot step was not found, so this case measured nothing').toBeDefined();
+    const stepText = WORKFLOW.slice(WORKFLOW.indexOf(`      - name: ${SNAPSHOT_STEP}`));
+    const upToNextStep = stepText.slice(0, stepText.indexOf('\n      - ', 1) + 1 || undefined);
+    expect(upToNextStep).toContain(SNAPSHOT_STEP);
+    expect(upToNextStep).not.toMatch(/continue-on-error:\s*true/);
+  });
+
+  it('REL11-M (the forbidden direction): a condition written on the NEXT line is never read as "no condition"', () => {
+    // The blocking finding of the fifth review, as an arm. `if:` with its text
+    // on the following line is valid YAML, and the reader used to leave
+    // `condition` at `null` for it — so REL11-B swore the snapshot scan was
+    // ungated while it was gated to pull requests only. Fail-closed now: the
+    // condition is reported as present-but-unreadable, which is not `null`.
+    const multiline = WORKFLOW.replace(`      - name: ${SNAPSHOT_STEP}\n`, `      - name: ${SNAPSHOT_STEP}\n        if:\n          ${PULL_REQUEST_ONLY}\n`);
+    expect(multiline).not.toBe(WORKFLOW); // the seed landed
+    const seeded = conditionOf(stepsOfJob(multiline, 'hygiene'), SNAPSHOT_STEP);
+    expect(seeded, 'an unreadable condition must not read as "no condition"').not.toBeNull();
+    expect(seeded).toBe(UNREADABLE_CONDITION);
+
+    // The same form at JOB level, which hid a gate on `hygiene` itself.
+    const jobGated = WORKFLOW.replace('  hygiene:\n', '  hygiene:\n    if:\n      ' + PULL_REQUEST_ONLY + '\n');
+    expect(jobGated).not.toBe(WORKFLOW);
+    expect(jobCondition(jobGated, 'hygiene')).not.toBeNull();
   });
 
   it('REL11-F (negative control): a missing job and a renamed step are reported, not silently passed', () => {
@@ -395,7 +468,15 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
   });
 
   it('REL11-G (negative control): removing the range gate is reported, so D is not true by construction', () => {
-    const ungated = WORKFLOW.replace(`        if: ${PULL_REQUEST_ONLY}\n`, '');
+    // ANCHORED on the range step's own name, not on the first `if:` in the
+    // file. The unanchored seed deleted whichever gated step came first, so
+    // the day another step above this one carries the same condition, G would
+    // have reddened by naming this reader rather than by measuring the range
+    // scan — a negative control that tests the wrong line is not a control.
+    // (Fifth review, finding 3; REL11-K was already anchored for this reason.)
+    const anchor = `      - name: ${RANGE_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`;
+    expect(WORKFLOW, 'the range step is not written in the form this seed expects').toContain(anchor);
+    const ungated = WORKFLOW.replace(anchor, `      - name: ${RANGE_STEP}\n`);
     expect(ungated).not.toBe(WORKFLOW);
     expect(conditionOf(stepsOfJob(ungated, 'hygiene'), RANGE_STEP)).toBeNull();
   });
