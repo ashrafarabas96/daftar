@@ -1831,3 +1831,107 @@ export async function seedSameOwnerBusiness(pool: Pool, biz: StockBusiness, slug
     variantProduct: { productId: vp.productId, variantIds: [must(vp.variantIds[0]), must(vp.variantIds[1])] },
   };
 }
+
+/** One leg of an owner-written transfer: the movement's own stored figures. */
+export interface OwnerTransferLeg {
+  /** `transfer_out` or `transfer_in`. */
+  readonly kind: 'transfer_out' | 'transfer_in';
+  readonly warehouseId: string;
+  /** Signed, as the ledger stores it: negative out, positive in. */
+  readonly qty: string;
+  /** Signed too, and DELIBERATELY free: a control needs to write a pair that does not cancel. */
+  readonly value: string;
+  readonly unitCost?: string | null;
+  readonly stockSeq: number;
+  readonly cache: { readonly onHand: string; readonly valuation: string; readonly avg: string | null };
+}
+
+/**
+ * H-1, for a TRANSFER: as the schema owner, write a COMPLETE transfer — header,
+ * one line, and both legs with their bindings, bridge rows, cache rows and
+ * movements — with the GIVEN stored values.
+ *
+ * It exists because `0093`'s value law speaks only about a complete document
+ * (as many movements as two per line, which is what a `value_complete` arm
+ * means), so the only way to see that law refuse anything is to write a
+ * complete pair whose values do NOT cancel. No routine can produce that: the
+ * primitive computes the value from the cost, which is exactly why this is
+ * owner-written here instead.
+ *
+ * It does NOT touch `seedOwnerMovement`: that one writes a `fixture_line`
+ * chain, and a transfer needs its own header, line and bridge. One method per
+ * shape, in one place, rather than a second copy of either.
+ */
+export async function seedOwnerTransfer(
+  c: Queryable,
+  s: Scope,
+  input: {
+    readonly variantId: string;
+    readonly sourceWarehouseId: string;
+    readonly destinationWarehouseId: string;
+    /** The line's quantity, unsigned, as `inventory_transfer_lines` stores it. */
+    readonly qty: string;
+    readonly legs: readonly [OwnerTransferLeg, OwnerTransferLeg];
+    readonly transferId?: string;
+    readonly lineId?: string;
+  },
+): Promise<{ transferId: string; lineId: string; movementIds: readonly string[] }> {
+  const transferId = input.transferId ?? randomUUID();
+  const lineId = input.lineId ?? randomUUID();
+  await setScope(c, s);
+  await c.query(
+    `INSERT INTO inventory_transfers (tenant_id, business_id, id, source_warehouse_id, destination_warehouse_id, intent_sha256, actor_user_id, business_transaction_id)
+     VALUES ($1, $2, $3, $4, $5, repeat('a', 64), $6, $7)`,
+    [s.tenantId, s.businessId, transferId, input.sourceWarehouseId, input.destinationWarehouseId, s.userId, randomUUID()],
+  );
+  await c.query(
+    `INSERT INTO inventory_transfer_lines (tenant_id, business_id, transfer_id, id, line_no, variant_id, qty)
+     VALUES ($1, $2, $3, $4, 1, $5, $6::numeric)`,
+    [s.tenantId, s.businessId, transferId, lineId, input.variantId, input.qty],
+  );
+
+  const movementIds: string[] = [];
+  for (const leg of input.legs) {
+    await c.query(
+      `INSERT INTO stock_source_bindings (tenant_id, business_id, source_type, source_id, source_line_id, movement_kind)
+       VALUES ($1, $2, 'inventory_transfer', $3, $4, $5)`,
+      [s.tenantId, s.businessId, transferId, lineId, leg.kind],
+    );
+    await c.query(
+      `INSERT INTO stock_source_bridge_inventory_transfer (business_id, source_id, source_line_id, movement_kind)
+       VALUES ($1, $2, $3, $4)`,
+      [s.businessId, transferId, lineId, leg.kind],
+    );
+    await c.query(
+      `INSERT INTO stock_levels (tenant_id, business_id, warehouse_id, variant_id, on_hand, valuation_base_minor, avg_unit_cost_base_minor, last_stock_seq)
+       VALUES ($1, $2, $3, $4, $5::numeric, $6::bigint, $7::numeric, $8)
+       ON CONFLICT (business_id, warehouse_id, variant_id) DO UPDATE
+         SET on_hand = EXCLUDED.on_hand, valuation_base_minor = EXCLUDED.valuation_base_minor,
+             avg_unit_cost_base_minor = EXCLUDED.avg_unit_cost_base_minor, last_stock_seq = EXCLUDED.last_stock_seq`,
+      [s.tenantId, s.businessId, leg.warehouseId, input.variantId, leg.cache.onHand, leg.cache.valuation, leg.cache.avg, leg.stockSeq],
+    );
+    const movementId = randomUUID();
+    await c.query(
+      `INSERT INTO stock_movements (tenant_id, business_id, id, warehouse_id, variant_id, stock_seq, movement_kind, source_type, source_id,
+                                    source_line_id, qty_delta, unit_cost_base_minor, value_delta_base_minor, reason, actor_user_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'inventory_transfer', $8, $9, $10::numeric, $11::numeric, $12::bigint, NULL, $13)`,
+      [
+        s.tenantId,
+        s.businessId,
+        movementId,
+        leg.warehouseId,
+        input.variantId,
+        leg.stockSeq,
+        leg.kind,
+        transferId,
+        lineId,
+        leg.qty,
+        leg.unitCost ?? null,
+        leg.value,
+        s.userId,
+      ],
+    );
+    movementIds.push(movementId);
+  }
+  return { transferId, lineId, movementIds };
+}
