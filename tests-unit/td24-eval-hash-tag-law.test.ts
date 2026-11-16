@@ -238,4 +238,25 @@ describe('TD-24 law — one EVAL, one slot', () => {
     const tagged = await keysOfOneEval({ key: 'POST-/v1/orders-203.0.113.9' });
     expect(new Set(tagged.map(slotOf)).size).toBe(1);
   });
+
+  it('TD24-SLOT-E: the two slot numbers `rate-limit-store.ts` cites are the slots of keys NAMED here', async () => {
+    // `rateLimitKey`'s doc block cites two slots as its evidence that the tag
+    // varies with the scope and the caller's key. It cited them beside an
+    // elided key (`{ip:default:…}`), so one of the two could not be
+    // reproduced from the text at all — a number that names no key, which is
+    // the same defect as a count that names no tree. The numbers now live
+    // here, computed from keys the STORE built, so the comment points at an
+    // assertion rather than at a memory.
+    const preAuth = await keysOfOneEval({ key: 'POST-/v1/orders-203.0.113.9' });
+    expect(hashTag(preAuth[0] ?? '')).toBe('ip:default:POST-/v1/orders-203.0.113.9');
+    expect(slotOf(preAuth[0] ?? '')).toBe(8_558);
+
+    const tenant = await keysOfOneEval({ key: 'k', tenantId: TENANT });
+    expect(hashTag(tenant[0] ?? '')).toBe(`t:${TENANT}:default:k`);
+    expect(slotOf(tenant[0] ?? '')).toBe(11_126);
+
+    // THE CLAIM the numbers are there to carry: two different scopes do not
+    // land in one slot, so the allowances are spread rather than collapsed.
+    expect(slotOf(preAuth[0] ?? '')).not.toBe(slotOf(tenant[0] ?? ''));
+  });
 });

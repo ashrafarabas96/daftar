@@ -209,8 +209,11 @@ export function rateLimitScopeSegment(scope: RateLimitScope): string {
  * key would also satisfy the cluster, by collapsing every allowance in the
  * system into a single slot — a performance defect traded for a correctness
  * one. The tag here varies with the scope and the caller's key, so slots stay
- * spread (`rl:thr:v1:{ip:default:…}` and a tenant's key measured into 8558
- * and 9439 of 16384). `tests-unit/td24-eval-hash-tag-law.test.ts` computes
+ * spread: `rl:thr:v1:{ip:default:POST-/v1/orders-203.0.113.9}` lands in slot
+ * 8558 of 16384 and a tenant's `{t:<uuid>:default:k}` in 11126 — both NAMED
+ * and asserted in `TD24-SLOT-E`, because the earlier pair of numbers sat
+ * beside an elided key and one of them could not be reproduced from this text.
+ * `tests-unit/td24-eval-hash-tag-law.test.ts` computes
  * the slot of every key of one `EVAL` and asserts they match, with a negative
  * control that an untagged pair does NOT.
  *
