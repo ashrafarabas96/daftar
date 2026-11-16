@@ -23,6 +23,7 @@ import { appDbUrl, dbUrl, ensurePostgres, ownerPool, resetData } from '../helper
 import { settlementWorld, settlementMissing, stockUp, newCustomer, sellOnCredit, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
 import { derivedRead, must } from '../golden-regression/phase4-s4/harness';
 import { collectPayment, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
+import { assertionFor, postAs, type PostCommand, type PostLine } from '../helpers/accounting-posting';
 
 const TABLE = 'allocation_reversals';
 
@@ -88,8 +89,28 @@ beforeAll(async () => {
   // stored figures — which is also what `allocation_reversal_value_conserved`
   // demands, so a typo here is refused at COMMIT rather than measured.
   reversalId = randomUUID();
-  await ownerPool().query(
-    `INSERT INTO allocation_reversals (
+  // IN ONE TRANSACTION WITH ITS CARRIER GUC SET, because this row's own guard
+  // demands it. Measured, after the second run refused with
+  // "null value in column business_transaction_id": `0094:227` refuses any row
+  // whose `business_transaction_id` IS DISTINCT FROM
+  // inventory_business_transaction_id(), and that function reads
+  // `app.business_transaction_id`. So a UUID bound as a parameter would be
+  // refused by MY OWN guard, and leaving the GUC unset makes the column NULL.
+  // Setting it transaction-locally and letting the function fill the column is
+  // the only shape that satisfies the guard -- and it means this fixture
+  // exercises that guard instead of going around it.
+  // ONE CONNECTION FOR THE WHOLE SEED, because the deferred binding FK
+  // cannot be satisfied across two of them: two connections are two
+  // transactions, and this row and its accounting entry must commit
+  // together. The owner URL is used because `allocation_reversals`
+  // grants INSERT to the internal writer alone.
+  const seedConn = new Client({ connectionString: dbUrl });
+  await seedConn.connect();
+  try {
+    await seedConn.query('BEGIN');
+    await seedConn.query(`SELECT set_config('app.business_transaction_id', $1, true)`, [randomUUID()]);
+    await seedConn.query(
+      `INSERT INTO allocation_reversals (
        tenant_id, business_id, id, allocation_id, payment_id, customer_id, invoice_id,
        reversal_date, invoice_currency, invoice_amount_applied_minor,
        invoice_historical_to_base_rate, invoice_carrying_base_released_minor,
@@ -97,11 +118,78 @@ beforeAll(async () => {
      SELECT x.tenant_id, x.business_id, $2::uuid, x.id, x.payment_id, x.customer_id, x.invoice_id,
             $3::date, x.invoice_currency, x.invoice_amount_applied_minor,
             x.invoice_historical_to_base_rate, x.invoice_carrying_base_released_minor,
-            'the merchant allocated this to the wrong invoice', inventory_business_transaction_id(), x.created_by, $2::uuid
+            -- THE ACTOR COMES FROM THE WORLD, NOT FROM THE ALLOCATION, and
+            -- that is measured rather than assumed: payment_allocations
+            -- (0081:297-323) carries created_at and NO created_by
+            -- column at all, while allocation_reversals (0094:132)
+            -- requires created_by UUID NOT NULL REFERENCES users (id).
+            -- The first run of this file said so in one line --
+            -- column x.created_by does not exist -- which is why the
+            -- owner's second condition is that the files RUN and not that
+            -- they read correctly. In the real command the actor is
+            -- v_actor.actor_user_id from the signed assertion; this fixture
+            -- is owner-written, so it uses the world's own user.
+            'the merchant allocated this to the wrong invoice', inventory_business_transaction_id(), $5::uuid, $2::uuid
        FROM payment_allocations x
       WHERE x.business_id = $1 AND x.id = $4::uuid`,
-    [a.shop.businessId, reversalId, a.day, allocationId],
-  );
+      [a.shop.businessId, reversalId, a.day, allocationId, a.shop.userId],
+    );
+    // ── AND ITS ACCOUNTING ENTRY, IN THE SAME TRANSACTION ──────────────
+    //
+    // The fourth run of this file refused with
+    // "violates foreign key allocation_reversals_binding_fk", and that
+    // refusal is the schema teaching the fixture its shape. Measured:
+    // 0094:147-150 points at accounting_source_bindings, whose rows are
+    // written INSIDE accounting_post_entry together with a journal entry
+    // (0045:795); and 0094:425 refuses an entry whose reversal row is not
+    // visible in the SAME transaction. So the only shape that satisfies both
+    // is insert, then post, then commit -- which is exactly why that FK is
+    // DEFERRABLE INITIALLY DEFERRED, and why a fixture that wrote the row
+    // alone was wrong rather than unlucky.
+    //
+    // THE FIGURES ARE READ BACK FROM THE ROW, not recomputed here. 0094's
+    // completeness validator rebuilds the two expected lines from the stored
+    // columns, so a number retyped in this fixture would be a second copy of
+    // the arithmetic -- the defect this lane exists to refuse.
+    const stored = await seedConn.query<{ cur: string; applied: string; base: string; rate: string; baseCur: string }>(
+      `SELECT r.invoice_currency AS cur, r.invoice_amount_applied_minor::text AS applied,
+              r.invoice_carrying_base_released_minor::text AS base,
+              r.invoice_historical_to_base_rate::text AS rate, b.base_currency AS "baseCur"
+         FROM allocation_reversals r JOIN businesses b ON b.id = r.business_id
+        WHERE r.business_id = $1 AND r.id = $2::uuid`,
+      [a.shop.businessId, reversalId],
+    );
+    const f = must(stored.rows[0], 'the reversal row this entry is built from');
+    const at = new Date(`${a.day}T00:00:00Z`);
+    const line = (systemKey: string, side: 'D' | 'C'): PostLine => ({
+      account: { kind: 'system' as const, systemKey },
+      side,
+      baseAmountMinor: BigInt(f.base),
+      baseCurrency: f.baseCur,
+      txnAmountMinor: BigInt(f.applied),
+      txnCurrency: f.cur,
+      fxRate: f.rate,
+      fxRateSource: f.cur === f.baseCur ? ('base' as const) : ('manual' as const),
+      fxRateAt: at,
+    });
+    // The two lines 0094:432-435 names, in its order: the receivable comes
+    // back as a DEBIT and the customer's credit liability as the CREDIT.
+    const entry: PostCommand = {
+      tenantId: a.shop.tenantId,
+      businessId: a.shop.businessId,
+      sourceType: 'allocation_reversal',
+      sourceId: reversalId,
+      entryDate: a.day,
+      lines: [line('accounts_receivable', 'D'), line('customer_credit_liability', 'C')],
+    };
+    await postAs(assertionFor(entry, a.shop.userId), entry, {}, seedConn);
+    await seedConn.query('COMMIT');
+  } catch (e) {
+    await seedConn.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    await seedConn.end().catch(() => undefined);
+  }
 
   b = await settlementWorld('l3 c3 rls b');
   const missingB = await settlementMissing(b);
@@ -172,6 +260,25 @@ describe("C3 §3 — the owner's second condition: another merchant reads ZERO, 
       // row security refuses — which is the point of the owner's condition.
       const seen = await other.query<{ c: string }>(`SELECT count(*)::text AS c FROM ${TABLE}`);
       expect(must(seen.rows[0], 'a count').c, 'another merchant must see no reversal of this one').toBe('0');
+
+      // AND THE SAME COUNT, ON THE SAME GRANT, FOR THE MERCHANT WHO OWNS IT.
+      // A zero read by another business proves isolation only if the identical
+      // query is NON-zero for its owner: a policy that blinded the runtime
+      // role to the whole table would satisfy the zero above just as well, and
+      // the file would report isolation it had not measured. The control is
+      // the same statement through a connection pinned to A, not a read by the
+      // schema owner, because the owner is exempt from nothing here and proves
+      // nothing about the grant.
+      const mine = await appAs(a);
+      try {
+        const own = await mine.query<{ c: string }>(`SELECT count(*)::text AS c FROM ${TABLE}`);
+        expect(
+          Number(must(own.rows[0], 'a count').c),
+          'the owning merchant must see its own reversal through the same grant, or the zero above measures blindness and not isolation',
+        ).toBeGreaterThan(0);
+      } finally {
+        await mine.end().catch(() => undefined);
+      }
 
       // AND THROUGH THE READER, which is what the condition names: asking
       // about A's invoice as B answers `invoice.not_found` rather than a
