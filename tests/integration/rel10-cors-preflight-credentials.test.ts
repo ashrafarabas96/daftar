@@ -27,9 +27,14 @@
  * the corrected reading, each with its mechanism named, and the two dead
  * routes stay as RATCHETS rather than being deleted.
  *
- * None of this is a hypothesis: every arm seeds, builds, boots, and reads the
- * preflight, and every arm first proves its own seed reached the compiled
- * program — so an arm can never report "closed" when it merely failed to run.
+ * None of this is a hypothesis — and the exact reach is worth stating, since
+ * an earlier wording here said "every arm seeds, builds, boots, and reads the
+ * preflight" and that was false of three of them: `REL10-P1` and `REL10-P2`
+ * seed NOTHING (they measure the tree as it stands), and `REL10-N3` neither
+ * boots nor sends a request (the compiler refuses its seed, which is the
+ * finding). What holds of every SEEDED arm is that it proves its seed reached
+ * the compiled program before concluding anything — so an arm can never
+ * report "closed" when it merely failed to apply.
  * `REL10-R1`/`REL10-R2` assert the header comes back `true` on the same
  * request `REL10-P1` asserts it is absent on, which IS the red-first proof of
  * `REL10-P1`: with either seed in the tree, `REL10-P1` fails.
@@ -93,8 +98,27 @@ const MAIN = join(ROOT, 'apps/api/src/main.ts');
  * apps/api/tsconfig.build.json` is the api's OWN build (`apps/api`'s `build`
  * script, same config), measured at ~5s, and the output goes UNDER
  * `node_modules/` so that (a) Node resolves `@nestjs/*` upward from it as
- * usual and (b) nothing is left in `apps/api/dist`, which `gate:phase1`
- * refuses to find in the tree.
+ * usual and (b) nothing is left in `apps/api/dist`, which the Phase 1 build
+ * gate refuses to find in the tree.
+ *
+ * THE PHRASE ABOVE NAMES NEITHER THAT GATE'S SCRIPT NOR ITS FILE, AND THAT IS
+ * THE POINT. The review index counts a test as COVERAGE for a file when the
+ * test merely NAMES it — its path, its basename, or any `npm run` script that
+ * runs it. An earlier wording here used the script name and flipped that
+ * gate's row from «none found by reference» to «covered», on a file marked
+ * `security: high`, although this law never runs it and asserts nothing about
+ * it: the page would have told the owner a gate was protected by a test that
+ * does not touch it.
+ *
+ * AND THE FIRST ATTEMPT TO EXPLAIN THAT, HERE, DID IT AGAIN — by writing the
+ * file's own path into the explanation. The regenerated page kept the row
+ * flipped and the check still passed, so nothing complained; it took reading
+ * the generator's needles (path, basename, script name) to see that the
+ * sentence describing the trap was setting it. Hence this wording, and hence
+ * the rule in its sharpest form: IN A COMMENT, DESCRIBE THE GATE, NEVER NAME
+ * IT. Third occurrence today of prose moving a generated count — a stale row,
+ * a `(+N)` cap, and this one, which is the only one that could MISLEAD about
+ * a security file rather than merely fail a check.
  */
 const OUT = join(ROOT, 'node_modules', '.cache', 'rel10-cors-law-dist');
 
@@ -174,9 +198,20 @@ async function boot(corsOrigins: string): Promise<Booted> {
   let dead: string | null = null;
   child.once('exit', (code, signal) => (dead = `exit=${String(code)} signal=${String(signal)}`));
 
+  // EVERY THROW ON THIS PATH KILLS THE CHILD FIRST. `boot` throws BEFORE its
+  // caller has a value to pass to `stop`, so the caller's `finally` cannot
+  // clean up after it — a server left listening would hold cluster
+  // connections through the REST of `backend-work`'s steps (the Phase 4 gates
+  // and the perf budgets run after the tests, in the same job), and the
+  // failure would be attributed to whatever ran next. Measured as a defect by
+  // the review of this file, not after an incident.
+  const die = async (why: string): Promise<never> => {
+    await stopChild(child);
+    throw new Error(`${why}:\n${out}`);
+  };
   const deadline = Date.now() + 90_000;
   for (;;) {
-    if (dead !== null) throw new Error(`the api died before it listened (${dead}):\n${out}`);
+    if (dead !== null) return await die(`the api died before it listened (${dead})`);
     try {
       // ANY status answers the only question here — is it listening? A 404 is
       // an answer; `/v1/health` is a platform route and is not mounted in
@@ -186,19 +221,23 @@ async function boot(corsOrigins: string): Promise<Booted> {
     } catch {
       /* not up yet */
     }
-    if (Date.now() > deadline) throw new Error(`the api did not listen on ${port} within 90s:\n${out}`);
+    if (Date.now() > deadline) return await die(`the api did not listen on ${port} within 90s`);
     await new Promise((ok) => setTimeout(ok, 250));
   }
   return { port, child, log: () => out };
 }
 
-async function stop(b: Booted): Promise<void> {
+async function stopChild(child: ChildProcess): Promise<void> {
   await new Promise<void>((ok) => {
-    if (b.child.exitCode !== null || b.child.signalCode !== null) return ok();
-    b.child.once('exit', () => ok());
-    b.child.kill('SIGKILL');
+    if (child.exitCode !== null || child.signalCode !== null) return ok();
+    child.once('exit', () => ok());
+    child.kill('SIGKILL');
     setTimeout(ok, 5_000);
   });
+}
+
+async function stop(b: Booted): Promise<void> {
+  await stopChild(b.child);
 }
 
 /** A real browser preflight: `OPTIONS` carrying `Origin` and the method ask. */
@@ -240,8 +279,22 @@ describe('REL-10 the preflight itself', () => {
   it('REL10-P2 AN ORIGIN THE ALLOWLIST NEVER GRANTED IS NOT ECHOED, AND GETS NO CREDENTIALS GRANT', async () => {
     const b = await boot(GRANTED);
     try {
+      // THE POSITIVE WITNESS FIRST, ON THE SAME SERVER. Every assertion below
+      // is an ABSENCE, and three absences hold on a server that enabled no
+      // CORS at all — which is how the first version of this arm could have
+      // passed with `enableCors` deleted. So the granted origin is asked
+      // first, and it must be echoed: that is what proves there IS a layer
+      // here to refuse the stranger.
+      const granted = await preflight(b.port, GRANTED);
+      expect(granted.get('access-control-allow-origin'), 'the preflight never reached an enabled CORS layer, so nothing below is evidence').toBe(GRANTED);
+
       const h = await preflight(b.port, STRANGER);
-      expect(h.get('access-control-allow-origin'), 'an origin outside the allowlist was echoed back').not.toBe(STRANGER);
+      // AND THE HEADER IS ABSENT, not merely different from the stranger.
+      // `not.toBe(STRANGER)` passed on `Access-Control-Allow-Credentials: *`
+      // — a REAL relaxation — while this file's own header promised "no
+      // `Access-Control-Allow-Origin` at all". The assertion now says what
+      // the header says. (Review of this file, finding 1.)
+      expect(h.get('access-control-allow-origin'), 'an origin outside the allowlist got an echo or a wildcard').toBeNull();
       expect(h.get('access-control-allow-credentials'), 'the running server granted credentials to a stranger origin').toBeNull();
     } finally {
       await stop(b);
@@ -263,6 +316,9 @@ describe('REL-10 the preflight itself', () => {
  *  - LIVE: a credentials key the reader and the compiler cannot see, inside
  *    the one `enableCors` options object.                       (`REL10-R1`)
  *  - LIVE: `app.use(cors(...))` placed BEFORE `enableCors`.     (`REL10-R2`)
+ *  - LIVE: the dead arm's OWN options, as the only call — which is what makes
+ *    `REL10-N1` a claim about POSITION rather than about Nest ignoring those
+ *    options.                                                   (`REL10-R3`)
  *  - DEAD: a SECOND `enableCors` after the first.               (`REL10-N1`)
  *  - DEAD: `app.use(cors(...))` placed AFTER `enableCors`.      (`REL10-N2`)
  *  - REFUSED BY THE COMPILER: a `...spread` carrying `credentials` after a
@@ -297,6 +353,11 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
   };
 
   const HIDDEN_KEY = ['cred', 'entials'];
+  // `cors` is resolved at run time, and it is a TRANSITIVE dependency (of
+  // `@nestjs/platform-express`), not one this repository declares. If an
+  // install ever stops hoisting it, these two arms throw on `require` and
+  // redden loudly — they cannot go quietly green, which is the only property
+  // that matters here. Said rather than left for the next reader to discover.
   const REQUIRE_CORS = `(await import('node:module')).createRequire(__filename)('cors') as (o: unknown) => never`;
 
   const arms: readonly Arm[] = [
@@ -320,11 +381,18 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
         s.replace(CALL, `  const rel10SeededBefore = ${REQUIRE_CORS};\n  app.use(rel10SeededBefore({ origin: true, credentials: true }));\n${CALL}`),
     },
     {
+      id: 'REL10-R3',
+      what: 'the SAME options as REL10-N1, as the ONLY enableCors call',
+      relaxes: true,
+      marker: 'rel10SeededOnly',
+      apply: (s) => s.replace(CALL, `  const rel10SeededOnly = { origin: true, credentials: true } as const;\n  app.enableCors(rel10SeededOnly);`),
+    },
+    {
       id: 'REL10-N1',
       what: 'a SECOND enableCors after the first',
       relaxes: false,
       marker: 'rel10SeededSecond',
-      why: 'the first CORS layer answers the preflight and ends the response, so the second never runs',
+      why: 'the first CORS layer answers the preflight and ends the response, so the second never runs — and REL10-R3 proves these very options DO relax when they are the only call, so this arm is about POSITION and not about Nest ignoring them',
       apply: (s) => s.replace(CALL, `${CALL}\n  const rel10SeededSecond = { origin: true, credentials: true } as const;\n  app.enableCors(rel10SeededSecond);`),
     },
     {
@@ -339,6 +407,13 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
 
   for (const arm of arms) {
     it(`${arm.id} ${arm.what}`, async () => {
+      // THE TREE IS PRISTINE BEFORE THIS ARM SEEDS IT. If a previous arm timed
+      // out, vitest moves on while that arm's `finally` is still pending, and
+      // its restore would later land on top of THIS arm's seed. That would
+      // make an arm measure a tree it did not write — silently. Asserting the
+      // starting state turns that race into a red. (Review of this file,
+      // finding 2.)
+      expect(readFileSync(MAIN, 'utf8'), `the bootstrap was not pristine when «${arm.id}» began: a previous arm is still unwinding`).toBe(pristine);
       const seeded = arm.apply(pristine);
       expect(seeded, `the seed «${arm.id}» did not apply: the capture anchor moved`).not.toBe(pristine);
       writeFileSync(MAIN, seeded, 'utf8');
@@ -383,6 +458,7 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
       `  const rel10SeededSpread = { credentials: true } as const;\n  app.enableCors({\n    origin: [...parseCorsOrigins(config.CORS_ORIGINS)],\n    credentials: false,\n    ...rel10SeededSpread,\n  });`,
     );
     expect(seeded, 'the REL10-N3 seed did not apply: the capture anchor moved').not.toBe(pristine);
+    expect(readFileSync(MAIN, 'utf8'), 'the bootstrap was not pristine when REL10-N3 began').toBe(pristine);
     writeFileSync(MAIN, seeded, 'utf8');
     try {
       let thrown: { status?: number; stdout?: string } | null = null;

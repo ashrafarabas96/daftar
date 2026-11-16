@@ -21,7 +21,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | Domain / packages | 45 | 4 | 6 |
 | API | 68 | 14 | 2 |
 | Web | 90 | 13 | 30 |
-| Security / gates | 35 | 33 | 4 |
+| Security / gates | 35 | 33 | 5 |
 | CI / release | 16 | 7 | 3 |
 | Other production files | 1 | 0 | 0 |
 | Tests (listed separately) | 303 | — | — |
@@ -297,7 +297,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `scripts/install-accounting-key.ts` | P3-S8 | Install (or rotate) the ACCOUNTING ASSERTION KEY in the database (P2-S3, migration 0044). | 5fcab76 (S8 freeze) | high: assertion | 1: integration/assertion-key-separation |
 | `scripts/install-inventory-key.ts` | P3-S1 (+S8) | Install (or rotate) the INVENTORY ASSERTION KEY in the database (P3-AL-55 §C). | 61b89d6 (S1 closure) | high: assertion | 1: integration/assertion-key-separation |
 | `scripts/install-provisioning-key.ts` | P3-S8 | Install (or rotate) the PROVISIONING ASSERTION KEY in the database (Final Release Blocker 1, migration 0038). | 5fcab76 (S8 freeze) | high: assertion | 3: integration/assertion-key-separation, security/p3c-provisioning-key-install, security/provisioner-boundary |
-| `scripts/phase1-gate.ts` | P3-S1 | PHASE 1 MACHINE GATE (Final Enforcement Directive §4–6, §75). | 61b89d6 (S1 closure) | high: gate | 1: integration/rel10-cors-preflight-credentials |
+| `scripts/phase1-gate.ts` | P3-S1 | PHASE 1 MACHINE GATE (Final Enforcement Directive §4–6, §75). | 61b89d6 (S1 closure) | high: gate | none found by reference |
 | `scripts/phase2-deployment-authority.ts` | P3-S1 (+S9, corrective) | P2-S9 — THE DEPLOYMENT AUTHORITY, PROVED (RB-P2-01) | 61b89d6 (S1 closure) | high: definer, grants, RLS, gate | 3: tests-unit/dr91-deploy-authority-spawn-report, security/deployment-authority-model, security/p3c-td18-definer-ownership |
 | `scripts/phase2-prefix.ts` | P3-S1 (+S9) | THE PHASE 2 MIGRATION PREFIX — the historical invariant `gate:phase2:release` protects after Phase 2 closed. | 61b89d6 (S1 closure) | high: gate | 18: integration/phase3-s8-failure-injection, integration/phase3-s8-guards, integration/phase3-s8-rebuild-rehearsal, integration/sale-s2-atomic-law (+14) |
 | `scripts/phase2-s3-gate.ts` | P3-S8 | PHASE 2 SLICE GATE — P2-S3, the secure posting engine (directive §74). | 5fcab76 (S8 freeze) | high: gate | 2: integration/accounting-guards, security/phase3-s8-gate-tamper |
