@@ -60,9 +60,20 @@
 -- reachability and not authority (P4-AL-39: each routine verifies the
 -- signed server decision itself). The internal principal gains INSERT and
 -- a COLUMN-SCOPED UPDATE — never a table-level UPDATE, DELETE or TRUNCATE
--- — and `status` is deliberately ABSENT from that column list: the
--- lifecycle is out of scope, so no privilege granted here could change a
--- customer's status even if a routine tried.
+-- — and `status` is ABSENT from THIS FILE'S column list, because the
+-- lifecycle is out of scope here.
+--
+-- AND THAT IS NOT THE SAME SENTENCE AS "the status cannot be written",
+-- which an earlier draft of this paragraph came close to saying. Measured:
+-- `0081:661` already granted this principal `UPDATE (status)` on
+-- `customers`, this file neither adds nor removes it, and end-state claim
+-- (6) below asserts that INHERITED privilege is still there — so the
+-- privilege to write `status` EXISTS and withholding it here withholds
+-- nothing. What actually keeps the lifecycle out of these two routines is
+-- their own `SET` lists, which name no `status`, and a routine is not an
+-- invariant. A guard that rests on the command layer is a convention; the
+-- real bound on `status` is a card not yet written, and saying so is the
+-- honest form of this paragraph.
 --
 -- `customers_revision_guard()` and `customers_no_delete()` (`0075:507`,
 -- `0075:516`) are left exactly as they are: this file drops no trigger,
@@ -268,16 +279,30 @@ BEGIN
   v_intent := split_part(current_setting('app.inventory_assertion', true), '.', 7);
 
   -- The business scope is in the predicate, so another merchant's customer
-  -- is not found rather than updated. ONE refusal, not two: measured on the
-  -- tree, `0075:410` is RESTRICTIVE but its USING admits
-  -- `current_user = 'daftar_inventory_internal'` (`0075:411`), and
-  -- `inventory_internal_read` (`0075:419-420`) is PERMISSIVE `USING (true)`,
-  -- so for THIS owner the policies do not scope the read at all. The
-  -- predicate below is the only barrier here, which is why the business id
-  -- comes from the signed assertion (step 9 of `0054` pins
-  -- `app.business_id` on the actor) and never from an argument. The INSERT
-  -- side is different and the claim there stands: `0075:412` has no
-  -- exemption for this role.
+  -- is not found rather than updated.
+  --
+  -- THE READ IS NOT SCOPED FOR THIS OWNER, and that half is measured:
+  -- `business_isolation_read` (`0075:410`) is RESTRICTIVE but its USING
+  -- admits `current_user = 'daftar_inventory_internal'` (`0075:411`), and
+  -- `inventory_internal_read` (`0075:419-420`) is PERMISSIVE `USING (true)`
+  -- — so the SELECT below is bounded by its predicate and by nothing else.
+  --
+  -- THE UPDATE IS A DIFFERENT SENTENCE, and an earlier draft of this comment
+  -- got it wrong by saying "the predicate below is the only barrier here".
+  -- Measured: `business_isolation_update` (`0075:414-416`) is RESTRICTIVE
+  -- FOR UPDATE with USING and WITH CHECK both
+  -- `app_bypass() OR business_id = app_business()`, and it carries NO
+  -- `current_user` exemption; and `customers` is `ENABLE` **and**
+  -- `FORCE ROW LEVEL SECURITY` (`0075:390-391`), which is the clause that
+  -- subjects the table's own owner to its policies. So the write below is
+  -- bounded TWICE: by this predicate and by that policy. Naming only one of
+  -- them understated the protection, and a security claim narrower than the
+  -- truth is still a wrong claim — it is the one that gets quoted later.
+  --
+  -- Either way the business id comes from the signed assertion (step 9 of
+  -- `0054` pins `app.business_id` on the actor) and never from an argument.
+  -- The INSERT side is bounded the same way: `0075:412` has no exemption for
+  -- this role.
   SELECT c.revision, c.last_intent_sha256 INTO v_row FROM customers c WHERE c.business_id = v_business AND c.id = p_customer_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'customer.not_found: the customer does not exist in this business' USING ERRCODE = 'P0001';
@@ -433,7 +458,18 @@ BEGIN
   IF NOT has_column_privilege('daftar_inventory_internal', 'customers', 'name', 'UPDATE')
      OR has_column_privilege('daftar_inventory_internal', 'customers', 'id', 'UPDATE')
      OR has_column_privilege('daftar_inventory_internal', 'customers', 'create_intent_sha256', 'UPDATE')
-     OR has_column_privilege('daftar_inventory_internal', 'customers', 'created_by', 'UPDATE') THEN
+     OR has_column_privilege('daftar_inventory_internal', 'customers', 'created_by', 'UPDATE')
+     -- AND THE THREE THIS CLAIM USED TO OMIT. Both independent reviews
+     -- converged on the same gap: `tenant_id`, `business_id` and
+     -- `created_at` are unwritable TODAY only because the GRANT above does
+     -- not list them, so there was no case — and a control with no case is
+     -- the control that does not notice the day a case appears. Of the three,
+     -- `business_id` is the one that matters most: granting it would make a
+     -- customer movable between merchants, which re-attributes every
+     -- receivable that joins to it. This probe now sees that.
+     OR has_column_privilege('daftar_inventory_internal', 'customers', 'tenant_id', 'UPDATE')
+     OR has_column_privilege('daftar_inventory_internal', 'customers', 'business_id', 'UPDATE')
+     OR has_column_privilege('daftar_inventory_internal', 'customers', 'created_at', 'UPDATE') THEN
     RAISE EXCEPTION 'selling.migration_end_state_invalid: the internal UPDATE on customers is not column-scoped away from the final identity'
       USING ERRCODE = 'P0001';
   END IF;

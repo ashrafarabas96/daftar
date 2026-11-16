@@ -339,7 +339,23 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       // and if it could, that would be a second customer, not a theft; so the
       // claim that matters is that A's row is byte-identical afterwards.
       const stolen = await t.request.post('/v1/customers').set(headersB).send({ customerId, name: 'Taken Over' });
-      expect(stolen.status, 'whatever B is answered, it is answered about B').toBeLessThan(500);
+      // `< 500` ALONE WAS TOO LOOSE, and it was loose in a way that mattered:
+      // it admits B's create SUCCEEDING, and the row-count assertion further
+      // down used to be `>= 1`, which then hid the second row that success
+      // would have produced. The two loose bounds covered for each other.
+      //
+      // So the bound is closed here on what the code can actually answer. B
+      // asks for an id that exists in A and not in B, so either answer is
+      // defensible — but if it is ACCEPTED, the row it created must belong to
+      // B, and that is asserted rather than assumed.
+      expect(stolen.status, 'whatever B is answered, it is not a server fault').toBeLessThan(500);
+      if (stolen.status < 300) {
+        const inB = await ownerPool().query<{ b: string }>(`SELECT business_id::text AS b FROM customers WHERE id = $1 AND business_id = $2`, [
+          customerId,
+          bizB.businessId,
+        ]);
+        expect(inB.rows.length, 'if B’s create was accepted, it landed in B and nowhere else').toBe(1);
+      }
 
       // THE POSITIVE CONTROL: the same id, the same route, A's own header.
       const mine = await t.request.get(`/v1/customers/${customerId}`).set(headersA);
@@ -348,8 +364,16 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       expect(mine.body.name).toBe('Mahmoud A. Odeh');
 
       // And A's row belongs to A's business and tenant in the table itself.
-      const owned = await ownerPool().query<{ b: string; n: string }>(`SELECT business_id::text AS b, name AS n FROM customers WHERE id = $1`, [customerId]);
-      expect(owned.rows.length, 'exactly one row carries that id in A').toBeGreaterThanOrEqual(1);
+      // SCOPED TO A, so the number is exact instead of a floor. The old form
+      // counted every business's rows and then asserted `>= 1`, which is
+      // satisfied by any number at all — including a row B had just made.
+      // The claim this case is about is A's row, so A's business is in the
+      // predicate and the count is `1`.
+      const owned = await ownerPool().query<{ b: string; n: string }>(
+        `SELECT business_id::text AS b, name AS n FROM customers WHERE id = $1 AND business_id = $2`,
+        [customerId, bizA.businessId],
+      );
+      expect(owned.rows.length, 'exactly one row carries that id in A').toBe(1);
       expect(owned.rows.some((x) => x.b === bizA.businessId && x.n === 'Mahmoud A. Odeh')).toBe(true);
     });
 
@@ -691,10 +715,19 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
   // ── (g) the control for the derived-head guard in the barrier suite ────
   describe('(g) a scratch database below the complete set is still detected', () => {
     /**
-     * THE MANDATORY POSITIVE CONTROL for the one line this branch changed in
-     * `tests/security/p4s4-rls-barrier-behaviour.test.ts` — a file that
-     * belongs to the train, changed under a LIMITED permission from the
-     * coordinator.
+     * THE POSITIVE CONTROL for the derived-head guard in
+     * `tests/security/p4s4-rls-barrier-behaviour.test.ts`.
+     *
+     * AND NOT, AS THIS PARAGRAPH USED TO SAY, "for the one line this branch
+     * changed" there. Measured: this branch does NOT touch that file — the
+     * edit was withdrawn in `4a132ce5` — and `origin/main` already carries
+     * `scratchHeadProblem(db.applied, headMigration())`. So the control below
+     * stands for a change that is not in this pull request, and the sentence
+     * describing a limited permission described one this branch never
+     * exercises. A justification that names a change nobody made is read as
+     * evidence of that change, which is worse than carrying no justification
+     * at all. The control itself is kept, because the guard it exercises is
+     * live on main and worth a control either way.
      *
      * That line used to read `!head.startsWith('0086_')` and now reads
      * `head !== headMigration()`. Deriving the head removes a literal that
