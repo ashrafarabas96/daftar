@@ -252,8 +252,7 @@ function shardProblems(ciText: string, found: Map<string, string[]>, reg: Regist
     seen.add(d.keptShard);
     for (let i = 1; i <= d.shards; i += 1) if (!seen.has(i)) problems.push(`C-13: shard ${i} of ${d.shards} of \`${step}\` runs nowhere`);
     const kept = runOf(ciText, d.keptIn, step) ?? '';
-    const expectedKept = `npm run test:integration -- ${excludes} --shard=${d.keptShard}/${d.shards}
-npx vitest run ${d.keptFiles.join(' ')}`;
+    const expectedKept = `npm run test:integration -- ${excludes} --shard=${d.keptShard}/${d.shards} && npx vitest run ${d.keptFiles.join(' ')}`;
     if (kept !== expectedKept) problems.push(`C-13: the \`${step}\` kept in \`${d.keptIn}\` is \`${kept}\`, expected \`${expectedKept}\``);
   }
   return problems;

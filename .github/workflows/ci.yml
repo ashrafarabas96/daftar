@@ -536,9 +536,7 @@ jobs:
       # Every file runs once between the four jobs, none twice and none dropped: the sum
       # of `Test Files` over the four logs is the count before the split, 362.
       - name: Integration + security tests
-        run: |
-          npm run test:integration -- --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=1/4
-          npx vitest run tests/security/td24-redis-live.test.ts tests/security/td24-distributed-rate-limiter.test.ts
+        run: npm run test:integration -- --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=1/4 && npx vitest run tests/security/td24-redis-live.test.ts tests/security/td24-distributed-rate-limiter.test.ts
         env:
           PG_PORT: '5432'
           # TD-24 / DR-90 §5. Without this the live suite skips and TD-24's
