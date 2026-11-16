@@ -186,7 +186,7 @@ export type InventoryP4S3OperationCode = 'pos.session_open' | 'pos.session_close
  * its routine is exactly the mistake `TL-P4-S1-R1` ruled on one layer up, for an
  * accounting source type.
  */
-export type InventoryP4S4OperationCode = 'customer.collect_payment' | 'customer.apply_credit';
+export type InventoryP4S4OperationCode = 'customer.collect_payment' | 'customer.apply_credit' | 'customer.reverse_allocation';
 
 export type InventoryOperationCode =
   | InventoryS1OperationCode
@@ -256,7 +256,15 @@ export const INVENTORY_P4_S3_OPERATION_CODES: readonly InventoryP4S3OperationCod
   'pos.cart_remove_line',
 ];
 
-export const INVENTORY_P4_S4_OPERATION_CODES: readonly InventoryP4S4OperationCode[] = ['customer.collect_payment', 'customer.apply_credit'];
+export const INVENTORY_P4_S4_OPERATION_CODES: readonly InventoryP4S4OperationCode[] = [
+  'customer.collect_payment',
+  'customer.apply_credit',
+  // `0094` registers this op code in `inventory_operation_kinds`, and the
+  // routine's first statement consumes an assertion for it. A code the
+  // database knows and this closed union does not is a command no typed
+  // caller can reach -- so the two registries move together or not at all.
+  'customer.reverse_allocation',
+];
 
 export const INVENTORY_OPERATION_CODES: readonly InventoryOperationCode[] = [
   ...INVENTORY_S1_OPERATION_CODES,
@@ -925,6 +933,13 @@ export const INVENTORY_PAYLOAD_SCHEMAS: Readonly<Record<InventoryOperationCode, 
   // nor the invoice's is an argument, exactly as the supplier kind takes
   // neither: a stored snapshot is the routine's to read under its own lock, and
   // passing it would make it a figure the caller could state.
+  // THE FIELD ORDER IS THE DIGEST'S TYPE ARRAY, field for field. `0094`
+  // digests ARRAY['uuid','uuid','integer'] || array_fill('integer', 8)
+  // over [reversal id, allocation id, YYYYMMDD] || the eight reason
+  // words, so this list is those eleven in that order -- and it uses the
+  // same `REASON_WORDS` the other reason-carrying commands use rather
+  // than a second spelling of the same eight.
+  'customer.reverse_allocation': Object.freeze([spec('reversal_id', 'uuid'), spec('allocation_id', 'uuid'), spec('reversal_date', 'integer'), ...REASON_WORDS]),
   'customer.apply_credit': Object.freeze([
     spec('application_id', 'uuid'),
     spec('credit_id', 'uuid'),
