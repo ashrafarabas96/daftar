@@ -43,11 +43,34 @@
 -- itself be one of that account's sales documents. `accounting_post_reversal`
 -- writes `source_type = 'reversal'` and `source_id = p_original_entry_id`
 -- (0046), so the original is reachable by that key and the question is
--- answerable in one lookup. This is a temporary decision of the MVP-03 lane
--- (MVP03-م-1 in `.local-context/OWNER_QUEUE_AR.md`), taken because the
--- alternative — an absolute ban — would, with the write-off reducer deferred
--- by DR-114/ثالثًا/1, leave a wrongly posted invoice permanently
--- uncorrectable, which is a worse fault than the one being prevented.
+-- answerable in one lookup.
+--
+-- THE REASON THIS ARM USED TO GIVE WAS FALSE, and it is corrected here rather
+-- than deleted. It said an absolute ban would leave a wrongly posted invoice
+-- permanently uncorrectable. Measured, that correction is ALREADY impossible
+-- for a different reason: `accounting_reversals_20_domain_source_guard()`
+-- refuses a reversal whose original entry is an `invoice`,
+-- `customer_payment_allocation`, `customer_credit_application`,
+-- `customer_credit` or `sale`
+-- (0081_phase4_customer_payments_credits.sql:1409-1416), so no such reversal
+-- entry can exist today and this arm is UNREACHABLE. An independent money
+-- review measured that, and it is right.
+--
+-- So the arm is kept for what it really is: FORWARD COMPATIBILITY with the
+-- slice that ships the reversal document, which 0081's own note promises in
+-- those words -- "this slice ships no reversal document for any of them --
+-- P4-S6 does, and it will add the paired clause when it ships the writer"
+-- (0081:1399-1402). When that clause lands, a reversal of a sales document
+-- becomes possible and this guard already judges it by its origin instead of
+-- refusing it, so P4-S6 needs no migration of its own here. Refusing
+-- `reversal` outright today would be equally correct in behaviour and would
+-- cost exactly that.
+--
+-- AND THE QUESTION THE FALSE REASON WAS HIDING IS A REAL ONE, raised to the
+-- owner instead of answered here (MVP03-م-1 in
+-- `.local-context/OWNER_QUEUE_AR.md`): with reversal of a sales document
+-- refused upstream and the write-off reducer deferred by DR-114/ثالثًا/1,
+-- what IS the intended route to correct a wrongly posted invoice?
 --
 -- `manual_adjustment` and `opening_balance` are refused on both accounts.
 -- The opening-balance arm is its own owner decision (DR-114/ثالثًا/3 and /4):

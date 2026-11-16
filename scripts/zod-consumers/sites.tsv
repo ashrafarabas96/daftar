@@ -424,7 +424,7 @@ tests/integration/team.test.ts	325	find-shift	safe	R-RECEIVER	const maxUsers = (
 tests/integration/team.test.ts	340	find-shift	safe	R-RECEIVER	const maxUsers = (res.body.limits as { key: string; limit: number }[]).find((l) => l.key === 'MAX_USERS');
 tests/integration/warehouse-branch-association.test.ts	83	find-shift	safe	R-RECEIVER	const w2 = homes.find((w) => w.branch_id === branch2)?.id ?? '';
 tests/integration/warehouse-branch-association.test.ts	84	find-shift	safe	R-RECEIVER	const first = homes.find((w) => w.branch_id !== branch2);
-tests/performance/accounting-read-plans.test.ts	184	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).id;
+tests/performance/accounting-read-plans.test.ts	185	find-shift	safe	R-RECEIVER	cashId = must(accounts.find((a) => a.code === '1000')).id;
 tests/performance/phase3-s8-budgets.test.ts	232	find-shift	safe	HAND	(report.testResults ?? []).find((r) => (r.name ?? '').endsWith(T01)),
 tests/performance/receivables-open-page-equivalence.test.ts	304	find-shift	safe	R-RECEIVER	[seeded.businessId['subject'], cases.find((k) => k.key === 'settledCreditTail')?.customerId],
 tests/performance/receivables-open-page-equivalence.test.ts	317	find-shift	safe	R-RECEIVER	[seeded.businessId['subject'], cases.find((k) => k.key === 'currencies')?.customerId],

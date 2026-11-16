@@ -168,7 +168,8 @@ beforeAll(async () => {
   await ownerPool().query(
     `INSERT INTO accounts (tenant_id, business_id, code, name, type)
      VALUES ($1, $2, '1900', 'Perf ordinary asset', 'asset'),
-            ($1, $2, '2900', 'Perf ordinary liability', 'liability')`,
+            ($1, $2, '2900', 'Perf ordinary liability', 'liability')
+     ON CONFLICT DO NOTHING`,
     [tenantId, businessId],
   );
 
