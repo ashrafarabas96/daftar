@@ -188,6 +188,15 @@ const OPERATION_AUTHORITY: Readonly<
   // normally holds the key, not by a shared shape.
   'customer.collect_payment': { permission: 'payments.collect', scope: 'warehouses' },
   'customer.apply_credit': { permission: 'payments.collect', scope: 'warehouses' },
+  // NOT `payments.collect`, WHICH ITS SIBLINGS CARRY. `payments.reverse`
+  // already exists in the permission set and is named for exactly this
+  // act, and it is the NARROWER of the two: a member who may take a
+  // payment need not be able to undo one that was already applied to an
+  // invoice. Copying the siblings' permission would have widened who can
+  // move a settled figure, which is the one mistake this line can make.
+  // The scope is theirs, `warehouses`, because the reversal is scoped by
+  // the document it undoes exactly as the allocation was.
+  'customer.reverse_allocation': { permission: 'payments.reverse', scope: 'warehouses' },
 };
 
 /**
