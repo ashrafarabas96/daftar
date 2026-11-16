@@ -13,10 +13,15 @@
  * row out of `pg_trigger` and `pg_proc` so the numbers in the migration's
  * header are measured rather than asserted by their own author.
  *
- * It also carries its own NEGATIVE CONTROL: the law `sum(value_delta) = 0` is
- * exercised by writing a transfer whose two movements do NOT cancel, and the
- * database must refuse it by name. A guard that only ever sees balanced input
- * is a guard nobody has seen work.
+ * WHAT THIS FILE DOES NOT YET CARRY, and the earlier version of this comment
+ * wrongly said it did: a behavioural control writing a COMPLETE transfer whose
+ * movements do not cancel, so the law is seen refusing. It is owed, and it is
+ * owed more loudly since `0093` gained its leg-count precondition — a guard
+ * that only ever sees balanced input is a guard nobody has seen work. Writing
+ * it needs the owner-level movement harness (`stock_levels`, the movement and
+ * the bridge row), which lives in another lane's test file and is not
+ * exported; the choice between exporting it, duplicating it here, or resting
+ * on the registry and the T-05 vector is with the coordinator.
  */
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -69,7 +74,7 @@ describe('C6 — the transfer value arm on a cluster', () => {
     expect(row?.owner).toBe('daftar_inventory_internal');
     expect(row?.secdef, 'SECURITY DEFINER').toBe(true);
     expect(row?.proconfig, 'the pinned search_path').toEqual(['search_path=pg_catalog, public, pg_temp']);
-    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('5b5e64f0bc35117698fe3659444ca307575342717d4ee8d9b27f5cd64a39e58e');
+    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc');
   });
 
   it('§3 the schema floor constant names the head this build ships', async () => {

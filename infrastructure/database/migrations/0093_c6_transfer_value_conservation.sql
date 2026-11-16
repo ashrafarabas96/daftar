@@ -43,7 +43,9 @@ GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
 CREATE OR REPLACE FUNCTION inventory_transfer_value_conserved() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
-  v_sum NUMERIC;
+  v_sum   NUMERIC;
+  v_legs  BIGINT;
+  v_lines BIGINT;
 BEGIN
   -- A transfer moves value between two warehouses: it may not create or
   -- destroy any.
@@ -65,6 +67,35 @@ BEGIN
   -- no value column and may not carry one -- the same rule that leaves the
   -- `sale` source without a value_complete arm (P4-AL-05 and the
   -- no-authoritative-balance guard refuse exactly such a column).
+  -- AND IT SPEAKS ONLY ABOUT A SET THAT HAS ITS LEGS, which is the second
+  -- thing CI taught this guard. Run 43843250451 failed one case and one only:
+  -- `inventory-s3-transfer.test.ts` T-05's NEGATIVE CONTROL for case 1 --
+  -- "with stock_source_complete_inventory_transfer dropped, the half transfer
+  -- would commit" -- and it failed because THIS law refused the half transfer
+  -- in that mechanism's absence. A one-legged transfer is value-unbalanced
+  -- too, so the two laws genuinely overlap on that input, and a control that
+  -- proves the completeness guard is what refuses cannot do its work while
+  -- another law refuses the same row.
+  --
+  -- So the precondition is structural and coarse ON PURPOSE: as many movements
+  -- as two per line, or this law has nothing to say. It is NOT a copy of the
+  -- completeness law -- that one also matches each leg's kind, warehouse and
+  -- quantity, and none of that is repeated here. Where the counts do not
+  -- match, the set is incomplete and `source_movement_set_incomplete` owns the
+  -- refusal; this law's subject is the COMPLETE document, which is what a
+  -- `value_complete` arm means in the registry.
+  SELECT count(*) INTO v_lines
+  FROM inventory_transfer_lines l
+  WHERE l.business_id = NEW.business_id AND l.transfer_id = NEW.transfer_id;
+  SELECT count(*) INTO v_legs
+  FROM stock_source_bridge_inventory_transfer b
+  JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
+                        AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
+  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id;
+  IF v_legs <> 2 * v_lines THEN
+    RETURN NULL;
+  END IF;
+
   SELECT coalesce(sum(m.value_delta_base_minor), 0) INTO v_sum
   FROM stock_source_bridge_inventory_transfer b
   JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
@@ -156,7 +187,7 @@ DECLARE
     "stock_source_complete_sale()": "0d66d946ae01292345ded8215710f96283e7cb60ad8a6cb3a8219a7cec96ba5b",
     "stock_source_complete_sale_header()": "6aa21ff188d72c53cc887c0a88e5c302953f78d58e7dc95a0909b01a830c89b1",
     "sale_header_guard()": "b5d218c0114b7ea43e9e84fe4470f383be2a5c9d86486749e1312126d7a6bcc3",
-    "inventory_transfer_value_conserved()": "5b5e64f0bc35117698fe3659444ca307575342717d4ee8d9b27f5cd64a39e58e"
+    "inventory_transfer_value_conserved()": "c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
