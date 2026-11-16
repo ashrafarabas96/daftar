@@ -2148,7 +2148,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3074,
+      "line": 3086,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2156,7 +2156,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3187,
+      "line": 3199,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2164,7 +2164,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3190,
+      "line": 3202,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2172,7 +2172,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3204,
+      "line": 3216,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2180,7 +2180,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3205,
+      "line": 3217,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2188,7 +2188,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 3492,
+      "line": 3504,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2196,7 +2196,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4876,
+      "line": 5097,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -2204,7 +2204,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4889,
+      "line": 5110,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -2212,7 +2212,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4958,
+      "line": 5179,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -2220,7 +2220,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4987,
+      "line": 5208,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "assertion",
@@ -2228,7 +2228,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4990,
+      "line": 5211,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -2236,7 +2236,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4991,
+      "line": 5212,
       "phase": "phase-4",
       "signals": ["seq-scan", "index-only-scan"],
       "kind": "mention",
@@ -2244,7 +2244,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 4995,
+      "line": 5216,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "assertion",
@@ -2252,7 +2252,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5015,
+      "line": 5236,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "mention",
@@ -2260,7 +2260,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5207,
+      "line": 5428,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2269,7 +2269,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5208,
+      "line": 5429,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2278,7 +2278,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5209,
+      "line": 5430,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2287,7 +2287,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5219,
+      "line": 5440,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -2295,7 +2295,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5225,
+      "line": 5446,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2303,7 +2303,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5233,
+      "line": 5454,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -2311,7 +2311,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5245,
+      "line": 5466,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2319,7 +2319,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5246,
+      "line": 5467,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2327,7 +2327,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5286,
+      "line": 5507,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -2335,7 +2335,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5302,
+      "line": 5523,
       "phase": "phase-4",
       "signals": ["explain", "seq-scan"],
       "kind": "mention",
@@ -2343,7 +2343,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5334,
+      "line": 5555,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2352,7 +2352,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5335,
+      "line": 5556,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2361,7 +2361,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5336,
+      "line": 5557,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2370,7 +2370,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5348,
+      "line": 5569,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "assertion",
@@ -2378,7 +2378,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5349,
+      "line": 5570,
       "phase": "phase-4",
       "signals": ["seq-scan", "index-only-scan"],
       "kind": "mention",
@@ -2386,7 +2386,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5353,
+      "line": 5574,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "assertion",
@@ -2394,7 +2394,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5359,
+      "line": 5580,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2403,7 +2403,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5360,
+      "line": 5581,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2412,7 +2412,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5384,
+      "line": 5605,
       "phase": "phase-4",
       "signals": ["explain"],
       "kind": "mention",
@@ -2420,7 +2420,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5508,
+      "line": 5729,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2429,7 +2429,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5509,
+      "line": 5730,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "plan-gate",
@@ -2438,7 +2438,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5621,
+      "line": 5842,
       "phase": "phase-4",
       "signals": ["row-estimate"],
       "kind": "mention",
@@ -2446,7 +2446,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5628,
+      "line": 5849,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
@@ -2455,7 +2455,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5629,
+      "line": 5850,
       "phase": "phase-4",
       "signals": ["seq-scan"],
       "kind": "plan-gate",
@@ -2464,7 +2464,7 @@
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
-      "line": 5630,
+      "line": 5851,
       "phase": "phase-4",
       "signals": [],
       "kind": "plan-gate",
