@@ -28,33 +28,81 @@ import { describe, expect, it } from 'vitest';
  *            vacuously true against a file in which nothing was found.
  *   REL11-B  THE CLAIM. The snapshot scan carries no event condition => the
  *            push path to `main` is secret-scanned at all.
- *   REL11-B2 AND NOTHING ABOVE IT switches that step off: no job in the WHOLE
- *            `needs:` chain of `hygiene`, at any depth, carries an event
- *            condition, and each job's own `needs:` text is pinned so an
+ *   REL11-B2 AND NO EVENT CONDITION ABOVE IT switches that step off: no job in
+ *            the WHOLE `needs:` chain of `hygiene`, at any depth, carries an
+ *            event condition, and each job's own `needs:` text is pinned so an
  *            unread form at any level fails closed. Without this, B is a claim
  *            about one line and not about coverage.
+ *
+ *            THE TITLE SAYS "no event condition", NOT "nothing", and the
+ *            narrowing is measured rather than cautious. Something above it
+ *            DOES switch it off, and nothing in this file measures that: the
+ *            scan steps carry no `if: always()`, and three steps run before
+ *            them inside `hygiene` — `Dependency audit`
+ *            (`npm audit --audit-level=high`), `Forbidden artifact scan` and
+ *            `Raw credential scan`. A failure in any of them skips both scans.
+ *            That is not a hypothesis: `docs/decisions/
+ *            2026-10-27-ci-self-hosted-runner.md` records, as follow-up 1,
+ *            that `gitleaks` "has never run on the self-hosted runner" because
+ *            in every run so far it was "`skipped` because `hygiene` fails
+ *            earlier at `Dependency audit`" — and marks that claim NOT_RUN.
+ *            So the step order is a fourth load-bearing condition of D's
+ *            argument, named below with the other three. It is a condition on
+ *            the SCAN RUNNING AT ALL, which is why it cannot be read off a
+ *            law over the file's text: whether a job's earlier step fails is a
+ *            property of a run, and this file reads a workflow. Closing it
+ *            belongs to whoever owns `ci.yml` (L2), as `if: always()` on the
+ *            two scan steps or as a scan job of its own, and it is carded.
+ *            (Sixth review, finding 2.)
  *   REL11-C  NEGATIVE CONTROL. On a fixture in which that same step IS gated
  *            on `pull_request`, the reader reports the condition => B can fail,
  *            and this is the red proof of a guard that reads a file it must not
  *            edit. No byte of `ci.yml` is touched to obtain it.
  *   REL11-D  THE RANGE SCAN'S SCOPE. It IS gated on `pull_request`. This case
  *            PINS that scope so it cannot change unnoticed in either
- *            direction. It is a SCOPE and not a gap: measured on this
- *            repository, `main` is protected with `strict`, ten required
- *            contexts, `enforce_admins`, and neither force pushes nor
- *            deletions — so no commit reaches `main` except through a pull
+ *            direction. It is a SCOPE and not a gap, and here is the whole of
+ *            why, with the probe named so the next reader can refute it.
+ *
+ *            THE PROBE, because this is the one claim in the file that no
+ *            assertion here can make: `gh api repos/ashrafarabas96/daftar/
+ *            branches/main/protection`, run by L4 on 2026-11-16, returned
+ *            `strict=true`, TEN required contexts, `enforce_admins=true`,
+ *            `allow_force_pushes=false`, `allow_deletions=false`, and reviews
+ *            required. So no commit reaches `main` except through a pull
  *            request that passed those ten, an administrator's included, and
  *            scanning the range on pull requests covers every commit that can
- *            land. (An earlier version of this comment called it "the recorded
- *            gap", which was wider than the measurement.)
- *            THAT ARGUMENT RESTS ON THREE THINGS, so each is named rather than
+ *            land. That reading is recorded in `.local-context/
+ *            OWNER_QUEUE_AR.md` — which is NOT tracked by git, so a reader who
+ *            has only this repository cannot check it and must re-run the
+ *            probe. The probe is therefore the falsifier, not the prose: this
+ *            paragraph is a dated reading of a mutable setting, and a setting
+ *            can be changed by anyone with admin rights without touching a
+ *            file. (An earlier version called it "the recorded gap", which was
+ *            wider than the measurement; this version was wider than its
+ *            evidence, which is the sixth review's finding 1.)
+ *
+ *            AND ONE RECORD STILL SAYS OTHERWISE, named rather than quietly
+ *            left behind: `.local-context/cards/
+ *            REL11_SECRET_RANGE_SCAN_PR_ONLY_AR.md` is open, on fingerprint
+ *            `a191d9da`, and says the direct-push window is unscanned. It is
+ *            updated in the same commit as this comment. Its OTHER measurement
+ *            stands untouched and is not covered by anything here: this
+ *            repository is PUBLIC (`gh repo view --json visibility` =>
+ *            `PUBLIC`), so its whole history is readable by anyone regardless
+ *            of what any scan covers. Scan scope and history exposure are two
+ *            subjects, and D is only the first.
+ *
+ *            THAT ARGUMENT RESTS ON FOUR THINGS, so each is named rather than
  *            assumed: the protection as measured; the scan being inside a
  *            REQUIRED job (`hygiene`) rather than a required context of its
- *            own; and the step not being `continue-on-error`, which REL11-E2
- *            pins. Lose any one — `enforce_admins` off, `hygiene` dropped from
- *            the required contexts, or `continue-on-error: true` — and the gap
- *            is real again. If L2 later scans the range on pushes too, this
- *            case must be updated in the SAME commit, exactly as
+ *            own; the step not being `continue-on-error`, which REL11-E2
+ *            pins; and no earlier step of `hygiene` failing, since neither
+ *            scan step carries `if: always()` (REL11-B2 above, with the run in
+ *            which exactly that happened). Lose any one — `enforce_admins`
+ *            off, `hygiene` dropped from the required contexts,
+ *            `continue-on-error: true`, or a red `Dependency audit` — and the
+ *            gap is real again. If L2 later scans the range on pushes too,
+ *            this case must be updated in the SAME commit, exactly as
  *            `dr71-schema-floor-guard` tells whoever adds a migration to move
  *            the constant with it.
  *   REL11-E  SCOPE. The workflow's push trigger really does include `main`, so
@@ -78,9 +126,22 @@ import { describe, expect, it } from 'vitest';
  *            not stepped over, so B2 cannot be satisfied by depth one alone.
  *   REL11-J  NEGATIVE CONTROL. A key that is not `branches:` does not feed the
  *            scope claim, so E cannot go green on an excluded branch.
+ *   REL11-E2 SCOPE, the two conditions D leans on that are NOT about the
+ *            step's own `if:`: `push:` carries no `paths:`/`paths-ignore:`
+ *            filter, so no changed-file set silently excludes a push; and the
+ *            scan step is not `continue-on-error`, so a finding fails the job
+ *            rather than being reported past.
+ *   REL11-M  THE FORBIDDEN DIRECTION. A condition written on the NEXT line is
+ *            never read as "no condition", at step level and at job level.
+ *   REL11-N  THE FORBIDDEN DIRECTION, AT THE BLOCK BOUNDARY. A comment at the
+ *            job indent does not end the job: a gate after one is still read,
+ *            the step list is not truncated at it, and the boundary still
+ *            stops where the job stops.
  *
  * This index is part of the file's claim, not decoration: a case added without
- * a line here is a claim nobody can find. (Second review, finding 5.)
+ * a line here is a claim nobody can find. (Second review, finding 5.) Three
+ * cases had been added without one — E2, M and N — so the rule had been broken
+ * by its own author twice before anyone read it. (Sixth review, finding 3.)
  */
 
 const REPO_ROOT = resolve(__dirname, '..');
@@ -122,6 +183,12 @@ export function stepsOfJob(yamlText: string, jobName: string): readonly Workflow
     // there. `noUncheckedIndexedAccess` is on, and a non-null assertion would
     // hide exactly the class of mistake this file exists to catch.
     const line = lines[i] ?? '';
+    // A COMMENT IS NOT A BOUNDARY. `#` is not a space, so a comment at the job
+    // indent used to end the block and TRUNCATE this list — and a claim over
+    // "the steps of this job" then passes over steps it never saw. This
+    // workflow writes such comments between jobs itself. (Sixth review,
+    // finding 5; the same fix is in `jobKey`.)
+    if (/^ {2}#/.test(line)) continue;
     // A new top-level job begins: two spaces, a name, a colon, nothing else.
     if (/^ {2}\S/.test(line) && line !== `  ${jobName}:`) break;
 
@@ -189,6 +256,10 @@ export function jobKey(yamlText: string, jobName: string, key: string): string |
   let collecting = false;
   for (let i = jobAt + 1; i < lines.length; i += 1) {
     const line = lines[i] ?? '';
+    // A comment at the job indent is not the next job: ending here read a job
+    // whose `if:` follows such a comment as `null`, that is as UNGATED.
+    // (Sixth review, finding 5; same fix as in `stepsOfJob`.)
+    if (/^ {2}#/.test(line)) continue;
     if (/^ {2}\S/.test(line)) break; // the next job
     const hit = want.exec(line);
     if (hit !== null) {
@@ -473,6 +544,42 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     const jobGated = WORKFLOW.replace('  hygiene:\n', '  hygiene:\n    if:\n      ' + PULL_REQUEST_ONLY + '\n');
     expect(jobGated).not.toBe(WORKFLOW);
     expect(jobCondition(jobGated, 'hygiene')).not.toBeNull();
+  });
+
+  it('REL11-N (the forbidden direction, at the block boundary): a comment at the job indent does not end the job', () => {
+    // The sixth review found the last place the forbidden direction survived,
+    // and it was not in a condition but in the BOUNDARY. Both readers ended a
+    // job at the first line matching `^ {2}\S` — and `#` is not a space, so a
+    // comment written at the JOB indent ended the block. That form is not
+    // hypothetical: this very workflow uses it between jobs (`  # ----`,
+    // `  # 2a. Backend — the no-database checks.`).
+    //
+    // Two consequences, both in the direction this file exists to refuse:
+    //   - a job whose `if:` sits after such a comment read as `null`, that is
+    //     as UNGATED, about a job that is gated;
+    //   - and the step list was TRUNCATED at the comment, which is worse than
+    //     a wrong list: a claim over "the steps of this job" passes vacuously
+    //     over the steps it never saw, and REL11-E2's "the scan step is not
+    //     `continue-on-error`" is exactly such a claim.
+    const comment = '  # a comment at the job indent, which YAML allows anywhere\n';
+
+    // JOB level: the gate sits after the comment and must still be read.
+    const gatedAfterComment = WORKFLOW.replace('  hygiene:\n', `  hygiene:\n${comment}    if: ${PULL_REQUEST_ONLY}\n`);
+    expect(gatedAfterComment).not.toBe(WORKFLOW); // the seed landed
+    expect(jobCondition(gatedAfterComment, 'hygiene'), 'a gate after a comment must not read as "no gate"').toBe(PULL_REQUEST_ONLY);
+
+    // STEP level: measured by the step that matters rather than by a total, so
+    // this arm does not redden the day a step is added elsewhere in the job.
+    const commentedSteps = WORKFLOW.replace(`      - name: ${SNAPSHOT_STEP}\n`, `${comment}      - name: ${SNAPSHOT_STEP}\n`);
+    expect(commentedSteps).not.toBe(WORKFLOW);
+    expect(conditionOf(stepsOfJob(commentedSteps, 'hygiene'), RANGE_STEP), 'the step list was truncated at a comment').toBe(PULL_REQUEST_ONLY);
+
+    // AND THE BOUNDARY STILL WORKS, so the fix does not trade one wrong
+    // direction for the other: `hygiene` must still END where it ends, and not
+    // run on into the job below it. Its last step is the upload of the scan
+    // evidence; a reader that over-ran would carry a later job's steps here.
+    const names = stepsOfJob(WORKFLOW, 'hygiene').map((s) => s.name);
+    expect(names[names.length - 1], 'hygiene no longer ends where this arm expects').toMatch(/^uses:actions\/upload-artifact(@|$)/);
   });
 
   it('REL11-F (negative control): a missing job and a renamed step are reported, not silently passed', () => {
