@@ -144,7 +144,11 @@ import { describe, expect, it } from 'vitest';
  *            no longer hands its `name:` to that step while losing the gate
  *            (shape 2, which failed OPEN — measured `null` for a gated scan).
  *            `- id:`, `- env:` and `- continue-on-error:` openers are covered
- *            too, and the workflow as it stands reads identically.
+ *            too. On the workflow as it stands the arm pins what it
+ *            actually measures — `hygiene` gains no unnamed step and
+ *            still ends at its upload step — not the wider claim that
+ *            both readers produce identical lists, which it never
+ *            compares.
  *
  * This index is part of the file's claim, not decoration: a case added without
  * a line here is a claim nobody can find. (Second review, finding 5.) Three
@@ -637,7 +641,17 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     // `- uses:` steps (`checkout`, `setup-node`), so the only new thing in
     // this seed is the opener — and nobody writing it would think they had
     // disarmed a law.
-    const openedByGate = WORKFLOW.replace(`      - name: ${RANGE_STEP}\n`, `      - if: ${PULL_REQUEST_ONLY}\n        name: ${RANGE_STEP}\n`);
+    // AND THIS SEED MOVES THE GATE TOO. The first version replaced only the
+    // `- name:` line, so the step's own eight-space `if:` SURVIVED — and the
+    // assertion below then passed by reading THAT line rather than the
+    // opener, which is the same self-deception the next shape's note
+    // describes. It also produced text Actions would reject outright, two
+    // `if:` keys in one step, so it was not a shape anybody could write.
+    // (Seventh review of this PR, note 1.)
+    const openedByGate = WORKFLOW.replace(
+      `      - name: ${RANGE_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`,
+      `      - if: ${PULL_REQUEST_ONLY}\n        name: ${RANGE_STEP}\n`,
+    );
     expect(openedByGate).not.toBe(WORKFLOW); // the seed landed
     const steps = stepsOfJob(openedByGate, 'hygiene');
 
@@ -673,10 +687,20 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(afterBareUses).not.toBe(WORKFLOW); // the seed landed
     const afterSteps = stepsOfJob(afterBareUses, 'hygiene');
     expect(conditionOf(afterSteps, RANGE_STEP), 'the gate was lost and the name moved onto the bare `uses:` step above it').toBe(PULL_REQUEST_ONLY);
+    // AND THE SEEDED `- uses:` STEP KEEPS ITS OWN IDENTITY — measured by
+    // POSITION and by COUNT, not by presence. `some(name === …)` stood here
+    // and COULD NOT REDDEN: this job already carries a bare checkout step of
+    // exactly that name, so the assertion was satisfied by the original
+    // whatever became of the seed. An assertion that cannot redden is not an
+    // assertion — the creed of this very file, and it took a reviewer to find
+    // it here. (Seventh review of this PR, note 2.)
+    const at = afterSteps.findIndex((x) => x.name === RANGE_STEP);
+    expect(at, 'the range step was not found at all in the seeded job').toBeGreaterThan(0);
+    expect(afterSteps[at - 1]?.name, 'the step the seed put directly above the gate lost its identity to the rename').toBe('uses:actions/checkout@v4');
     expect(
-      afterSteps.some((s) => s.name === 'uses:actions/checkout@v4'),
-      'the bare `uses:` step above it must keep its own identity',
-    ).toBe(true);
+      afterSteps.filter((x) => x.name === 'uses:actions/checkout@v4'),
+      'the seeded `uses:` step was folded away: only the job\u2019s own checkout is left',
+    ).toHaveLength(2);
 
     // 3. AND THE OTHER OPENERS YAML PERMITS DO NOT SWALLOW THE STEP BELOW
     //    THEM. `- id:` and `- env:` carry no condition, so the step they open
