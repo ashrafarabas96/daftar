@@ -77,3 +77,89 @@ describe('C6 — the transfer value arm on a cluster', () => {
     expect(head, 'the head of the applied set').toBe('0093_c6_transfer_value_conservation.sql');
   });
 });
+
+/**
+ * THE ORDER IS THE LAW, NOT THE NAME.
+ *
+ * CI 43831620333 measured the fault this pins: with the guard on the HEADER it
+ * fired before `stock_source_complete_inventory_transfer` and answered for a
+ * refusal that mechanism owns (`inventory-s3-transfer.test.ts` T-05, the §E
+ * nine-state vector under H-6). The repair was to hang it off
+ * `inventory_transfer_lines` under a name that sorts AFTER that guard's, since
+ * PostgreSQL fires triggers of one event in alphabetical order by name.
+ *
+ * But a repair that rests on alphabetical order and is asserted only by its
+ * own name is a guard with no law behind it: any later rename, however well
+ * meant, brings the fault back silently. So this asserts the ORDER and the
+ * three things that make the order mean anything — one relation, one event,
+ * one deferral class — because alphabetical order decides nothing between an
+ * immediate trigger and a deferred one.
+ */
+describe('C6 — the firing order the repair rests on', () => {
+  const COMPLETE = 'stock_source_complete_inventory_transfer';
+  const CONSERVE = 'transfer_value_conserved_per_line';
+
+  interface TrigRow {
+    readonly tgname: string;
+    readonly tgtype: number;
+    readonly is_constraint: boolean;
+    readonly tgdeferrable: boolean;
+    readonly tginitdeferred: boolean;
+  }
+
+  async function pairOrderedByName(names: readonly string[]): Promise<readonly TrigRow[]> {
+    const r = await client.query<TrigRow>(
+      `SELECT g.tgname, g.tgtype::int AS tgtype, (g.tgconstraint <> 0) AS is_constraint,
+              g.tgdeferrable, g.tginitdeferred
+         FROM pg_trigger g
+        WHERE g.tgrelid = 'public.inventory_transfer_lines'::regclass
+          AND NOT g.tgisinternal AND g.tgname = ANY($1::text[])
+        ORDER BY g.tgname`,
+      [names],
+    );
+    return r.rows;
+  }
+
+  it('§4 completeness sorts BEFORE conservation, on one relation, one event and one deferral class', async () => {
+    const rows = await pairOrderedByName([COMPLETE, CONSERVE]);
+    expect(rows.length, 'both triggers must exist on inventory_transfer_lines before their order can mean anything').toBe(2);
+    const first = rows[0];
+    const second = rows[1];
+    expect(first?.tgname, 'the mechanism that owns the incomplete-set refusal must be fired first').toBe(COMPLETE);
+    expect(second?.tgname).toBe(CONSERVE);
+    // Same event, or the order says nothing about which one judges an insert.
+    expect(second?.tgtype, `both must be AFTER INSERT FOR EACH ROW; got ${String(first?.tgtype)} and ${String(second?.tgtype)}`).toBe(first?.tgtype);
+    // Same deferral class, for the same reason: an immediate trigger fires at
+    // the statement and a deferred one at COMMIT, and no name ordering bridges
+    // that.
+    for (const row of rows) {
+      expect(
+        [row.is_constraint, row.tgdeferrable, row.tginitdeferred],
+        `${row.tgname} must be a DEFERRABLE INITIALLY DEFERRED constraint trigger for the name order to decide anything`,
+      ).toEqual([true, true, true]);
+    }
+  });
+
+  it('§5 and the order law can fail: renamed to sort first, the predicate breaks', async () => {
+    // THE NEGATIVE CONTROL. A rename inside a transaction this case rolls
+    // back, so the live schema is untouched — asserted afterwards by reading
+    // the pair back.
+    const probe = 'aaa_value_conserved_order_probe';
+    await client.query('BEGIN');
+    try {
+      await client.query(`ALTER TRIGGER ${CONSERVE} ON inventory_transfer_lines RENAME TO ${probe}`);
+      const rows = await pairOrderedByName([COMPLETE, probe]);
+      expect(rows.length, 'the rename must have taken, or this control proves nothing').toBe(2);
+      expect(rows[0]?.tgname, 'under a name that sorts first the conservation guard would fire FIRST again, which is exactly the fault CI measured').toBe(
+        probe,
+      );
+    } finally {
+      await client.query('ROLLBACK');
+    }
+    const after = await pairOrderedByName([COMPLETE, CONSERVE]);
+    expect(
+      after.map((r) => r.tgname),
+      'the rollback took the rename with it',
+    ).toEqual([COMPLETE, CONSERVE]);
+  });
+});
