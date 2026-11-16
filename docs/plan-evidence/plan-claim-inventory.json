@@ -88,9 +88,9 @@
     "note": "Derived from git ls-files. No file is excluded by name — an exclusion list is how a claim hides."
   },
   "totals": {
-    "hits": 431,
-    "planGates": 120,
-    "assertions": 31,
+    "hits": 547,
+    "planGates": 146,
+    "assertions": 39,
     "files": 54
   },
   "byPhase": {
@@ -105,9 +105,9 @@
       "mentions": 15
     },
     "phase-4": {
-      "planGates": 63,
-      "assertions": 14,
-      "mentions": 129
+      "planGates": 89,
+      "assertions": 22,
+      "mentions": 211
     },
     "phase-3": {
       "planGates": 6,
@@ -327,9 +327,9 @@
       "phase": "cross-phase"
     },
     "tests/integration/phase4-s7-installment-fact-db.test.ts": {
-      "planGates": 13,
-      "assertions": 4,
-      "mentions": 41,
+      "planGates": 39,
+      "assertions": 12,
+      "mentions": 123,
       "phase": "phase-4"
     },
     "tests/integration/read-s7-no-cache.test.ts": {
@@ -1993,6 +1993,960 @@
       "signals": ["collation-dependent-range"],
       "kind": "mention",
       "text": "return `[plan-evidence] ${label} | server_version_num=${env.serverVersionNum} datcollate=${env.datcollate} datctype=${env.datctype} provider=${env.localeProvider ?? 'n/a'} byteOrder=${env.collationIsByteOrder}${v.authoritative ? '' : ` | ${v.reasons.join('; ')}`}`;"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 623,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `pg_class.relpages` and `reltuples`, which are inputs to a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 1802,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "M['R13_block_sliced'] = END_BLOCK.includes('c_bodies') && END_BLOCK.includes('EXPLAIN (COSTS OFF)') && END_BLOCK.trimEnd().endsWith('$end$;');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2147,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    A `Seq Scan` IT FOUND THE ROW AND NOTHING REFUSED — so whether that"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2310,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [world.businessId, world.invoiceId]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2312,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join('\\n');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2326,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* to `Seq Scan` while every `*_noseq` reading stayed index-served. It could"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2343,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2402,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    relation: round 24 measured one run in thirty where it was a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2679,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2695,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "/** `EXPLAIN (COSTS OFF)` of one statement, with the planner free or forced. */"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2704,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2706,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join(' | ');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2823,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    sequential path but then chooses BETWEEN two indexes on `reltuples`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2826,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    in the same run, reads `relpages = 0` / `reltuples = -1` (the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2828,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `reltuples = 1` HERE in all 65 of its runs, and nothing in this file"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2831,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "//    planner believes the relation empty, prefers an `Index Only Scan` on"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2848,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* One statement under `knobs`, on a connection of its own, with `EXPLAIN`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2858,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const pl = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2860,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return { row: (r.rows[0] ?? {}) as Record<string, unknown>, plan: pl.rows.map((x) => x['QUERY PLAN']).join(' | ') };"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3086,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT pg_relation_size(c.oid)::text AS bytes, c.relpages::int AS relpages, c.reltuples::text AS reltuples"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3199,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    recorded `relpages = 1` / `reltuples = 1` here in all 65 runs while"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3202,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    NEVER-VACUUMED SENTINEL `reltuples = -1` instead, the planner falls"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3216,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "await sup.query<{ relpages: number; reltuples: string }>("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3217,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relpages::int AS relpages, c.reltuples::text AS reltuples"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3504,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// `VACUUM` moves `relpages` and `reltuples`, which are exactly the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5097,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* planner choosing the very index that was not enforcing — on a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5110,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* conditional on nothing the planner decides, and a `Seq Scan` refuses"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5179,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* non-vacuity control, on `Aggregate -> Seq Scan on installment_plans p` —"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5208,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5211,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// only thing asked of them is that EXPLAIN ANSWERED AT ALL — true of a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5212,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// `Seq Scan` and of an `Index Only Scan` alike, so it is not a claim about"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5216,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5236,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` anyway, both countings then agreed, and this case received"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5428,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(heapTruth['error'], `the heap-forced EXISTS did not answer: ${String(heapTruth['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5429,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced EXISTS was not planned on the heap, so its value answers another question').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5430,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect((heapTruth['row'] as Record<string, unknown>)['t'], 'the heap-forced EXISTS does not see the two rows that ARE in the heap').toBe('true');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5440,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_bitmapscan` off AND NO `EXPLAIN` BESIDE IT. So no plan of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5446,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    chooses BETWEEN TWO INDEXES on `reltuples` -- and the primary key IS"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5454,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` taken in the SAME transaction, and the plan asserted to"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5466,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// planner a choice BETWEEN TWO INDEXES, and it chooses on `reltuples`:"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5467,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// round 26 measured that one plain `VACUUM` moves `reltuples` to 2 and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5507,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_seqscan` and `enable_bitmapscan` off and NO `EXPLAIN` in the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5523,
+      "phase": "phase-4",
+      "signals": ["explain", "seq-scan"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` in the same transaction, plan asserted `Seq Scan` and both"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5555,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['error'], `the heap-forced pair did not answer: ${String(heapPair['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5556,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(String(heapPair['plan']), 'the heap-forced pair was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5557,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['row']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5569,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "// asked of it is that EXPLAIN ANSWERED and named the relation -- true of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5570,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` and of an `Index Only Scan` alike. IT IS NO LONGER"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5574,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(planFree, 'EXPLAIN did not answer for the free reading').toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5580,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["planForced"],
+      "text": "expect(planForced, 'the index-forced plan is not an index plan').toContain('Index');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5581,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced and index-forced plans are the same plan, so the pair measures nothing').not.toBe("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5605,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `INSERT`s, the `EXPLAIN`s and the `SELECT`s of these readings, and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5729,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['relpages']), 'the constructed base page count is zero, so the planner has no page count to scale from').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5730,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['reltuples']), 'the constructed base tuple count is the never-vacuumed sentinel').toBeGreaterThanOrEqual(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5842,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    back, and a `VACUUM` moves `relpages` AND `reltuples` -- precisely"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5849,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(tailTruthForced['error'], `the heap-forced truth did not answer after the sweep: ${String(tailTruthForced['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5850,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(String(tailTruthForced['plan']), 'the post-sweep heap-forced truth was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5851,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect((tailTruthForced['row'] as Record<string, unknown>)['t'], 'the sweep changed the state the rest of §R7 reads').toBe('true');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 623,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `pg_class.relpages` and `reltuples`, which are inputs to a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 1802,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "M['R13_block_sliced'] = END_BLOCK.includes('c_bodies') && END_BLOCK.includes('EXPLAIN (COSTS OFF)') && END_BLOCK.trimEnd().endsWith('$end$;');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2147,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    A `Seq Scan` IT FOUND THE ROW AND NOTHING REFUSED — so whether that"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2310,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [world.businessId, world.invoiceId]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2312,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join('\\n');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2326,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* to `Seq Scan` while every `*_noseq` reading stayed index-served. It could"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2343,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2402,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "//    relation: round 24 measured one run in thirty where it was a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2679,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relname::text AS rel, c.relpages::int AS relpages, c.reltuples::text AS reltuples,"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2695,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost"],
+      "kind": "mention",
+      "text": "/** `EXPLAIN (COSTS OFF)` of one statement, with the planner free or forced. */"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2704,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const r = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2706,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return r.rows.map((x) => x['QUERY PLAN']).join(' | ');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2823,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    sequential path but then chooses BETWEEN two indexes on `reltuples`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2826,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    in the same run, reads `relpages = 0` / `reltuples = -1` (the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2828,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    `reltuples = 1` HERE in all 65 of its runs, and nothing in this file"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2831,
+      "phase": "phase-4",
+      "signals": ["index-only-scan"],
+      "kind": "mention",
+      "text": "//    planner believes the relation empty, prefers an `Index Only Scan` on"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2848,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "* One statement under `knobs`, on a connection of its own, with `EXPLAIN`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2858,
+      "phase": "phase-4",
+      "signals": ["explain", "plan-cost", "query-plan-json"],
+      "kind": "mention",
+      "text": "const pl = await c.query<{ 'QUERY PLAN': string }>(`EXPLAIN (COSTS OFF) ${sql}`, [...params]);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 2860,
+      "phase": "phase-4",
+      "signals": ["query-plan-json"],
+      "kind": "mention",
+      "text": "return { row: (r.rows[0] ?? {}) as Record<string, unknown>, plan: pl.rows.map((x) => x['QUERY PLAN']).join(' | ') };"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3086,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT pg_relation_size(c.oid)::text AS bytes, c.relpages::int AS relpages, c.reltuples::text AS reltuples"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3199,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    recorded `relpages = 1` / `reltuples = 1` here in all 65 runs while"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3202,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    NEVER-VACUUMED SENTINEL `reltuples = -1` instead, the planner falls"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3216,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "await sup.query<{ relpages: number; reltuples: string }>("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3217,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "`SELECT c.relpages::int AS relpages, c.reltuples::text AS reltuples"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 3504,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// `VACUUM` moves `relpages` and `reltuples`, which are exactly the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5097,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* planner choosing the very index that was not enforcing — on a `Seq Scan`"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5110,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* conditional on nothing the planner decides, and a `Seq Scan` refuses"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5179,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "* non-vacuity control, on `Aggregate -> Seq Scan on installment_plans p` —"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5208,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5211,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "// only thing asked of them is that EXPLAIN ANSWERED AT ALL — true of a"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5212,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// `Seq Scan` and of an `Index Only Scan` alike, so it is not a claim about"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5216,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(plans[k], `${k}: EXPLAIN did not answer`).toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5236,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` anyway, both countings then agreed, and this case received"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5428,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(heapTruth['error'], `the heap-forced EXISTS did not answer: ${String(heapTruth['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5429,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced EXISTS was not planned on the heap, so its value answers another question').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5430,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect((heapTruth['row'] as Record<string, unknown>)['t'], 'the heap-forced EXISTS does not see the two rows that ARE in the heap').toBe('true');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5440,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_bitmapscan` off AND NO `EXPLAIN` BESIDE IT. So no plan of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5446,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    chooses BETWEEN TWO INDEXES on `reltuples` -- and the primary key IS"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5454,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` taken in the SAME transaction, and the plan asserted to"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5466,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// planner a choice BETWEEN TWO INDEXES, and it chooses on `reltuples`:"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5467,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "// round 26 measured that one plain `VACUUM` moves `reltuples` to 2 and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5507,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `enable_seqscan` and `enable_bitmapscan` off and NO `EXPLAIN` in the"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5523,
+      "phase": "phase-4",
+      "signals": ["explain", "seq-scan"],
+      "kind": "mention",
+      "text": "//    `EXPLAIN` in the same transaction, plan asserted `Seq Scan` and both"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5555,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['error'], `the heap-forced pair did not answer: ${String(heapPair['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5556,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(String(heapPair['plan']), 'the heap-forced pair was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5557,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapPair"],
+      "text": "expect(heapPair['row']).toStrictEqual({ retired_spelling: '1', shipped_spelling: '1' });"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5569,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "// asked of it is that EXPLAIN ANSWERED and named the relation -- true of"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5570,
+      "phase": "phase-4",
+      "signals": ["seq-scan", "index-only-scan"],
+      "kind": "mention",
+      "text": "// a `Seq Scan` and of an `Index Only Scan` alike. IT IS NO LONGER"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5574,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "assertion",
+      "text": "expect(planFree, 'EXPLAIN did not answer for the free reading').toContain('installment_plans');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5580,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["planForced"],
+      "text": "expect(planForced, 'the index-forced plan is not an index plan').toContain('Index');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5581,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["heapTruth"],
+      "text": "expect(String(heapTruth['plan']), 'the heap-forced and index-forced plans are the same plan, so the pair measures nothing').not.toBe("
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5605,
+      "phase": "phase-4",
+      "signals": ["explain"],
+      "kind": "mention",
+      "text": "//    `INSERT`s, the `EXPLAIN`s and the `SELECT`s of these readings, and"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5729,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['relpages']), 'the constructed base page count is zero, so the planner has no page count to scale from').toBeGreaterThan(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5730,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "plan-gate",
+      "via": ["baseInputs"],
+      "text": "expect(Number(baseInputs['reltuples']), 'the constructed base tuple count is the never-vacuumed sentinel').toBeGreaterThanOrEqual(0);"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5842,
+      "phase": "phase-4",
+      "signals": ["row-estimate"],
+      "kind": "mention",
+      "text": "//    back, and a `VACUUM` moves `relpages` AND `reltuples` -- precisely"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5849,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(tailTruthForced['error'], `the heap-forced truth did not answer after the sweep: ${String(tailTruthForced['error'])}`).toBeUndefined();"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5850,
+      "phase": "phase-4",
+      "signals": ["seq-scan"],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect(String(tailTruthForced['plan']), 'the post-sweep heap-forced truth was not planned on the heap').toContain('Seq Scan');"
+    },
+    {
+      "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",
+      "line": 5851,
+      "phase": "phase-4",
+      "signals": [],
+      "kind": "plan-gate",
+      "via": ["tailTruthForced"],
+      "text": "expect((tailTruthForced['row'] as Record<string, unknown>)['t'], 'the sweep changed the state the rest of §R7 reads').toBe('true');"
     },
     {
       "file": "tests/integration/phase4-s7-installment-fact-db.test.ts",

@@ -6122,12 +6122,23 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       //    sentence that is TRUE and that names no cause -- and that single red
       //    blocked the `P4-S1` gate for every lane that merges `main`.
       //
-      //    A LAW THAT REDS ON A PREMISE IT DOES NOT OWN IS A FALSE RED, AND A
-      //    FALSE RED IS HOW A LAW GETS DISABLED. So the premise is MEASURED in
-      //    the same execution and the verdict is three-way. NOTHING IS SKIPPED
-      //    AND NO THRESHOLD MOVES: every execution asserts, and the only
-      //    outcome newly tolerated is the one where the instrument NAMES the
-      //    backend that held the horizon.
+      //    THE PREMISE IS THEREFORE MEASURED IN THE SAME EXECUTION -- AND ONLY
+      //    MEASURED. An earlier revision read the two instruments below into a
+      //    three-way verdict and TOLERATED the outcome where one of them named a
+      //    holder, on the argument that a law reding on a premise it does not own
+      //    is a false red. THAT TOLERANCE IS WITHDRAWN, because the premise is
+      //    not unowned: it is a property of the DATABASE the probe runs in, and
+      //    the way to own it is to give the probe a database of its own, not to
+      //    accept its failure. And the tolerance did not even hold its own line:
+      //    MEASURED in job `131793746672`, step «Phase 4 slice gate», the arm
+      //    that did not truncate had an EMPTY blocker list, so the instrument
+      //    named NOBODY and the outcome was excused anyway -- by the cutoff
+      //    reading alone (`230642` against `delete_xid 230644`). An excuse that
+      //    names nobody attributes nothing and rules nothing out.
+      //    SO: NOTHING IS SKIPPED, NO THRESHOLD MOVES, AND NOTHING IS TOLERATED.
+      //    Every execution asserts, the two instruments are PRINTED so that a red
+      //    arrives with its own cause attached, and arm 1's truncation is
+      //    asserted unconditionally at the end of this body.
       const heapNotices = (x: Record<string, unknown>): string =>
         ((x['verbose'] as readonly string[] | undefined) ?? []).filter((l) => l.includes('public.dr101_probe')).join('\n');
       const held = (x: Record<string, unknown>): readonly Record<string, unknown>[] => [
@@ -6144,12 +6155,22 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       //    and is the quantity truncation is actually decided on, so it is the
       //    witness of record and the activity scan is the corroborating one.
       //
-      //    MEASURED, in six probe executions of one CI log (`131793746672`) and
-      //    in two here: truncation happens IF AND ONLY IF the cutoff is NEWER
-      //    than the `DELETE`'s own xid. Every truncating execution printed
-      //    `delete_xid + 1`; the one failing execution printed `delete_xid - 2`
-      //    (`230642` against `230644`). THE PAIR OF NUMBERS IS THEREFORE A
-      //    CAUSE, not an inference from a byte count.
+      //    MEASURED, in the CI jobs that printed the pair, counted in their own
+      //    logs and not from memory. An earlier revision of this comment said
+      //    "six probe executions of one CI log and two here"; the log it cites
+      //    carries one execution of this case, so that count was a claim no
+      //    artifact supported. What the artifacts do carry:
+      //      - job `131793746672`: ONE execution -- `removable cutoff: 230642`
+      //        against `delete_xid 230644`, and the heap NOT truncated.
+      //      - job `131872940712`: TWO executions -- the no-holder arm at
+      //        `1349` against `1348` and at `230368` against `230367`, both
+      //        truncated; the holder arm at `1354` and `230373`, each EQUAL to
+      //        its own `delete_xid`, neither truncated.
+      //    So: truncation happens IF AND ONLY IF the cutoff is NEWER than the
+      //    `DELETE`'s own xid. THE PAIR OF NUMBERS IS THEREFORE A CAUSE, not an
+      //    inference from a byte count. No count of LOCAL executions is claimed
+      //    here: a number no artifact carries is not a measurement, and this
+      //    comment states only what a named log can be read back for.
       const cutoffOf = (x: Record<string, unknown>): number | null => {
         const m = [...heapNotices(x).matchAll(/removable cutoff: (\d+)/g)];
         // EXACTLY ONE, or none: the probe's heap is vacuumed once, and a second
@@ -6167,9 +6188,25 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
         if (c === null || !Number.isFinite(d) || d <= 0 || c >= 2 ** 31 || d >= 2 ** 31) return null;
         return c > d;
       };
-      type Verdict = 'MECHANISM' | 'ENVIRONMENT_HELD' | 'UNEXPLAINED';
-      const verdictOf = (x: Record<string, unknown>): Verdict =>
-        x['truncated'] === true ? 'MECHANISM' : held(x).length > 0 || horizonPassed(x) === false ? 'ENVIRONMENT_HELD' : 'UNEXPLAINED';
+      //    AND THERE IS NO VERDICT HERE, BY CONSTRUCTION. An earlier round read
+      //    these two instruments into one of `MECHANISM` / `ENVIRONMENT_HELD` /
+      //    `UNEXPLAINED` and let the middle value stand in for arm 1's premise.
+      //    THAT IS WITHDRAWN, and the reason is a defect in the reading and not
+      //    a matter of taste: NEITHER instrument can say WHERE a holder came
+      //    from. `held()` names the backends it can see, and the cutoff witness
+      //    reports only that the horizon lagged the `DELETE` -- so a holder that
+      //    THIS TREE's own work produced (a migration's autovacuum, another
+      //    suite's backend in the same database) satisfies the excuse exactly as
+      //    a foreign one does, and the tree is acquitted by its own doing.
+      //    MEASURED, and this is what settles it rather than the argument: in
+      //    job `131793746672`, step «Phase 4 slice gate», arm 1 did not truncate
+      //    with cutoff `230642` against `delete_xid 230644` -- AND ITS BLOCKER
+      //    LIST WAS EMPTY. The excuse that fired there named nobody, so there
+      //    was nothing to attribute and nothing to rule out.
+      //    The two readers are kept, and they are read ALOUD below, because the
+      //    cause is worth seeing. What is removed is their power to turn arm 1's
+      //    silence into a pass (OD-P4-14: a law may be tightened, never loosened
+      //    to obtain one).
       //    AND THE READING IS NOT ALLOWED TO BE SILENTLY EMPTY. An errored
       //    `pg_stat_activity` read returns `[]`, which would read as «nothing
       //    holds» -- and an empty list that excuses nothing is the same object
@@ -6209,19 +6246,17 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       //    nothing, so it must carry NO pid. A pid here would mean the two arms
       //    were not the contrast they are read as (RULE-11).
       expect(a['no_holder']['holder_pid'], 'the control arm reported a planted holder, so the two arms are not the contrast they are read as').toBeNull();
-      //    AND THE BRANCH SELECTION HAS ITS OWN CONTROLS, as a pure function of
-      //    a record -- two that must be excused and two that must NOT be. The
-      //    last is the one that keeps the law a law: no truncation AND nobody
-      //    named is still a red, because then the tree is the only suspect left.
+      //    AND THE TWO INSTRUMENTS HAVE THEIR OWN CONTROLS, as pure functions
+      //    of a record. `held()` first: it must SEE a blocker that is in the
+      //    record, and must NOT invent one out of an empty record -- without
+      //    both, its emptiness in arm 1 says nothing either way.
       const synth = (truncated: boolean, blockers: readonly Record<string, unknown>[]): Record<string, unknown> => ({
         truncated,
         blockers_before: blockers,
         blockers_after: [],
       });
-      expect(verdictOf(synth(true, [])), 'a truncating arm with a clear horizon is the mechanism itself').toBe('MECHANISM');
-      expect(verdictOf(synth(true, [{ kind: 'snapshot' }])), 'a truncating arm is the mechanism even if somebody was reading').toBe('MECHANISM');
-      expect(verdictOf(synth(false, [{ kind: 'snapshot' }])), 'no truncation WITH a named holder is the environment, not the tree').toBe('ENVIRONMENT_HELD');
-      expect(verdictOf(synth(false, [])), 'no truncation and NOBODY named must stay red, or this branch excuses everything').toBe('UNEXPLAINED');
+      expect(held(synth(false, [{ kind: 'snapshot' }])).length, 'the holder reading does not see a blocker that is right there in the record').toBe(1);
+      expect(held(synth(false, [])).length, 'the holder reading invented a blocker out of an empty record, so its emptiness means nothing').toBe(0);
       //    AND THE CUTOFF WITNESS HAS THE SAME FOUR, over a record whose
       //    activity scan is EMPTY -- which is the case `#90` measured and the
       //    one the scan alone cannot read. The fourth is the plant that must
@@ -6233,17 +6268,13 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
         delete_xid: deleteXid,
         verbose: [`INFO: finished vacuuming "x.public.dr101_probe": pages: 0 removed\nremovable cutoff: ${cutoff}, which was 3 XIDs old`],
       });
-      expect(verdictOf(withCutoff(false, '230642', '230644')), 'a cutoff OLDER than the DELETE is the horizon, named by the server itself').toBe(
-        'ENVIRONMENT_HELD',
-      );
-      expect(verdictOf(withCutoff(false, '230645', '230644')), 'a cutoff NEWER than the DELETE leaves the tree the only suspect').toBe('UNEXPLAINED');
-      expect(verdictOf(withCutoff(false, '230644', '230644')), 'a cutoff EQUAL to the DELETE still sees the tail, so it is the horizon').toBe(
-        'ENVIRONMENT_HELD',
-      );
+      expect(horizonPassed(withCutoff(false, '230642', '230644')), 'a cutoff OLDER than the DELETE must read as a horizon that had NOT passed it').toBe(false);
+      expect(horizonPassed(withCutoff(false, '230645', '230644')), 'a cutoff NEWER than the DELETE must read as a horizon that HAD passed it').toBe(true);
+      expect(horizonPassed(withCutoff(false, '230644', '230644')), 'a cutoff EQUAL to the DELETE still sees the tail, so it had NOT passed it').toBe(false);
       expect(
-        verdictOf({ truncated: false, blockers_before: [], blockers_after: [], delete_xid: '230644', verbose: [] }),
-        'an unreadable cutoff is not a licence',
-      ).toBe('UNEXPLAINED');
+        horizonPassed({ truncated: false, blockers_before: [], blockers_after: [], delete_xid: '230644', verbose: [] }),
+        'an unreadable cutoff must read as unreadable, not as a horizon in either direction',
+      ).toBeNull();
       //    AND THE PARSER IS PROVEN TO READ THE REAL THING, on both arms of
       //    this execution, before any verdict of theirs is believed (RULE-18):
       //    a parser that silently returned `null` would make every arm
@@ -6252,11 +6283,11 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
         expect(cutoffOf(a[k]), `the VACUUM's own removable cutoff could not be read for arm ${k}: ${JSON.stringify(a[k]['verbose'])}`).not.toBeNull();
         expect(horizonPassed(a[k]), `arm ${k}'s cutoff and delete_xid are not comparable, so the witness of record is unreadable`).not.toBeNull();
       }
-      const v1 = verdictOf(a['no_holder']);
-      expect(
-        v1,
-        `a plain VACUUM did not truncate and NOTHING in this database held a snapshot as old as the DELETE, so the assumption :4980 rests on is false on this tree: ${JSON.stringify(a['no_holder'])}`,
-      ).not.toBe('UNEXPLAINED');
+      //    AND ARM 1'S OWN READING IS NOT ASSERTED HERE: it is asserted at the
+      //    END of this body, unconditionally and in one place, once the heap
+      //    filter below has been proven on both arms. Reading it twice -- once
+      //    as a verdict and once as a fact -- is how the two readings came to
+      //    disagree in the first place.
       // 2. THE MECHANISM: one open snapshot older than the `DELETE` is
       //    SUFFICIENT to leave the relation at its inflated size -- the exact
       //    shape of the intermittent CI failure, reproduced on demand.
@@ -6322,47 +6353,33 @@ describe('P4-S7 §R13 SET CONSTRAINTS, the query plan, the trigger SET and the s
       //    wrong in a way that only ever passes.
       const saidNoHolder = heapNotices(a['no_holder']);
       expect(saidNoHolder.length, `no notice named the probe's own heap in the control arm: ${JSON.stringify(a['no_holder']['verbose'])}`).toBeGreaterThan(0);
-      //    AND THE CONTROL ARM IS HELD TO THE READING ITS OWN VERDICT EARNS.
-      //    BOTH BRANCHES ASSERT, AND THE SERVER'S WORDS MUST AGREE WITH THE
-      //    BLOCKER LIST IN EITHER ONE. The branch is not a way out: it is the
-      //    measured dichotomy, and the third case is already red above.
-      if (v1 === 'MECHANISM') {
-        // The premise held, so the pair discriminates: the SAME filter that
-        // shows arm 2 removing nothing must show arm 1 removing pages.
-        expect(a['no_holder']['truncated'], 'the verdict says MECHANISM but the arm did not truncate').toBe(true);
-        // and the server's own cutoff agrees with the outcome: it PASSED the
-        // DELETE. If it did not, truncation and the cutoff disagree and one of
-        // the two readings is wrong.
-        expect(
-          horizonPassed(a['no_holder']),
-          `the arm truncated while the server's own cutoff had NOT passed the DELETE, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
-        ).toBe(true);
-        expect(saidNoHolder, 'the control arm did not report the heap giving pages back, so the filter is not reading the heap').toMatch(
-          /pages: (?!0 removed)\d+ removed/,
-        );
-      } else {
-        // The premise did not hold. THE SERVER MUST SAY SO ITSELF, in the same
-        // words arm 2 earns, and the holder must be named: an ENVIRONMENT_HELD
-        // verdict that the server's own summary does not corroborate would be
-        // this file explaining away its own red.
-        expect(
-          saidNoHolder,
-          `arm 1 did not truncate and a holder was named, but the server did not report the tail as unremovable, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
-        ).toMatch(/dead but not yet removable|cannot be removed yet/);
-        expect(saidNoHolder, 'arm 1 did not truncate yet the server reported pages removed, so the size reading and the notices disagree').toMatch(
-          /pages: 0 removed/,
-        );
-        // AND THE CUTOFF MUST CARRY THE SAME SENTENCE. This is what keeps the
-        // branch from being an excuse: `ENVIRONMENT_HELD` is only available
-        // when the quantity truncation is DECIDED on had not passed the
-        // `DELETE`. A named holder with a cutoff that HAD passed is a
-        // contradiction, and it stays red.
-        expect(
-          horizonPassed(a['no_holder']),
-          `arm 1 did not truncate, but the server's own cutoff HAD passed the DELETE, so nothing in this reading explains the tail: ${JSON.stringify(a['no_holder'])}`,
-        ).toBe(false);
-        console.log(`[DR-101] arm no_holder could not ask: the horizon was held by ${JSON.stringify(held(a['no_holder']))}`);
-      }
+      //    AND NOW ARM 1, UNCONDITIONALLY: THE PREMISE IS ASSERTED, NOT
+      //    ADJUDICATED. The readers are printed FIRST, so that a red arrives
+      //    with its own cause attached and nobody has to re-run anything to see
+      //    it -- and printing is all they do. If the horizon was held, this
+      //    probe measured nothing on this tree and says so in red; the holder's
+      //    identity belongs in the next measurement, not in a licence here.
+      console.log(
+        `[DR-101] arm no_holder's horizon readers: held=${JSON.stringify(held(a['no_holder']))} cutoff=${String(cutoffOf(a['no_holder']))} delete_xid=${String(a['no_holder']['delete_xid'])} horizonPassed=${String(horizonPassed(a['no_holder']))}`,
+      );
+      expect(
+        a['no_holder']['truncated'],
+        `a plain VACUUM did not truncate, so the premise \`:4980\` rests on does not hold on this tree and this probe measured nothing. The two readers above name what the horizon was doing; neither of them excuses this line: ${JSON.stringify(a['no_holder'])}`,
+      ).toBe(true);
+      //    ...AND THE TWO READINGS MUST AGREE ON THE ARM THAT TRUNCATED: the
+      //    server's own cutoff PASSED the `DELETE`. If the heap gave pages back
+      //    while the cutoff had not passed, one of the two instruments is wrong
+      //    and the pair below discriminates nothing (RULE-11).
+      expect(
+        horizonPassed(a['no_holder']),
+        `arm 1 truncated while the server's own cutoff had NOT passed the DELETE, so the two readings disagree: ${JSON.stringify(a['no_holder'])}`,
+      ).toBe(true);
+      //    ...AND THE SAME FILTER THAT SHOWS ARM 2 REMOVING NOTHING MUST SHOW
+      //    ARM 1 REMOVING PAGES. Without this line the filter could be wrong in
+      //    a way that only ever passes.
+      expect(saidNoHolder, 'the control arm did not report the heap giving pages back, so the filter is not reading the heap').toMatch(
+        /pages: (?!0 removed)\d+ removed/,
+      );
     });
   }
 });
