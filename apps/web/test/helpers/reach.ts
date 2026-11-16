@@ -33,6 +33,14 @@ const WEB_SRC = 'apps/web/src';
 const SOURCE_EXT = '[cm]?[jt]sx?';
 /** A source file of any kind the build compiles. */
 export const SOURCE_FILE = new RegExp(String.raw`\.${SOURCE_EXT}$`);
+/**
+ * A JSON data file. It is DATA, not code: never an entry, never parsed for imports and never a consumer. But it is a node of the
+ * import graph (`import cat from '@/x.json'` reaches it), so a customer word in one that a scanned file imports is a customer word
+ * in the scanned file's reach.
+ */
+export const JSON_FILE = /\.json$/;
+/** Every file the walk holds a node for: the source files and the JSON they import. */
+const isWalked = (path: string): boolean => SOURCE_FILE.test(path) || JSON_FILE.test(path);
 const ENTRY_FILE = new RegExp(
   String.raw`(?:^|/)(?:page|layout|template|loading|error|global-error|not-found|global-not-found|forbidden|unauthorized|default|route|(?:opengraph-image|twitter-image|icon|apple-icon)\d*|sitemap|robots|manifest)\.${SOURCE_EXT}$`,
 );
@@ -81,7 +89,7 @@ export function splitEntryPoints(paths: readonly string[]): { customers: string[
 
 /** A package: a name or an `@scope/name`. Anything else that is not relative is an alias this walk does not know. */
 const PACKAGE = /^(?:[A-Za-z][\w.-]*|@[A-Za-z0-9][\w.-]*\/)/;
-const EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts'];
+const EXTENSIONS = ['ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs', 'mts', 'cts', 'json'];
 
 interface Imports {
   /** Module specifiers of real imports (declarations, `export … from`, `import()`/`require()` of a literal). */
@@ -126,17 +134,18 @@ function parseImports(path: string, source: string): Imports {
  * build finds them for `./`, `../` and `@/`; `unresolved` are specifiers the
  * walk could not follow — a path that names no file (`./x.js`), an alias it
  * does not know (`~/x`), a computed `import(…)` — which the caller must treat
- * as a failure, never as "nothing there". `.json` is data, not code.
+ * as a failure, never as "nothing there". A `.json` import is followed like any other: it resolves to a file of `files` or it is a hole.
+ * A JSON file itself imports nothing.
  */
 export function importsOf(path: string, source: string, files: Readonly<Record<string, string>>): { resolved: string[]; unresolved: string[] } {
   const resolved: string[] = [];
+  if (JSON_FILE.test(path)) return { resolved, unresolved: [] };
   const parsed = parseImports(path, source);
   const unresolved: string[] = [...parsed.computed];
   for (const spec of parsed.specifiers) {
-    if (spec.endsWith('.json')) continue;
     const find = (base: string): string | undefined =>
       [base, ...EXTENSIONS.map((ext) => `${base}.${ext}`), ...EXTENSIONS.map((ext) => `${base}/index.${ext}`)].find(
-        (candidate) => Object.hasOwn(files, candidate) && SOURCE_FILE.test(candidate),
+        (candidate) => Object.hasOwn(files, candidate) && isWalked(candidate),
       );
     let hit: string | undefined;
     if (spec.startsWith('@/')) hit = find(`${WEB_SRC}/${spec.slice(2)}`);

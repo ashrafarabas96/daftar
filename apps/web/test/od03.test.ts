@@ -6,7 +6,7 @@ import en from '@/messages/en.json';
 import tr from '@/messages/tr.json';
 import { isS7Key, isS7WebFile, stripTsComments } from '../../../scripts/guards/merchant-jargon';
 import { REPO_ROOT } from './helpers/refusal-codes';
-import { SOURCE_FILE, customersOnly, entryPoints, importsOf, isCustomersEntry, reachedFrom } from './helpers/reach';
+import { JSON_FILE, SOURCE_FILE, customersOnly, entryPoints, importsOf, isCustomersEntry, reachedFrom } from './helpers/reach';
 
 /**
  * T-12 (P3-S7 contract A-19; MP-2): the tax boundary. BLOCKED BY OD-03 — no
@@ -271,7 +271,10 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
    * `app/` or `pages/` directory at the `apps/web` root would make Next ignore
    * `src/` altogether (BOUNDARY (p) fails if one appears); (4) `.js` files are
    * walked and can make a customers file reached, but are not themselves
-   * scanned for vocabulary (`isS7WebFile` is `.ts`/`.tsx` only); (5) Next
+   * scanned for vocabulary (`isS7WebFile` is `.ts`/`.tsx` only); `.json` files
+   * ARE walked and ARE scanned as text (BOUNDARY (q)), except the three message
+   * catalogues, which the KEY rule above already covers (and whose receivables
+   * refusal text names a customer by design); (5) Next
    * intercepting routes under `customers` count as other entries; (6) the
    * exemption is on FILES only: keys are scanned exactly as on main.
    *
@@ -292,9 +295,18 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   const CUSTOMER_WORD = /customer|عميل|عملاء|müşteri/i;
   const codeToken = new RegExp(`^(?:${RECEIVABLES_CODES.map((c) => c.replace(/[.]/g, '\\.')).join('|')})$`);
 
+  /**
+   * The message catalogues: `messages/<locale>.json`. They are scanned as KEYS (every `isS7Key` key, in all three locales, with the
+   * receivables allowance), not as files, so they are the one JSON the file scan leaves out. Every other JSON the walk holds is
+   * scanned as text, like a `.tsx`, unless only the customers route uses it.
+   */
+  const CATALOG_FILE = /^apps\/web\/src\/messages\/(?:ar|en|tr)\.json$/;
+
   interface CustomerLaw {
     readonly customersOnly: string[];
     readonly scanned: string[];
+    /** The JSON data files scanned as text: not customers-only, not a message catalogue. */
+    readonly dataFiles: string[];
     readonly screens: string[];
     readonly libraries: string[];
     readonly s7Keys: string[];
@@ -309,7 +321,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       .sort();
     const screens = scanned.filter((path) => path.endsWith('.tsx'));
     const libraries = scanned.filter((path) => !path.endsWith('.tsx'));
+    const dataFiles = Object.keys(files)
+      .filter((path) => JSON_FILE.test(path) && !CATALOG_FILE.test(path) && !only.has(path))
+      .sort();
     const hits: string[] = [];
+    for (const path of dataFiles) if (CUSTOMER_WORD.test(files[path] ?? '')) hits.push(`data ${path}`);
     for (const path of screens) if (CUSTOMER_WORD.test(stripTsComments(files[path] ?? ''))) hits.push(`screen ${path}`);
     for (const path of libraries) {
       const src = files[path] ?? '';
@@ -327,7 +343,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
         if (key in catalog && CUSTOMER_WORD.test(`${key} ${catalog[key]}`)) hits.push(`key ${locale}: ${key}`);
       }
     }
-    return { customersOnly: [...only].sort(), scanned, screens, libraries, s7Keys, keys, hits };
+    return { customersOnly: [...only].sort(), scanned, dataFiles, screens, libraries, s7Keys, keys, hits };
   }
 
   function repositorySources(): Record<string, string> {
@@ -336,8 +352,8 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       for (const entry of readdirSync(dir)) {
         const full = join(dir, entry);
         if (statSync(full).isDirectory()) walk(full);
-        // Every source file the build compiles, not only `.ts`/`.tsx`: `tsconfig` has `allowJs`.
-        else if (SOURCE_FILE.test(entry)) out[relative(REPO_ROOT, full).split('\\').join('/')] = readFileSync(full, 'utf8');
+        // Every source file the build compiles, not only `.ts`/`.tsx` (`tsconfig` has `allowJs`), and the JSON they import.
+        else if (SOURCE_FILE.test(entry) || JSON_FILE.test(entry)) out[relative(REPO_ROOT, full).split('\\').join('/')] = readFileSync(full, 'utf8');
       }
     };
     walk(join(REPO_ROOT, 'apps', 'web', 'src'));
@@ -496,9 +512,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
   });
 
   /**
-   * The boundaries of the reach computation, each with a control that turns
-   * RED when the boundary moves. (Each was also shown red against a planted
-   * mutation of `helpers/reach.ts` or of `customerLaw`; see the PR notes.)
+   * The boundaries of the reach computation, each with a control in this file
+   * that asserts the flagged outcome on a synthetic tree where the boundary is
+   * crossed, beside the clean outcome where it is not. Nothing here records a
+   * mutation run of `helpers/reach.ts` or of `customerLaw`; what a control
+   * proves is what its assertions say.
    */
   it('BOUNDARY (a): "every other entry" is ALL entries — non-S7 pages, route handlers, special files and the middleware', () => {
     const view = `${importAccount}export default () => CustomerAccountView;`;
@@ -549,15 +567,21 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       'a path that names no file': "import { x } from '@/lib/not-there';\nexport const TillView = x;",
       'a computed dynamic import': 'export const TillView = (n) => import(`@/views/${n}`);',
       'a relative path that names no file': "import { x } from '../nowhere';\nexport const TillView = x;",
+      'a json file that is not in the tree': "import cat from '@/messages/nope.json';\nexport const TillView = () => cat;",
     };
     for (const [what, source] of Object.entries(unresolved)) {
       expect(() => customerLaw(walk(source), SYNTHETIC_CATALOG), what).toThrow(/could not resolve/);
       expect(() => reachedFrom(walk(source), [`${A}/pos/till/page.tsx`]), what).toThrow(/could not resolve/);
     }
-    // Data and packages are not holes.
+    // A json file the tree holds, and packages, are not holes.
     expect(() =>
       customerLaw(
-        walk("import cat from '@/messages/en.json';\nimport { useState } from 'react';\nimport 'server-only';\nexport const TillView = () => cat + useState;"),
+        {
+          ...walk(
+            "import cat from '@/messages/en.json';\nimport { useState } from 'react';\nimport 'server-only';\nexport const TillView = () => cat + useState;",
+          ),
+          'apps/web/src/messages/en.json': '{}',
+        },
         SYNTHETIC_CATALOG,
       ),
     ).not.toThrow();
@@ -708,7 +732,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       'a split literal': "export const TillView = () => t('pos.buy' + 'er');",
       'a template with a literal interpolation': "export const TillView = () => t(`pos${'.buyer'}`);",
       'a join on a variable separator': "export const TillView = (a, SEP) => t([a, 'buyer'].join(SEP));",
-      'a key imported from a json file': "import copy from '@/messages/keys.json';\nexport const TillView = () => t(copy.buyerKey);",
+      'a key imported from a json file': "import copy from '@/views/pos/keys.json';\nexport const TillView = () => t(copy.buyerKey);",
       'an aliased translator': "const tt = t;\nexport const TillView = () => tt('pos.buyer');",
       'a translator in an object': "export const TillView = (label) => ({ t: label }).t('pos.buyer');",
       'a translator mapped over keys': 'export const TillView = (ks) => ks.map(t);',
@@ -718,7 +742,7 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
       'a dictionary read': 'export const TillView = (dicts, locale, key) => dicts[locale][key];',
     };
     for (const [what, view] of Object.entries(reads)) {
-      const law = customerLaw(syntheticTree({ ...customersPage, [TILL]: view }), catalog);
+      const law = customerLaw(syntheticTree({ ...customersPage, [TILL]: view, 'apps/web/src/views/pos/keys.json': '{"buyerKey":"pos.buyer"}' }), catalog);
       expect(law.hits, what).toEqual(['key en: pos.buyer']);
       expect(law.keys, what).toEqual([...law.s7Keys]);
     }
@@ -834,7 +858,11 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     // `allowJs` is read from tsconfig.json, not assumed: if it is on, the walk must read JavaScript.
     if (tsconfig.compilerOptions.allowJs === true) for (const name of js) expect(SOURCE_FILE.test(name), `allowJs is on but the walk skips ${name}`).toBe(true);
     for (const name of ['a.ts', 'a.tsx', 'a.mts', 'a.cts']) expect(SOURCE_FILE.test(name), name).toBe(true);
+    // `.json` is data, not code: not a source file (never an entry, never parsed for imports). It IS a node the walk holds and the
+    // law scans (BOUNDARY (q)), which is `JSON_FILE`'s claim and no other extension's.
     for (const name of ['a.json', 'a.css', 'a.d.ts.map', 'a.tsx.snap']) expect(SOURCE_FILE.test(name), name).toBe(false);
+    expect(JSON_FILE.test('a.json')).toBe(true);
+    for (const name of ['a.css', 'a.d.ts.map', 'a.tsx.snap', 'a.json.ts', 'a.jsonc', ...js]) expect(JSON_FILE.test(name), name).toBe(false);
     // And the repository reader keeps what the pattern accepts: a JavaScript entry in a real tree is entered and walked.
     expect(entryPoints(js.map((name) => `${A}/pos/${name.replace('a.', 'page.')}`))).toHaveLength(4);
   });
@@ -903,6 +931,50 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     }
   });
 
+  it('BOUNDARY (q): a .json file is walked and scanned like any other file', () => {
+    const JSON_PATH = 'apps/web/src/views/pos/copy.json';
+    const tillImports = "import copy from './copy.json';\nexport const TillView = () => copy.label;";
+    const accountImports = "import copy from './copy.json';\nexport const CustomerAccountView = () => copy.label;";
+    const withTill = (json: string): CustomerLaw => customerLaw(syntheticTree({ [TILL]: tillImports, [JSON_PATH]: json }), SYNTHETIC_CATALOG);
+    // POSITIVE: customer vocabulary in a json file a scanned file imports turns the law red, by that file. All three vocabularies.
+    const planted = withTill('{"label":"Customer balance"}');
+    expect(planted.dataFiles).toContain(JSON_PATH);
+    expect(planted.hits).toEqual([`data ${JSON_PATH}`]);
+    for (const word of ['العميل', 'Müşteri']) expect(withTill(JSON.stringify({ label: word })).hits, word).toEqual([`data ${JSON_PATH}`]);
+    // NEGATIVE: a json file that carries no customer vocabulary stays green, and is still scanned (not skipped).
+    const clean = withTill('{"label":"Till"}');
+    expect(clean.hits).toEqual([]);
+    expect(clean.dataFiles).toContain(JSON_PATH);
+    // A json file nothing imports is not an exemption either, and a json file imports nothing, whatever its text looks like.
+    expect(customerLaw(syntheticTree({ [JSON_PATH]: '{"label":"customer"}' }), SYNTHETIC_CATALOG).hits).toEqual([`data ${JSON_PATH}`]);
+    expect(importsOf(JSON_PATH, '{"a":"import x from \'./y\'"}', syntheticTree({ [JSON_PATH]: '{}' }))).toEqual({ resolved: [], unresolved: [] });
+    // EXEMPT: the same customer word in a json file only the customers route uses is the slice's, and is not scanned...
+    const SLICE_JSON = `${CV}/copy.json`;
+    const slice = customerLaw(syntheticTree({ [ACCOUNT]: accountImports, [SLICE_JSON]: '{"label":"Customer balance"}' }), SYNTHETIC_CATALOG);
+    expect(slice.customersOnly).toContain(SLICE_JSON);
+    expect(slice.dataFiles).not.toContain(SLICE_JSON);
+    expect(slice.hits).toEqual([]);
+    // ...until a scanned file imports it too: reach decides, as for every other file.
+    const shared = customerLaw(
+      syntheticTree({
+        [ACCOUNT]: accountImports,
+        [TILL]: "import copy from '@/views/customers/copy.json';\nexport const TillView = () => copy.label;",
+        [SLICE_JSON]: '{"label":"Customer balance"}',
+      }),
+      SYNTHETIC_CATALOG,
+    );
+    expect(shared.customersOnly).not.toContain(SLICE_JSON);
+    expect(shared.hits).toEqual(expect.arrayContaining([`data ${SLICE_JSON}`]));
+    // The message catalogues are the one json left to the key rule: a customer word in a catalogue FILE is not a file hit.
+    const catalogFile = 'apps/web/src/messages/en.json';
+    expect(customerLaw(syntheticTree({ [catalogFile]: '{"error.x":"Customer payment refused"}' }), SYNTHETIC_CATALOG).dataFiles).not.toContain(catalogFile);
+    // A json import resolves with or without its extension, as the build resolves it.
+    expect(importsOf(TILL, "import a from './copy.json';\nimport b from './copy';", syntheticTree({ [JSON_PATH]: '{}' })).resolved).toEqual([
+      JSON_PATH,
+      JSON_PATH,
+    ]);
+  });
+
   it('REACH, repository: every S7 file except the derived customers-only files, and every S7 key, names no customer', () => {
     const files = repositorySources();
     const law = customerLaw(files, { ar, en, tr });
@@ -938,6 +1010,27 @@ describe('T-12 — OD-03: no tax element anywhere in S7', () => {
     ]) {
       expect(law.scanned, path).toContain(path);
     }
+    // EVERY view registry outside the customers slice is scanned, not only the two pinned above: found by globbing the tree.
+    const registries = Object.keys(files)
+      .filter((path) => /^apps\/web\/src\/views\/(?!customers\/)(?:.+\/)?registry\.[cm]?[jt]sx?$/.test(path))
+      .sort();
+    expect(registries.length, 'the registry glob found too few files').toBeGreaterThanOrEqual(8);
+    for (const path of registries) expect(law.scanned, `view registry ${path}`).toContain(path);
+    // The JSON the app imports is in the walk: the three catalogues are held and reached, and none is scanned as a file (the key rule
+    // has them). Any OTHER json in `src/` is scanned as text, so a customer word in it surfaces in `law.hits` below.
+    const catalogues = ['ar', 'en', 'tr'].map((locale) => `apps/web/src/messages/${locale}.json`);
+    const reachedEverywhere = reachedFrom(files, everyEntry);
+    for (const path of catalogues) {
+      expect(Object.hasOwn(files, path), path).toBe(true);
+      expect(reachedEverywhere.has(path), path).toBe(true);
+      expect(law.dataFiles, path).not.toContain(path);
+    }
+    expect(
+      Object.keys(files)
+        .filter((path) => JSON_FILE.test(path) && !catalogues.includes(path) && !law.customersOnly.includes(path))
+        .sort(),
+      'a json file outside the catalogues and the customers-only set must be a scanned data file',
+    ).toEqual(law.dataFiles);
     expect(law.screens.length, 'the scan ran over too few screens').toBeGreaterThan(10);
     expect(law.libraries.length).toBeGreaterThan(2);
     // The key scope is main's: EVERY S7 key, in all three locales. The exemption is on FILES only; no key is excused.
