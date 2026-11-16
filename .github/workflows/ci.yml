@@ -528,8 +528,15 @@ jobs:
         run: npm run verify:history
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # Grade 3 of the CI-speed split (DR-169). This step used to run all three
+      # directories in one process (362 test files, about 24 minutes). It now runs slice
+      # 1 of 4 of them, then the two TD-24 suites by name: they need the redis container,
+      # which TD-24 / DR-90 allows in this job and no other. Slices 2 to 4 run in
+      # `backend-int-2` .. `backend-int-4`, a postgres each, under the same step name.
+      # Every file runs once between the four jobs, none twice and none dropped: the sum
+      # of `Test Files` over the four logs is the count before the split, 362.
       - name: Integration + security tests
-        run: npm run test:integration
+        run: npm run test:integration -- --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=1/4 && npx vitest run tests/security/td24-redis-live.test.ts tests/security/td24-distributed-rate-limiter.test.ts
         env:
           PG_PORT: '5432'
           # TD-24 / DR-90 §5. Without this the live suite skips and TD-24's
@@ -3780,6 +3787,808 @@ jobs:
           PG_PORT: '5432'
           P4_S4_CLIENT_DELAY_MS: '200'
 
+  # Grade 3 of the CI-speed split (DR-169). `Integration + security tests` ran as one
+  # vitest process over tests/integration, tests/security and tests/guards (362 files,
+  # about 24 minutes of `backend-work`). It is the first test step of `backend`, run
+  # right after the fresh migrate, so nothing it needs comes from an earlier test step:
+  # a copy of the same setup gives it the same database. It now runs as four `--shard`
+  # slices: slice 1 stays in `backend` (through `npm run test:integration`, so the
+  # required job still reaches the three directories by an npm script body), slices
+  # 2 to 4 run in `backend-int-2` .. `backend-int-4`, each with a postgres of its own.
+  # The two TD-24 suites need redis, which TD-24 allows in `backend` only: every slice
+  # excludes them and `backend` runs them by name. The exclude list and the shard count
+  # are the same in all four slices; law C-13 of tests/guards/ci-job-conservation.test.ts
+  # holds that, and C-11 holds the setup copy.
+  backend-int-2:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Integration + security tests
+        run: npx vitest run tests/integration tests/security tests/guards --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=2/4
+        env:
+          PG_PORT: '5432'
+
+  # Grade 3 of the CI-speed split: shard 3 of 4 of `Integration + security tests`, see
+  # `backend-int-2` for why. Setup is the same text as in `backend` (C-11).
+  backend-int-3:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Integration + security tests
+        run: npx vitest run tests/integration tests/security tests/guards --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=3/4
+        env:
+          PG_PORT: '5432'
+
+  # Grade 3 of the CI-speed split: shard 4 of 4 of `Integration + security tests`, see
+  # `backend-int-2` for why. Setup is the same text as in `backend` (C-11).
+  backend-int-4:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Integration + security tests
+        run: npx vitest run tests/integration tests/security tests/guards --exclude=tests/security/td24-redis-live.test.ts --exclude=tests/security/td24-distributed-rate-limiter.test.ts --shard=4/4
+        env:
+          PG_PORT: '5432'
+
   # -------------------------------------------------------------------------
   # 2e. Backend — the REQUIRED check. It does no work; it reads the four parts.
   # -------------------------------------------------------------------------
@@ -3798,7 +4607,7 @@ jobs:
     # reader of tests/guards/required-ci-chain-composition.test.ts takes flow
     # sequences only when they do not wrap.
     # prettier-ignore
-    needs: [backend, backend-static, backend-gates-p2, backend-golden, backend-ctl-budget-in, backend-ctl-budget-out, backend-ctl-ratio-in, backend-ctl-ratio-out]
+    needs: [backend, backend-static, backend-gates-p2, backend-golden, backend-ctl-budget-in, backend-ctl-budget-out, backend-ctl-ratio-in, backend-ctl-ratio-out, backend-int-2, backend-int-3, backend-int-4]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -3812,9 +4621,12 @@ jobs:
           BACKEND_CTL_BUDGET_OUT: ${{ needs.backend-ctl-budget-out.result }}
           BACKEND_CTL_RATIO_IN: ${{ needs.backend-ctl-ratio-in.result }}
           BACKEND_CTL_RATIO_OUT: ${{ needs.backend-ctl-ratio-out.result }}
+          BACKEND_INT_2: ${{ needs.backend-int-2.result }}
+          BACKEND_INT_3: ${{ needs.backend-int-3.result }}
+          BACKEND_INT_4: ${{ needs.backend-int-4.result }}
         run: |
           failed=0
-          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN BACKEND_CTL_BUDGET_IN BACKEND_CTL_BUDGET_OUT BACKEND_CTL_RATIO_IN BACKEND_CTL_RATIO_OUT; do
+          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN BACKEND_CTL_BUDGET_IN BACKEND_CTL_BUDGET_OUT BACKEND_CTL_RATIO_IN BACKEND_CTL_RATIO_OUT BACKEND_INT_2 BACKEND_INT_3 BACKEND_INT_4; do
             result="${!part}"
             if [ "$result" != "success" ]; then
               echo "::error::$part finished '$result', not 'success'"
