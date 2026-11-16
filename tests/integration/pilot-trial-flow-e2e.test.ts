@@ -369,6 +369,23 @@ let targetBalanceAfterCross: bigint | null = null;
 /** Arm J: the three on-account sends that ask what a REPLAY is keyed on. */
 const replayKeyResults: { label: string; status: number; body: string; replayed: unknown }[] = [];
 let balanceAfterReplayKey: bigint | null = null;
+
+/**
+ * THE ABSENCE PROBES, and why they are sends rather than a comment. The two
+ * red cases at the end of this file say a route is not mounted on this tree. A
+ * constant set to `null` in this file is my own writing and says nothing about
+ * the server: the day the route lands, those cases would also go green if this
+ * suite had been refused for authentication, for a missing permission or for
+ * the wrong tenant — and that green would be read as the route working. So
+ * each absence is SENT, on the base this flow already used and with the same
+ * headers, and beside it a SIBLING route that IS mounted is sent too. The
+ * sibling is the control that says the client, the token and the tenant are
+ * the reason for nothing.
+ */
+let absentCustomerCreateStatus: number | null = null;
+let mountedCustomerReadStatus: number | null = null;
+let absentStatementStatus: number | null = null;
+let mountedReceivableStatus: number | null = null;
 /** The flow customer's still-open documents, and arm B's customer's. */
 let openInvoices: readonly OpenInvoiceRow[] = [];
 let otherOpenInvoices: readonly OpenInvoiceRow[] | null = null;
@@ -818,6 +835,18 @@ beforeAll(async () => {
   }
   const afterReplayKey = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
   if (afterReplayKey.status < 300) balanceAfterReplayKey = BigInt((afterReplayKey.body as ReceivableBody).baseMinor);
+
+  // THE ABSENCE PROBES — see their declaration above. They are the last thing
+  // this flow does, so nothing they answer can change a figure measured above,
+  // and each absent send is paired with a mounted sibling on the same base.
+  const createProbe = await w.t.request.post('/v1/customers').set(w.headers).send({});
+  absentCustomerCreateStatus = createProbe.status;
+  const createControl = await w.t.request.get(`/v1/customers/${customerId}`).set(w.headers).send();
+  mountedCustomerReadStatus = createControl.status;
+  const statementProbe = await w.t.request.get(`/v1/customers/${customerId}/account-statement`).set(w.headers).send();
+  absentStatementStatus = statementProbe.status;
+  const statementControl = await w.t.request.get(`/v1/customers/${customerId}/receivable`).set(w.headers).send();
+  mountedReceivableStatus = statementControl.status;
 }, 240_000);
 
 afterAll(async () => {
@@ -1152,6 +1181,23 @@ describe(CLAIM, () => {
     // own command — with the replay law above applied to it unchanged: the
     // same `customerId` sent twice must answer `200`, say `replayed`, and
     // leave ONE customer.
+    // AND THE CAUSE IS NAMED RATHER THAN ASSUMED: the send answered an absent
+    // route, while the sibling read of the SAME customer on the SAME base with
+    // the SAME headers answered under 300. So the refusal is the route's
+    // absence and not authentication, a permission or the tenant — and the day
+    // `0091` lands, this case cannot go green for one of those reasons while
+    // looking like the route.
+    if (CUSTOMER_CREATE.path === null) {
+      expect(mountedCustomerReadStatus, 'the control read of a mounted customer route never ran, so the absence below is unmeasured').not.toBeNull();
+      expect(
+        (mountedCustomerReadStatus ?? 999) < 300,
+        `the control read of a mounted customer route answered ${mountedCustomerReadStatus}, so an absent answer below would say nothing about the write route`,
+      ).toBe(true);
+      expect(
+        [404, 405],
+        `POST /v1/customers answered ${absentCustomerCreateStatus}, which is not an absent route: the claim this case is red for is then wrong`,
+      ).toContain(absentCustomerCreateStatus);
+    }
     expect(
       CUSTOMER_CREATE.path,
       'the customer write route is not mounted on this base: the four customer.* operation codes it needs do not exist yet, and this suite seeds the customer rather than pretending the route is there',
@@ -1489,6 +1535,22 @@ describe(CLAIM, () => {
     // keep it out of reach from here: that PR is unmerged with changes
     // requested, and it has no running balance yet, so the recurrence has
     // nothing of its own to read.
+    // AND THE SAME PAIR FOR THIS ONE: the statement path this lane will read is
+    // sent here and answers an absent route, while `receivable` — mounted on
+    // the same controller, reached with the same headers — answers under 300.
+    // So this case is red because the route is not on this tree, not because
+    // the suite is refused.
+    if (STATEMENT_PATH === null) {
+      expect(mountedReceivableStatus, 'the control read of the mounted receivable route never ran, so the absence below is unmeasured').not.toBeNull();
+      expect(
+        (mountedReceivableStatus ?? 999) < 300,
+        `the control read of the mounted receivable route answered ${mountedReceivableStatus}, so an absent answer below would say nothing about the statement route`,
+      ).toBe(true);
+      expect(
+        [404, 405],
+        `GET /v1/customers/:customerId/account-statement answered ${absentStatementStatus}, which is not an absent route: the claim this case is red for is then wrong`,
+      ).toContain(absentStatementStatus);
+    }
     expect(
       STATEMENT_PATH,
       'the statement route is mounted on an open branch and not on this one, and it carries no running balance yet, so this suite neither reaches it nor fakes it',
