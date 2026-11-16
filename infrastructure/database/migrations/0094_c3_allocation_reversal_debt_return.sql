@@ -1,6 +1,12 @@
 -- ─────────────────────────────────────────────────────────────────────────
 -- 0094 — C3, THE DEBT RETURN HALF: reversing a payment allocation.
 --
+-- ITS BASE IS `mvp03/ar-source-document-guard` @ `9ea18edf`, NOT `main`.
+-- §G below replaces a function that `0090` creates in that branch, and a
+-- widening written against an absent allow-list is a list written from
+-- memory. So this file is read as a branch stacked on PR #64 and its diff is
+-- this file alone; whoever reviews it must not be shown #64's commits twice.
+--
 -- THE AUTHORITY THIS FILE RESTS ON. The owner's third option, relayed
 -- 2026-11-16: `C3` is confined to the DEBT RETURNING, and RE-EXTINGUISHING an
 -- invoice after a reversal is deferred by card, because it would need a branch
