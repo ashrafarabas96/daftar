@@ -33,6 +33,28 @@
  *     than the statement that needs it.
  * Each of those is then shown to FAIL under a mutation of the file's text, so
  * none of them can pass vacuously.
+ *
+ * WHAT THIS LAW DOES NOT CHECK, written down because a textual law with no
+ * stated limit is read wider than it is, and then gets disabled by a false
+ * failure at the first legitimate edit. That happened today to a hard-coded
+ * census pair in `ci.yml`, and this file is not going to repeat it:
+ *
+ *   - it is TEXT, not behaviour. It never connects to a database, so it does
+ *     not prove the replacement succeeds, nor that it is refused without the
+ *     bracket. `tests/integration/migration-portability.test.ts` is the
+ *     behavioural witness, and its cases are the ones whose names end "with no
+ *     superuser anywhere in the path";
+ *   - it does not prove the ROLE EXISTS, nor that the migrator holds that
+ *     membership, nor that it is held `WITH SET TRUE` / `WITH INHERIT FALSE`.
+ *     Those are facts about the cluster's roles, asserted where roles are
+ *     asserted, and `0045:973-985` is where the estate states them;
+ *   - it does not prove the bracket is NECESSARY. If `0090` ever stopped
+ *     handing that function to `daftar_accounting_internal`, the bracket would
+ *     become harmless rather than wrong, and this law would still pass. The
+ *     ownership fact lives in `0090:196`, not here;
+ *   - and it says nothing about any OTHER migration. It is pinned to `0094`
+ *     by name, so another lane adding a replacement of its own in its own file
+ *     cannot turn this red.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
