@@ -174,8 +174,16 @@ function decodeOnce(part: string): string {
  *   3. the port, with `5432` and "absent" the same
  *   4. the role and the password, percent-decoded ONCE (see `decodeOnce`)
  *   5. the database path, without a trailing slash
- * and the QUERY STRING is excluded: `sslmode`, timeouts and pool options
- * change how a principal connects, never which principal it is.
+ *   6. the query parameters that CARRY IDENTITY — `user`, `password`, `host`
+ *      and `port` — each overriding the same field in the URL, because that
+ *      is what the driver does. Measured against `pg-connection-string`, the
+ *      parser behind `new Pool({ connectionString })`, and pinned by an arm
+ *      that reads it so a change in the dependency reddens here.
+ *      `sslmode`, timeouts and pool options are NOT in the key: they change
+ *      how a principal connects, not which principal it is. `dbname` is not
+ *      either, because that parser does not let it override the path —
+ *      measured, and pinned, so the day it does this file reddens instead of
+ *      quietly keying two databases as one.
  *
  * WHAT IS DELIBERATELY NOT NORMALIZED, because normalizing is a widening and
  * each widening can refuse a correct deployment:
@@ -196,13 +204,54 @@ function dbPrincipalKey(raw: string): string {
   } catch {
     // Not a URL: compare it as text, which is what §31 did for everything
     // before this function existed.
-    return `raw\u0000${raw}`;
+    return JSON.stringify(['raw', raw]);
   }
+  const query = url.searchParams;
+  /**
+   * A query parameter WINS over the same field in the URL, because that is
+   * what the driver does — measured, not assumed, against
+   * `pg-connection-string` (the parser `new Pool({ connectionString })` uses
+   * in `apps/api/src/infra/database.ts`):
+   *
+   *   `…://daftar_resolver:y@db/daftar?user=daftar_app&password=x`
+   *       -> user `daftar_app`, password `x`
+   *   `…://daftar_app:x@db/daftar?port=5433`   -> port 5433
+   *   `…://daftar_app:x@db/daftar?host=/var/run/postgresql` -> that host
+   *
+   * The first of those is why the query string is NOT excluded from this key.
+   * An earlier version of this function excluded it, with the comment that a
+   * parameter changes "how a principal connects, never which principal it
+   * is". That was false in BOTH directions and the review of #118 caught it:
+   * `?user=…&password=…` reaches another role while the URL's userinfo still
+   * spells this one, and two servers that differ only in `?port=` would have
+   * been refused as one principal.
+   *
+   * Note the asymmetry, which is a property of the platform and not a choice:
+   * `URL` does NOT decode userinfo, while `searchParams` DOES decode a
+   * parameter. So a value taken from the query is already decoded and must not
+   * be decoded again.
+   */
+  const effective = (param: string, fromUrl: string, decodeFromUrl: boolean): string => {
+    const fromQuery = query.get(param);
+    if (fromQuery !== null && fromQuery !== '') return fromQuery;
+    return decodeFromUrl ? decodeOnce(fromUrl) : fromUrl;
+  };
   const scheme = url.protocol.replace(/:$/, '').toLowerCase();
   const canonicalScheme = scheme === 'postgres' ? 'postgresql' : scheme;
-  const port = url.port === DEFAULT_POSTGRES_PORT ? '' : url.port;
+  const port = effective('port', url.port, false);
   const database = url.pathname.replace(/\/+$/, '');
-  return [canonicalScheme, decodeOnce(url.username), decodeOnce(url.password), url.hostname.toLowerCase(), port, database].join('\u0000');
+  // JSON.stringify, not a NUL-joined string: the parts are percent-DECODED
+  // before they are joined, so a `%00` inside a role name used to shift the
+  // field boundaries and merge two different secrets into one key — measured in
+  // the review of #118. An array encodes its own boundaries.
+  return JSON.stringify([
+    canonicalScheme,
+    effective('user', url.username, true),
+    effective('password', url.password, true),
+    effective('host', url.hostname, false).toLowerCase(),
+    port === DEFAULT_POSTGRES_PORT ? '' : port,
+    database,
+  ]);
 }
 
 const EnvSchema = z

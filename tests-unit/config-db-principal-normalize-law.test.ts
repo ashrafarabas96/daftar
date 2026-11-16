@@ -95,7 +95,11 @@ describe('§31 compares credentials, not strings', () => {
     { element: 'query', url: 'postgresql://daftar_app:x@db/daftar?sslmode=require', what: 'a connection parameter appended' },
     { element: '5 path', url: 'postgresql://daftar_app:x@db/daftar/', what: 'a trailing slash on the database path' },
     { element: '1 scheme', url: 'postgres://daftar_app:x@db/daftar', what: 'the `postgres://` spelling of the same scheme' },
-    { element: '1 scheme', url: 'POSTGRESQL://daftar_app:x@db/daftar', what: 'the scheme in upper case' },
+    {
+      element: 'platform (not our element 1)',
+      url: 'POSTGRESQL://daftar_app:x@db/daftar',
+      what: "the scheme in upper case — pinned because `URL` lower-cases `protocol` ITSELF, so this arm measures the platform's behaviour and not ours; our own `.toLowerCase()` there is defensive and seeding it away reddens nothing",
+    },
     { element: '2 host', url: 'postgresql://daftar_app:x@DB/daftar', what: 'the host in another case' },
     { element: '4 decode', url: 'postgresql://daftar_app:%78@db/daftar', what: 'the password percent-encoded (`%78` is `x`)' },
     { element: '4 decode', url: 'postgresql://daftar_%61pp:x@db/daftar', what: 'the role percent-encoded (`%61` is `a`)' },
@@ -173,6 +177,71 @@ describe('§31 compares credentials, not strings', () => {
     const env = { ...MERCHANT_PROD, APP_DATABASE_URL: 'postgresql://daftar_app:%zz@db/daftar' };
     expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'postgresql://daftar_app:%zz@db/daftar' })).toThrow(DUP);
     expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'postgresql://daftar_identity:%zz@db/daftar' })).not.toThrow();
+  });
+
+  // ── ELEMENT 6: THE QUERY PARAMETERS THAT CARRY IDENTITY ──────────────────
+  //
+  // The blocking finding of #118's review. An earlier version excluded the
+  // query string with the comment that a parameter changes "how a principal
+  // connects, never which principal it is". Measured against the driver's own
+  // parser, that was false in BOTH directions: `?user=…&password=…` reaches
+  // another role while the URL still spells this one, and two servers that
+  // differ only in `?port=` were keyed as one principal and refused.
+  const byParameter: readonly { readonly url: string; readonly what: string }[] = [
+    {
+      url: 'postgresql://daftar_resolver:y@db/daftar?user=daftar_app&password=x',
+      what: '`?user=` and `?password=` reaching APP while the userinfo spells another role',
+    },
+    { url: 'postgresql://daftar_app:x@elsewhere/daftar?host=db', what: '`?host=` overriding the host' },
+    { url: 'postgresql://daftar_app:x@db:5433/daftar?port=5432', what: '`?port=` overriding back to the default port' },
+    { url: 'postgresql://daftar_app:x@db/daftar?dbname=other', what: '`?dbname=`, which that parser does NOT honour, so it rescues nothing' },
+  ];
+
+  for (const { url, what } of byParameter) {
+    it(`refuses ${what} — element 6 query parameters`, () => {
+      expect(() => loadConfig(withIdentity(url))).toThrow(DUP);
+    });
+  }
+
+  it('NEGATIVE CONTROL: `?port=` to a NON-default port is a different principal — defends element 6', () => {
+    // The direction the exclusion got wrong the other way: two servers on one
+    // host, told apart only by a parameter, must both start.
+    expect(() => loadConfig(withIdentity('postgresql://daftar_app:x@db/daftar?port=5433'))).not.toThrow();
+  });
+
+  it('NEGATIVE CONTROL: a parameter that is present but EMPTY falls back to the URL — defends element 6', () => {
+    // `?user=` with no value must not blank the role out and collapse
+    // everything onto one key.
+    expect(() => loadConfig(withIdentity('postgresql://daftar_identity:x@db/daftar?user='))).not.toThrow();
+  });
+
+  it('DEPENDENCY: the precedence this key copies is read from the driver, not assumed', async () => {
+    // If `pg-connection-string` stops letting these parameters override — or
+    // starts honouring `dbname` — this arm reddens and the key above is wrong
+    // until it is changed. A claim about someone else's behaviour has to be
+    // measured where it lives. (`database.ts` builds its pool with
+    // `new Pool({ connectionString })`, which is this parser.)
+    const { parse } = await import('pg-connection-string');
+    const overridden = parse('postgresql://daftar_resolver:y@db/daftar?user=daftar_app&password=x&host=other&port=5433');
+    expect(overridden.user).toBe('daftar_app');
+    expect(overridden.password).toBe('x');
+    expect(overridden.host).toBe('other');
+    expect(overridden.port).toBe('5433');
+    // And the one that does NOT override, which is why it is absent from the key:
+    expect(parse('postgresql://daftar_app:x@db/daftar?dbname=other').database).toBe('daftar');
+  });
+
+  it('RULES: a decoded `%00` cannot shift the field boundaries of the key', () => {
+    // The parts are percent-decoded before they are joined, so a NUL-joined
+    // key let `a%00b:c` and `a:b%00c` produce the same string — two different
+    // secrets as one principal. (#118's review, finding 3.) The key is JSON
+    // now, which encodes its own boundaries, so these are two principals and
+    // the process starts.
+    const env = { ...MERCHANT_PROD, APP_DATABASE_URL: 'postgresql://a%00b:c@db/daftar' };
+    expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'postgresql://a:b%00c@db/daftar' })).not.toThrow();
+    // And the same value twice is still one principal, so the fallback did not
+    // become "nothing ever matches".
+    expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'postgresql://a%00b:c@db/daftar' })).toThrow(DUP);
   });
 
   it('RULES: a value that is not a URL at all still compares as text', () => {
