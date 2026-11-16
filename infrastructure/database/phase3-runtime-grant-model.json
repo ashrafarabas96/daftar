@@ -64,6 +64,7 @@
   "select": {
     "daftar_app": {
       "tables": [
+        "allocation_reversals",
         "branch_warehouses",
         "customer_contacts",
         "customer_credit_applications",
@@ -226,7 +227,7 @@
     "beyondPhase3Scope": "Entries for relations and routines a later phase creates are reviewed here on the same terms as the Phase 3 ones. They are NOT an allowlist that admits them: they are the reviewed statement of which grants exist, and every law in the suite — the forbidden privileges, the by-USE DML refusal sweep, the definer law — still applies to them in full."
   },
   "internalWriterTablePrivilegesBeyondPhase3Scope": {
-    "note": "NOT a law of this file and NOT an allowlist: the laws above are about the seven runtimePrincipals and PUBLIC, and daftar_inventory_internal is neither — it is the DEFINER-owner the signed entry routines run as, so a table privilege it holds is reachable only from inside a routine it owns. This entry exists because a reviewer should not have to read a migration to learn that an internal writer gained a WRITE privilege, which is the one thing the grant matrix cannot report. It records the Phase 4 ones and what withholds the rest. EXHAUSTIVE as read from the live catalogues with aclexplode over relacl and attacl, for every relation created past the accepted 0000-0073 prefix: 0074, 0075, 0076, 0080 and 0081 give this principal no table or column write beyond the rows below (0074, 0076 and 0080 contain no privilege statement at all, and 0075 gives it SELECT and trigger EXECUTE only), and daftar_inventory_internal is the ONLY role other than the migrator and the superusers that holds any write privilege on any relation past that prefix — daftar_accounting_internal, daftar_catalog_internal, daftar_provisioning_internal and all seven runtime principals hold none. No relation past the prefix carries a DELETE, TRUNCATE, REFERENCES or TRIGGER grantee for anyone.",
+    "note": "NOT a law of this file and NOT an allowlist: the laws above are about the seven runtimePrincipals and PUBLIC, and daftar_inventory_internal is neither — it is the DEFINER-owner the signed entry routines run as, so a table privilege it holds is reachable only from inside a routine it owns. This entry exists because a reviewer should not have to read a migration to learn that an internal writer gained a WRITE privilege, which is the one thing the grant matrix cannot report. It records the Phase 4 ones and what withholds the rest. EXHAUSTIVE as read from the live catalogues with aclexplode over relacl and attacl, for every relation created past the accepted 0000-0073 prefix: 0074, 0075, 0076, 0080, 0081 and 0094 give this principal no table or column write beyond the rows below (0074, 0076 and 0080 contain no privilege statement at all, and 0075 gives it SELECT and trigger EXECUTE only), and daftar_inventory_internal is the ONLY role other than the migrator and the superusers that holds any write privilege on any relation past that prefix — daftar_accounting_internal, daftar_catalog_internal, daftar_provisioning_internal and all seven runtime principals hold none. No relation past the prefix carries a DELETE, TRUNCATE, REFERENCES or TRIGGER grantee for anyone.",
     "daftar_inventory_internal": {
       "sales": [
         "INSERT",
@@ -243,7 +244,8 @@
       "payment_allocations": ["INSERT"],
       "customer_credits": ["INSERT", "UPDATE (remaining_amount_minor, remaining_carrying_base_amount_minor) only"],
       "customer_credit_applications": ["INSERT"],
-      "customers": ["UPDATE (status) only"]
+      "customers": ["UPDATE (status) only"],
+      "allocation_reversals": ["INSERT"]
     },
     "whyInvoiceSequencesTakesBoth": "TL-P4-S2-R4. INSERT is the FIRST-USE INITIALISER: 0078's sale_commit creates the (business_id, 'invoice', YYYY) series row of a business that has never numbered a document, with the default internal format INV-{YYYY}-{SEQ:6}, as INSERT ... ON CONFLICT (business_id, document_kind, period) DO NOTHING. Before the ruling the routine REFUSED instead, which left a clean business with no supported path to its first invoice number. The UPDATE is COLUMN-LEVEL on updated_at alone and is the ROW LOCK's: every PostgreSQL locking clause requires UPDATE on the relation, satisfied by any one column (0045:399 is the precedent). The two together are deliberately not enough to rewrite a merchant's number_format: INSERT can only create, DO NOTHING never overwrites, there is no table-level UPDATE and no UPDATE on number_format, so ON CONFLICT DO UPDATE is not even a privilege the owner holds. 0078-E(5) asserts the body carries exactly one INSERT, that it is DO NOTHING, and that it UPDATEs and DELETEs the relation nowhere; 0078-E(7) asserts the privileges against the live catalogues, including that NO runtime principal holds INSERT on the series. Proved behaviourally in tests/integration/sale-s2-sequence-init.test.ts. This is a DAFTAR-INTERNAL document identifier and implies no jurisdiction's fiscal or tax rule: OD-03 is OPEN (P4-AL-45).",
     "source": "infrastructure/database/migrations/0077_phase4_sales_sale_items_sources.sql section 5; 0078_phase4_sale_commit.sql section 1; 0079_phase4_pos_till_sessions_cart.sql section 4; 0081_phase4_customer_payments_credits.sql section 2",

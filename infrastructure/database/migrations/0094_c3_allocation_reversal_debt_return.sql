@@ -42,8 +42,12 @@
 -- here. Measured: `0084:576-580` is prose about `ROW_COUNT`, above the
 -- signature at `:593`, and not an identity in this body.
 --
--- THE ONE LINE THIS FILE DOES NOT CARRY, and it is the reason it is not
--- pushed. `invoice_outstanding` is `STABLE` and SECURITY INVOKER — "daftar_app
+-- THE ONE LINE THIS FILE NOW CARRIES, after the owner signed it as `DR-168`
+-- on 2026-11-16 with two blocking conditions (row security ENABLEd and FORCEd
+-- with a business_id policy, and a red test that another merchant reads zero
+-- rows through the reader). What follows was written while it was still
+-- missing and is kept, corrected by addition and not deleted, because it is
+-- the measurement that made the case for the line. `invoice_outstanding` is `STABLE` and SECURITY INVOKER — "daftar_app
 -- holds SELECT on `invoices`, `sales` and both reducers" (`0084:588`) — so the
 -- third branch needs `GRANT SELECT ON allocation_reversals TO daftar_app` and
 -- a matching entry in `select.daftar_app.tables` of
@@ -170,10 +174,25 @@ CREATE POLICY inventory_internal_read ON allocation_reversals
 CREATE POLICY accounting_internal_read ON allocation_reversals
   FOR SELECT USING (current_user = 'daftar_accounting_internal');
 
--- `daftar_app` gets NO privilege here. The one line it needs is the owner's,
--- and §0 above says why this file is incomplete until then.
+-- THE GRANT, AND IT IS THE OWNER'S LINE, NOT MINE. Signed as `DR-168`:
+-- "GRANT SELECT alone for daftar_app, and zero INSERT/UPDATE/DELETE/TRUNCATE/
+-- REFERENCES/TRIGGER for any principal and PUBLIC, on the precedent of
+-- purchase_reversals" -- with two blocking conditions, both proved on this
+-- branch: row security ENABLEd AND FORCEd with a business_id policy (§B
+-- above, and `tests/integration/l3-c3-allocation-reversals-rls.test.ts`
+-- asserts it on a live cluster with a negative control), and a red test that
+-- another merchant reads ZERO rows THROUGH THE READER.
+--
+-- The shape is the sibling's, measured and not invented: `0081:615-618`
+-- grants `SELECT` to `daftar_app`, `SELECT, INSERT` to the inventory writer
+-- and `SELECT` to the accounting principal on `payment_allocations` and its
+-- siblings. Nothing else is granted here, to anybody: the grant model forbids
+-- INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES and TRIGGER to every runtime
+-- principal and to PUBLIC, at table and at column level
+-- (`phase3-runtime-grant-model.json:62-63`).
 GRANT INSERT, SELECT ON allocation_reversals TO daftar_inventory_internal;
 GRANT SELECT ON allocation_reversals TO daftar_accounting_internal;
+GRANT SELECT ON allocation_reversals TO daftar_app;
 
 -- ─────────────────────────────────────────────────────────────────────────
 -- §C  APPEND ONLY. A reversal is a fact, not a field: it is never changed and
