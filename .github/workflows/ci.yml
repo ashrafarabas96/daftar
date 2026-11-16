@@ -1035,11 +1035,11 @@ jobs:
       #      `P4-D`'s ceiling is 100 ms.
       #   2. a delay planted OUTSIDE the database (`setTimeout`, 200 ms, at the
       #      head of the same windows) must leave BOTH converted budgets green —
-      #      and must turn `P4-F over HTTP` RED, because that budget is still
-      #      judged on the wall clock by decision and the HTTP window CONTAINS
-      #      the transaction window. That red is the control's second half, not
-      #      its failure: it is the executable proof that the unconverted budget
-      #      really was left unconverted.
+      #      and must turn `P4-F over HTTP` RED, because that budget is judged
+      #      on the handler window (DR-163, `judgedOn=handlerWindowMs`) and the
+      #      delay is planted INSIDE that window. That red is the control's second
+      #      half, not its failure: it is the executable proof that this budget
+      #      really is judged on the window the delay is planted in.
       #
       # WHY THE MARKERS AND NOT THE PROSE. Each budget's assertion message opens
       # with a pure-ASCII `P4-S4-BUDGET-FAIL-<tag>` that appears if and only if
@@ -1085,17 +1085,17 @@ jobs:
         run: |
           set -e
           log="$RUNNER_TEMP/negative-control-receivables-client-side.log"
-          # The run is EXPECTED to fail, on the one budget this card left on the
-          # wall clock and on that budget alone.
+          # The run is EXPECTED to fail, on the one budget judged on the handler
+          # window (DR-163) and on that budget alone.
           if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
             tail -80 "$log"
-            echo "a 200 ms CLIENT-SIDE delay left P4-F over HTTP green — that budget is judged on the wall clock, so this run proves the delay never reached it"; exit 1
+            echo "a 200 ms CLIENT-SIDE delay left P4-F over HTTP green — that budget is judged on the handler window, so this run proves the delay never reached it"; exit 1
           fi
           test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
-          # POSITIVE CONTROL for the absence claims below: the wall-clock budget
-          # DID fail, in this log, so the marker grep can see a marker here.
+          # POSITIVE CONTROL for the absence claims below: the handler-window
+          # budget DID fail, in this log, so the marker grep can see a marker here.
           for tag in FHTTP-BASE-5 FHTTP-FOREIGN-5; do
-            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=wallClockClientMs" "$log" || {
+            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=handlerWindowMs" "$log" || {
               tail -160 "$log"
               echo "the client-side-delayed run did not fail on $tag — either the delay never fired or the marker is not in this log, and then every absence below is unmeasured"; exit 1
             }
