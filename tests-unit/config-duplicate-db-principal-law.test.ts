@@ -20,8 +20,16 @@ import { loadConfig } from '../apps/api/src/config';
  * reproduced (review of this PR, finding 1, which was right): those four seeds
  * ran in the `l4-security-gates` worktree on `sec/rel11-secret-scan-scope-law`,
  * whose unit lane is 29 files / 246 cases — that branch carries its own law
- * files. THIS branch's unit lane is 29 files / 238 cases with this file, and 28
- * files / 233 cases without it. Both measured, each on the tree it names.
+ * files.
+ *
+ * NO LANE TOTAL FOR *THIS* BRANCH IS QUOTED HERE, deliberately, and the
+ * omission is the lesson. An earlier version said "29 files / 238 cases with
+ * this file"; the arms added further down made it 241, and the number went
+ * stale inside the very commit whose subject line was "drops a false count"
+ * (the second review of this PR caught it, and it was right). A total that
+ * every new arm falsifies is a trap, not evidence — and it was never the
+ * evidence anyway: what carries the claim below is the GREP ZERO, which no
+ * arm of this file can change.
  *
  * Four greens are not four gaps, and saying so would be the overstatement this
  * file exists to avoid. Three of them ARE covered — by laws that cannot run
