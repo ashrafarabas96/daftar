@@ -285,7 +285,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
  * accounting code that nobody classified lands on 400 rather than on 500, so
  * an unclassified refusal is still a refusal and never reads as an outage.
  */
-function accountingStatus(code: string): number {
+export function accountingStatus(code: string): number {
   if (code === 'accounting.forbidden' || code === 'accounting.branch_scope_violation' || code.startsWith('accounting.assertion_')) {
     return HttpStatus.FORBIDDEN;
   }
@@ -352,7 +352,18 @@ function accountingStatus(code: string): number {
     // balance with an Inventory line is refused at COMMIT. The books' state
     // forbids it, the payload is well formed — a conflict, like its S3
     // siblings, and deliberately not an `AccountingErrorCode`.
-    code === 'accounting.inventory_account_domain_owned'
+    code === 'accounting.inventory_account_domain_owned' ||
+    // MVP-03 (DR-114 third/2; 0090). A line on `accounts_receivable` or on
+    // `customer_credit_liability` must stand behind a sales document, so a
+    // manual adjustment or an opening balance on either is refused at
+    // COMMIT by a deferred constraint trigger. The payload is well formed
+    // and what forbids it is the books' own state -- the entry's source
+    // type -- exactly as for the R-B1a sibling above: a conflict, not a bad
+    // request. 400 here would tell a merchant entering legacy customer
+    // balances to fix a payload that is not wrong, and would leave the code
+    // with no classification at all. Deliberately not an
+    // `AccountingErrorCode`, like its twin.
+    code === 'accounting.ar_source_document_required'
   ) {
     return HttpStatus.CONFLICT;
   }
