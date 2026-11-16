@@ -63,6 +63,19 @@ interface Register {
   totals: { shared: number; assigned: number };
   shared: string[];
   assignment: Record<string, string>;
+  sharded: Record<string, ShardedStep>;
+}
+
+/** A baseline step that now runs as `--shard` slices in several jobs (grade 3). */
+interface ShardedStep {
+  shards: number;
+  jobs: string[];
+  keptIn: string;
+  keptShard: number;
+  keptFiles: string[];
+  dirs: string[];
+  decision: string;
+  reason: string;
 }
 
 const register = JSON.parse(readFileSync(REGISTER_PATH, 'utf8')) as Register;
@@ -186,6 +199,66 @@ function fingerprintProblems(reg: Register): string[] {
       ];
 }
 
+/** The `run:` text of the named step in a job: one line, or the lines of a `|` block (dedented). */
+function runOf(ciText: string, job: string, step: string): string | undefined {
+  const block = stepBlocks(ciText, job).find((b) => b.name === step);
+  if (block === undefined) return undefined;
+  const lines = block.text.split(String.fromCharCode(10));
+  const at = lines.findIndex((l) => /^\s*run:/.test(l));
+  if (at < 0) return undefined;
+  const rest = (lines[at] as string).replace(/^\s*run:\s*/, '').trim();
+  if (rest !== '|') return rest;
+  const body: string[] = [];
+  for (let i = at + 1; i < lines.length && /^ {10}\S/.test(lines[i] ?? ''); i += 1) body.push((lines[i] as string).trim());
+  return body.join(String.fromCharCode(10));
+}
+
+/**
+ * C-13 (grade 3) — a baseline step that runs as `--shard` slices keeps every
+ * file it ran before, once. The slices are only a partition if (a) the step runs
+ * in exactly the declared jobs and in `keptIn`, (b) every shard job runs the same
+ * directories with the same excluded files and `--shard=i/n` for its own i and the
+ * declared n, all i from 1 to n present once, and (c) `keptIn` runs its own slice through the npm script and then exactly the
+ * files that every slice excludes, and nothing else. Then the union of the slices
+ * and the kept files is the file set the step ran as one process; a sum of `Test
+ * Files` over the logs equal to the count before the split is the run-time half.
+ */
+function shardProblems(ciText: string, found: Map<string, string[]>, reg: Register): string[] {
+  const problems: string[] = [];
+  for (const [step, d] of Object.entries(reg.sharded)) {
+    if (reg.assignment[step] === undefined) problems.push(`C-13: \`${step}\` is declared sharded but is not a baseline step`);
+    const want = [d.keptIn, ...d.jobs].sort();
+    const got = [...(found.get(step) ?? [])].sort();
+    if (want.join(',') !== got.join(',')) problems.push(`C-13: \`${step}\` runs in [${got.join(', ')}], declared [${want.join(', ')}]`);
+    if (d.jobs.length + 1 !== d.shards)
+      problems.push(`C-13: \`${step}\` declares ${d.shards} shards for ${d.jobs.length} jobs and the one kept in \`${d.keptIn}\``);
+    const excludes = d.keptFiles.map((f) => `--exclude=${f}`).join(' ');
+    const seen = new Set<number>();
+    for (const job of d.jobs) {
+      const run = runOf(ciText, job, step) ?? '';
+      const m = /--shard=(\d+)\/(\d+)\b/.exec(run);
+      if (m === null) {
+        problems.push(`C-13: the \`${step}\` of \`${job}\` has no --shard=i/n`);
+        continue;
+      }
+      const [i, n] = [Number(m[1]), Number(m[2])];
+      if (n !== d.shards) problems.push(`C-13: \`${job}\` runs --shard=${i}/${n}, declared ${d.shards} shards`);
+      if (seen.has(i)) problems.push(`C-13: shard ${i} runs in two jobs`);
+      seen.add(i);
+      const expected = `npx vitest run ${d.dirs.join(' ')} ${excludes} --shard=${i}/${d.shards}`;
+      if (run !== expected) problems.push(`C-13: the \`${step}\` of \`${job}\` is \`${run}\`, expected \`${expected}\``);
+      if (d.keptShard + 1 + d.jobs.indexOf(job) !== i) problems.push(`C-13: \`${job}\` runs shard ${i}, expected ${d.keptShard + 1 + d.jobs.indexOf(job)}`);
+    }
+    seen.add(d.keptShard);
+    for (let i = 1; i <= d.shards; i += 1) if (!seen.has(i)) problems.push(`C-13: shard ${i} of ${d.shards} of \`${step}\` runs nowhere`);
+    const kept = runOf(ciText, d.keptIn, step) ?? '';
+    const expectedKept = `npm run test:integration -- ${excludes} --shard=${d.keptShard}/${d.shards}
+npx vitest run ${d.keptFiles.join(' ')}`;
+    if (kept !== expectedKept) problems.push(`C-13: the \`${step}\` kept in \`${d.keptIn}\` is \`${kept}\`, expected \`${expectedKept}\``);
+  }
+  return problems;
+}
+
 /** Everything wrong with `ciText` as judged against the committed register. */
 function conservationProblems(ciText: string, reg: Register): string[] {
   const problems: string[] = [];
@@ -220,6 +293,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
   for (const [step, jobs] of found) {
     const assigned = reg.assignment[step];
     if (reg.shared.includes(step)) continue;
+    if (reg.sharded[step] !== undefined) continue; // judged by C-13 below
     if (assigned === undefined) {
       problems.push(`C-2: \`${step}\` runs in ${jobs.join(', ')} and is in neither list of the register`);
       continue;
@@ -233,6 +307,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
 
   // C-3 — every assigned step runs exactly once, in its own job.
   for (const [step, job] of Object.entries(reg.assignment)) {
+    if (reg.sharded[step] !== undefined) continue; // judged by C-13 below
     const jobs = found.get(step);
     if (jobs === undefined) {
       problems.push(`C-3: \`${step}\` is assigned to \`${job}\` and runs in NO job of the family — the work is gone`);
@@ -253,7 +328,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
     }
   }
 
-  problems.push(...fingerprintProblems(reg), ...hollowProblems(ciText, reg));
+  problems.push(...shardProblems(ciText, found, reg), ...fingerprintProblems(reg), ...hollowProblems(ciText, reg));
   return problems;
 }
 
@@ -266,8 +341,12 @@ const PARTS = [
   'backend-ctl-budget-out',
   'backend-ctl-ratio-in',
   'backend-ctl-ratio-out',
+  'backend-int-2',
+  'backend-int-3',
+  'backend-int-4',
 ];
 const CTL_JOBS = PARTS.filter((p) => p.startsWith('backend-ctl-'));
+const SHARD_JOBS = PARTS.filter((p) => p.startsWith('backend-int-'));
 const AGG_JOB = 'backend-required';
 const CHECK_NAME = 'backend';
 
@@ -416,7 +495,7 @@ function setupCopyProblems(ciText: string, reg: Register): string[] {
     return out.join('\n');
   };
   const runsOn = (job: string) => /^ {4}runs-on:\s*(.+?)\s*$/m.exec(jobText(ciText, job))?.[1];
-  for (const job of CTL_JOBS) {
+  for (const job of [...CTL_JOBS, ...SHARD_JOBS]) {
     if (runsOn(job) !== runsOn('backend')) problems.push(`C-11: \`${job}\` runs on ${String(runsOn(job))}, \`backend\` on ${String(runsOn('backend'))}`);
     if (service(job) === '' || service(job) !== service('backend')) problems.push(`C-11: the postgres service of \`${job}\` is not the one of \`backend\``);
     if (/^ {6}redis:/m.test(jobText(ciText, job))) problems.push(`C-11: \`${job}\` has a redis service — TD-24 allows that container in \`backend\` only`);
@@ -580,9 +659,9 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED: a part is dropped from `needs`', () => {
-    const planted = ci.replace(', backend-ctl-ratio-out]', ']');
+    const planted = ci.replace(', backend-int-4]', ']');
     expect(planted, 'the needs line was not found to shorten — update this proof').not.toBe(ci);
-    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-ctl-ratio-out`');
+    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-int-4`');
   });
 
   it('RED: `if: always()` is removed, so a skipped part would skip the aggregate', () => {
@@ -633,9 +712,9 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED (behaviour): one part is simply not read by the script', () => {
-    const planted = ci.replace(' BACKEND_CTL_RATIO_IN BACKEND_CTL_RATIO_OUT; do', ' BACKEND_CTL_RATIO_IN; do');
+    const planted = ci.replace(' BACKEND_INT_3 BACKEND_INT_4; do', ' BACKEND_INT_3; do');
     expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
-    expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-ctl-ratio-out` finished `failure` and the aggregate still exits 0');
+    expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-int-4` finished `failure` and the aggregate still exits 0');
   });
 });
 
@@ -652,6 +731,7 @@ describe('the control jobs carry the same setup as `backend` (grade 2)', () => {
   it('the unplanted workflow has no C-11 problem, and the comparison really compared twelve setup steps', () => {
     expect(setupCopyProblems(ci, register)).toEqual([]);
     expect(CTL_JOBS).toHaveLength(4);
+    expect(SHARD_JOBS).toHaveLength(3);
   });
 
   it('RED: one control job migrates differently from `backend`', () => {
@@ -678,5 +758,65 @@ describe('the control jobs carry the same setup as `backend` (grade 2)', () => {
   it('RED: one control job runs on another image', () => {
     const planted = plantIn('backend-ctl-ratio-in', 'runs-on: ubuntu-26.04', 'runs-on: ubuntu-latest');
     expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-ctl-ratio-in` runs on ubuntu-latest');
+  });
+});
+
+describe('the sharded Integration step keeps every file it ran (C-13, grade 3)', () => {
+  const STEP = 'Integration + security tests';
+  const plantIn = (job: string, from: string, to: string) => {
+    const slice = jobText(ci, job);
+    const mutated = slice.replace(from, to);
+    expect(mutated, `the text to plant in \`${job}\` was not found — update this proof`).not.toBe(slice);
+    const planted = ci.replace(slice, mutated);
+    expect(planted).not.toBe(ci);
+    return planted;
+  };
+  const found = (text: string) => {
+    const m = new Map<string, string[]>();
+    for (const job of register.jobs) for (const s of stepsOf(text, job)) m.set(s, [...(m.get(s) ?? []), job]);
+    return m;
+  };
+  const problems = (text: string, reg: Register = register) => shardProblems(text, found(text), reg).join('\n');
+
+  it('POSITIVE: the committed workflow is a partition, and the proof compared four shards and two kept files', () => {
+    expect(problems(ci)).toBe('');
+    const d = register.sharded[STEP] as ShardedStep;
+    expect(d.shards).toBe(4);
+    expect(d.keptFiles).toHaveLength(2);
+    expect(SHARD_JOBS.map((j) => /--shard=(\d+)\/4/.exec(runOf(ci, j, STEP) ?? '')?.[1])).toEqual(['2', '3', '4']);
+    expect(runOf(ci, 'backend', STEP)).toContain('--shard=1/4');
+  });
+
+  it('RED: a shard job runs the wrong slice', () => {
+    expect(problems(plantIn('backend-int-2', '--shard=2/4', '--shard=3/4'))).toContain('shard 3 runs in two jobs');
+  });
+
+  it('RED: a shard is dropped (its job runs no --shard at all)', () => {
+    expect(problems(plantIn('backend-int-4', ' --shard=4/4', ''))).toContain('has no --shard=i/n');
+  });
+
+  it('RED: a shard job forgets one excluded file, so a redis suite would run twice', () => {
+    expect(problems(plantIn('backend-int-3', ' --exclude=tests/security/td24-redis-live.test.ts', ''))).toContain('backend-int-3');
+  });
+
+  it('RED: a shard job drops a directory', () => {
+    expect(problems(plantIn('backend-int-2', 'tests/integration tests/security tests/guards', 'tests/integration tests/security'))).toContain('backend-int-2');
+  });
+
+  it('RED: the kept step in `backend` runs more than the two redis files', () => {
+    expect(problems(plantIn('backend', 'npm run test:integration -- --exclude', 'npm run test:integration -- --reporter=dot --exclude'))).toContain(
+      'kept in `backend`',
+    );
+  });
+
+  it('RED: the count of shards changes in the register without the workflow', () => {
+    const d = register.sharded[STEP] as ShardedStep;
+    const reg = { ...register, sharded: { [STEP]: { ...d, shards: 5 } } };
+    expect(problems(ci, reg)).toContain('declares 5 shards for 3 jobs');
+  });
+
+  it('RED: a shard job has its own redis service', () => {
+    const planted = plantIn('backend-int-2', '    steps:\n', '      redis:\n        image: redis:7.2-alpine\n    steps:\n');
+    expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-int-2` has a redis service');
   });
 });

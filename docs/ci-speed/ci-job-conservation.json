@@ -15,8 +15,23 @@
     "backend-ctl-budget-in",
     "backend-ctl-budget-out",
     "backend-ctl-ratio-in",
-    "backend-ctl-ratio-out"
+    "backend-ctl-ratio-out",
+    "backend-int-2",
+    "backend-int-3",
+    "backend-int-4"
   ],
+  "sharded": {
+    "Integration + security tests": {
+      "shards": 4,
+      "jobs": ["backend-int-2", "backend-int-3", "backend-int-4"],
+      "keptIn": "backend",
+      "keptShard": 1,
+      "keptFiles": ["tests/security/td24-redis-live.test.ts", "tests/security/td24-distributed-rate-limiter.test.ts"],
+      "dirs": ["tests/integration", "tests/security", "tests/guards"],
+      "decision": "DR-169",
+      "reason": "24 minutes of one vitest process split into four --shard slices, each with its own postgres; the two redis suites stay where TD-24 allows redis"
+    }
+  },
   "totals": {
     "shared": 12,
     "assigned": 49
