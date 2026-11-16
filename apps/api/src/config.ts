@@ -194,6 +194,16 @@ function decodeOnce(part: string): string {
  *   · an unparseable value is returned unchanged, so it still compares as text
  *     rather than silently matching everything
  *
+ * WHAT THIS DOES NOT REACH, named here because the next reader of §31 is
+ * looking at this function and would otherwise read it as covering more than
+ * it does: only the names in §31's own map are compared through this key.
+ * `:521-522` compares `PROVISIONER_DATABASE_URL` against APP and PLATFORM as
+ * RAW TEXT, so on a tree where that name is not a member of the map, a
+ * provisioner credential written another way is still accepted — `postgres://`
+ * for `postgresql://`, say. #111 adds it to the map; until that lands, the
+ * class is closed for the map's members and open for the provisioner. (Review
+ * of #118, finding 2.)
+ *
  * Pinned, element by element with a negative control for each, in
  * `tests-unit/config-db-principal-normalize-law.test.ts`.
  */
