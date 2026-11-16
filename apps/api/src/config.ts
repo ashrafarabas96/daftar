@@ -152,6 +152,25 @@ function decodeOnce(part: string): string {
 }
 
 /**
+ * The same, with `decodeURI` — the function the driver uses for the PATH
+ * (`pg-connection-string/index.js:67`), where it uses `decodeURIComponent`
+ * for the host (`:56`). They differ: `decodeURI` leaves the reserved set
+ * (`%2F`, `%3F`, `%23` …) encoded. Copying the driver function by function is
+ * the point — a key built with the wrong one of the two would be finer than
+ * the driver for `%2F` in a database name and would accept a duplicate.
+ *
+ * A malformed escape throws, and that must not take the process down before
+ * the refusal is reported, so it compares as written.
+ */
+function decodeUriOnce(part: string): string {
+  try {
+    return decodeURI(part);
+  } catch {
+    return part;
+  }
+}
+
+/**
  * THE IDENTITY OF A DATABASE PRINCIPAL, as §31 compares them.
  *
  * §31 used to compare the connection strings as TEXT. Measured on `main`
@@ -167,16 +186,40 @@ function decodeOnce(part: string): string {
  * those seven collapses two roles onto one principal while the process starts,
  * serves and reports nothing, which is the whole class §31 exists to refuse.
  *
+ * THREE MORE STARTED AGAINST THE FIRST VERSION OF THIS VERY FUNCTION, and
+ * they are listed beside the original seven because they are the same class
+ * and were found the same way — the sixth review of #118, measured on this
+ * branch at `4f0a2fc0`, each reproduced as a red arm before it was closed:
+ *
+ *   `@d%62/` (the host encoded) · `/daft%61r` (the database encoded) ·
+ *   `?user=zz&user=daftar_app` (a repeated parameter, whose LAST value is the
+ *   one the driver connects with)
+ *
+ * The lesson they share is the one invariant this function has: THE KEY MUST
+ * NEVER BE FINER THAN THE DRIVER. Every field here is derived by copying what
+ * `pg-connection-string` does to that field, function by function — not by
+ * choosing a normalization that looks reasonable. A key coarser than the
+ * driver refuses a deployment that should work, which is visible and
+ * recoverable; a key finer than the driver accepts a duplicate credential
+ * while the process starts and reports nothing, which is not.
+ *
  * WHAT IS NORMALIZED, and nothing beyond it:
  *   1. the scheme, case-insensitively, with `postgres` ≡ `postgresql`
- *   2. the host, lower-cased (DNS is case-insensitive; `URL` keeps the case
- *      for a non-special scheme, measured)
+ *   2. the host, percent-decoded ONCE and lower-cased ONLY when it is a NAME.
+ *      DNS is case-insensitive, but this field can also hold a Unix socket
+ *      PATH (`?host=/var/run/postgresql`), and a path is case-sensitive — so a
+ *      value starting with `/` keeps its case. Lower-casing it unconditionally
+ *      read two different sockets as one principal.
  *   3. the port, with `5432` and "absent" the same
  *   4. the role and the password, percent-decoded ONCE (see `decodeOnce`)
- *   5. the database path, without a trailing slash
+ *   5. the database path, without a trailing slash, percent-decoded ONCE with
+ *      `decodeURI` — the driver's own function for this field, which is NOT
+ *      `decodeURIComponent` (see `decodeUriOnce`)
  *   6. the query parameters that CARRY IDENTITY — `user`, `password`, `host`
- *      and `port` — each overriding the same field in the URL, because that
- *      is what the driver does. Measured against `pg-connection-string`, the
+ *      and `port` — each overriding the same field in the URL, taking the LAST
+ *      value when one is repeated, because that is what the driver does: it
+ *      assigns every entry in a loop, while `URLSearchParams.get()` returns
+ *      the first. Measured against `pg-connection-string`, the
  *      parser behind `new Pool({ connectionString })`, and pinned by an arm
  *      that reads it so a change in the dependency reddens here.
  *      `sslmode`, timeouts and pool options are NOT in the key: they change
@@ -197,12 +240,36 @@ function decodeOnce(part: string): string {
  * WHAT THIS DOES NOT REACH, named here because the next reader of §31 is
  * looking at this function and would otherwise read it as covering more than
  * it does: only the names in §31's own map are compared through this key.
- * `:521-522` compares `PROVISIONER_DATABASE_URL` against APP and PLATFORM as
- * RAW TEXT, so on a tree where that name is not a member of the map, a
- * provisioner credential written another way is still accepted — `postgres://`
- * for `postgresql://`, say. #111 adds it to the map; until that lands, the
- * class is closed for the map's members and open for the provisioner. (Review
- * of #118, finding 2.)
+ * The clause whose message is "must be a distinct role from APP/PLATFORM
+ * (least-privilege provisioning boundary)" compares `PROVISIONER_DATABASE_URL`
+ * against APP and PLATFORM as RAW TEXT, so on a tree where that name is not a
+ * member of the map, a provisioner credential written another way is still
+ * accepted — `postgres://` for `postgresql://`, say. #111 adds it to the map;
+ * until that lands, the class is closed for the map's members and open for the
+ * provisioner. (Review of #118, finding 2.)
+ *
+ * It is cited by its WORDING, not by its line. The number written here was
+ * `:521-522`, measured before the block you are reading was added, and by the
+ * time anyone read it the clause had moved to `:697-698` — a line number
+ * inside the SAME file shifts with any edit above it, so a citation by line is
+ * stale the moment the file is touched. The wording is greppable and moves
+ * with the clause. (Sixth review, finding 3.)
+ *
+ * TWO MORE THINGS THIS KEY DOES NOT REACH, with the DIRECTION of each, since
+ * that is what decides whether it matters: a key that is COARSER than the
+ * driver can refuse a correct deployment, and one that is FINER accepts a
+ * duplicate credential. Only the second is a security hole, and neither of
+ * these is of that kind:
+ *   · `pg-connection-string:57-59` prepends a `%2f…` hostname to the pathname
+ *     when a `host` parameter is also present, which changes the DATABASE the
+ *     driver connects to. This key reads the pathname alone, so such a pair
+ *     can key EQUAL while the driver sees two databases — coarser, so it
+ *     refuses rather than accepts.
+ *   · under the `socket:` scheme the driver takes the database from `?db`
+ *     (`:49`) and the host from the path (`:48`). `?db` is not in this key, so
+ *     two `socket:` URLs differing only there key equal — coarser again. The
+ *     scheme is itself element 1, so a `socket:` URL never collides with a
+ *     `postgresql://` one.
  *
  * Pinned, element by element with a negative control for each, in
  * `tests-unit/config-db-principal-normalize-law.test.ts`.
@@ -242,14 +309,38 @@ function dbPrincipalKey(raw: string): string {
    * be decoded again.
    */
   const effective = (param: string, fromUrl: string, decodeFromUrl: boolean): string => {
-    const fromQuery = query.get(param);
+    // The LAST value of a repeated parameter, not the first. The driver
+    // assigns every entry of `searchParams` in a loop
+    // (`pg-connection-string/index.js:40-42`), so for `?user=a&user=b` the
+    // one it connects with is `b`. `query.get()` returns `a`, and reading it
+    // meant `?user=zz&user=daftar_app` keyed as `zz` while reaching the app
+    // credential — a duplicate accepted, the worst direction. (Sixth review,
+    // finding 2.)
+    const all = query.getAll(param);
+    const fromQuery = all.length === 0 ? null : (all[all.length - 1] ?? null);
     if (fromQuery !== null && fromQuery !== '') return fromQuery;
     return decodeFromUrl ? decodeOnce(fromUrl) : fromUrl;
   };
   const scheme = url.protocol.replace(/:$/, '').toLowerCase();
   const canonicalScheme = scheme === 'postgres' ? 'postgresql' : scheme;
   const port = effective('port', url.port, false);
-  const database = url.pathname.replace(/\/+$/, '');
+  // Percent-DECODED, with the driver's own two functions: it uses
+  // `decodeURI` for the path (`:67`) and `decodeURIComponent` for the host
+  // (`:56`), which are not the same function — `decodeURI` leaves reserved
+  // characters like `%2F` alone. Leaving either raw made this key FINER than
+  // the driver, which is the one property it must never have: `d%62` and `db`
+  // are one host to the driver, and `daft%61r` and `daftar` one database, so
+  // both spellings reached the app credential while keying differently and
+  // starting. (Sixth review, finding 1.)
+  const database = decodeUriOnce(url.pathname.replace(/\/+$/, ''));
+  // The host is lower-cased ONLY when it is a NAME. The query form may carry a
+  // Unix socket PATH (`?host=/var/run/postgresql`), and a file path is
+  // case-sensitive, so lower-casing it would read two different sockets as one
+  // principal and refuse a correct deployment. The old comment justified the
+  // lower-casing by DNS alone, which is not true of every value this field can
+  // hold. (Sixth review, finding 4.)
+  const host = effective('host', url.hostname, true);
+  const canonicalHost = host.startsWith('/') ? host : host.toLowerCase();
   // JSON.stringify, not a NUL-joined string: the parts are percent-DECODED
   // before they are joined, so a `%00` inside a role name used to shift the
   // field boundaries and merge two different secrets into one key — measured in
@@ -258,7 +349,7 @@ function dbPrincipalKey(raw: string): string {
     canonicalScheme,
     effective('user', url.username, true),
     effective('password', url.password, true),
-    effective('host', url.hostname, false).toLowerCase(),
+    canonicalHost,
     port === DEFAULT_POSTGRES_PORT ? '' : port,
     database,
   ]);

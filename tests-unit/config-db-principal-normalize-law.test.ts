@@ -103,6 +103,29 @@ describe('§31 compares credentials, not strings', () => {
     { element: '2 host', url: 'postgresql://daftar_app:x@DB/daftar', what: 'the host in another case' },
     { element: '4 decode', url: 'postgresql://daftar_app:%78@db/daftar', what: 'the password percent-encoded (`%78` is `x`)' },
     { element: '4 decode', url: 'postgresql://daftar_%61pp:x@db/daftar', what: 'the role percent-encoded (`%61` is `a`)' },
+    // The sixth review's two blocking findings, as refusal arms. Both are the
+    // worst class: an input that reaches the APP credential at the DRIVER and
+    // started. Verified in `node_modules/pg-connection-string/index.js`, not
+    // taken on report: `:56` is `config.host = decodeURIComponent(hostname)`
+    // and `:67` is `config.database = decodeURI(pathname)`, so the first two
+    // spellings here are the same credential; and `:40-42` assigns every
+    // query entry in a loop, so for a REPEATED parameter the LAST one wins,
+    // while this key had been reading the first.
+    {
+      element: '2 host decode',
+      url: 'postgresql://daftar_app:x@d%62/daftar',
+      what: 'the HOST percent-encoded (`%62` is `b`) — the driver decodes the host, so this is `db`',
+    },
+    {
+      element: '6 path decode',
+      url: 'postgresql://daftar_app:x@db/daft%61r',
+      what: 'the DATABASE percent-encoded (`%61` is `a`) — the driver decodes the path, so this is `daftar`',
+    },
+    {
+      element: '6 query last wins',
+      url: 'postgresql://daftar_identity:z@db/daftar?user=zz&user=daftar_app&password=zz&password=x',
+      what: 'a REPEATED parameter whose LAST value is the app credential, which is the one the driver uses',
+    },
   ];
 
   for (const { element, url, what } of refused) {
@@ -229,6 +252,54 @@ describe('§31 compares credentials, not strings', () => {
     expect(overridden.port).toBe('5433');
     // And the one that does NOT override, which is why it is absent from the key:
     expect(parse('postgresql://daftar_app:x@db/daftar?dbname=other').database).toBe('daftar');
+
+    // THE THREE BEHAVIOURS THE SIXTH REVIEW FOUND THE KEY DISAGREEING WITH,
+    // pinned HERE, at the dependency, and not only through `loadConfig`. Each
+    // one of them, left unmatched, made the key FINER than the driver — and a
+    // key finer than the driver accepts a duplicate credential, which is the
+    // one direction §31 may never fail in.
+    //
+    // 1. the host IS decoded (`index.js:56`, `decodeURIComponent`)
+    expect(parse('postgresql://daftar_app:x@d%62/daftar').host).toBe('db');
+    // 2. the database IS decoded (`:67`) — and with `decodeURI`, which is NOT
+    //    the same function: it leaves the reserved set alone. Both halves are
+    //    pinned, because copying the wrong one of the two is itself the bug.
+    expect(parse('postgresql://daftar_app:x@db/daft%61r').database).toBe('daftar');
+    expect(parse('postgresql://daftar_app:x@db/a%2Fb').database).toBe('a%2Fb');
+    // 3. for a REPEATED parameter the LAST value wins (`:40-42` assigns every
+    //    entry in a loop), where `URLSearchParams.get()` returns the first.
+    const repeated = parse('postgresql://daftar_identity:z@db/daftar?user=zz&user=daftar_app');
+    expect(repeated.user).toBe('daftar_app');
+    expect(new URL('postgresql://daftar_identity:z@db/daftar?user=zz&user=daftar_app').searchParams.get('user')).toBe('zz');
+  });
+
+  it('NEGATIVE CONTROL: two Unix socket paths that differ only in CASE stay two principals', () => {
+    // A file path is case-sensitive, so the host is lower-cased only when it
+    // is a NAME. Lower-casing it unconditionally read two different sockets as
+    // one principal and refused a correct deployment — the other defect class,
+    // and the reason this arm is a negative control rather than a refusal.
+    // (Sixth review, finding 4.)
+    //
+    // BOTH URLs carry the socket path, and that is the whole point of the arm.
+    // The first version of this control set only IDENTITY to a socket path and
+    // left APP on `db`: the two were different hosts either way, so the arm
+    // passed whether the case was folded or not. Seeding the guard away left
+    // it GREEN — a control that does not move with the line it names measures
+    // nothing, and this file says so about other people's arms, so it says it
+    // about its own.
+    const socketApp = 'postgresql://daftar_app:x@db/daftar?host=/var/run/PG';
+    const socketIdentity = 'postgresql://daftar_app:x@db/daftar?host=/var/run/pg';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: socketApp, IDENTITY_DATABASE_URL: socketIdentity })).not.toThrow();
+    // And the same pair as NAMES still collapses, which is element 2's own
+    // claim — so the arm pins the boundary between the two cases rather than
+    // just one side of it.
+    expect(() =>
+      loadConfig({
+        ...MERCHANT_PROD,
+        APP_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar?host=PG',
+        IDENTITY_DATABASE_URL: 'postgresql://daftar_app:x@db/daftar?host=pg',
+      }),
+    ).toThrow(DUP);
   });
 
   it('RULES: a decoded `%00` cannot shift the field boundaries of the key', () => {
