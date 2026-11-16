@@ -197,16 +197,34 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // reformatted onto one line, losing the `\n });` this capture ends at — an
     // over-capture running to the next `});` in the file, where any later
     // mention of `credentials: false` in a comment would do. Stripping closes
-    // both, because only code can satisfy the claim now.
+    // those TWO, because only code can satisfy the claim now.
     // (Second review of this PR, finding 2.)
+    //
+    // "Those two" is the whole claim, and the narrowing is deliberate. An
+    // earlier wording here read as though the class of false greens were
+    // closed. It is not. What is closed is the set of routes by which THIS
+    // PROBE could read a relaxation as `credentials: false` — and the probe is
+    // a text reader. A guard gap of a different kind is recorded separately
+    // and is NOT closed by anything in this file: four routes by which a
+    // request can reach the CORS layer with an origin the allowlist never
+    // granted. Those live in `.local-context/OWNER_QUEUE_AR.md` with their
+    // class and their falsifiers, and closing them needs an assertion on a
+    // real `OPTIONS` response, which needs a booting app — the integration
+    // lane, NOT_RUN here and never to be reported as PASS from this file.
+    // A law over the bootstrap's text cannot hold the behaviour of a request.
     const options = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     expect(options).not.toBe('');
 
     // THE CAPTURE DID NOT RUN PAST THE CALL. Measured, the third review found
     // the one route that stripping left open: reformat `enableCors` onto a
     // single line and the capture, which ends at `\n });`, runs on to the next
-    // one in the file — 157 characters instead of 81 — carrying whatever lies
-    // between. These two assertions bound it by STRUCTURE, which the length
+    // one in the file, carrying whatever lies between. No character counts are
+    // given for the two captures: a pair of figures stood here and did not
+    // reproduce when re-measured, and a number whose measurement cannot be
+    // repeated is worse than none — it invites the next reader to tune a
+    // length bound to it. The direction is what was measured and it holds:
+    // the reformatted capture is the LONGER one, and it swallows the lines
+    // after the call. These two assertions bound it by STRUCTURE, which the length
     // bound below cannot do here: from the call to the end of the file is only
     // 340 characters, under any length a growing options object could live
     // with. What follows the call is the listen and the log line, so their
@@ -242,12 +260,35 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // AND ONE MORE CONSEQUENCE. The sentence that stood here was WRONG, and
     // the third review measured it: it said reformatting the call onto a
     // single line makes this case fail. It did not — the capture simply ran
-    // past the call and stayed GREEN at 157 characters. It fails now, because
+    // past the call and stayed GREEN. It fails now, because
     // the two structural assertions above refuse a capture that swallowed the
     // listen and the log line. So the consequence is real only since those
     // were added, and the answer to it is to move this expectation with the
     // reformat — never to widen the pattern until it matches whatever the file
     // now says.
+    //
+    // AND WHAT THE REVIEW INDEX DOES NOT SAY ABOUT THIS CLAIM. The pull
+    // request recorded that `check:phase3:review-index` shows zero change and
+    // gave the reason that this file "is already counted in the
+    // `apps/api/src/config.ts` row". That reason is incidental, and it hides
+    // the load-bearing part. Measured on the merged tree:
+    //
+    //  - zero change follows from the file not being NEW, not from which row
+    //    cites it. The generator counts a test as coverage when it IMPORTS the
+    //    path or NAMES it (`scripts/phase3-review-index.ts:353`), so this file
+    //    is cited by every row it reaches, and a file that already exists on
+    //    `main` moves no count whichever rows those are.
+    //  - and `apps/api/src/main.ts` — the file whose text this case reads, the
+    //    subject of the whole claim — has NO row in the index: a search of
+    //    `docs/PHASE_3_REVIEW_INDEX.md` for `main.ts` returns nothing, because
+    //    rows are built from the indexed history through HEAD and the tree,
+    //    not from every source file. So zero change is not evidence that this
+    //    law's subject is accounted for. Its subject is not indexed.
+    //
+    // One instrument note, because it nearly produced a false finding of my
+    // own: the index prints only the first few covering tests per row and then
+    // `(+21)`. Grepping the printed page for a test name therefore proves
+    // nothing about membership — the page is capped, and the cap says so.
     //
     // CONSEQUENCE, named here because whoever it reddens reads this file and
     // not a card: moving these options into a constant or another module makes
