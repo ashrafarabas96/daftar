@@ -7,7 +7,7 @@
  * every number inside `<bdi dir="ltr">`.
  */
 import type { CSSProperties, ReactNode } from 'react';
-import { Badge, Button, Card, List, SearchField, Select, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Badge, Button, Card, List, SearchField, Select, TextField, spacing, textColors, typography } from '@daftar/design-system';
 import type { InventoryWarehouseDto } from '@/lib/phase3-api';
 import { Ltr, formatQty, isZeroQuantityText, rich, unsignedQty, type Translate, type ViewBaseProps } from '@/lib/phase3-format';
 import type { Locale } from '@/lib/i18n';
@@ -35,7 +35,7 @@ export function SectionTitle(props: { children: ReactNode }) {
 
 /** Secondary text under a field or a section. */
 export function Hint(props: { children: ReactNode }) {
-  return <p style={{ margin: 0, color: colors.neutral[500], fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>{props.children}</p>;
+  return <p style={{ margin: 0, color: textColors.secondary, fontFamily: typography.fontFamily.base, fontSize: typography.size.sm }}>{props.children}</p>;
 }
 
 const NOTICE_TONE = { error: 'danger', success: 'success', info: 'info' } as const;
@@ -120,7 +120,7 @@ export function ItemName(props: { name: string; variantName: string | null }) {
   return (
     <span style={{ display: 'flex', flexDirection: 'column' }}>
       <bdi>{props.name}</bdi>
-      {props.variantName !== null ? <bdi style={{ color: colors.neutral[500], fontSize: typography.size.sm }}>{props.variantName}</bdi> : null}
+      {props.variantName !== null ? <bdi style={{ color: textColors.secondary, fontSize: typography.size.sm }}>{props.variantName}</bdi> : null}
     </span>
   );
 }

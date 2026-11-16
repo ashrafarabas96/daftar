@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
-import { colors, elevation, radius, spacing, typography, zIndex } from '../tokens';
+import { colors, elevation, radius, spacing, toastColors, typography, zIndex } from '../tokens';
 import { Button } from './buttons';
 
 const backdrop: CSSProperties = {
@@ -161,7 +161,7 @@ export interface Toast {
 }
 
 export function ToastRegion({ toasts }: { toasts: Toast[] }) {
-  const bg = { success: colors.semantic.success, danger: colors.semantic.danger, info: colors.semantic.info };
+  const bg = toastColors;
   return (
     <div
       aria-live="polite"

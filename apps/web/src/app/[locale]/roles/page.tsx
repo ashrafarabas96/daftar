@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { PERMISSIONS, type RoleDto } from '@daftar/shared-contracts';
-import { Badge, Button, Checkbox, Dialog, FeatureLockedState, Select, Table, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Badge, Button, Checkbox, Dialog, FeatureLockedState, Select, Table, TextField, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, ensureSession } from '@/lib/client';
 import { createRole, deleteRole, listRoles, updateRole } from '@/lib/merchant-api';
@@ -85,7 +85,7 @@ export default function RolesPage({ params }: { params: Promise<{ locale: Locale
       </div>
       {locked ? <FeatureLockedState title={t('roles.locked')} upgradeLabel={t('nav.plan')} onUpgrade={() => router.push(`/${locale}/plan`)} /> : null}
       {error ? (
-        <p role="alert" style={{ color: colors.semantic.danger }}>
+        <p role="alert" style={{ color: textColors.danger }}>
           {error}
         </p>
       ) : null}
@@ -140,7 +140,7 @@ export default function RolesPage({ params }: { params: Promise<{ locale: Locale
             <TextField label={t('roles.key')} required value={key} onChange={(v) => setKey(v.toLowerCase())} hint={t('roles.keyHint')} />
           ) : null}
           <TextField label={t('roles.name')} required value={name} onChange={setName} />
-          <p style={{ margin: 0, fontFamily: typography.fontFamily.base, fontSize: typography.size.sm, color: colors.neutral[500] }}>
+          <p style={{ margin: 0, fontFamily: typography.fontFamily.base, fontSize: typography.size.sm, color: textColors.secondary }}>
             {t('roles.permissions')}
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(14rem, 1fr))' }}>

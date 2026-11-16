@@ -40,6 +40,46 @@ export const colors = {
   focus: '#2563EB',
 } as const;
 
+/**
+ * Text roles that meet WCAG 2.x AA for normal text (>= 4.5:1) on the surfaces
+ * they are used on: white, neutral.50 and neutral.100 (T-08, governance 04 §3).
+ * The base brand and semantic colors above are unchanged; these are darker
+ * shades of the same hue, for TEXT only. Fills, borders and accents keep using
+ * `colors.semantic.*`. Ratios are asserted by apps/web/test/design-tokens.test.ts.
+ */
+export const textColors = {
+  primary: colors.neutral[900],
+  /** neutral.600: 7.56 on white, 6.87 on neutral.100 (neutral.500 is 4.39 there). */
+  secondary: colors.neutral[600],
+  /** brand.primary: 5.17 on white, 4.70 on neutral.100. */
+  link: colors.brand.primary,
+  /** emerald-700: 5.48 on white, 4.98 on neutral.100 (semantic.success is 3.77). */
+  success: '#047857',
+  /** amber-800: 7.09 on white, 6.37 on warningSoft (semantic.warning is 3.19; amber-700 #B45309 only 4.51 on warningSoft). */
+  warning: '#92400E',
+  /** red-700: 6.47 on white, 5.88 on neutral.100 (semantic.danger is 4.39 on neutral.100). */
+  danger: '#B91C1C',
+  /** sky-700: 5.93 on white, 5.39 on neutral.100 (semantic.info is 4.10). */
+  info: '#0369A1',
+} as const;
+
+/** Badge foreground on its own soft background — every pair >= 4.5:1. */
+export const badgeColors = {
+  neutral: { bg: colors.neutral[100], fg: colors.neutral[700] },
+  success: { bg: colors.semantic.successSoft, fg: textColors.success },
+  warning: { bg: colors.semantic.warningSoft, fg: textColors.warning },
+  danger: { bg: colors.semantic.dangerSoft, fg: textColors.danger },
+  info: { bg: colors.semantic.infoSoft, fg: textColors.info },
+  brand: { bg: colors.brand.primarySoft, fg: colors.brand.primaryHover },
+} as const;
+
+/** Solid toast backgrounds under white text — every pair >= 4.5:1. */
+export const toastColors = {
+  success: textColors.success,
+  danger: colors.semantic.danger,
+  info: textColors.info,
+} as const;
+
 export const typography = {
   fontFamily: {
     base: "'Tajawal', 'Inter', -apple-system, 'Segoe UI', sans-serif",
@@ -94,6 +134,9 @@ export const zIndex = { base: 0, dropdown: 1000, sticky: 1100, overlay: 1200, mo
 
 /** Minimum interactive target (WCAG 2.5.8 / platform HIG). */
 export const TOUCH_TARGET = '2.75rem';
+
+/** Minimum height of a primary button (governance 04 §3: >= 48px). 3rem = 48px. */
+export const BUTTON_MIN_PRIMARY = '3rem';
 
 /**
  * RTL/LTR logical helpers — components must use logical properties so the

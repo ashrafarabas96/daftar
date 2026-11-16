@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { BusinessSettingsDto, LocaleCode } from '@daftar/shared-contracts';
-import { Button, Checkbox, Combobox, Select, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Button, Checkbox, Combobox, Select, TextField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, ensureSession } from '@/lib/client';
 import { getCurrentBusiness, updateCurrentBusiness } from '@/lib/merchant-api';
@@ -121,12 +121,12 @@ export default function SettingsPage({ params }: { params: Promise<{ locale: Loc
             </Button>
           </div>
           {saved ? (
-            <p role="status" style={{ color: colors.semantic.success }}>
+            <p role="status" style={{ color: textColors.success }}>
               {t('settings.saved')}
             </p>
           ) : null}
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger }}>
+            <p role="alert" style={{ color: textColors.danger }}>
               {error}
             </p>
           ) : null}

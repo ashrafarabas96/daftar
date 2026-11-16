@@ -1,7 +1,7 @@
 'use client';
 import { Suspense, use, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Button, Card, PasswordField, spacing, typography, colors } from '@daftar/design-system';
+import { Button, Card, PasswordField, colors, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { completePasswordReset } from '@/lib/merchant-api';
 
@@ -38,7 +38,7 @@ function ResetForm({ locale }: { locale: Locale }) {
     >
       <PasswordField label={t('auth.newPassword')} required value={password} onChange={setPassword} autoComplete="new-password" />
       {error ? (
-        <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+        <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
           {error}
         </p>
       ) : null}

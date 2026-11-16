@@ -2,7 +2,7 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { CountryDto, CurrencyDto } from '@daftar/shared-contracts';
-import { Button, Combobox, TextField, colors, spacing, typography } from '@daftar/design-system';
+import { Button, Combobox, TextField, spacing, textColors, typography } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
 import { ApiError, ensureSession, setCurrentBusinessId } from '@/lib/client';
 import { createBusinessInTenant, getCountries, getCurrencies, getCurrentBusiness } from '@/lib/merchant-api';
@@ -85,7 +85,7 @@ export default function NewBusinessPage({ params }: { params: Promise<{ locale: 
         />
         <TextField label={t('onboarding.slug')} required value={storeSlug} onChange={(v) => setStoreSlug(v.toLowerCase().replace(/[^a-z0-9-]/g, ''))} />
         {error ? (
-          <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+          <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
             {error}
           </p>
         ) : null}

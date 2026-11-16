@@ -17,6 +17,7 @@ import {
   TextField,
   colors,
   spacing,
+  textColors,
   typography,
 } from '@daftar/design-system';
 import { makeT, type Locale } from '@/lib/i18n';
@@ -299,7 +300,7 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
             </Button>
           </div>
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+            <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
               {error}
             </p>
           ) : null}
@@ -330,14 +331,14 @@ export default function CatalogPage({ params }: { params: Promise<{ locale: Loca
             />
           ))}
           {error ? (
-            <p role="alert" style={{ color: colors.semantic.danger, margin: 0 }}>
+            <p role="alert" style={{ color: textColors.danger, margin: 0 }}>
               {error}
             </p>
           ) : null}
         </div>
       </Dialog>
       {toast ? (
-        <p role="status" style={{ color: colors.semantic.success, fontFamily: typography.fontFamily.base }}>
+        <p role="status" style={{ color: textColors.success, fontFamily: typography.fontFamily.base }}>
           {toast}
         </p>
       ) : null}
