@@ -5,11 +5,11 @@ Scope: `apps/**`, `tests/**`, `packages/**`, `tests-unit/**`, `scripts/**` (the 
 
 ## Totals (informational: they move whenever unrelated code adds a `.find(`)
 
-classified sites: 540 — safe: 507, intended: 33
+classified sites: 563 — safe: 530, intended: 33
 
-by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=406, formatter=13, index=2, issues-access=35, length=7, method=18
+by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=429, formatter=13, index=2, issues-access=35, length=7, method=18
 
-by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=430
+by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=8, R-PROSE=9, R-RECEIVER=452
 
 `needs-fixing` sites: 0
 
@@ -59,6 +59,7 @@ by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUAR
 | tests/guards/p4s4-settlement-surface-laws.test.ts | find-shift | `const other = ROW_LOCK_ONLY_ROUTINES.find((r) => r !== fn) as string;` | safe | finds a routine name in a constant list |
 | tests/guards/p4s4-standard-aging-not-due-band.test.ts | issues-access | `if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');` | safe | Membership of a path in a list (`toContain`): independent of order and of how many other issues exist. |
 | tests/guards/p4s4-standard-aging-not-due-band.test.ts | method | `if (!r.success) expect(r.error.issues.map((i) => i.path.join('.'))).toContain('bucketDays');` | safe | Membership of a path in a list (`toContain`): independent of order and of how many other issues exist. |
+| tests/guards/phase4-merchant-language-guard.test.ts | find-shift | `const issue = languageIssues(body, []).find((i) => i.kind === 'jargon');` | safe | the language guard's own `issues` (kind/detail), unrelated to zod. |
 | tests/guards/phase4-merchant-language-guard.test.ts | find-shift | `expect(hits.find((h) => h.rule === 'JSX text literal outside t()')?.evidence).toBe('Outstanding balance');` | safe | the language guard's own `issues` (kind/detail), unrelated to zod. |
 | tests/guards/phase4-merchant-language-guard.test.ts | find-shift | `expect(issues.find((i) => i.kind === 'jargon')?.detail, text).toContain(word);` | safe | the language guard's own `issues` (kind/detail), unrelated to zod. |
 | tests/guards/phase4-merchant-language-guard.test.ts | find-shift | `expect(issues.find((i) => i.kind === 'tax-control')?.detail, d.desc).toContain(d.tag);` | safe | the language guard's own `issues` (kind/detail), unrelated to zod. |

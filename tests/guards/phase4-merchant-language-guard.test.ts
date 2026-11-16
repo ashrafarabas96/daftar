@@ -42,6 +42,7 @@ import {
   type ElementView,
   type FieldDescriptor,
 } from '../../tests/browser/invariants';
+import { DR35_CREDIT_TEMPLATES, DR35_PATTERN_SOURCES, stripDr35Literal } from '../../scripts/guards/dr35-credit-literal';
 import { deliveredFiles } from '../helpers/delivered-files';
 
 const ROOT = join(__dirname, '../..');
@@ -273,7 +274,7 @@ describe("P4-S1 action 3b — the browser gate's jargon and tax rules reach a Ph
     for (const [locale, dict] of Object.entries(dicts)) {
       for (const [key, value] of Object.entries(dict)) {
         if (key.startsWith('accounting.')) continue; // the accountant's chart; no merchant screen renders it
-        expect(ACCT_JARGON_RE.test(value), `${locale}:${key} = ${value}`).toBe(false);
+        expect(ACCT_JARGON_RE.test(stripDr35Literal(value)), `${locale}:${key} = ${value}`).toBe(false);
       }
     }
     // The six accepted strings that contain `vat` as a substring: the `jargon`
@@ -297,8 +298,91 @@ describe("P4-S1 action 3b — the browser gate's jargon and tax rules reach a Ph
         const v = dicts[locale][k];
         if (v === undefined) continue;
         expect(TAX_WORD_RE.test(v), `${locale}:${k} = ${v}`).toBe(false);
-        expect(ACCT_JARGON_RE.test(v), `${locale}:${k} = ${v}`).toBe(false);
+        expect(ACCT_JARGON_RE.test(stripDr35Literal(v)), `${locale}:${k} = ${v}`).toBe(false);
       }
     }
+  });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+describe('DR-35 / DR-114(b) — the credit-line literal is the ONLY exception, in BOTH guards', () => {
+  const LOCALES = ['ar', 'en', 'tr'] as const;
+  const fill = (locale: (typeof LOCALES)[number], days = '12'): string => DR35_CREDIT_TEMPLATES[locale].replace('{days}', days);
+  /** Catalog guard verdict: does a Phase 4 key holding `value` get refused? */
+  const catalogRefuses = (locale: CatalogLocale, value: string, key = 'customers.account.invoices.heldOnInvoice'): boolean =>
+    findMerchantJargon({ [locale]: { [key]: value } }).length > 0;
+  /** In-page guard verdict on one rendered line. */
+  const pageRefuses = (value: string): boolean => languageIssues(value, []).some((i) => i.kind === 'jargon');
+
+  // Every case once; BOTH guards must give the same verdict (a screen may not pass one gate and fail the other).
+  const TABLE: { name: string; locale: CatalogLocale; text: string; refused: boolean }[] = [
+    ...LOCALES.map((l) => ({ name: `${l}: the literal template, filled`, locale: l, text: fill(l), refused: false })),
+    ...LOCALES.map((l) => ({ name: `${l}: the literal with 1 day`, locale: l, text: fill(l, '1'), refused: false })),
+    { name: 'ar: bare word', locale: 'ar', text: 'رصيد دائن', refused: true },
+    { name: 'ar: bare word, other phrase', locale: 'ar', text: 'الدائن لدينا', refused: true },
+    { name: 'en: bare word', locale: 'en', text: 'Credit', refused: true },
+    { name: 'en: bare word in a sentence', locale: 'en', text: 'You have credit with us', refused: true },
+    { name: 'ar: one word changed', locale: 'ar', text: 'رصيد دائن على فاتورة عمرها 12 شهرًا', refused: true },
+    { name: 'en: one word changed', locale: 'en', text: 'Credit balance on a invoice 12 days old', refused: true },
+    { name: 'en: no days number', locale: 'en', text: 'Credit balance on an invoice days old', refused: true },
+    { name: 'ar: template + jargon appended', locale: 'ar', text: `${fill('ar')} في دفتر الأستاذ`, refused: true },
+    { name: 'ar: template + bare word appended', locale: 'ar', text: `${fill('ar')} دائن`, refused: true },
+    { name: 'en: template + jargon appended', locale: 'en', text: `${fill('en')} in the ledger`, refused: true },
+    { name: 'en: template + bare word prepended', locale: 'en', text: `credit ${fill('en')}`, refused: true },
+    { name: 'tr: template + jargon appended', locale: 'tr', text: `${fill('tr')} yevmiye`, refused: true },
+    { name: 'en: template glued to a longer word', locale: 'en', text: `${fill('en')}s ledger`, refused: true },
+  ];
+
+  it('the table is not empty and holds both verdicts (a guard that scans nothing proves nothing)', () => {
+    expect(TABLE.length).toBeGreaterThanOrEqual(16);
+    expect(TABLE.filter((c) => !c.refused).length).toBe(6);
+    expect(TABLE.filter((c) => c.refused).length).toBeGreaterThanOrEqual(10);
+    expect(DR35_PATTERN_SOURCES.length).toBe(3);
+  });
+
+  it.each(TABLE)('catalog guard and in-page guard agree: $name', ({ locale, text, refused }) => {
+    expect(catalogRefuses(locale, text), `catalog guard on "${text}"`).toBe(refused);
+    expect(pageRefuses(text), `in-page guard on "${text}"`).toBe(refused);
+  });
+
+  it('the exception is by TEXT only: the same literal under another key or namespace is judged identically', () => {
+    for (const l of LOCALES) {
+      for (const key of ['customers.account.other', 'invoices.row.note', 'pos.hint']) expect(catalogRefuses(l, fill(l), key), `${l} ${key}`).toBe(false);
+      // and the bare word under the SAME key as the literal is still refused
+    }
+    expect(catalogRefuses('ar', 'دائن', 'customers.account.invoices.heldOnInvoice')).toBe(true);
+    expect(catalogRefuses('en', 'Credit', 'customers.account.invoices.heldOnInvoice')).toBe(true);
+    expect(catalogRefuses('tr', 'Alacaklı', 'customers.account.invoices.heldOnInvoice')).toBe(true);
+  });
+
+  it('the page program reads the literal inside a multi-line body: only the literal line passes', () => {
+    const body = ['Customer account', fill('en'), 'Open credit', fill('ar')].join('\n');
+    const issue = languageIssues(body, []).find((i) => i.kind === 'jargon');
+    expect(issue?.detail).toBe('Open credit');
+  });
+
+  it('stripDr35Literal removes whole occurrences only and keeps neighbours apart', () => {
+    expect(stripDr35Literal(`a ${fill('en')}b`).includes('Credit')).toBe(true);
+    expect(stripDr35Literal(`a ${fill('en')} b`).replace(/\s+/g, ' ')).toBe('a b');
+    expect(stripDr35Literal('Credit')).toBe('Credit');
+  });
+
+  it('the real catalogs: the owner literal is the value of the key in all three locales, and both guards pass it', () => {
+    const dicts = catalogs();
+    for (const l of LOCALES) {
+      expect(dicts[l]['customers.account.invoices.heldOnInvoice'], l).toBe(DR35_CREDIT_TEMPLATES[l]);
+      expect(pageRefuses(fill(l)), l).toBe(false);
+    }
+    expect(findMerchantJargon(dicts)).toEqual([]);
+  });
+});
+
+describe('DR-35 — Turkish «alacak» wording: what the catalog guard refuses today', () => {
+  it('the denylisted Turkish credit forms are refused; the template with a changed word is still refused', () => {
+    const tr = (v: string): number => findMerchantJargon({ tr: { 'customers.account.x': v } }).length;
+    expect(tr('Alacak kaydı')).toBeGreaterThan(0);
+    expect(tr('Alacaklı müşteri')).toBeGreaterThan(0);
+    expect(tr('12 günlük faturada alacak kaydı var')).toBeGreaterThan(0);
+    expect(tr(DR35_CREDIT_TEMPLATES.tr.replace('{days}', '12'))).toBe(0);
   });
 });

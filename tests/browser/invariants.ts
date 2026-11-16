@@ -12,6 +12,7 @@
  * say which rule fired, in which locale and at which width.
  */
 import type { Page } from 'playwright-core';
+import { DR35_PATTERN_SOURCES } from '../../scripts/guards/dr35-credit-literal';
 import type { Locale } from './config';
 
 export type IssueKind =
@@ -116,7 +117,10 @@ export const LANGUAGE_RULES = String.raw`(args) => {
   const acctRe = new RegExp(${JSON.stringify(ACCT_JARGON_SOURCE)}, 'i');
   const taxRe = new RegExp(${JSON.stringify(TAX_WORD_SOURCE)}, 'i');
   const issues = [];
-  const jargon = [...new Set(String(args.text).split(/\n+/).filter((l) => acctRe.test(l)).map((l) => l.trim().slice(0, 60)))];
+  // DR-35 / DR-114(b): the one literal credit line (shared data, scripts/guards/dr35-credit-literal.ts) is cut out of a line before the test.
+  const dr35 = ${JSON.stringify(DR35_PATTERN_SOURCES)}.map((p) => new RegExp(p, 'gu'));
+  const scan = (l) => dr35.reduce((s, re) => s.replace(re, ' '), l);
+  const jargon = [...new Set(String(args.text).split(/\n+/).filter((l) => acctRe.test(scan(l))).map((l) => l.trim().slice(0, 60)))];
   if (jargon.length) issues.push({ kind: 'jargon', detail: jargon.slice(0, 4).join(' | ') });
   const taxControls = [];
   for (const d of args.descriptors) {

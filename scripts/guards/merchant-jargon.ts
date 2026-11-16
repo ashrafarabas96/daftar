@@ -17,6 +17,8 @@
  * "حساب" have ordinary meanings (TL-12).
  */
 
+import { stripDr35Literal } from './dr35-credit-literal';
+
 export type CatalogLocale = 'ar' | 'en' | 'tr';
 
 /** The per-locale denylist: SIM-06 (docs/DAFTAR_SIMPLICITY_STANDARD.md) plus the lock's L:1302 list, translated. */
@@ -156,7 +158,9 @@ export function findMerchantJargon(catalogs: Readonly<Partial<Record<CatalogLoca
     const matchers = MERCHANT_JARGON[locale].map((term) => [term, jargonMatcher(locale, term)] as const);
     for (const [key, value] of Object.entries(catalog)) {
       if (!isS7Key(key)) continue;
-      for (const [term, re] of matchers) if (re.test(value)) hits.push({ locale, key, term, value });
+      // DR-35 / DR-114(b): the one literal credit line is cut out of the SCANNED text, whatever the key.
+      const scanned = stripDr35Literal(value);
+      for (const [term, re] of matchers) if (re.test(scanned)) hits.push({ locale, key, term, value });
     }
   }
   return hits;
