@@ -230,7 +230,20 @@ const LAWS: readonly Law[] = [
         .filter((f) => /^\d{4}_.*\.sql$/.test(f))
         .sort();
       if (onDisk.length === 0) return 'the migration directory probe is blind: it listed no file';
-      if (onDisk[onDisk.length - 1] !== MIGRATION) return `the highest migration on this tree is ${onDisk[onDisk.length - 1]}, not ${MIGRATION}`;
+      // AND NOT `the highest file on disk is 0092`, which this line used to
+      // demand. That is a claim about the WHOLE migrations directory enforced
+      // from inside one card's guard: the moment any number above 0092 lands
+      // in `main` -- and #120 of this same lane carries `0093` -- it goes red
+      // permanently, and the next lane has to edit THIS lane's guard file to
+      // make its own branch green. A false red is how a law gets disabled,
+      // and this one would have arrived with a motive attached.
+      //
+      // What the guard is actually for survives without it: `0092` is present
+      // on the tree, `frozenThrough` is present, and every frozen file still
+      // hashes to its pinned sha -- which is the "nothing at or below 0079
+      // was touched" claim, and it needs no statement about what the newest
+      // file is.
+      if (!onDisk.includes(MIGRATION)) return `${MIGRATION} is not on this tree; the directory holds ${String(onDisk.length)} migrations`;
       const frozenIndex = onDisk.indexOf(MANIFEST.frozenThrough);
       if (frozenIndex < 0) return `frozenThrough ${MANIFEST.frozenThrough} is not on this tree`;
       // Every frozen file still hashes to the sha the manifest pinned. This is

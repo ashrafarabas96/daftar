@@ -119,7 +119,30 @@
 --     the LAST running balance  ==  customer_ar_outstanding.txn_minor
 --
 -- EXACTLY, as an absolute integer value and not as an identity between
--- two sums computed the same way. The payment as received and the
+-- two sums computed the same way -- FOR EVERY CURRENCY THAT READER
+-- REPORTS, which is the half of the sentence an earlier draft left out.
+--
+-- THE READER DROPS A CURRENCY THAT NETS TO ZERO, and that is measured, not
+-- supposed: `customer_ar_outstanding` ends with
+-- `HAVING pg_catalog.sum(o.outstanding_txn_minor) <> 0` (`0083:378`). So a
+-- currency a customer has settled IN FULL yields NO ROW there -- not a row
+-- carrying zero. The statement, by contrast, still has entries in that
+-- currency and closes them at `0`, because the documents happened and a
+-- statement is a history. Both are right; they answer different questions.
+--
+-- Stating the equality unconditionally therefore made a claim that is FALSE
+-- in two cases this file itself calls legitimate: a customer who has paid
+-- everything, and a currency the customer paid in with no open invoice
+-- (declared below as "a fact and not an error"). The law as it actually
+-- holds, and as the suite now asserts in BOTH directions, is:
+--
+--   * every currency the READER reports is reported by the statement with
+--     the same integer; and
+--   * a currency the STATEMENT reports and the reader does not must close at
+--     exactly `0` -- which is the `HAVING <> 0` difference and nothing else.
+--
+-- That pair is stronger than the sentence it replaces, not weaker: it still
+-- pins the closing figure, and it names the one gap instead of hiding it. The payment as received and the
 -- retained credit are STATED rows with NEITHER side, so no unapplied
 -- money is posted a second time and the credit balance is never netted
 -- against the receivable (DR-114/(ب)).

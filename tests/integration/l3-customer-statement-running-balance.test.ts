@@ -80,7 +80,20 @@ const SELECT_STATEMENT = `
   SELECT s.entry_kind, s.entry_id, to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date_text, s.kind_rank,
          s.currency_code, s.debit_txn_minor::text AS debit_txn_minor, s.credit_txn_minor::text AS credit_txn_minor,
          s.running_balance_txn_minor::text AS running_balance_txn_minor
-    FROM customer_account_statement($1::uuid, $2::uuid) s`;
+    FROM customer_account_statement($1::uuid, $2::uuid) s
+   -- THE ORDER IS ASKED FOR, not inherited from the plan. Both laws in this
+   -- file read the row SEQUENCE: §A takes the LAST running balance per
+   -- currency, and foldRunning accumulates in arrival order. Without an
+   -- ORDER BY those laws rest on the function's body keeping its own
+   -- ordering through whatever plan is chosen -- true in every run measured
+   -- so far (Function Scan, not inlined), and still a plan artefact rather
+   -- than a contract. A law that depends on the planner is a law that passes
+   -- until the day it does not.
+   --
+   -- foldRunning keys its accumulator on currency_code, so partitioning
+   -- the output by currency first changes no figure it computes; it only
+   -- makes the sequence the laws judge the one the query demanded.
+   ORDER BY s.currency_code, s.entry_date, s.kind_rank, s.entry_id`;
 
 /** One `daftar_app` statement under the tenant/business GUCs of `scope`. */
 async function asApp<T extends Record<string, unknown>>(
@@ -239,7 +252,30 @@ describe('§A the closing law — the last running balance IS the reader of reco
         `${o.currency_code}: the statement closes at ${String(last.get(o.currency_code))} and the reader of record states ${o.txn_minor}`,
       ).toBe(o.txn_minor);
     }
-    expect(last.size, 'every currency the statement reports must be one the reader of record reports').toBe(aOutstanding.length);
+    // AND THE OTHER DIRECTION, which is where the old form was simply wrong.
+    // It asserted `last.size === aOutstanding.length`, i.e. that the two
+    // report the SAME SET of currencies. They do not, by construction:
+    // `customer_ar_outstanding` ends with `HAVING sum(...) <> 0`
+    // (`0083:378`), so a currency settled in full yields NO row there, while
+    // the statement still carries its documents and closes them at `0`. On a
+    // fully settled customer the old line read `1` against `0` and would have
+    // gone red for a correct statement.
+    //
+    // So the law is directional: every currency the reader reports is closed
+    // on above, and a currency only the STATEMENT reports must close at
+    // exactly zero -- the `HAVING` difference, and nothing else hiding in it.
+    const reported = new Set(aOutstanding.map((o) => o.currency_code));
+    for (const [currency, closing] of last)
+      if (!reported.has(currency))
+        expect(closing, `${currency}: the reader of record omits it, so the statement must close it at exactly 0 and it closed at ${closing}`).toBe('0');
+    // THE POSITIVE CONTROL for that loop: this fixture is half paid on
+    // purpose, so the reader DOES report its currency and the loop above must
+    // have had nothing to skip. Without this, the directional law would pass
+    // vacuously on a fixture whose currencies the reader never reports.
+    expect(
+      [...last.keys()].filter((c) => !reported.has(c)),
+      'this fixture is half paid, so no currency of it is omitted by the reader',
+    ).toEqual([]);
   });
 
   it('the SQL window agrees with an independent BigInt fold on EVERY row', () => {
@@ -363,6 +399,32 @@ describe('§C the boundaries', () => {
     const closing = rows[rows.length - 1]?.running_balance_txn_minor;
     // ON the threshold: zero, as the integer `'0'`, not merely falsy.
     expect(closing, `a fully settled customer must close at 0 and closed at ${String(closing)}`).toBe('0');
+
+    // AND THE READER OF RECORD, WHICH THIS ARM NEVER ASKED. The closing
+    // figure above was asserted against a literal; the one claim the card
+    // makes is about agreement with `customer_ar_outstanding`, and the only
+    // place that agreement is interesting -- the zero boundary -- was the one
+    // place nothing measured it. At full settlement the reader reports NO ROW
+    // for the currency (`HAVING sum(...) <> 0`, `0083:378`), so that absence
+    // is the assertion.
+    const settledReader = await asApp<OutstandingRow>(
+      app,
+      A.shop,
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r`,
+      [A.shop.businessId, payer],
+    );
+    expect(settledReader, `the reader of record must report nothing for a fully settled customer; it reported ${JSON.stringify(settledReader)}`).toEqual([]);
+    // THE POSITIVE CONTROL for that emptiness, through the SAME call and the
+    // same connection: the half-paid customer of §A still gets a row. An
+    // empty answer from a probe that cannot see would otherwise read as
+    // agreement (RULE-11/RULE-18).
+    const openReader = await asApp<OutstandingRow>(
+      app,
+      A.shop,
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r`,
+      [A.shop.businessId, aCustomer],
+    );
+    expect(openReader.length, 'the same call must still answer for a customer who owes, or the emptiness above measures nothing').toBeGreaterThan(0);
     expect(rows.map((r) => r.running_balance_txn_minor)).toEqual(foldRunning(rows));
     // One minor unit past the threshold, in the direction a credit note goes:
     // the fold over the same rows plus one more applied unit is NEGATIVE, and
