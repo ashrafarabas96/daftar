@@ -2288,3 +2288,60 @@ describe('TL-P4-RLS-INT-01 §14 RED PROOF — the completeness law can fail, and
     expect(readsIn(strip(`BEGIN PERFORM 1; END`))).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §15 — THE INVENTORY SEEN REFUSING A DOOR NOBODY DECLARED.
+//
+// §14 above asserts the record MATCHES the catalogue. That is a claim about
+// agreement, and agreement is what a guard reports when it is working AND
+// when it is blind: both answer "no findings". The owner's fifth condition on
+// DR-142 (`OWNER_DECISIONS_AR.md:4545`) asks for a PLANT proving this guard
+// still goes red on a routine the record does not know about, and until now
+// there was none.
+//
+// The reason that is not pedantry is in this card's own history: the roster
+// floor for the P4-S1 suite was wrong TWICE (13 against 15, then 15 against
+// 16) and its guard was green both times. A guard nobody has watched refuse
+// is exactly what this lane keeps writing rules against.
+//
+// The plant lives inside a transaction this case rolls back, so the shared
+// cluster is byte-identical afterwards and no other suite can see it — and
+// the rollback is verified rather than trusted. `liveDefiners` and
+// `inventoryFindings` both take any executor, which is what makes the plant
+// possible without touching the committed catalogue.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('TL-P4-RLS-INT-01 §15 — an undeclared internal definer is REPORTED, and the claim can fail', () => {
+  const PLANT = 'zzz_undeclared_definer_plant';
+
+  it('RED: a SECURITY DEFINER routine owned by an internal principal and in no row is named', async () => {
+    const c = await ownerPool().connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(`CREATE FUNCTION ${PLANT}() RETURNS integer LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$ SELECT 1 $$`);
+      await c.query(`ALTER FUNCTION ${PLANT}() OWNER TO daftar_inventory_internal`);
+
+      // THE PLANT IS PROVED TO HAVE REACHED THE CATALOGUE BEFORE ITS RESULT
+      // IS READ (RULE-27). A `CREATE` that silently landed somewhere this
+      // probe does not look would make the finding below prove nothing, and a
+      // run with no plant at all would read as a successful control.
+      const planted = (await liveDefiners(c)).filter((x) => x.sig.includes(PLANT));
+      expect(planted, 'the plant must be in the live catalogue as an internal-owned definer, or this case measures nothing').toHaveLength(1);
+      expect(planted[0]?.owner, 'and owned by the internal principal, which is what brings it into this inventory').toBe('daftar_inventory_internal');
+
+      const findings = await inventoryFindings(c, logins);
+      const named = findings.filter((f) => f.includes(PLANT));
+      expect(named, `the inventory must name the door no row declares; it said: ${findings.join(' | ')}`).not.toHaveLength(0);
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+  }, 300_000);
+
+  it('and the rollback took the plant with it, so the committed catalogue is unchanged', async () => {
+    const after = (await liveDefiners(ownerPool())).filter((x) => x.sig.includes(PLANT));
+    expect(after, 'the plant must be gone — a leaked definer would redden every other suite that reads this inventory').toHaveLength(0);
+    // AND the real inventory is clean again, which is the positive control for
+    // the emptiness above: it shows this probe still sees and still judges.
+    expect(await inventoryFindings(ownerPool(), logins), 'the real inventory has no findings once the plant is gone').toEqual([]);
+  }, 300_000);
+});
