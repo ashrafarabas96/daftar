@@ -33,6 +33,13 @@
 -- makes the gap guard demand the new trigger -- so the next migration's
 -- end-state assertion keeps covering it.
 
+-- §D bracket (measured from 0077:508 and 0077:819): the role that will own
+-- the routine needs CREATE on the schema while it owns it, and the grant is
+-- withdrawn after the last transfer in this file. The static guard
+-- `inventory-definer-contract` refuses a hand-over without both halves, and
+-- it refused THIS file until they were added.
+GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
+
 CREATE OR REPLACE FUNCTION inventory_transfer_value_conserved() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
@@ -67,6 +74,8 @@ CREATE CONSTRAINT TRIGGER inventory_transfers_value_conserved
 
 -- Grants and the trigger first, ownership last ([[daftar-grant-before-owner]]).
 ALTER FUNCTION inventory_transfer_value_conserved() OWNER TO daftar_inventory_internal;
+
+REVOKE CREATE ON SCHEMA public FROM daftar_inventory_internal;
 
 CREATE OR REPLACE FUNCTION inventory_stock_source_guard_gaps()
 RETURNS TABLE (source_type TEXT, missing TEXT)
