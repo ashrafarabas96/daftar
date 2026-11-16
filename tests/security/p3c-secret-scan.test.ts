@@ -222,10 +222,23 @@ describe('Phase 3 secret history range scan', () => {
     // AND THE NARROWING IS NOT A RELAXATION: the same range with a real
     // secret in a patch-bearing commit still FAILS. Without this half, the
     // fix above could have been a way to stop counting at all.
-    const leaky = buildRepo({ emptyAfter: 3, onBranch: { 5: [leak('ghp_' + 'A'.repeat(36))] } });
+    //
+    // THE SEED IS `plantedToken()`, THE ONE THE REST OF THIS SUITE USES, and
+    // the first version of this arm got that wrong in the way that matters:
+    // it planted `ghp_` followed by thirty-six letter `A`s, which gitleaks
+    // does NOT report — its github-pat rule carries an entropy floor that a
+    // repeated character cannot clear. So the arm read `PASS` and reported
+    // «the fix is a relaxation» when what had actually happened was that the
+    // CONTROL measured nothing. Measured in CI on `08581d13`, run
+    // `43888998108`: this half failed with `expected 'PASS' to be 'FAIL'`
+    // while the patchless half above passed — so the fix was proven and the
+    // control was not. A seed whose detection is not itself established is
+    // not a control, which is the rule this arm now carries in its own body.
+    const leaky = buildRepo({ emptyAfter: 3, onBranch: { 5: [leak(plantedToken())], 6: [unleak] } });
     const bad = runScan(leaky.repo, leaky.base, leaky.head);
     expect(bad.result).toBe('FAIL');
     expect(bad.findings).toBeGreaterThan(0);
+    expect(bad.remaining.length).toBeGreaterThan(0);
     expect(bad.commitsScanned).toBe(bad.commitsWithPatch);
   });
 
