@@ -501,6 +501,32 @@ ALTER FUNCTION accounting_allocation_reversal_entry_complete() OWNER TO daftar_a
 -- ─────────────────────────────────────────────────────────────────────────
 GRANT CREATE ON SCHEMA public TO daftar_accounting_internal;
 
+-- AS THE FUNCTION'S OWNER, and this is the line a superuser build hides.
+--
+-- `0090` could write this function with a bare `CREATE OR REPLACE` because at
+-- that point it DID NOT EXIST: the migrator created it and then handed it over
+-- with `ALTER FUNCTION … OWNER TO daftar_accounting_internal` (`0090:196`).
+-- Replacing it afterwards is a different act -- PostgreSQL requires the OWNER
+-- (or a superuser) for `CREATE OR REPLACE` on an existing function -- so the
+-- same statement that worked in `0090` fails here with
+-- `must be owner of function accounting_ar_control_line_source_document`.
+--
+-- MEASURED, AND IT IS THE DIFFERENCE BETWEEN MY CLUSTER AND THE RUNNER: a
+-- local build applies the migrations as a SUPERUSER, which is exempt, so this
+-- file passed locally and then failed on CI in the five
+-- `migration-portability` cases whose names all end "with no superuser
+-- anywhere in the path" -- while the one case that applies the whole tail as a
+-- superuser passed. A green local apply says nothing about this class of
+-- defect, which is exactly why that suite exists.
+--
+-- The bracket is the estate's own, not an invention: `0045:973-985` does the
+-- same thing for the same role and states why it is allowed -- the migrator
+-- holds that membership WITH SET TRUE for exactly this kind of statement, and
+-- WITH INHERIT FALSE so it is never accounting authority by accident. The
+-- `ALTER … OWNER TO` below therefore becomes a no-op reassertion rather than a
+-- transfer, and it is kept so the end state is stated outright.
+SET LOCAL ROLE daftar_accounting_internal;
+
 CREATE OR REPLACE FUNCTION accounting_ar_control_line_source_document()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -554,6 +580,8 @@ BEGIN
     USING ERRCODE = 'P0001';
 END;
 $$;
+
+RESET ROLE;
 
 ALTER FUNCTION accounting_ar_control_line_source_document() OWNER TO daftar_accounting_internal;
 
