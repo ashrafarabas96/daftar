@@ -137,6 +137,14 @@ import { describe, expect, it } from 'vitest';
  *            job indent does not end the job: a gate after one is still read,
  *            the step list is not truncated at it, and the boundary still
  *            stops where the job stops.
+ *   REL11-O  THE FORBIDDEN DIRECTION, AT THE STEP OPENER. A step that BEGINS
+ *            with one of its other keys is opened as a step of its own: a
+ *            `- if: <gate>` opener is read as the gate (shape 1, which failed
+ *            CLOSED before), and the same opener after a bare `- uses:` step
+ *            no longer hands its `name:` to that step while losing the gate
+ *            (shape 2, which failed OPEN — measured `null` for a gated scan).
+ *            `- id:`, `- env:` and `- continue-on-error:` openers are covered
+ *            too, and the workflow as it stands reads identically.
  *
  * This index is part of the file's claim, not decoration: a case added without
  * a line here is a claim nobody can find. (Second review, finding 5.) Three
@@ -164,6 +172,13 @@ export type WorkflowStep = { readonly name: string; readonly condition: string |
  * gated step into a proof that it is ungated. Unknown must cost, not pass.
  */
 export const UNREADABLE_CONDITION = '<<a condition whose text is on the following line(s)>>';
+/**
+ * A step opened by a key this reader cannot name it by (`- if:`, `- id:`,
+ * `- env:`, …) and that has not yet carried a `name:` of its own. Lookups by
+ * name return `undefined` for it — "no such step" — which every assertion
+ * here treats as a failure rather than as "a step with no condition".
+ */
+export const UNNAMED_STEP = '<<a step whose name has not been read>>';
 
 /**
  * The steps of one job, read without a YAML dependency on purpose: `js-yaml`
@@ -198,16 +213,45 @@ export function stepsOfJob(yamlText: string, jobName: string): readonly Workflow
     // own positive control first failed, on the real file: the range scan
     // appeared to carry `always() && ...`, the condition of the
     // `actions/upload-artifact` step below it.
-    const opener = /^ {6}- (name|uses|run): ?(.*)$/.exec(line);
+    // EVERY `- <key>:` AT SIX SPACES OPENS A STEP, not only the three keys
+    // this reader can name one by. The first version matched
+    // `- (name|uses|run):` alone, and YAML permits a step to begin with any of
+    // its keys — `- if:`, `- id:`, `- env:`, `- continue-on-error:`. Such a
+    // step was not opened, so its lines were folded into the PREVIOUS step,
+    // and in a shape this very workflow already contains (a bare `- uses:`
+    // step, then a step opening with `- if: <gate>` and carrying its `name:`
+    // at eight spaces) the gate was read off the six-space opener line, which
+    // `^ {8}if:` never sees, while the NAME was moved onto the preceding
+    // `uses:` step whose condition is `null` — so REL11-B read `null`, that is
+    // UNGATED, about a step that is gated. The forbidden direction again, at
+    // the one place the sixth review's fix did not reach. (Seventh review,
+    // finding 1, raised by this lane from non-blocking to blocking: a reader
+    // that fails OPEN on a gate is the defect this file exists to refuse, and
+    // accepting it because the shape is absent from `ci.yml` TODAY would rest
+    // this guard on the order of a file L4 does not own.)
+    const opener = /^ {6}- ([A-Za-z0-9_-]+): ?(.*)$/.exec(line);
     if (opener !== null) {
       if (current !== null) steps.push(current);
       const [, key = '', value = ''] = opener;
-      current = { name: key === 'name' ? value.trim() : `${key}:${value.trim()}`, condition: null };
+      const text = value.trim();
+      if (key === 'name') current = { name: text, condition: null };
+      else if (key === 'uses' || key === 'run') current = { name: `${key}:${text}`, condition: null };
+      else if (key === 'if')
+        // A step that OPENS with its gate. Unnamed until a `name:` of its own
+        // arrives, and its condition is read here — empty means the text is on
+        // the following line(s), which is unreadable, not absent.
+        current = { name: UNNAMED_STEP, condition: text === '' ? UNREADABLE_CONDITION : text };
+      else current = { name: UNNAMED_STEP, condition: null };
       continue;
     }
     if (current === null) continue;
+    // A step whose own `name:` arrives later takes it. This covers a step
+    // opened by `- uses:`/`- run:` and a step opened by any other key, which
+    // is UNNAMED until now — without that second case the fix above would
+    // move no name and the gated step would stay nameless while the step
+    // above it kept the name, which is the same false reading by another road.
     const named = /^ {8}name: (.*)$/.exec(line);
-    if (named !== null && current.name.startsWith('uses:')) current.name = (named[1] ?? '').trim();
+    if (named !== null && (current.name.startsWith('uses:') || current.name === UNNAMED_STEP)) current.name = (named[1] ?? '').trim();
     // `if:` with NO space-and-value after it is valid YAML whose condition
     // sits on the following line(s). The first version required `if: ` with a
     // value, so that form left `condition` at `null` and this law swore the
@@ -298,7 +342,7 @@ export function jobCondition(yamlText: string, jobName: string): string | null |
  * The jobs a job hangs from, read from ITS OWN `needs:` key.
  *
  * The first version asserted `toContain('    needs: workspaces')` against the
- * whole file. That text appears FIVE times in this workflow, so the assertion
+ * whole file. That text appears EIGHT times in this workflow (measured at this head, `grep -c` on the committed file — it was five when this was written, which is why a count belongs in no claim that does not re-measure it), so the assertion
  * passed on four other jobs and could not fail however `hygiene`'s own `needs:`
  * changed — the same vacuity this file guards against, one layer further up.
  * (Second review, finding 1.)
@@ -446,7 +490,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(jobCondition(WORKFLOW, 'hygiene')).toBeNull();
     // Read from `hygiene`'s OWN `needs:` key, and then every job it names is
     // checked. Asserting the text `    needs: workspaces` against the whole
-    // file could not fail: it occurs five times.
+    // file could not fail: it occurs EIGHT times at this head (it was five when this line was written).
     // The RAW text of hygiene's own `needs:` is pinned beside the loop, and
     // that is what closes the whole class of defects this law kept producing:
     // every incomplete read SHORTENS the list, and a shortened list still
@@ -582,6 +626,80 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(names[names.length - 1], 'hygiene no longer ends where this arm expects').toMatch(/^uses:actions\/upload-artifact(@|$)/);
   });
 
+  it('REL11-O (the forbidden direction, at the step opener): a step that BEGINS with its gate is not read as ungated', () => {
+    // The seventh review's finding 1, as an arm — and raised here from
+    // non-blocking to blocking, because its own description is the forbidden
+    // direction: a GATED step read as `null`.
+    //
+    // THE SHAPE IS THE ONE THAT WAS MEASURED, not a convenient one: a step
+    // opening with `- if: <gate>` and carrying its `name:` at eight spaces,
+    // written after a BARE `- uses:` step. `ci.yml` already contains bare
+    // `- uses:` steps (`checkout`, `setup-node`), so the only new thing in
+    // this seed is the opener — and nobody writing it would think they had
+    // disarmed a law.
+    const openedByGate = WORKFLOW.replace(`      - name: ${RANGE_STEP}\n`, `      - if: ${PULL_REQUEST_ONLY}\n        name: ${RANGE_STEP}\n`);
+    expect(openedByGate).not.toBe(WORKFLOW); // the seed landed
+    const steps = stepsOfJob(openedByGate, 'hygiene');
+
+    // 1. THE GATE IS READ, on the step that carries it.
+    expect(conditionOf(steps, RANGE_STEP), 'a step that opens with its own gate must not read as "no condition"').toBe(PULL_REQUEST_ONLY);
+
+    const carriers = steps.filter((s) => s.name === RANGE_STEP);
+    expect(carriers, 'exactly one step may carry the range scan name').toHaveLength(1);
+
+    // 2. AND THE SAME OPENER AFTER A BARE `- uses:` STEP, WHICH IS THE ONE
+    //    THAT FAILED **OPEN**. The two shapes are kept apart because they
+    //    broke in opposite directions under the old reader, and only one of
+    //    them is dangerous — a distinction the first draft of this arm got
+    //    wrong by asserting of shape 1 what was only true of shape 2:
+    //      - shape 1 (above), no bare `uses:` above it: the step was lost
+    //        entirely and the lookup returned `undefined` — "no such step" —
+    //        so the law failed CLOSED. Wrong, but it refuses.
+    //      - shape 2 (here), a bare `- uses:` step directly above: the
+    //        eight-space `name:` was taken by THAT step, because the rename
+    //        guard fired on `uses:`. So the lookup found a REAL step with the
+    //        RIGHT name and condition `null` ⇒ the law swore an ungated scan
+    //        about a gated one. It failed OPEN.
+    //    A reader that loses a name refuses; a reader that MOVES a name lies.
+    //    THE SEED MOVES THE GATE, it does not add a second one: the step's
+    //    own eight-space `if:` is REPLACED by the opener form. Leaving it in
+    //    place is how the first draft of this arm fooled itself — the old
+    //    reader read that surviving line and the assertion passed for a
+    //    reason that had nothing to do with the opener.
+    const afterBareUses = WORKFLOW.replace(
+      `      - name: ${RANGE_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`,
+      `      - uses: actions/checkout@v4\n      - if: ${PULL_REQUEST_ONLY}\n        name: ${RANGE_STEP}\n`,
+    );
+    expect(afterBareUses).not.toBe(WORKFLOW); // the seed landed
+    const afterSteps = stepsOfJob(afterBareUses, 'hygiene');
+    expect(conditionOf(afterSteps, RANGE_STEP), 'the gate was lost and the name moved onto the bare `uses:` step above it').toBe(PULL_REQUEST_ONLY);
+    expect(
+      afterSteps.some((s) => s.name === 'uses:actions/checkout@v4'),
+      'the bare `uses:` step above it must keep its own identity',
+    ).toBe(true);
+
+    // 3. AND THE OTHER OPENERS YAML PERMITS DO NOT SWALLOW THE STEP BELOW
+    //    THEM. `- id:` and `- env:` carry no condition, so the step they open
+    //    is unnamed-and-ungated until its own keys arrive — what must NOT
+    //    happen is the following step's `name:`/`if:` being read as theirs.
+    for (const opener of ['id: range-scan', 'env:', 'continue-on-error: false']) {
+      const other = WORKFLOW.replace(`      - name: ${RANGE_STEP}\n`, `      - ${opener}\n        name: ${RANGE_STEP}\n        if: ${PULL_REQUEST_ONLY}\n`);
+      expect(other).not.toBe(WORKFLOW);
+      expect(conditionOf(stepsOfJob(other, 'hygiene'), RANGE_STEP), `a step opened by \`- ${opener}\` lost its gate`).toBe(PULL_REQUEST_ONLY);
+    }
+
+    // 4. AND THE WORKFLOW AS IT STANDS IS UNCHANGED BY THE WIDER OPENER, so
+    //    the fix did not trade one wrong direction for the other: every step
+    //    of `hygiene` is still found, and the job still ends where it ends.
+    const asIs = stepsOfJob(WORKFLOW, 'hygiene');
+    expect(
+      asIs.some((s) => s.name === UNNAMED_STEP),
+      'the wider opener invented an unnamed step in a job that has none',
+    ).toBe(false);
+    expect(asIs[asIs.length - 1], 'hygiene no longer ends where this arm expects').toBeDefined();
+    expect(asIs[asIs.length - 1]?.name).toMatch(/^uses:actions\/upload-artifact(@|$)/);
+  });
+
   it('REL11-F (negative control): a missing job and a renamed step are reported, not silently passed', () => {
     expect(stepsOfJob(WORKFLOW, 'no-such-job')).toHaveLength(0);
     const renamed = WORKFLOW.replace(`      - name: ${SNAPSHOT_STEP}\n`, '      - name: Secret scan (renamed)\n');
@@ -658,7 +776,7 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(twoNeeds).not.toBe(WORKFLOW);
     expect(neededJobs(twoNeeds, 'hygiene')).toEqual(['workspaces', 'prep']);
     // The flow form reads the same way. Anchored on `  hygiene:` because the
-    // line `    needs: workspaces` occurs FIVE times in this workflow and a
+    // line `    needs: workspaces` occurs EIGHT times in this workflow at this head (five when this was written) and a
     // string replace takes the first — which is another job's. This control
     // itself failed that way first: the same vacuity the review named, now
     // inside the seed instead of inside the assertion.
