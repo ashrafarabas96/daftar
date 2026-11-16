@@ -452,12 +452,59 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       loaded = await createScratchDb('daftar_l3_customer_write_loaded', { upTo: headBefore() });
       expect(loaded.applied.map(base), 'the copy stops short of 0091').not.toContain(MIGRATION);
 
+      // THE ROWS THIS CLAIM IS ACTUALLY ABOUT, and they are written here
+      // because nothing else writes them: `loaded` is a database of its own,
+      // so the shared test data never reaches it and no earlier case in this
+      // file inserts into it. Without this seed `customers` is EMPTY before
+      // the upgrade, and the sentence this case ends with -- "above all
+      // `customers` itself" -- compares nothing with nothing. That is the
+      // vacuous-claim class this file's own header rules against, and DR-142/3
+      // asks for a copy WITH DATA, not a copy that merely exists.
+      //
+      // The shape is the precedent's, measured and not invented:
+      // `tests/integration/migration-upgrade.test.ts:181-204` seeds a scratch
+      // database as `tenants DEFAULT VALUES` -> `businesses` -> `users`. The
+      // connection is the scratch owner, and `customers_revision_guard`
+      // (`0075:516`) reads `OLD`, so it governs UPDATE and does not refuse
+      // these INSERTs.
+      const loadedTenant = (await loaded.pool.query<{ id: string }>(`INSERT INTO tenants DEFAULT VALUES RETURNING id`)).rows[0];
+      const loadedBiz = (
+        await loaded.pool.query<{ id: string }>(
+          `INSERT INTO businesses (tenant_id, name, store_slug, country_code, base_currency, timezone)
+           VALUES ($1, 'Loaded Shop', 'loaded-shop', 'JO', 'JOD', 'Asia/Amman') RETURNING id`,
+          [loadedTenant?.id],
+        )
+      ).rows[0];
+      const loadedUser = (
+        await loaded.pool.query<{ id: string }>(`INSERT INTO users (email, password_hash, display_name) VALUES ('loaded@test.dev', 'x', 'Loaded') RETURNING id`)
+      ).rows[0];
+      for (const name of ['Loaded One', 'Loaded Two']) {
+        await loaded.pool.query(
+          `INSERT INTO customers (tenant_id, business_id, id, name, status, revision,
+                                  create_intent_sha256, last_intent_sha256, business_transaction_id, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, 'active', 1, repeat('b', 64), repeat('b', 64), $5, $6, $6)`,
+          [loadedTenant?.id, loadedBiz?.id, randomUUID(), name, randomUUID(), loadedUser?.id],
+        );
+      }
+
       const tables = await allTables(loaded.pool);
       const before = await tableDigest(loaded.pool, tables);
+      const countIn = (digest: Record<string, string>, table: string): number => {
+        const v = digest[table];
+        expect(v, `the digest must cover ${table}, or its count is not a measurement`).toBeDefined();
+        return Number((v ?? '').slice(0, (v ?? '').indexOf(':')));
+      };
       // The probe must be able to see: a database with no rows at all would
       // make "nothing changed" true for the wrong reason (RULE-11/RULE-19).
       const populated = Object.values(before).filter((v) => Number(v.slice(0, v.indexOf(':'))) > 0);
       expect(populated.length, 'the database this upgrade runs over already holds rows').toBeGreaterThan(0);
+      // AND THE CONTROL THAT `populated` ALONE DOES NOT GIVE: `populated`
+      // counts any non-empty table, and the migrations seed several of those
+      // themselves, so it is satisfied whether or not a merchant exists. The
+      // claim below is about `customers`, so `customers` is what must be
+      // non-empty before the upgrade -- the two rows just written.
+      expect(countIn(before, 'customers'), 'customers holds rows BEFORE the upgrade, so "customers did not change" is a real comparison').toBe(2);
+      expect(countIn(before, 'businesses'), 'and the merchant they belong to exists before the upgrade too').toBeGreaterThan(0);
 
       const applied = await loaded.migrateRest();
       expect(applied.map(base), 'the remaining migrations include 0091').toContain(MIGRATION);
@@ -470,7 +517,11 @@ describe('P4-S1 the customer write commands (DR-142)', () => {
       expect(changed, 'inventory_operation_kinds gained the two P4-S1 rows').toContain('inventory_operation_kinds');
       // Everything else that existed before the upgrade is untouched — above
       // all `customers` itself: a migration that rewrote customer master data
-      // on the way up is the failure this test exists to catch.
+      // on the way up is the failure this test exists to catch. And that
+      // sentence now has a subject: the two customers seeded above are in
+      // `before`, asserted by count, so an upgrade that rewrote or dropped
+      // them would change this digest instead of leaving an empty one equal
+      // to another empty one.
       expect(
         changed.filter((x) => x !== 'inventory_operation_kinds' && !x.startsWith('schema_migrations')),
         'no other pre-existing table changed',
