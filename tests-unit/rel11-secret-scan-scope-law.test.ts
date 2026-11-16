@@ -37,13 +37,29 @@ import { describe, expect, it } from 'vitest';
  *            on `pull_request`, the reader reports the condition => B can fail,
  *            and this is the red proof of a guard that reads a file it must not
  *            edit. No byte of `ci.yml` is touched to obtain it.
- *   REL11-D  THE RECORDED GAP. The range scan IS gated on `pull_request`. This
- *            case PINS the gap so it cannot change unnoticed in either
- *            direction. When L2 closes REL-11, this case must be updated in
- *            the SAME commit — exactly as `dr71-schema-floor-guard` tells
- *            whoever adds a migration to move the constant with it.
+ *   REL11-D  THE RANGE SCAN'S SCOPE. It IS gated on `pull_request`. This case
+ *            PINS that scope so it cannot change unnoticed in either
+ *            direction. It is a SCOPE and not a gap: measured on this
+ *            repository, `main` is protected with `strict`, ten required
+ *            contexts, `enforce_admins`, and neither force pushes nor
+ *            deletions — so no commit reaches `main` except through a pull
+ *            request that passed those ten, an administrator's included, and
+ *            scanning the range on pull requests covers every commit that can
+ *            land. (An earlier version of this comment called it "the recorded
+ *            gap", which was wider than the measurement.)
+ *            THAT ARGUMENT RESTS ON THREE THINGS, so each is named rather than
+ *            assumed: the protection as measured; the scan being inside a
+ *            REQUIRED job (`hygiene`) rather than a required context of its
+ *            own; and the step not being `continue-on-error`, which REL11-E2
+ *            pins. Lose any one — `enforce_admins` off, `hygiene` dropped from
+ *            the required contexts, or `continue-on-error: true` — and the gap
+ *            is real again. If L2 later scans the range on pushes too, this
+ *            case must be updated in the SAME commit, exactly as
+ *            `dr71-schema-floor-guard` tells whoever adds a migration to move
+ *            the constant with it.
  *   REL11-E  SCOPE. The workflow's push trigger really does include `main`, so
- *            the gap is in the step's condition and not in the trigger.
+ *            the step's condition is what decides the scan's reach, not the
+ *            trigger.
  *   REL11-F  NEGATIVE CONTROL. A missing job and a renamed step are reported;
  *            `undefined` (no such step) is kept apart from `null` (a step with
  *            no condition).
@@ -398,9 +414,11 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     expect(conditionOf(seeded, SNAPSHOT_STEP)).not.toBeNull();
   });
 
-  it('REL11-D (the recorded gap): the range scan runs on pull requests only — REL-11, open with L2', () => {
-    // When L2 closes REL-11, this expectation must be moved in the same commit.
-    // Its failure is not a defect in this law: it is the gap being closed.
+  it("REL11-D (scope): the range scan runs on pull requests only — covered by the branch's protection, not a gap", () => {
+    // If L2 later scans the range on pushes too, this expectation must be
+    // moved in the same commit. Its failure is not a defect in this law: it is
+    // the scope changing. Why this scope is coverage and not a gap, and the
+    // three conditions that argument rests on, are in the header above.
     expect(conditionOf(HYGIENE_STEPS, RANGE_STEP)).toBe(PULL_REQUEST_ONLY);
   });
 
