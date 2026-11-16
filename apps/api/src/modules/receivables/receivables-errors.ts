@@ -365,6 +365,20 @@ export function receivablesPlanRefusal(error: ReceivableArithmeticError): AppErr
 const UNIQUE_KEY_REFUSALS: Readonly<Record<string, ReceivablesCode>> = {
   payment_allocations_pkey: 'customer_payment.allocations_invalid',
   customer_credits_pkey: 'customer_payment.allocations_invalid',
+  // The two unique BACKSTOPS of the same table (`0081:325-326`):
+  // `UNIQUE (business_id, payment_id, invoice_id)` and
+  // `UNIQUE (business_id, payment_id, line_no)`. Neither is reachable on a
+  // known path today -- `assertAllocations` (`receivables-payload.ts:259-261`)
+  // refuses a duplicate invoice or a duplicate allocation id before any
+  // statement runs -- and that is why they are listed rather than left: the day
+  // a path does reach one (a new caller, a batch command, a routine that
+  // inserts allocations itself) an unlisted key arrives as a raw 23505 and is
+  // re-thrown UNTOUCHED, so the merchant gets a Postgres constraint name and a
+  // 500 instead of the refusal the payload guard would have given for the same
+  // mistake. They answer the same question as that guard, so they take the same
+  // code; no new code reaches the merchant.
+  payment_allocations_invoice_uq: 'customer_payment.allocations_invalid',
+  payment_allocations_line_no_uq: 'customer_payment.allocations_invalid',
 };
 
 /** The constraint a unique-key refusal (`23505`) names, or null for any other error. */
