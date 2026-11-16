@@ -24,14 +24,49 @@
  *   RESOLVER = PROVISIONER → **STARTED**
  *
  * So of the six pairs of the four credentials a production `merchant-api` can
- * reach — `APP`, `IDENTITY`, `RESOLVER`, `PROVISIONER`; `PLATFORM` and
- * `WORKER` are REFUSED outright in this mode (`forbid(...)`, "merchant API has
- * no platform/worker authority"), which is what makes the set four and not
- * six — exactly TWO were exposed, and both are the owner's two. The other
- * four were already closed, two of them by §31's duplicate-principal check,
- * whose reach is pinned separately in
- * `tests-unit/config-duplicate-db-principal-law.test.ts` (PR #110, this
- * branch's parent).
+ * reach — `APP`, `IDENTITY`, `RESOLVER`, `PROVISIONER` — exactly TWO were
+ * exposed, and both are the owner's two. The other four were already closed,
+ * two of them by §31's duplicate-principal check, whose reach is pinned
+ * separately in `tests-unit/config-duplicate-db-principal-law.test.ts`
+ * (PR #110, this branch's parent).
+ *
+ * ── HOW THAT SET OF FOUR IS ARRIVED AT, MECHANISM BY MECHANISM ──────────────
+ *
+ * The four is not a subset of §31's map; it is that map with one name taken
+ * out and another put in, and the two are excluded by DIFFERENT clauses. On
+ * the base tree §31's `urls` map holds SIX names — `APP`, `PLATFORM`,
+ * `IDENTITY`, `RESOLVER`, `WORKER`, `RECONCILER` — and `PROVISIONER` is not
+ * among them, which is this branch's whole subject. Three removals and one
+ * addition give the four:
+ *
+ *   `PLATFORM`, `WORKER` → `forbid(...)` at `:437-438` ("merchant API has no
+ *                          platform/worker authority"): a merchant API that
+ *                          is merely GIVEN either one does not start.
+ *   `RECONCILER`         → NOT `forbid`. The §7 converse at `:284-288`,
+ *                          "must NOT be set in PROCESS_MODE=merchant-api
+ *                          (only the reconciler process holds reconciliation
+ *                          authority)". A separate clause with a separate
+ *                          wording, written for a separate reason (§7 keeps
+ *                          the ledger-wide reader out of every other mode).
+ *   `PROVISIONER`        → added to the reachable four, because `:518-522`
+ *                          REQUIRES it in this mode.
+ *
+ * Measured, not read off the source: on blob `d0d0d99b` of `config.ts`, whose
+ * lines `242-290` are byte-identical to this branch's blob `e91531d1` (diffed,
+ * no output), with the `MERCHANT_PROD` fixture below as the control — and that
+ * control STARTED:
+ *
+ *   fixture alone                      → STARTED
+ *   + RECONCILER, distinct credential  → REFUSED, `:284-288` wording only
+ *   + RECONCILER = APP                 → REFUSED, `:284-288` AND §31, both in
+ *                                        the one message (`fail` accumulates)
+ *
+ * That last line is why `RECONCILER` cannot be called "excluded from the
+ * separation set": it is IN the map and §31 does compare it. It is excluded
+ * from the REACHABLE set, by a mode clause, which is a different statement.
+ * If `:284-288` were ever relaxed, this file's "four" would become five and
+ * the enumeration above would be measuring the wrong set — so the clause is
+ * named here by line and by wording rather than left to be inferred.
  *
  * ── WHY THE FIX IS A MEMBERSHIP AND NOT A THIRD COMPARISON ──────────────────
  *
