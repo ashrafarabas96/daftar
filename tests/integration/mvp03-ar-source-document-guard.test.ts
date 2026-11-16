@@ -20,7 +20,7 @@ import {
 } from '../helpers/accounting-posting';
 import { settlementWorld, settlementMissing, stockUp, newCustomer, sellOnCredit } from '../golden-regression/phase4-s4/settlement-world';
 import { SYSTEM_KEYS, collectPayment, applyCredit, rateToR10, CREDIT_SOURCE_TYPE, type AllocationInput } from '../golden-regression/phase4-s4/settlement-path';
-import { entryLines, entryOfSource, creditSnapshot } from '../golden-regression/phase4-s4/harness';
+import { entryLines, creditSnapshot } from '../golden-regression/phase4-s4/harness';
 import { Client } from 'pg';
 import { dbUrl } from '../helpers/test-app';
 
