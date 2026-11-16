@@ -46,7 +46,21 @@ DECLARE
   v_sum NUMERIC;
 BEGIN
   -- A transfer moves value between two warehouses: it may not create or
-  -- destroy any. The claim is a SUM over the document's movements and not a
+  -- destroy any.
+  --
+  -- IT FIRES PER LINE, AND THAT IS NOT A DETAIL. On the header it fired FIRST
+  -- -- the header is inserted before the lines, so its deferred event is
+  -- queued first -- and it then answered for refusals that belong to another
+  -- mechanism: `inventory-s3-transfer.test.ts` T-05 (the nine-state vector,
+  -- H-6) asserts that an incomplete transfer is refused BY ITS NAMED
+  -- MECHANISM, `inventory.source_movement_set_incomplete`, and CI 43831620333
+  -- measured three of those cases reporting THIS law's code instead. An
+  -- incomplete set has an unbalanced value too, so both guards were right and
+  -- the wrong one spoke. Hung off `inventory_transfer_lines` with a name that
+  -- sorts after `stock_source_complete_inventory_transfer`, PostgreSQL fires
+  -- the completeness guard first for each line (triggers on the same event
+  -- fire in alphabetical order by name) and this law speaks only about a set
+  -- that is complete. The sum is still the whole document's, not the line's. The claim is a SUM over the document's movements and not a
   -- comparison against a stored total, because `inventory_transfers` carries
   -- no value column and may not carry one -- the same rule that leaves the
   -- `sale` source without a value_complete arm (P4-AL-05 and the
@@ -55,7 +69,7 @@ BEGIN
   FROM stock_source_bridge_inventory_transfer b
   JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
                         AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
-  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.id;
+  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id;
   IF v_sum IS DISTINCT FROM 0::numeric THEN
     RAISE EXCEPTION 'inventory.transfer_value_not_conserved: a transfer moves value between warehouses and must not create or destroy it' USING ERRCODE = 'P0001';
   END IF;
@@ -68,8 +82,8 @@ COMMENT ON FUNCTION inventory_transfer_value_conserved() IS
 
 REVOKE ALL ON FUNCTION inventory_transfer_value_conserved() FROM PUBLIC;
 
-CREATE CONSTRAINT TRIGGER inventory_transfers_value_conserved
-  AFTER INSERT OR UPDATE ON inventory_transfers DEFERRABLE INITIALLY DEFERRED
+CREATE CONSTRAINT TRIGGER transfer_value_conserved_per_line
+  AFTER INSERT ON inventory_transfer_lines DEFERRABLE INITIALLY DEFERRED
   FOR EACH ROW EXECUTE FUNCTION inventory_transfer_value_conserved();
 
 -- Grants and the trigger first, ownership last ([[daftar-grant-before-owner]]).
@@ -142,7 +156,7 @@ DECLARE
     "stock_source_complete_sale()": "0d66d946ae01292345ded8215710f96283e7cb60ad8a6cb3a8219a7cec96ba5b",
     "stock_source_complete_sale_header()": "6aa21ff188d72c53cc887c0a88e5c302953f78d58e7dc95a0909b01a830c89b1",
     "sale_header_guard()": "b5d218c0114b7ea43e9e84fe4470f383be2a5c9d86486749e1312126d7a6bcc3",
-    "inventory_transfer_value_conserved()": "250e6722be899c9b5e912306252e21386047342abf88976f299d77fd86d7f4bb"
+    "inventory_transfer_value_conserved()": "5b5e64f0bc35117698fe3659444ca307575342717d4ee8d9b27f5cd64a39e58e"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP
@@ -255,7 +269,7 @@ BEGIN
           ('inventory_transfer',   'source_complete',  'inventory_transfer_lines',   'stock_source_complete_inventory_transfer',   5,  true,  'stock_source_complete_inventory_transfer()'),
           ('inventory_transfer',   'source_freeze',    'inventory_transfer_lines',   'stock_source_freeze_inventory_transfer',     27, false, 'stock_source_freeze_inventory_transfer()'),
           ('inventory_transfer',   'header_immutable', 'inventory_transfers',        'inventory_transfers_immutable',              27, false, 'inventory_source_header_guard()'),
-          ('inventory_transfer',   'value_complete',   'inventory_transfers',        'inventory_transfers_value_conserved',        21, true,  'inventory_transfer_value_conserved()'),
+          ('inventory_transfer',   'value_complete',   'inventory_transfer_lines',   'transfer_value_conserved_per_line',         5,  true,  'inventory_transfer_value_conserved()'),
           ('inventory_adjustment', 'source_complete',  'inventory_adjustment_lines', 'stock_source_complete_inventory_adjustment', 5,  true,  'stock_source_complete_inventory_adjustment()'),
           ('inventory_adjustment', 'source_freeze',    'inventory_adjustment_lines', 'stock_source_freeze_inventory_adjustment',   27, false, 'stock_source_freeze_inventory_adjustment()'),
           ('inventory_adjustment', 'header_immutable', 'inventory_adjustments',      'inventory_adjustments_immutable',            27, false, 'inventory_source_header_guard()'),

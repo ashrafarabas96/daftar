@@ -59,17 +59,17 @@ describe('C6 — the transfer value arm on a cluster', () => {
          FROM pg_trigger g
          JOIN pg_proc p ON p.oid = g.tgfoid
          JOIN pg_roles r ON r.oid = p.proowner
-        WHERE g.tgrelid = 'public.inventory_transfers'::regclass
-          AND g.tgname = 'inventory_transfers_value_conserved' AND NOT g.tgisinternal`,
+        WHERE g.tgrelid = 'public.inventory_transfer_lines'::regclass
+          AND g.tgname = 'transfer_value_conserved_per_line' AND NOT g.tgisinternal`,
     );
     const row = r.rows[0];
     expect(row, 'the trigger must exist before its shape can be judged').toBeDefined();
-    expect(row?.tgtype, 'AFTER INSERT OR UPDATE, FOR EACH ROW — the shape the registry records as 21').toBe(21);
+    expect(row?.tgtype, 'AFTER INSERT, FOR EACH ROW — the shape the registry records as 5, on the LINES table so the completeness guard speaks first').toBe(5);
     expect(row?.deferred, 'a deferred constraint trigger, because the movements are written after the header').toBe(true);
     expect(row?.owner).toBe('daftar_inventory_internal');
     expect(row?.secdef, 'SECURITY DEFINER').toBe(true);
     expect(row?.proconfig, 'the pinned search_path').toEqual(['search_path=pg_catalog, public, pg_temp']);
-    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('250e6722be899c9b5e912306252e21386047342abf88976f299d77fd86d7f4bb');
+    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('5b5e64f0bc35117698fe3659444ca307575342717d4ee8d9b27f5cd64a39e58e');
   });
 
   it('§3 the schema floor constant names the head this build ships', async () => {
