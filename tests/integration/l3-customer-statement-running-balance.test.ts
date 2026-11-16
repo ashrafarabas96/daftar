@@ -5,7 +5,8 @@ import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appDbUrl, ensurePostgres, ownerPool } from '../helpers/test-app';
 import { newCustomer, sellOnCredit, settlementMissing, settlementWorld, stockUp, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
-import { collectPayment } from '../golden-regression/phase4-s4/settlement-path';
+import { applyCredit, collectPayment, rateToR10 } from '../golden-regression/phase4-s4/settlement-path';
+import { creditSnapshot, must } from '../golden-regression/phase4-s4/harness';
 
 /**
  * 0092 — THE INSTALLED `customer_account_statement`, MEASURED.
@@ -375,19 +376,44 @@ describe('§C the boundaries', () => {
     expect(aRows[i]?.running_balance_txn_minor).toBe(aRows[i - 1]?.running_balance_txn_minor);
   });
 
-  it('entries on the SAME date are ordered by kind_rank and then by entry_id — a total order', () => {
-    for (let i = 1; i < aRows.length; i += 1) {
-      const p = aRows[i - 1];
+  it('entries on the SAME date are ordered by kind_rank and then by entry_id — a total order WITHIN a currency', () => {
+    // THE ORDER THIS LAW JUDGES IS THE WINDOW'S OWN, AND THE WINDOW IS
+    // PARTITIONED. `0092` accumulates
+    // `OVER (PARTITION BY currency_code ORDER BY entry_date, kind_rank, entry_id)`,
+    // so the triple is strictly increasing INSIDE a currency and says nothing
+    // across one. An earlier form of this case compared every consecutive pair
+    // globally, which was true only because every fixture here had a single
+    // currency -- and it became a trap the moment the probe started asking for
+    // `ORDER BY s.currency_code, …` (added so the laws stop resting on the
+    // planner): at a currency boundary the date legitimately goes BACKWARDS,
+    // and the law would have gone red on a CORRECT reader. The law that forbids
+    // the case it requires is the false-failure shape this lane keeps writing
+    // rules against, and this one was mine.
+    //
+    // So: the triple increases within a currency, and the currencies arrive in
+    // contiguous blocks -- which is what makes "within a currency" a partition
+    // of the rows and not a filter over them.
+    const seenBlocks: string[] = [];
+    for (let i = 0; i < aRows.length; i += 1) {
       const c = aRows[i];
-      if (p === undefined || c === undefined) continue;
+      if (c === undefined) continue;
+      if (seenBlocks[seenBlocks.length - 1] !== c.currency_code) seenBlocks.push(c.currency_code);
+      const p = aRows[i - 1];
+      if (i === 0 || p === undefined || p.currency_code !== c.currency_code) continue;
       const ordered =
         p.entry_date_text < c.entry_date_text ||
         (p.entry_date_text === c.entry_date_text && (p.kind_rank < c.kind_rank || (p.kind_rank === c.kind_rank && p.entry_id < c.entry_id)));
       expect(
         ordered,
-        `row ${i - 1} (${p.entry_date_text}/${p.kind_rank}/${p.entry_id}) is not before row ${i} (${c.entry_date_text}/${c.kind_rank}/${c.entry_id})`,
+        `row ${i - 1} (${p.currency_code}/${p.entry_date_text}/${p.kind_rank}/${p.entry_id}) is not before row ${i} (${c.currency_code}/${c.entry_date_text}/${c.kind_rank}/${c.entry_id})`,
       ).toBe(true);
     }
+    // No currency may appear in two separate blocks: that would mean the rows
+    // of one partition are interleaved with another's, and then "within a
+    // currency" above would be skipping pairs it ought to have judged.
+    expect(seenBlocks.length, 'every currency must arrive as ONE contiguous block').toBe(new Set(seenBlocks).size);
+    // And the probe is sighted: it saw rows at all.
+    expect(seenBlocks.length, 'NO SUBJECT — the statement returned no currency block to order').toBeGreaterThan(0);
   });
 
   it('a customer who settles in full closes at EXACTLY zero, and one in credit goes NEGATIVE', async () => {
@@ -548,4 +574,148 @@ describe('§E the end-state block refuses, and is seen doing it', () => {
     const r = await ownerPool().query<{ ok: boolean }>(`SELECT has_function_privilege('daftar_app', 'customer_account_statement(uuid,uuid)', 'EXECUTE') AS ok`);
     expect(r.rows[0]?.ok, 'daftar_app holds EXECUTE again, so the committed catalogue is unchanged').toBe(true);
   }, 120_000);
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §F — THE TWO BRANCHES NOTHING HAD EVER EXECUTED.
+//
+// `0092` has five branches. Every case above exercises three of them: the
+// invoice, the payment row and the allocation. Branch 4 (`credit`, kind_rank 4)
+// and branch 5 (`credit_application`, kind_rank 5) had never produced a single
+// row in any executed case, and the independent review on `55e6c134` named
+// that as blocking. It is right, and the reason it is blocking rather than
+// cosmetic is branch 5: it MOVES THE BALANCE, and `customer_ar_outstanding`
+// counts `customer_credit_applications` inside its `paid` sum (`0084:636-639`).
+// So a wrong join, a wrong currency or a wrong sign there breaks the closing
+// law IN PRODUCTION while §A stays green on a fixture that has no credit in
+// it. Ten green jobs attested nothing about two fifths of this reader.
+//
+// The shape is the estate's own measured precedent, not an invention:
+// `tests/golden-regression/phase4-s4/12-overpayment-customer-credit.golden.test.ts`
+// overpays with an explicit `creditId`, reads the credit's pair back off the
+// stored row with `creditSnapshot` (never assuming it), sells a LATER invoice,
+// and consumes part of the credit onto it.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§F the credit and its application — the branches that move the balance without a payment', () => {
+  let creditCustomer = '';
+  let creditRows: readonly StatementRow[] = [];
+  let creditOutstanding: readonly OutstandingRow[] = [];
+
+  beforeAll(async () => {
+    creditCustomer = await newCustomer(A);
+    const invoiceA = await sellOnCredit(A, creditCustomer, '2');
+    const totalA = BigInt(invoiceA.totalTxnMinor);
+    const surplus = 500n;
+    const creditId = randomUUID();
+
+    // THE OVERPAYMENT that gives the credit its birth, and the surplus is the
+    // credit's original amount.
+    const born = await collectPayment(A.t, A.headers, {
+      paymentId: randomUUID(),
+      customerId: creditCustomer,
+      paymentMethodId: A.paymentMethodId,
+      paymentDate: A.day,
+      amountMinor: (totalA + surplus).toString(),
+      creditId,
+      allocations: [
+        {
+          invoiceId: invoiceA.invoiceId,
+          appliedMinor: invoiceA.totalTxnMinor,
+          releasedBeforeMinor: '0',
+          invoiceTotalTxnMinor: invoiceA.totalTxnMinor,
+          invoiceTotalBaseMinor: invoiceA.totalBaseMinor,
+        },
+      ],
+    });
+    expect(born.status, `the overpayment is accepted: ${JSON.stringify(born.body)}`).toBeLessThan(300);
+
+    // THE CREDIT'S OWN FIGURES, READ BACK off the stored row. A number retyped
+    // here would be a second copy of the arithmetic, and the application's
+    // chain position is the credit's to state.
+    const snapshot = await creditSnapshot(ownerPool(), A.shop.businessId, creditId);
+    const remainingBefore = BigInt(snapshot.remainingAmountMinor);
+    expect(remainingBefore, 'NO SUBJECT — the credit was born with nothing in it, so there is nothing to apply').toBeGreaterThan(0n);
+
+    // A LATER invoice, and part of the credit onto it.
+    const invoiceB = await sellOnCredit(A, creditCustomer, '6');
+    const consumed = remainingBefore < BigInt(invoiceB.totalTxnMinor) ? remainingBefore : BigInt(invoiceB.totalTxnMinor);
+    expect(consumed, 'NO SUBJECT — nothing can be consumed onto the later invoice').toBeGreaterThan(0n);
+    const applied = await applyCredit(A.t, A.headers, {
+      applicationId: randomUUID(),
+      creditId,
+      customerId: creditCustomer,
+      invoiceId: invoiceB.invoiceId,
+      applicationDate: A.day,
+      consumedMinor: consumed.toString(),
+      remainingBeforeMinor: snapshot.remainingAmountMinor,
+      creditOriginalMinor: snapshot.originalAmountMinor,
+      creditOriginalCarryingMinor: snapshot.originalCarryingBaseAmountMinor,
+      creditToBaseRateR10: rateToR10(snapshot.creditToBaseRate),
+      leg: {
+        invoiceId: invoiceB.invoiceId,
+        appliedMinor: consumed.toString(),
+        paymentAmountMinor: consumed.toString(),
+        releasedBeforeMinor: '0',
+        invoiceTotalTxnMinor: invoiceB.totalTxnMinor,
+        invoiceTotalBaseMinor: invoiceB.totalBaseMinor,
+        invoiceToBaseRateR10: rateToR10(invoiceB.sourceToBaseRate),
+        paymentToBaseRateR10: rateToR10(snapshot.creditToBaseRate),
+      },
+    });
+    expect(applied.status, `the credit application is accepted: ${JSON.stringify(applied.body)}`).toBeLessThan(300);
+
+    creditRows = await asApp<StatementRow>(app, A.shop, SELECT_STATEMENT, [A.shop.businessId, creditCustomer]);
+    creditOutstanding = await asApp<OutstandingRow>(
+      app,
+      A.shop,
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r`,
+      [A.shop.businessId, creditCustomer],
+    );
+  }, 900_000);
+
+  it('BOTH branches produced rows — the non-vacuity this section exists for', () => {
+    const ranks = new Set(creditRows.map((r) => r.kind_rank));
+    expect(ranks.has(4), `branch 4 (the credit) produced no row; ranks seen: ${[...ranks].sort().join(',')}`).toBe(true);
+    expect(ranks.has(5), `branch 5 (the credit application) produced no row; ranks seen: ${[...ranks].sort().join(',')}`).toBe(true);
+    // And all five are now exercised in one statement, which is the claim the
+    // suite could not make before.
+    expect(
+      [...ranks].sort((x, y) => x - y),
+      'every branch of the reader is exercised here',
+    ).toStrictEqual([1, 2, 3, 4, 5]);
+  });
+
+  it('the credit row itself moves the balance by nothing, and the APPLICATION moves it', () => {
+    const credit = creditRows.find((r) => r.kind_rank === 4);
+    const application = creditRows.find((r) => r.kind_rank === 5);
+    const c = must(credit, 'the credit row');
+    const a = must(application, 'the credit application row');
+    // The credit is a fact on the statement, not a movement of the receivable:
+    // both sides are absent, exactly as the payment row is.
+    expect(c.debit_txn_minor, 'the credit row debits nothing').toBeNull();
+    expect(c.credit_txn_minor, 'the credit row credits nothing').toBeNull();
+    // The application is the movement, and it is a CREDIT of the applied
+    // amount — the same side an allocation takes, because it settles the same
+    // receivable.
+    expect(a.debit_txn_minor, 'the application debits nothing').toBeNull();
+    expect(BigInt(must(a.credit_txn_minor, 'the application credits the applied amount')), 'and it credits a positive figure').toBeGreaterThan(0n);
+  });
+
+  it('and the closing law still holds WITH the credit branches in play, in both directions', () => {
+    const last = new Map<string, string>();
+    for (const r of creditRows) last.set(r.currency_code, r.running_balance_txn_minor);
+    expect(last.size, 'NO SUBJECT — the statement returned no row for this customer').toBeGreaterThan(0);
+    const reported = new Set(creditOutstanding.map((o) => o.currency_code));
+    for (const o of creditOutstanding)
+      expect(
+        last.get(o.currency_code),
+        `${o.currency_code}: the statement closes at ${String(last.get(o.currency_code))} and the reader of record states ${o.txn_minor}`,
+      ).toBe(o.txn_minor);
+    for (const [currency, closing] of last)
+      if (!reported.has(currency)) expect(closing, `${currency}: the reader of record omits it, so the statement must close it at exactly 0`).toBe('0');
+  });
+
+  it('and the SQL window still agrees with an independent BigInt fold on every row', () => {
+    expect(creditRows.map((r) => r.running_balance_txn_minor)).toEqual(foldRunning(creditRows));
+  });
 });

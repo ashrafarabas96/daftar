@@ -139,7 +139,20 @@ const LAWS: readonly Law[] = [
       if (body.length === 0) return 'the reader body could not be delimited';
       if (!body.includes('OVER (PARTITION BY s.currency_code')) return 'no window partitioned by currency_code in the body';
       if (!body.includes('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW')) return 'the window frame is not cumulative';
-      if (!/ORDER BY s\.entry_date, s\.kind_rank, s\.entry_id/.test(body)) return 'the window is not ordered by the total order';
+      // ANCHORED INSIDE THE WINDOW, not anywhere in the body. Measured: that
+      // ORDER BY appears TWICE in `0092` -- at `:202` inside `OVER (...)`,
+      // which is the accumulation order and the only one that decides a
+      // figure, and at `:282` as the function's final output order. An earlier
+      // form of this arm searched the whole body, so weakening the WINDOW's
+      // order left it green on the strength of the output's -- the arm could
+      // not tell the two apart. Its own per-arm mutant in section C caught
+      // that, which is what per-arm mutants are for.
+      if (
+        !/OVER \(PARTITION BY s\.currency_code[\s\S]*?ORDER BY s\.entry_date, s\.kind_rank, s\.entry_id[\s\S]*?ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW/.test(
+          body,
+        )
+      )
+        return 'the window is not ordered by the total order';
       return null;
     },
     kill: (w) => ({ ...w, migration: dropLines(w.migration, 'ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW') }),
@@ -301,5 +314,64 @@ describe('0092 — DR-145: each law goes RED when the line it guards is deleted 
     expect(after, `${id}: the kill changed nothing (sha ${before})`).not.toBe(before);
     const verdict = law.holds(mutant);
     expect(verdict, `${id} stayed GREEN on its own mutant, so it guards nothing (DR-145). sha before=${before} after=${after}`).not.toBeNull();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C — `L1` HAS THREE ARMS AND HAD ONE KILLER.
+//
+// Section B kills each law with one mutant, which proves the LAW guards
+// something. It does not prove each ARM does. `L1` claims three things — a
+// window partitioned by currency, a cumulative frame, and the total order —
+// and its killer drops the FRAME line only. So the partition arm and the order
+// arm had never been observed to refuse anything, and the partition is the
+// whole reason the window exists: with every fixture in a single currency,
+// deleting `PARTITION BY` changes no figure any executed case reads, and the
+// independent review on `55e6c134` named that gap.
+//
+// Each arm below gets its own mutant, with section B's discipline kept: the
+// world digest must MOVE before the verdict is read, so a mutation that
+// changed nothing cannot be mistaken for a law that fired.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('0092 — C: every arm of L1 refuses on its own, not merely the law as a whole', () => {
+  const l1 = LAWS.find((l) => l.id === 'L1');
+
+  it('L1 is present, or this section has no subject', () => {
+    expect(l1, 'L1 must exist for its arms to be judged').toBeDefined();
+  });
+
+  const arms: readonly { readonly arm: string; readonly mutate: (t: string) => string; readonly says: string }[] = [
+    {
+      arm: 'the partition by currency',
+      mutate: (t) => t.replace('OVER (PARTITION BY s.currency_code', 'OVER ('),
+      says: 'partitioned by currency_code',
+    },
+    {
+      arm: 'the cumulative frame',
+      mutate: (t) => t.replace('ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW', ''),
+      says: 'frame is not cumulative',
+    },
+    {
+      arm: 'the total order',
+      mutate: (t) => t.replace('ORDER BY s.entry_date, s.kind_rank, s.entry_id', 'ORDER BY s.entry_date'),
+      says: 'not ordered by the total order',
+    },
+  ];
+
+  it.each(arms.map((a) => [a.arm, a] as const))('L1 refuses when %s is removed', (arm, spec) => {
+    const law = l1;
+    expect(law, 'L1 must exist').toBeDefined();
+    if (law === undefined) return;
+    const before = worldSha(WORLD);
+    const mutant: Texts = { ...WORLD, migration: spec.mutate(WORLD.migration) };
+    const after = worldSha(mutant);
+    // THE MUTATION HAPPENED. Without this the red below could be the law
+    // passing on an unchanged text, which is how a control proves nothing.
+    expect(after, `${arm}: the mutation changed nothing (sha ${before}) — the replacement did not match`).not.toBe(before);
+    const verdict = law.holds(mutant);
+    expect(verdict, `L1 stayed GREEN with ${arm} removed, so that arm guards nothing`).not.toBeNull();
+    // AND IT REFUSES FOR THE RIGHT REASON: a law that went red on some other
+    // arm would hide the fact that this one is unguarded.
+    expect(verdict ?? '', `L1 refused, but not for ${arm}: ${verdict ?? ''}`).toContain(spec.says);
   });
 });
