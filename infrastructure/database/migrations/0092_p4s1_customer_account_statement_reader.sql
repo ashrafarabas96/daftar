@@ -246,6 +246,22 @@ LANGUAGE sql STABLE SET search_path = pg_catalog, public, pg_temp AS $$
              NULL::TEXT, c.origin_payment_id, c.currency_code::TEXT,
              NULL::BIGINT, NULL::BIGINT,
              NULL::BIGINT, NULL::BIGINT,
+             -- A FIGURE AS OF NOW, ON A ROW DATED THEN, said here because a
+             -- reader of this statement would otherwise take it for a
+             -- historical one. `remaining_amount_minor` and
+             -- `remaining_carrying_base_amount_minor` are MUTABLE: every
+             -- application of the credit reduces them (`customer_credit_consume`,
+             -- `0081`). So a credit of 500 opened on the 1st and consumed to
+             -- nothing on the 20th prints as "credit, 1st, remaining 0" --
+             -- the date it was created beside its balance today.
+             --
+             -- IT MOVES NO BALANCE, which is why this is a display matter and
+             -- not an arithmetic one: this branch contributes NEITHER debit
+             -- NOR credit (both NULL above), so the running balance never
+             -- reads these two columns. Showing today's remainder is also
+             -- what a merchant asking "what is left of this credit" means.
+             -- The remainder AS OF THE ENTRY DATE is a different report and a
+             -- product decision, not something to change quietly here.
              c.original_amount_minor::BIGINT, c.remaining_amount_minor::BIGINT,
              c.remaining_carrying_base_amount_minor::BIGINT, NULL::TEXT
         FROM public.customer_credits c

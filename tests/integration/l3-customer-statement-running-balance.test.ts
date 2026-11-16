@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appDbUrl, ensurePostgres, ownerPool } from '../helpers/test-app';
@@ -241,6 +243,20 @@ describe(`§0 non-vacuity — ${CLAIM}`, () => {
 });
 
 describe('§A the closing law — the last running balance IS the reader of record', () => {
+  // THE SUBJECT, ASSERTED HERE AND NOT ONLY IN §0. `beforeAll` returns early
+  // when a relation is missing (`:165`), which leaves `aRows` and
+  // `aOutstanding` EMPTY -- and then every law in this section passes by
+  // iterating over nothing. §0 does go red in that case, so the FILE is red;
+  // but a law that is GREEN on a fixture which never reached the function
+  // under test is the vacuous pass this file's own header says it exists to
+  // avoid, and a green line in a report is how a wrong conclusion gets drawn
+  // from a red file. So this section states the minimum it needs before it
+  // judges anything.
+  beforeAll(() => {
+    expect(aRows.length, 'NO SUBJECT — the statement returned no row, so nothing below judges the function').toBeGreaterThan(0);
+    expect(aOutstanding.length, 'NO SUBJECT — the reader of record returned nothing, so the closing law has no right-hand side').toBeGreaterThan(0);
+  });
+
   it('per currency, the last running balance equals customer_ar_outstanding.txn_minor exactly', () => {
     const last = new Map<string, string>();
     for (const r of aRows) last.set(r.currency_code, r.running_balance_txn_minor);
@@ -458,4 +474,78 @@ describe('§D minor units — integers, never a float', () => {
       }
     }
   });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §E — THE END-STATE CLAIMS SEEN REFUSING, which nothing had watched.
+//
+// `0092`'s `DO $post$` block (`:306`–`:409`) carries NINE named refusals, each
+// with its own positive control inside its own query. Every one of them has
+// only ever been observed in the AFFIRMATIVE: the migration applies upward and
+// the block stays silent. The package's seven mutants attack the migration's
+// TEXT, not these claims, so no run has ever seen one of them speak.
+//
+// That is the defect class this lane keeps writing rules against, and the money
+// review named it. So this section runs the real block against a catalogue
+// mutated inside a transaction it rolls back, and watches the claim refuse.
+//
+// WHY THE BLOCK IS READ FROM THE FILE rather than re-stated here: a copy would
+// drift from the migration and then prove something about the copy. The block
+// is extracted between its own `$post$` delimiters, and that extraction is
+// asserted to have found the real thing before anything is run (RULE-27).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§E the end-state block refuses, and is seen doing it', () => {
+  const MIGRATION_PATH = join(__dirname, '../../infrastructure/database/migrations/0092_p4s1_customer_account_statement_reader.sql');
+
+  /** The real `DO $post$ … $post$;` block, taken from the migration this card ships. */
+  function endStateBlock(): string {
+    const sql = readFileSync(MIGRATION_PATH, 'utf8');
+    const start = sql.indexOf('DO $post$');
+    const end = sql.indexOf('$post$;', start + 'DO $post$'.length);
+    expect(start, 'the end-state block must be found in the migration, or this section tests a copy').toBeGreaterThan(-1);
+    expect(end, 'the block must be terminated, or the extraction is truncated').toBeGreaterThan(start);
+    const block = `${sql.slice(start, end)}$post$;`;
+    // THE EXTRACTION IS PROVED BEFORE IT IS RUN: it must carry the refusals
+    // this section is about, and more than one of them.
+    const refusals = block.match(/selling\.migration_end_state_invalid/g) ?? [];
+    expect(refusals.length, `the extracted block must carry the named refusals; it carried ${refusals.length}`).toBeGreaterThanOrEqual(8);
+    return block;
+  }
+
+  it('the real block is SILENT on the real catalogue — the positive control for every arm below', async () => {
+    const c = await ownerPool().connect();
+    try {
+      await c.query('BEGIN');
+      await c.query(endStateBlock());
+      await c.query('ROLLBACK');
+    } finally {
+      c.release();
+    }
+  }, 300_000);
+
+  it('RED: with EXECUTE revoked from daftar_app, the reachability claim refuses by name', async () => {
+    const c = await ownerPool().connect();
+    let message = '';
+    try {
+      await c.query('BEGIN');
+      await c.query(`REVOKE EXECUTE ON FUNCTION customer_account_statement(uuid, uuid) FROM daftar_app`);
+      // THE PLANT REACHED THE CATALOGUE, asserted before its result is read.
+      const seen = await c.query<{ ok: boolean }>(`SELECT has_function_privilege('daftar_app', 'customer_account_statement(uuid,uuid)', 'EXECUTE') AS ok`);
+      expect(seen.rows[0]?.ok, 'the revoke must really have landed, or the refusal below proves nothing').toBe(false);
+      try {
+        await c.query(endStateBlock());
+      } catch (e) {
+        message = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      await c.query('ROLLBACK').catch(() => undefined);
+      c.release();
+    }
+    expect(message, `the block must refuse, and by this claim: ${message}`).toContain('not reachable by daftar_app alone');
+  }, 300_000);
+
+  it('and the rollback took the plant with it: the grant is back', async () => {
+    const r = await ownerPool().query<{ ok: boolean }>(`SELECT has_function_privilege('daftar_app', 'customer_account_statement(uuid,uuid)', 'EXECUTE') AS ok`);
+    expect(r.rows[0]?.ok, 'daftar_app holds EXECUTE again, so the committed catalogue is unchanged').toBe(true);
+  }, 120_000);
 });

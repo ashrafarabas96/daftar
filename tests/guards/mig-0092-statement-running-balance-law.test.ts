@@ -224,41 +224,62 @@ const LAWS: readonly Law[] = [
   {
     id: 'L6',
     claim: 'the number is 0092, above every number on this base, and nothing at or below frozenThrough is touched',
+    // FOUR CLAIMS, AND ONE MUTANT USED TO KILL ONLY THE FIRST. Every arm here
+    // `return`ed, so the single killer for this law -- which renames the
+    // file's first line -- short-circuited at the top and the three arms
+    // below it NEVER EXECUTED in any red state: that 0092 is on the tree,
+    // that `frozenThrough` is on it, and that all 80 frozen files still hash
+    // to their pinned shas. That last one is the arm that carries the whole
+    // "nothing at or below 0079 was touched" claim, and it was the least
+    // exercised of the four.
+    //
+    // So the arms are COLLECTED rather than returned from: each one runs on
+    // every call, the answer names everything wrong at once, and the mutant
+    // that renames the first line is now seen to leave the other three
+    // standing. The contract is unchanged -- a string when something is
+    // wrong, `null` when nothing is -- so every caller and every killer in
+    // this file reads it exactly as before.
     holds: ({ migration: t }) => {
-      if (!t.startsWith(`-- ${MIGRATION}\n`)) return 'the file does not name itself on its first line';
+      const problems: string[] = [];
+      if (!t.startsWith(`-- ${MIGRATION}\n`)) problems.push('the file does not name itself on its first line');
       const onDisk = readdirSync(MIGRATIONS_DIR)
         .filter((f) => /^\d{4}_.*\.sql$/.test(f))
         .sort();
-      if (onDisk.length === 0) return 'the migration directory probe is blind: it listed no file';
-      // AND NOT `the highest file on disk is 0092`, which this line used to
-      // demand. That is a claim about the WHOLE migrations directory enforced
-      // from inside one card's guard: the moment any number above 0092 lands
-      // in `main` -- and #120 of this same lane carries `0093` -- it goes red
-      // permanently, and the next lane has to edit THIS lane's guard file to
-      // make its own branch green. A false red is how a law gets disabled,
-      // and this one would have arrived with a motive attached.
-      //
-      // What the guard is actually for survives without it: `0092` is present
-      // on the tree, `frozenThrough` is present, and every frozen file still
-      // hashes to its pinned sha -- which is the "nothing at or below 0079
-      // was touched" claim, and it needs no statement about what the newest
-      // file is.
-      if (!onDisk.includes(MIGRATION)) return `${MIGRATION} is not on this tree; the directory holds ${String(onDisk.length)} migrations`;
-      const frozenIndex = onDisk.indexOf(MANIFEST.frozenThrough);
-      if (frozenIndex < 0) return `frozenThrough ${MANIFEST.frozenThrough} is not on this tree`;
+      if (onDisk.length === 0) {
+        // The listing is the subject of the two arms that follow, so its
+        // emptiness is reported INSTEAD of them rather than alongside two
+        // findings derived from nothing (RULE-18).
+        problems.push('the migration directory probe is blind: it listed no file');
+      } else {
+        // AND NOT `the highest file on disk is 0092`, which this law used to
+        // demand. That is a claim about the WHOLE migrations directory
+        // enforced from inside one card's guard: the moment any number above
+        // 0092 lands in `main` -- and #120 of this same lane carries `0093`
+        // -- it goes red permanently, and the next lane has to edit THIS
+        // lane's guard file to green its own branch. A false red is how a law
+        // gets disabled, and this one would have arrived with a motive.
+        //
+        // What the guard is for survives without it: 0092 is present,
+        // `frozenThrough` is present, and every frozen file still hashes to
+        // its pinned sha -- which needs no statement about the newest file.
+        if (!onDisk.includes(MIGRATION)) problems.push(`${MIGRATION} is not on this tree; the directory holds ${String(onDisk.length)} migrations`);
+        if (!onDisk.includes(MANIFEST.frozenThrough)) problems.push(`frozenThrough ${MANIFEST.frozenThrough} is not on this tree`);
+      }
       // Every frozen file still hashes to the sha the manifest pinned. This is
       // the only arm that can prove "nothing at or below 0079 was touched",
       // and its positive control is the count: 80 files compared, not zero.
+      // It reads files BY NAME from the manifest, so it does not depend on the
+      // listing above and runs even when that listing is blind.
       let compared = 0;
       for (const entry of MANIFEST.migrations) {
         const actual = createHash('sha256')
           .update(readFileSync(join(MIGRATIONS_DIR, entry.name)))
           .digest('hex');
-        if (actual !== entry.sha256) return `${entry.name} no longer hashes to its frozen sha256`;
+        if (actual !== entry.sha256) problems.push(`${entry.name} no longer hashes to its frozen sha256`);
         compared += 1;
       }
-      if (compared !== MANIFEST.migrations.length || compared === 0) return 'the frozen-set probe compared nothing';
-      return null;
+      if (compared !== MANIFEST.migrations.length || compared === 0) problems.push('the frozen-set probe compared nothing');
+      return problems.length === 0 ? null : problems.join(' ; ');
     },
     kill: (w) => ({ ...w, migration: w.migration.replace(`-- ${MIGRATION}\n`, '-- 0087_p4s1_customer_account_statement_reader.sql\n') }),
   },
