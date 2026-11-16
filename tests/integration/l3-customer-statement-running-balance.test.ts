@@ -4,7 +4,18 @@ import { join } from 'node:path';
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { appDbUrl, ensurePostgres, ownerPool } from '../helpers/test-app';
-import { newCustomer, sellOnCredit, settlementMissing, settlementWorld, stockUp, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
+import {
+  baseCurrency,
+  newCustomer,
+  sellOnCredit,
+  settlementMissing,
+  settlementWorld,
+  stateFxRate,
+  stockUp,
+  type SettlementWorld,
+} from '../golden-regression/phase4-s4/settlement-world';
+import { confirmSale } from '../golden-regression/phase4-s2/sale-path';
+import { addTrackedProductPricedIn } from '../helpers/stock-ledger';
 import { applyCredit, collectPayment, rateToR10 } from '../golden-regression/phase4-s4/settlement-path';
 import { creditSnapshot, must } from '../golden-regression/phase4-s4/harness';
 
@@ -717,5 +728,128 @@ describe('§F the credit and its application — the branches that move the bala
 
   it('and the SQL window still agrees with an independent BigInt fold on every row', () => {
     expect(creditRows.map((r) => r.running_balance_txn_minor)).toEqual(foldRunning(creditRows));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §G — TWO CURRENCIES, so the partition finally guards a live figure.
+//
+// `0092` accumulates `OVER (PARTITION BY s.currency_code …)`. Until this
+// section, EVERY executed case had one currency, so deleting `PARTITION BY`
+// changed no figure any live case read — and `foldRunning`, which keys its
+// accumulator on the currency, agreed with the unpartitioned window too. The
+// textual arm in `mig-0092-…` now refuses that deletion, but a text law is not
+// a behaviour: this section is the behaviour.
+//
+// WHY A SECOND PRODUCT AND NOT A PARAMETER. The sale route cannot be told a
+// currency — `sales.ts:220` says it is "resolved by the server from the
+// catalogue and the business" — and `0078:723` reads it off
+// `p.price_currency`, while `:740` REFUSES a sale mixing products of different
+// currencies. So the only path to a second invoice currency is a second
+// product priced in one, and two SEPARATE sales. That refusal is not weakened
+// here; this section is built on top of it.
+//
+// AND THE SHARED WORLD IS NOT TOUCHED. The seeder is
+// `addTrackedProductPricedIn` in `tests/helpers/stock-ledger.ts`, a sibling of
+// `addTrackedProduct` rather than a change to it, called from here alone — so
+// the world that 22 other suites read is unchanged by construction, with
+// nothing to compare before and after.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§G the partition — two currencies for one customer', () => {
+  let twoCustomer = '';
+  let twoRows: readonly StatementRow[] = [];
+  let twoOutstanding: readonly OutstandingRow[] = [];
+  let baseCode = '';
+  let foreignCode = '';
+
+  beforeAll(async () => {
+    baseCode = await baseCurrency(A);
+    // THE SECOND CODE IS READ FROM THE CATALOGUE, not typed here: a code this
+    // file invented would fail the currency FK and say nothing about the
+    // partition.
+    const other = await ownerPool().query<{ code: string }>(`SELECT c.code FROM currencies c WHERE c.code <> $1 ORDER BY c.code LIMIT 1`, [baseCode]);
+    foreignCode = must(other.rows[0], 'a second currency must exist in the catalogue for this section to have a subject').code;
+    expect(foreignCode, 'the second currency must differ from the base').not.toBe(baseCode);
+
+    // The rate is stated through the estate's own mechanism, exactly as the
+    // cross-currency golden does; the value is this fixture's statement, as it
+    // is there.
+    await stateFxRate(A, foreignCode, baseCode, '3.5000000000', `${A.day}T00:00:01Z`);
+
+    const priced = await addTrackedProductPricedIn(ownerPool(), A.shop, foreignCode);
+    // Priced inbound stock for THAT product, through the same route `stockUp`
+    // uses — a product with no valued stock sells for nothing and the law
+    // below would compare 0 with 0.
+    const inbound = await A.t.request
+      .post('/v1/inventory/adjustments')
+      .set(A.headers)
+      .send({
+        adjustmentId: randomUUID(),
+        warehouseId: A.shop.w1,
+        occurredOn: A.day,
+        reason: 'l3 statement two-currency fixture',
+        lines: [{ productId: priced.productId, quantity: '50', unitCost: '7' }],
+      });
+    expect(inbound.status, `the priced inbound for the foreign-currency product is accepted: ${JSON.stringify(inbound.body)}`).toBe(201);
+
+    twoCustomer = await newCustomer(A);
+    // ONE invoice in the base currency, through the shared helper…
+    const baseInvoice = await sellOnCredit(A, twoCustomer, '2');
+    expect(baseInvoice.currencyCode, 'the shared product prices in the base currency').toBe(baseCode);
+
+    // …and ONE in the foreign currency, sold HERE because the helper is
+    // pinned to the world's own product. The invoice is read back out of the
+    // catalogue, never assumed from the request.
+    const saleId = randomUUID();
+    const foreignSale = await confirmSale(A.t, A.headers, {
+      saleId,
+      customerId: twoCustomer,
+      warehouseId: A.shop.w1,
+      occurredOn: A.day,
+      lines: [{ productId: priced.productId, quantity: '3' }],
+    });
+    expect(foreignSale.status, `the foreign-currency sale commits: ${JSON.stringify(foreignSale.body)}`).toBeLessThan(300);
+    const back = await ownerPool().query<{ currency_code: string; status: string; total: string }>(
+      `SELECT i.currency_code, i.status, i.total_txn_minor::text AS total
+         FROM sales s JOIN invoices i ON i.business_id = s.business_id AND i.sale_id = s.id
+        WHERE s.business_id = $1 AND s.id = $2`,
+      [A.shop.businessId, saleId],
+    );
+    const row = must(back.rows[0], 'the committed foreign-currency sale and its invoice');
+    expect(row.currency_code, 'the invoice took the PRODUCT’s pricing currency, which is what makes two partitions').toBe(foreignCode);
+    expect(row.status, 'and it is open, the only status the reader of record reads').toBe('open');
+    expect(BigInt(row.total) > 0n, 'NO SUBJECT — the foreign invoice totals nothing').toBe(true);
+
+    twoRows = await asApp<StatementRow>(app, A.shop, SELECT_STATEMENT, [A.shop.businessId, twoCustomer]);
+    twoOutstanding = await asApp<OutstandingRow>(
+      app,
+      A.shop,
+      `SELECT r.currency_code, r.txn_minor::text AS txn_minor FROM customer_ar_outstanding($1::uuid, $2::uuid) r`,
+      [A.shop.businessId, twoCustomer],
+    );
+  }, 900_000);
+
+  it('the statement carries TWO currencies for one customer — the subject the partition needs', () => {
+    const codes = new Set(twoRows.map((r) => r.currency_code));
+    expect([...codes].sort(), `two currencies must appear; saw ${[...codes].join(',')}`).toStrictEqual([baseCode, foreignCode].sort());
+  });
+
+  it('and each currency closes on the reader of record SEPARATELY — which an unpartitioned window could not do', () => {
+    const last = new Map<string, string>();
+    for (const r of twoRows) last.set(r.currency_code, r.running_balance_txn_minor);
+    expect(twoOutstanding.length, 'the reader of record must answer for both currencies').toBe(2);
+    for (const o of twoOutstanding)
+      expect(
+        last.get(o.currency_code),
+        `${o.currency_code}: the statement closes at ${String(last.get(o.currency_code))} and the reader of record states ${o.txn_minor}`,
+      ).toBe(o.txn_minor);
+  });
+
+  it('and the window agrees with the independent per-currency fold on every row', () => {
+    // `foldRunning` keys on the currency, so this is the claim that the SQL
+    // window partitions the way the fold does. With two currencies present, an
+    // unpartitioned window would run one balance across both and this would
+    // fail — which is exactly what no live case could say before.
+    expect(twoRows.map((r) => r.running_balance_txn_minor)).toEqual(foldRunning(twoRows));
   });
 });
