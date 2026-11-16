@@ -205,13 +205,33 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // closed. It is not. What is closed is the set of routes by which THIS
     // PROBE could read a relaxation as `credentials: false` — and the probe is
     // a text reader. A guard gap of a different kind is recorded separately
-    // and is NOT closed by anything in this file: four routes by which a
-    // request can reach the CORS layer with an origin the allowlist never
-    // granted. Those live in `.local-context/OWNER_QUEUE_AR.md` with their
-    // class and their falsifiers, and closing them needs an assertion on a
-    // real `OPTIONS` response, which needs a booting app — the integration
-    // lane, NOT_RUN here and never to be reported as PASS from this file.
-    // A law over the bootstrap's text cannot hold the behaviour of a request.
+    // and is NOT closed by anything in this file — AND ITS CLASS AND ITS
+    // NUMBER ARE BOTH NARROWER THAN THE WORDING THAT STOOD HERE, which said
+    // "four routes by which a request can reach the CORS layer with an origin
+    // the allowlist never granted". That was wrong twice over, and the
+    // correction is measured, not editorial:
+    //
+    //  - WRONG CLASS. Every recorded route is a `credentials` RELAXATION (a
+    //    second `enableCors`, a `...spread` after the key, `app.use(cors(…))`,
+    //    a computed key) — none of them is an un-granted ORIGIN reaching the
+    //    CORS layer. So that sentence committed the very error the owner's
+    //    record names in the same paragraph: a claim about a GUARD written as
+    //    a claim about the SYSTEM.
+    //  - WRONG NUMBER. Five spellings defeat a text reader; only TWO change
+    //    what the running server answers — a hidden/computed key, and
+    //    `app.use(cors(…))` mounted BEFORE `enableCors`. Mounted after, and a
+    //    second `enableCors`, do NOT (the first CORS layer answers the
+    //    preflight and ends the response), and a `...spread` after a literal
+    //    `credentials:` key does not even compile (`tsc` exits 2, TS2783).
+    //    Measured by booting the real process in
+    //    `tests/integration/rel10-cors-preflight-credentials.test.ts`.
+    //
+    // The queue entry carries the narrowing by name; this file no longer
+    // repeats the wording it replaced. Closing the two live routes needs an
+    // assertion on a real `OPTIONS` response, which needs a booting app — the
+    // integration lane, NOT_RUN here and never to be reported as PASS from
+    // this file. A law over the bootstrap's text cannot hold the behaviour of
+    // a request.
     const options = raw.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
     expect(options).not.toBe('');
 
@@ -307,5 +327,13 @@ describe('REL-10: the gate and the running server parse the same way', () => {
     // failing CLOSED, and it is deliberate — the claim is that the bootstrap's
     // own call carries `credentials: false`. Whoever moves the options moves
     // this expectation with them, in the same commit.
+    //
+    // AND A SECOND CONSEQUENCE OF THE SAME SHAPE, so this list is a list and
+    // not one example: the `//` strip above removes the rest of ANY line that
+    // contains `//`, so writing a literal origin (`'https://ops.example'`) on
+    // the `credentials:` key's own line would redden this case with no
+    // relaxation present. It fails CLOSED, like the one above, and it is
+    // listed because a reader who hits it should find it here rather than
+    // suspect the guard.
   });
 });
