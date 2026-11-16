@@ -12,8 +12,11 @@
  *   3. `app.use(cors({ credentials: true }))` beside the Nest call,
  *   4. a COMPUTED key (`[k]: true`) that no literal `credentials:` matches.
  *
- * **ALL FOUR DEFEAT THE TEXT LAW. ONLY TWO CHANGE THE RUNNING SERVER — AND
- * THAT WAS MEASURED HERE, NOT ASSUMED.** Seeded into `main.ts`, built with
+ * **ALL FOUR DEFEAT THE TEXT LAW. OF THOSE FOUR RECORDED ROUTES ONLY TWO
+ * CHANGE THE RUNNING SERVER — AND THAT WAS MEASURED HERE, NOT ASSUMED.**
+ * (Three LIVE arms appear below, because `REL10-R3` is not one of the four: it
+ * is `REL10-N1`'s own options as the only call, there to prove that arm is
+ * about POSITION.) Seeded into `main.ts`, built with
  * the api's own config, booted, and read back off the wire: (4) relaxes the
  * preflight, (3) relaxes it ONLY when mounted BEFORE `enableCors`, (1) and (3)
  * mounted after do NOT — the first CORS layer answers the preflight and ENDS
@@ -32,9 +35,11 @@
  * preflight" and that was false of three of them: `REL10-P1` and `REL10-P2`
  * seed NOTHING (they measure the tree as it stands), and `REL10-N3` neither
  * boots nor sends a request (the compiler refuses its seed, which is the
- * finding). What holds of every SEEDED arm is that it proves its seed reached
- * the compiled program before concluding anything — so an arm can never
- * report "closed" when it merely failed to apply.
+ * finding — so it is the one seeded arm that proves its seed did NOT reach the
+ * program). What holds of every arm that BOOTS is that it proves its seed
+ * reached the compiled program, both before the boot and again after the
+ * preflight — so an arm can never report "closed" when it merely failed to
+ * apply, nor when another arm's late rebuild took the seed away.
  * `REL10-R1`/`REL10-R2` assert the header comes back `true` on the same
  * request `REL10-P1` asserts it is absent on, which IS the red-first proof of
  * `REL10-P1`: with either seed in the tree, `REL10-P1` fails.
@@ -161,6 +166,16 @@ function role(name: string, password: string): string {
 
 type Booted = { readonly port: number; readonly child: ChildProcess; readonly log: () => string };
 
+/**
+ * EVERY CHILD THIS FILE SPAWNS, SO NONE CAN OUTLIVE IT. `boot` kills on its
+ * own throws and each arm's `finally` kills on the way out, but an arm ABORTED
+ * by vitest's own timeout is not a throw: its `finally` may never run, and an
+ * orphan `node` would keep a port and the cluster's connections — and on a
+ * self-hosted runner, which `ci.yml` says is not disposable, it would outlive
+ * the job itself. (Review of this file, note 2.)
+ */
+const spawned = new Set<ChildProcess>();
+
 /** Compile `apps/api` as it stands on disk right now. Throws with tsc's own text. */
 function buildApi(): void {
   execFileSync(process.execPath, [join(ROOT, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', join(ROOT, 'apps/api/tsconfig.build.json'), '--outDir', OUT], {
@@ -202,6 +217,7 @@ async function boot(corsOrigins: string): Promise<Booted> {
       LOG_LEVEL: 'warn',
     },
   });
+  spawned.add(child);
   child.stdout?.on('data', (b: Buffer) => (out += b.toString('utf8')));
   child.stderr?.on('data', (b: Buffer) => (out += b.toString('utf8')));
   let dead: string | null = null;
@@ -238,10 +254,16 @@ async function boot(corsOrigins: string): Promise<Booted> {
 
 async function stopChild(child: ChildProcess): Promise<void> {
   await new Promise<void>((ok) => {
-    if (child.exitCode !== null || child.signalCode !== null) return ok();
-    child.once('exit', () => ok());
+    if (child.exitCode !== null || child.signalCode !== null) return (spawned.delete(child), ok());
+    const done = (): void => {
+      spawned.delete(child);
+      ok();
+    };
+    child.once('exit', done);
     child.kill('SIGKILL');
-    setTimeout(ok, 5_000);
+    // The timer must not keep the event loop alive once the child is gone.
+    const late = setTimeout(done, 5_000);
+    late.unref();
   });
 }
 
@@ -270,6 +292,17 @@ beforeAll(async () => {
 afterAll(() => {
   // A seeded arm that threw must never leave the bootstrap relaxed on disk.
   if (pristine !== '' && readFileSync(MAIN, 'utf8') !== pristine) writeFileSync(MAIN, pristine, 'utf8');
+  // AND NO CHILD OUTLIVES THIS FILE, including one whose arm was aborted
+  // rather than thrown out of. `SIGKILL` is deliberate: a server that is
+  // mid-request has nothing worth draining here.
+  for (const child of spawned) {
+    try {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    } catch {
+      /* already gone */
+    }
+  }
+  spawned.clear();
 });
 
 describe('REL-10 the preflight itself', () => {
@@ -419,9 +452,11 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
       // THE TREE IS PRISTINE BEFORE THIS ARM SEEDS IT. If a previous arm timed
       // out, vitest moves on while that arm's `finally` is still pending, and
       // its restore would later land on top of THIS arm's seed. That would
-      // make an arm measure a tree it did not write — silently. Asserting the
-      // starting state turns that race into a red. (Review of this file,
-      // finding 2.)
+      // make an arm measure a tree it did not write. This assertion catches
+      // the case where that restore has ALREADY landed; the one AFTER the
+      // preflight below catches the case where it lands later. Neither alone
+      // is enough, which the first version of this guard got wrong.
+      // (Reviews of this file, findings 2 and 1.)
       expect(readFileSync(MAIN, 'utf8'), `the bootstrap was not pristine when «${arm.id}» began: a previous arm is still unwinding`).toBe(pristine);
       const seeded = arm.apply(pristine);
       expect(seeded, `the seed «${arm.id}» did not apply: the capture anchor moved`).not.toBe(pristine);
@@ -436,6 +471,20 @@ describe('REL-10 the seeded routes, each measured on the running server', () => 
         const b = await boot(GRANTED);
         try {
           const h = await preflight(b.port, GRANTED);
+          // THE PROGRAM THAT JUST ANSWERED STILL CARRIES THE SEED. Reading the
+          // marker only BEFORE the boot left a green window: an arm aborted by
+          // vitest's timeout can run its `finally` late, and that `finally`
+          // ends in `buildApi()` on the PRISTINE tree — overwriting
+          // `OUT/main.js` while this arm is mid-flight. `REL10-N1` and
+          // `REL10-N2` would then pass on a program they never seeded, and
+          // their whole value is an ABSENT header, so they would pass for the
+          // one reason that proves nothing. Re-reading it here closes that
+          // window: the bytes that served this preflight are the bytes with
+          // the seed in them. (Review of this file, note 1.)
+          expect(
+            readFileSync(join(OUT, 'main.js'), 'utf8'),
+            `the compiled program lost the seed «${arm.id}» before it answered, so this arm measures nothing`,
+          ).toContain(arm.marker);
           const got = h.get('access-control-allow-credentials');
           if (arm.relaxes) {
             expect(got, `the seed «${arm.id}» did not relax the running server, so this arm measures nothing:\n${b.log()}`).toBe('true');
