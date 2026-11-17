@@ -5,7 +5,17 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { PHASE4_INHERITED_PREFIX_END } from '../../../scripts/phase4-prefix';
 import { createScratchDb } from '../../helpers/scratch-db';
 import { ensurePostgres, ownerPool, resetData } from '../../helpers/test-app';
-import { must, post, rate10, seedPostingFixture, todayIn, type PostCommand, type PostLine, type PostingFixture } from '../../helpers/accounting-posting';
+import {
+  must,
+  post,
+  rate10,
+  refusal,
+  seedPostingFixture,
+  todayIn,
+  type PostCommand,
+  type PostLine,
+  type PostingFixture,
+} from '../../helpers/accounting-posting';
 
 /**
  * GOLDEN REGRESSION — ENGINE SHAPES (directive §70, execution plan §30/§33).
@@ -198,6 +208,66 @@ async function golden(shape: Shape): Promise<void> {
   expect(debits, `${shape.id} does not balance`).toBe(credits);
 }
 
+/** The marker the AR source-document guard puts in its own message (`0090`). */
+const GUARD_MARKER = 'MVP03_AR_SOURCE_DOCUMENT_GUARD';
+
+/**
+ * A SHAPE THIS SUITE MAY NO LONGER POST, AND WHY IT STAYS HERE ANYWAY.
+ *
+ * `0090_mvp03_ar_source_document_guard.sql` (`DR-114`/ثالثًا/2) refuses a
+ * `journal_lines` row on `accounts_receivable` or on
+ * `customer_credit_liability` unless its entry is one of that account's sales
+ * documents. Seven shapes below were carried by `manual_adjustment`, which is
+ * exactly the carrier the guard refuses — and the measured reason the guard
+ * exists is that such a journal holds debt no join can put behind any
+ * customer's name (`journal_lines` carries `branch_id` and `warehouse_id` and
+ * no counterparty column, `0042`).
+ *
+ * `DR-115`/1 moved the carrier to a real sales document wherever one produces
+ * the shape. For these seven no document on this head does, each for a reason
+ * MEASURED and not reasoned (`MVP03_SOURCE_OF_TRUTH_2026-11-10_AR.md` §16):
+ *
+ *   — `GOLD-65` and `GOLD-66` ARE produced by the reversal of a real credit
+ *     application — but `planCustomerCreditApplication` emits
+ *     `[...creditLines, ...arLines]` (`customer-settlement.ts:612`) and
+ *     `mirrorReversalLines` preserves line order (`sources.ts:156-158`), so
+ *     the document's `line_no` 1 is `2210` where these goldens assert
+ *     `accounts_receivable`. Reproducing them would mean REORDERING the
+ *     `Shape` literal, and `DR-115`/1 requires the expected output to be
+ *     unchanged by a letter. The shape is right; its order is the document's.
+ *   — `GOLD-67` and `RULES-6` need a RECEIVABLE CARRIED IN USD. A product's
+ *     price currency must equal the business base currency
+ *     (`catalog.service.ts:246-250`) and a sale's currency is its products'
+ *     (`sale-commit.service.ts:626`), so no invoice on this head is foreign
+ *     and no document carries a foreign AR line at all.
+ *   — `GOLD-81` and `GOLD-82` need `2210` debited against cash at a
+ *     DIFFERENT amount with a realized FX leg. `customer_credit` is exactly
+ *     two equal lines with no FX leg (`0081`, `v_nlines <> 2`), and a credit
+ *     application faces `2210` with the receivable, never with cash.
+ *   — `RULES-7B/1` needs a void. There is no void state: `invoices_state_ck`
+ *     refused `'void'` outright, measured on a live database (§12).
+ *
+ * So the shape and its sentence stay here WORD FOR WORD and what is asserted
+ * is the guard's refusal — the one thing that is true of this journal today:
+ * a merchant's receivable may not be moved by hand. Deleting them was never
+ * an option (`DR-115`, ما لا يُقرأ منه), and the deferred card
+ * `cards/MVP03_GOLDENS_AWAITING_VOID_AND_REFUND_AR.md` owns their return as
+ * real goldens the day their documents exist.
+ *
+ * THE ASSERTION IS ON THE MARKER, not on "it threw": a refusal from a
+ * balance, period or fingerprint rule read as this law speaking is precisely
+ * the false positive RULE-27 exists for. The shape's own arithmetic is still
+ * checked, because balancing needs no ledger — so a wrong shape still fails
+ * here, and these seven are not reduced to "something was refused".
+ */
+async function refusedWithoutASalesDocument(shape: Shape): Promise<void> {
+  const message = await refusal(() => postShape(shape));
+  expect(message, `${shape.id} must be refused BY THE AR SOURCE-DOCUMENT GUARD and not by another rule`).toContain(GUARD_MARKER);
+  const debits = shape.lines.filter((l) => l.side === 'D').reduce((a, l) => a + minor(l.base), 0n);
+  const credits = shape.lines.filter((l) => l.side === 'C').reduce((a, l) => a + minor(l.base), 0n);
+  expect(debits, `${shape.id} does not balance`).toBe(credits);
+}
+
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
@@ -293,8 +363,8 @@ describe('golden: engine shapes — cross-currency refund (RULES §5.1, GOLD-50)
 });
 
 describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GOLD-65/66/67)', () => {
-  it('Example A reopens AR and owes the customer a credit — revenue is not touched', async () => {
-    await golden({
+  it('Example A reopens AR and owes the customer a credit — revenue is not touched — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-65',
       title: 'reverse a wrongly allocated payment',
       lines: [
@@ -304,8 +374,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
     });
   });
 
-  it('Example B reverses ONE allocation of a split payment: 200, not the payment’s 500', async () => {
-    await golden({
+  it('Example B reverses ONE allocation of a split payment: 200, not the payment’s 500 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-66',
       title: 'partial reversal of a split payment',
       lines: [
@@ -315,8 +385,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
     });
   });
 
-  it('Example C reverses at the ORIGINAL snapshots — AR 1440 @3.60, the original 40 gain undone, credit 1480 @4.00', async () => {
-    await golden({
+  it('Example C reverses at the ORIGINAL snapshots — AR 1440 @3.60, the original 40 gain undone, credit 1480 @4.00 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-67',
       title: 'multi-currency allocation reversal',
       lines: [
@@ -329,8 +399,8 @@ describe('golden: engine shapes — payment allocation reversal (RULES §5.2, GO
 });
 
 describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GOLD-81/82)', () => {
-  it('Case A consumes the whole credit: 370 EUR carried at 1480 paid out at 1554, 74 realized loss', async () => {
-    await golden({
+  it('Case A consumes the whole credit: 370 EUR carried at 1480 paid out at 1554, 74 realized loss — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-81',
       title: 'full same-currency refund of a customer credit',
       lines: [
@@ -341,8 +411,8 @@ describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GO
     });
   });
 
-  it('Case B releases the carrying value PROPORTIONALLY: 350 of 370 releases 1400, not 1480', async () => {
-    await golden({
+  it('Case B releases the carrying value PROPORTIONALLY: 350 of 370 releases 1400, not 1480 — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-82',
       title: 'partial same-currency refund of a customer credit',
       lines: [
@@ -354,9 +424,26 @@ describe('golden: engine shapes — refunding a customer credit (RULES §5.2, GO
   });
 });
 
+/**
+ * `GOLD-87` — the move to a real sales document was WITHDRAWN by the owner
+ * (`DR-115` addendum, 2026-11-11), so it is the EIGHTH refusal arm here.
+ *
+ * Measured reason, not a preference: its only legitimate carrier on this head
+ * is the reversal of a real `customer_payment_allocation`, and that reversal
+ * touches the journal ALONE — the `payment_allocations` row stands, and
+ * `invoice_outstanding` sums the allocation tables and not the journal
+ * (`0084:624-640`). So the statement would say "paid in full" while the AR
+ * control account carries the amount as a debit: EXACTLY the divergence
+ * migration `0090` was written to prevent. `daftar-finance` caught it.
+ *
+ * Its sentence and its `Shape` literal are kept here untouched, and the card
+ * `.local-context/cards/MVP03_GOLDENS_AWAITING_VOID_AND_REFUND_AR.md` carries
+ * it with the other seven: it returns as a real golden when the void/refund
+ * scope is built and a chargeback has a sales document of its own.
+ */
 describe('golden: engine shapes — chargeback (RULES §5.2ب, GOLD-87)', () => {
-  it('reverses the CASH ORIGIN, not into a customer credit: the money left the business', async () => {
-    await golden({
+  it('reverses the CASH ORIGIN, not into a customer credit: the money left the business — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'GOLD-87',
       title: 'card chargeback on an allocated payment',
       lines: [
@@ -368,8 +455,8 @@ describe('golden: engine shapes — chargeback (RULES §5.2ب, GOLD-87)', () => 
 });
 
 describe('golden: engine shapes — tri-currency settlement (RULES §6)', () => {
-  it('base ILS, invoice USD, payment EUR: 1480 in, 1440 of AR released, 40 realized gain', async () => {
-    await golden({
+  it('base ILS, invoice USD, payment EUR: 1480 in, 1440 of AR released, 40 realized gain — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'RULES-6',
       title: 'tri-currency settlement',
       lines: [
@@ -415,8 +502,8 @@ describe('golden: engine shapes — void of a paid invoice (RULES §7)', () => {
     });
   });
 
-  it('B/1 splits the credit note between the unpaid 700 of AR and the paid 300 now owed back', async () => {
-    await golden({
+  it('B/1 splits the credit note between the unpaid 700 of AR and the paid 300 now owed back — REFUSED while no sales document produces it', async () => {
+    await refusedWithoutASalesDocument({
       id: 'RULES-7B/1',
       title: 'void of a partly paid credit invoice',
       lines: [

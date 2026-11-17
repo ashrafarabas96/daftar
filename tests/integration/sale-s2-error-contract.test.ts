@@ -252,6 +252,9 @@ const ACCOUNTING_CONTRACT: readonly { readonly code: string; readonly status: nu
   { code: 'accounting.period_closed', status: 409 },
   { code: 'accounting.report_unbalanced', status: 409 },
   { code: 'accounting.inventory_account_domain_owned', status: 409 },
+  // MVP-03 (0090): refused at COMMIT because the entry's source type, not
+  // the payload, forbids a line on a guarded receivable account.
+  { code: 'accounting.ar_source_document_required', status: 409 },
   { code: 'accounting.payload_invalid', status: 400 },
   { code: 'accounting.period_range_invalid', status: 400 },
 ];
