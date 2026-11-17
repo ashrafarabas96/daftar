@@ -21,7 +21,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | Domain / packages | 45 | 4 | 6 |
 | API | 68 | 14 | 2 |
 | Web | 90 | 13 | 30 |
-| Security / gates | 35 | 33 | 4 |
+| Security / gates | 35 | 33 | 5 |
 | CI / release | 16 | 7 | 3 |
 | Other production files | 1 | 0 | 0 |
 | Tests (listed separately) | 303 | — | — |
@@ -304,7 +304,7 @@ It lists every path in `git diff --name-only 0f2b09e HEAD` except this page itse
 | `scripts/phase2-s8-gate.ts` | P3-S8 | PHASE 2 SLICE GATE — P2-S8, the hardening and reconciliation slice. | 5fcab76 (S8 freeze) | high: definer, grants, gate | 4: guards/ci-job-conservation, security/phase2-s8-gate-tamper, security/phase3-s8-gate-tamper, security/phase4-forward-evolution |
 | `scripts/phase3-corrective-gate.ts` | corrective | PHASE 3 CORRECTIVE GATE — `npm run gate:phase3:corrective` (the Tech Lead's corrective directive §18, §19; docs/PHASE_3_FINAL_CORRECTIVE_AUDIT.md requirement O). | not yet (corrective candidate) | high: gate | 8: tests-unit/browser-gate-dynamic-ports, guards/phase4-browser-step-ownership, security/p3c-corrective-gate-tamper, security/phase3-release-gate (+4) |
 | `scripts/phase3-prefix.ts` | P3-S9 (+corrective) | THE PHASE 3 MIGRATION PREFIX — the historical invariant `gate:phase3:release` protects once Phase 3 closes (docs/PHASE_3_S9_CONTRACT.md A-03, and the Tech Lead's final seal of 202… | d6f1bc6 (S9 candidate) | high: gate | 19: integration/phase3-s8-failure-injection, integration/phase3-s8-rebuild-rehearsal, integration/sale-s2-atomic-law, security/deployment-authority-model (+15) |
-| `scripts/phase3-s1-gate.ts` | P3-S1 | PHASE 3 SLICE GATE — P3-S1, inventory and catalog primitives (docs/PHASE_3_EXECUTION_PLAN.md §3 and §13). | 61b89d6 (S1 closure) | high: grants, gate | 1: guards/ci-job-conservation |
+| `scripts/phase3-s1-gate.ts` | P3-S1 | PHASE 3 SLICE GATE — P3-S1, inventory and catalog primitives (docs/PHASE_3_EXECUTION_PLAN.md §3 and §13). | 61b89d6 (S1 closure) | high: grants, gate | none found by reference |
 | `scripts/phase3-s2-gate.ts` | P3-S2 (+S9) | PHASE 3 SLICE GATE — P3-S2, the immutable stock ledger (docs/PHASE_3_EXECUTION_PLAN.md §4, docs/PHASE_3_S2_CONTRACT.md §7.1). | 57a5a7f (S2 freeze) | high: grants, gate | none found by reference |
 | `scripts/phase3-s3-gate.ts` | P3-S3 | PHASE 3 SLICE GATE — P3-S3, transfers, adjustments, damage, stocktake and inventory opening (docs/PHASE_3_EXECUTION_PLAN.md §5, docs/PHASE_3_S3_CONTRACT.md §7.1). | fecbecb (S3 freeze) | high: grants, gate | none found by reference |
 | `scripts/phase3-s4-gate.ts` | P3-S4 | PHASE 3 SLICE GATE — P3-S4, suppliers, purchases, receiving, landed cost and deficit coverage (docs/PHASE_3_EXECUTION_PLAN.md §6, docs/PHASE_3_S4_CONTRACT.md §7.1). | 43b8370 (S4 freeze) | high: grants, gate | 1: security/phase3-release-scope |

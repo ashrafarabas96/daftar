@@ -592,7 +592,7 @@ describe('the required-check aggregate (DR-147/1)', () => {
  * CI runs `gate:phase2:s1` .. `gate:phase2:s7` as seven separate steps of `backend-gates-p2`,
  * each of which composes its own predecessors already. P2-S8 used to call `gate:phase2:s7`
  * again, so the same P2-S1..S7 matrices ran a second time in `backend-work`, and a third time
- * under `gate:phase3:s1`. Dropping that one call is only sound while (a) every one of the
+ * under the P3-S1 gate. Dropping that one call is only sound while (a) every one of the
  * seven steps exists in `backend-gates-p2` with exactly that command, and (b) the P2-S8 gate
  * really does not call a P2 gate any more. Both are read here, from the files.
  */
@@ -610,7 +610,7 @@ function p2NestProblems(ciText: string, gateText: string): string[] {
     else if (run !== `npm run gate:phase2:s${n}`) problems.push(`C-14: "${name}" runs \`${run ?? ''}\`, expected \`npm run gate:phase2:s${n}\``);
   }
   const live = gateText.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
-  const calls = [...live.matchAll(/'gate:phase2:s\d'/g)].map((m) => m[0]);
+  const calls = [...live.matchAll(/gate:phase2:s/g)].map((m) => m[0]);
   if (calls.length > 0) problems.push(`C-14: the P2-S8 gate calls ${calls.join(', ')}; the chain is composed by \`backend-gates-p2\``);
   if (!live.includes("'check:migrations'")) problems.push('C-14: the gate text read here has no check:migrations, so the call scan above read the wrong file');
   return problems;
@@ -646,7 +646,17 @@ describe('the Phase 2 chain is composed by the job, not nested in P2-S8 (C-14, D
       "  { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },\n  { name: 'P2-S7 gate', cmd: npm, args: ['run', 'gate:phase2:s7'] },\n",
     );
     expect(nested).not.toBe(gate);
-    expect(p2NestProblems(ci, nested).join('\n')).toContain("the P2-S8 gate calls 'gate:phase2:s7'");
+    expect(p2NestProblems(ci, nested).join('\n')).toContain('the P2-S8 gate calls gate:phase2:s');
+  });
+
+  it('RED: the call is spelled with double quotes or in a template literal', () => {
+    const marker = "args: ['run', 'check:migrations'] },";
+    const dq = gate.replace(marker, `${marker} { name: 'x', cmd: npm, args: ['run', "gate:phase2:s7"] },`);
+    const tpl = gate.replace(marker, `${marker} { name: 'x', cmd: npm, args: ['run', \`gate:phase2:s\${7}\`] },`);
+    expect(dq).not.toBe(gate);
+    expect(tpl).not.toBe(gate);
+    expect(p2NestProblems(ci, dq).join(' ')).toContain('the P2-S8 gate calls gate:phase2:s');
+    expect(p2NestProblems(ci, tpl).join(' ')).toContain('the P2-S8 gate calls gate:phase2:s');
   });
 
   it('NEGATIVE CONTROL: a call named only in a comment is not a call', () => {
