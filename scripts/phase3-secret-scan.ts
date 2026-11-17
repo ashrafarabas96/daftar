@@ -82,8 +82,11 @@
  *
  * WHAT IT PRINTS, AND WHAT THE RELEASE EVIDENCE RECORDS
  *
- * base, head, merge-base, commits in range (and merges), commits gitleaks
- * reports scanned (must equal the range), findings, findings allowlisted
+ * base, head, merge-base, commits in range (and merges), how many of them
+ * CARRY A PATCH and which do not, commits gitleaks reports scanned (which
+ * must equal the patch-bearing count, NOT the range: gitleaks has no bytes
+ * to scan in a patchless commit and does not count it), findings, findings
+ * allowlisted
  * (with fingerprints), findings remaining, and the result. `--evidence=<file>`
  * writes the same as JSON for `scripts/phase3-s9-evidence.ts`.
  *
@@ -186,6 +189,49 @@ export function git(repo: string, args: readonly string[], input?: string): stri
 
 function gitOk(repo: string, args: readonly string[]): boolean {
   return gitRun(repo, args).status === 0;
+}
+
+/**
+ * THE COMMITS OF A RANGE THAT CARRY A PATCH, which is the only count gitleaks'
+ * own number can be compared against.
+ *
+ * gitleaks walks the range with `--diff-merges=first-parent` and scans the
+ * PATCH of each commit. A commit with no patch — `git commit --allow-empty`,
+ * a docs push that ended up changing nothing, a revert of a revert — has no
+ * bytes to scan, so gitleaks does not count it. That is correct behaviour, and
+ * it was being read as a gap: the guard compared `rev-list --count` (ALL
+ * commits) against gitleaks' number and refused the branch.
+ *
+ * Measured 2026-11-16: run `43851805698`, job `hygiene`, step «Secret history
+ * range scan» — gitleaks itself reported `no leaks found`, and the guard still
+ * failed with «gitleaks scanned 6 commits but the range
+ * b309b3b2..0aa22682 holds 7». The range holds exactly one patchless commit,
+ * `0aa22682` (`git diff --quiet` exit 0, `--name-status` empty), and a
+ * patch-bearing commit in the same range gives exit 1, so the probe
+ * discriminates. The deficit was one, and it was that commit.
+ *
+ * So the identity of the count is narrowed here rather than the comparison
+ * being loosened: equality still has to hold, and a secret in any scanned
+ * commit still fails. Compare `RULE-30` — two numbers with different
+ * identities must not be compared, however alike they look.
+ *
+ * The first parent is used deliberately, to match `--diff-merges=first-parent`:
+ * a merge commit's first-parent diff is the branch it brought in, which is why
+ * merges ARE scanned and ARE counted (pinned by this suite's CONTROL case,
+ * which passes on a range containing one merge). A commit with no parent at
+ * all is counted as patch-bearing: gitleaks scans its whole tree.
+ */
+export function patchlessCommits(repo: string, base: string, head: string): readonly string[] {
+  const out: string[] = [];
+  for (const c of git(repo, ['rev-list', `${base}..${head}`]).split('\n')) {
+    const commit = c.trim();
+    if (commit === '') continue;
+    const hasParent = gitOk(repo, ['rev-parse', '--verify', '--quiet', `${commit}^1`]);
+    if (!hasParent) continue; // a root commit: its whole tree is scanned
+    // `--quiet` exits 1 when there IS a difference, so exit 0 means no patch.
+    if (gitOk(repo, ['diff', '--quiet', `${commit}^1`, commit])) out.push(commit);
+  }
+  return out;
 }
 
 // ── gitleaks: pinned, checksum-verified ───────────────────────────────────
@@ -432,6 +478,14 @@ export interface ScanResult {
   readonly logOpts: string | null;
   readonly commitsInRange: number | null;
   readonly mergesInRange: number | null;
+  /**
+   * The commits of the range that carry a patch — the number gitleaks' own
+   * count is compared against. `commitsInRange` stays as the range's size, so
+   * the difference between the two is readable rather than hidden.
+   */
+  readonly commitsWithPatch: number | null;
+  /** Those of the range that carry no patch, named, so the gap is not a mystery. */
+  readonly patchlessCommits: readonly string[];
   readonly commitsScanned: number | null;
   /** tree mode: the files scanned */
   readonly filesScanned: number | null;
@@ -459,6 +513,8 @@ export function scan(opts: ScanOptions): ScanResult {
   let logOpts: string | null = null;
   let commitsInRange: number | null = null;
   let mergesInRange: number | null = null;
+  let commitsWithPatch: number | null = null;
+  let patchless: readonly string[] = [];
   let commitsScanned: number | null = null;
   let findings: GitleaksFinding[] | null = null;
   const allowlisted: { fingerprint: string; reason: string }[] = [];
@@ -486,6 +542,8 @@ export function scan(opts: ScanOptions): ScanResult {
     logOpts,
     commitsInRange,
     mergesInRange,
+    commitsWithPatch,
+    patchlessCommits: patchless,
     commitsScanned,
     filesScanned: null,
     findings: findings === null ? null : findings.length,
@@ -570,6 +628,15 @@ export function scan(opts: ScanOptions): ScanResult {
   if (base === head) problems.push(`base and head are the same commit ${head}: there is nothing to scan, which is not evidence of anything`);
 
   commitsInRange = Number(git(repo, ['rev-list', '--count', `${base}..${head}`]));
+  patchless = patchlessCommits(repo, base, head);
+  commitsWithPatch = commitsInRange - patchless.length;
+  // A RANGE WITH NOTHING TO SCAN IS DECLARED, NOT PASSED. Zero scanned and
+  // zero expected would compare equal and read as success, which is the same
+  // vacuous green as `base === head` above.
+  if (commitsWithPatch === 0)
+    problems.push(
+      `every commit of the range ${base.slice(0, 12)}..${head.slice(0, 12)} is patchless, so nothing was scanned, which is not evidence of anything`,
+    );
   mergesInRange = Number(git(repo, ['rev-list', '--count', '--merges', `${base}..${head}`]));
   logOpts = `--diff-merges=first-parent ${base}..${head}`;
 
@@ -619,8 +686,11 @@ export function scan(opts: ScanOptions): ScanResult {
     const scanned = /(\d+) commits scanned/.exec(log);
     commitsScanned = scanned ? Number(scanned[1]) : null;
     if (commitsScanned === null) problems.push('gitleaks did not report how many commits it scanned');
-    else if (commitsScanned !== commitsInRange)
-      problems.push(`gitleaks scanned ${commitsScanned} commits but the range ${base.slice(0, 12)}..${head.slice(0, 12)} holds ${commitsInRange}`);
+    else if (commitsScanned !== commitsWithPatch)
+      problems.push(
+        `gitleaks scanned ${commitsScanned} commits but the range ${base.slice(0, 12)}..${head.slice(0, 12)} holds ${String(commitsWithPatch)} that carry a patch` +
+          (patchless.length === 0 ? '' : ` (of ${String(commitsInRange)}; patchless: ${patchless.map((c) => c.slice(0, 12)).join(', ')})`),
+      );
     findings = JSON.parse(readFileSync(report, 'utf8')) as GitleaksFinding[];
   } finally {
     rmSync(work, { recursive: true, force: true });
@@ -789,6 +859,8 @@ export function scanTree(opts: TreeScanOptions): ScanResult {
     mergeBase: null,
     logOpts: null,
     commitsInRange: null,
+    commitsWithPatch: null,
+    patchlessCommits: [],
     mergesInRange: null,
     commitsScanned: null,
     filesScanned,
@@ -821,7 +893,13 @@ export function secretScanEvidenceProblems(e: Partial<ScanResult> | null, expect
   if (e.tool?.version !== GITLEAKS_VERSION || e.tool?.binarySha256 !== GITLEAKS_BINARY_SHA256)
     p.push(`the secret scan ran gitleaks ${String(e.tool?.version)} (${String(e.tool?.binarySha256)}), not the pinned ${GITLEAKS_VERSION}`);
   if (typeof e.commitsInRange !== 'number' || e.commitsInRange < 1) p.push(`the secret scan range holds ${String(e.commitsInRange)} commits`);
-  if (e.commitsScanned !== e.commitsInRange) p.push(`the secret scan read ${String(e.commitsScanned)} of ${String(e.commitsInRange)} commits`);
+  // The evidence must SAY how many commits carried a patch. An older record
+  // that does not is refused rather than compared against the range, which is
+  // the comparison this release fixed.
+  if (typeof e.commitsWithPatch !== 'number' || e.commitsWithPatch < 1)
+    p.push(`the secret scan evidence does not say how many commits carried a patch (${String(e.commitsWithPatch)})`);
+  else if (e.commitsScanned !== e.commitsWithPatch)
+    p.push(`the secret scan read ${String(e.commitsScanned)} of ${String(e.commitsWithPatch)} commits that carry a patch`);
   if (!Array.isArray(e.remaining) || e.remaining.length !== 0) p.push(`the secret scan leaves ${String(e.remaining?.length)} findings`);
   return p;
 }
@@ -887,7 +965,9 @@ function main(): void {
     if (r.mergedInto !== undefined) console.log(`  merged into: ${r.mergedInto} (the closed Phase 3 history is scanned, not the range to that commit)`);
     console.log(`  log options: ${String(r.logOpts)}`);
     console.log(`  commits in range: ${String(r.commitsInRange)} (${String(r.mergesInRange)} merges)`);
-    console.log(`  commits scanned: ${String(r.commitsScanned)}`);
+    console.log(
+      `  commits scanned: ${String(r.commitsScanned)} (of ${String(r.commitsWithPatch)} carrying a patch${r.patchlessCommits.length === 0 ? '' : `; ${String(r.patchlessCommits.length)} patchless`})`,
+    );
   }
   console.log(`  findings: ${String(r.findings)}`);
   console.log(`  allowlisted: ${r.allowlisted.length} (exact fingerprints, each proved against its content)`);
