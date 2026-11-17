@@ -136,6 +136,45 @@ describe('§31 compares credentials, not strings', () => {
     });
   }
 
+  /**
+   * THE THREE HOLES THE FIRST INDEPENDENT REVIEW OF THIS BRANCH MEASURED —
+   * each the dangerous direction, the key FINER than the driver, so the pair
+   * started and served. Each is a PAIR of spellings of ONE credential, and
+   * the first draft of these arms got that wrong: it compared each spelling
+   * against the fixture's `@db/daftar`, which is a DIFFERENT credential, so
+   * all three went red for the right reason and told me the ARMS were
+   * mis-paired rather than the fix being wrong. An arm that names a pair must
+   * hold that pair.
+   */
+  it('refuses two EMPTY-HOST spellings of one credential — the hole that reopened the whole class', () => {
+    // `new URL` refuses `…@/db` with `ERR_INVALID_URL` (measured on Node 24)
+    // and the driver accepts it, substituting a dummy authority of its own.
+    // The old fallback compared such a value as RAW TEXT, so these two — for
+    // which `parse()` reports identical user, password, host, port and
+    // database — keyed differently and the process STARTED.
+    const a = 'postgresql://daftar_app:x@/daftar';
+    const b = 'postgresql://daftar_app:x@/daftar?sslmode=require';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('refuses an ABSENT database against the role name, because that is the default `pg` applies', () => {
+    // `parse('…@db')` reports `database: null`, and `pg` then sets
+    // `database = user` — so these two are one credential. The key had
+    // represented `pg`'s PORT default while ignoring this one.
+    const a = 'postgresql://daftar_app:x@db';
+    const b = 'postgresql://daftar_app:x@db/daftar_app';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('refuses a `socket:` pair differing only in the `?host=` the driver throws away', () => {
+    // Under `socket:` the loop at `:40-42` sets `config.host` from the
+    // parameter and `:48` overwrites it from the pathname before returning,
+    // so `?host=` is DEAD at the driver and these reach one socket.
+    const a = 'socket:/var/run/daftar-pg?db=daftar';
+    const b = 'socket:/var/run/daftar-pg?db=daftar&host=/var/run/somewhere-else';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
   it('refuses the byte-identical spelling too, which is what held before this law', () => {
     expect(() => loadConfig(withIdentity(APP))).toThrow(DUP);
   });
@@ -232,6 +271,17 @@ describe('§31 compares credentials, not strings', () => {
     expect(() => loadConfig(withIdentity('postgresql://daftar_app:x@db/daftar?port=5433'))).not.toThrow();
   });
 
+  it('an EMPTY parameter falls back to the URL, so the two spellings are ONE credential and are refused', () => {
+    // The arm that MEASURES the empty-value fallback, added because the
+    // negative control below does not: with `fromQuery !== ''` seeded away,
+    // that control stays GREEN (the user becomes the empty string, which is
+    // still different from `daftar_app`), so nothing in this file held the
+    // condition. Here the empty `?user=` must fall back to the URL's own
+    // `daftar_app` — if it did not, this pair would key differently and
+    // START. (First independent review of this branch, finding 4.)
+    expect(() => loadConfig(withIdentity('postgresql://daftar_app:x@db/daftar?user='))).toThrow(DUP);
+  });
+
   it('NEGATIVE CONTROL: a parameter that is present but EMPTY falls back to the URL — defends element 6', () => {
     // `?user=` with no value must not blank the role out and collapse
     // everything onto one key.
@@ -315,10 +365,18 @@ describe('§31 compares credentials, not strings', () => {
     expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'postgresql://a%00b:c@db/daftar' })).toThrow(DUP);
   });
 
-  it('RULES: a value that is not a URL at all still compares as text', () => {
-    // The fallback keeps the pre-existing behaviour instead of making an
-    // unparseable value match everything — or nothing.
+  it('RULES: a value this key cannot parse FAILS CLOSED — every such value collides, rather than comparing as text', () => {
+    // It used to compare as raw text, and that was the blocking defect: raw
+    // text is FINER than the driver, so two spellings of one credential that
+    // this key could not parse keyed differently and started. Now every
+    // unparseable value keys the same, so §31 REFUSES the pair — coarser,
+    // which refuses a deployment visibly instead of accepting a duplicate
+    // credential silently.
     const env = { ...MERCHANT_PROD, APP_DATABASE_URL: 'not-a-url' };
     expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'not-a-url' })).toThrow(DUP);
+    // AND TWO DIFFERENT unparseable values are refused too, which is what
+    // "fails closed" means here and is the half a byte-identical pair cannot
+    // show.
+    expect(() => loadConfig({ ...env, IDENTITY_DATABASE_URL: 'also-not-a-url' })).toThrow(DUP);
   });
 });

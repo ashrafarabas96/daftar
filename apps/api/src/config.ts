@@ -244,9 +244,14 @@ function decodeUriOnce(part: string): string {
  * (least-privilege provisioning boundary)" compares `PROVISIONER_DATABASE_URL`
  * against APP and PLATFORM as RAW TEXT, so on a tree where that name is not a
  * member of the map, a provisioner credential written another way is still
- * accepted — `postgres://` for `postgresql://`, say. #111 adds it to the map;
- * until that lands, the class is closed for the map's members and open for the
- * provisioner. (Review of #118, finding 2.)
+ * accepted — `postgres://` for `postgresql://`, say, on a tree where that name
+ * is not a member of the map. THAT GAP IS NOW CLOSED, and this paragraph said
+ * otherwise until the merge was read: `PROVISIONER_DATABASE_URL` IS a member
+ * of the map on this tree (it landed with #111), so the class is closed for it
+ * too and the hand comparison is a second, redundant guard rather than the
+ * only one. A sentence that survived a merge describing a gap that no longer
+ * exists is a false claim, inherited rather than written, and it reads the same
+ * to whoever finds it. (Review of #118 finding 2, corrected on this head.)
  *
  * It is cited by its WORDING, not by its line. The number written here was
  * `:521-522`, measured before the block you are reading was added, and by the
@@ -274,14 +279,46 @@ function decodeUriOnce(part: string): string {
  * Pinned, element by element with a negative control for each, in
  * `tests-unit/config-db-principal-normalize-law.test.ts`.
  */
+/**
+ * `postgresql://user:pass@/db` — an EMPTY host, which libpq accepts and reads
+ * from `PGHOST` or its default. `new URL` REFUSES it (`ERR_INVALID_URL`,
+ * measured on Node 24), while the driver accepts it: `pg-connection-string`
+ * substitutes a dummy authority of its own (`index.js:30`) for exactly this
+ * shape and reports `host: ''`.
+ *
+ * So this key must do the same substitution. Falling back to a raw-text
+ * comparison here REOPENED THE WHOLE CLASS — measured, not feared:
+ * `…@/daftar` and `…@/daftar?sslmode=require` resolve to the SAME user,
+ * password, host, port and database (verified against `parse()`), and as raw
+ * text they are two different strings, so §31 read one credential as two and
+ * the process started and served. That is the key being FINER than the
+ * driver, the one property the invariant above forbids, in the very function
+ * written to establish it. (Review of this head, finding 1.)
+ */
+const EMPTY_HOST_AUTHORITY = '0db-principal-key-empty-host.invalid';
+
 function dbPrincipalKey(raw: string): string {
   let url: URL;
+  let emptyHost = false;
   try {
     url = new URL(raw);
   } catch {
-    // Not a URL: compare it as text, which is what §31 did for everything
-    // before this function existed.
-    return JSON.stringify(['raw', raw]);
+    // Mirror the driver's own retry before giving up: `scheme://…@/rest`
+    // becomes `scheme://…@<placeholder>/rest`, and the host element is then
+    // forced back to the empty string the driver reports.
+    const withHost = raw.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/@]*@)\//, `$1${EMPTY_HOST_AUTHORITY}/`);
+    try {
+      url = new URL(withHost);
+      emptyHost = withHost !== raw;
+    } catch {
+      // STILL unparseable. A raw-text comparison would be finer than the
+      // driver again, so it is not used: the value is keyed as UNPARSEABLE,
+      // which makes every such value collide with every other and FAIL
+      // CLOSED — §31 then refuses the pair instead of starting on a key it
+      // could not read. Coarser refuses a deployment visibly; finer accepts
+      // a duplicate credential silently.
+      return JSON.stringify(['unparseable-by-this-key']);
+    }
   }
   const query = url.searchParams;
   /**
@@ -332,22 +369,36 @@ function dbPrincipalKey(raw: string): string {
   // are one host to the driver, and `daft%61r` and `daftar` one database, so
   // both spellings reached the app credential while keying differently and
   // starting. (Sixth review, finding 1.)
-  const database = decodeUriOnce(url.pathname.replace(/\/+$/, ''));
+  const rawDatabase = decodeUriOnce(url.pathname.replace(/\/+$/, ''));
   // The host is lower-cased ONLY when it is a NAME. The query form may carry a
   // Unix socket PATH (`?host=/var/run/postgresql`), and a file path is
   // case-sensitive, so lower-casing it would read two different sockets as one
   // principal and refuse a correct deployment. The old comment justified the
   // lower-casing by DNS alone, which is not true of every value this field can
   // hold. (Sixth review, finding 4.)
-  const host = effective('host', url.hostname, true);
+  // Under `socket:` the `?host=` parameter is DEAD at the driver: the loop at
+  // `:40-42` sets it, and `:48` then overwrites it from the pathname before
+  // returning (`:51`). Honouring it here made two `socket:` URLs that differ
+  // only in `?host=` key differently while reaching ONE credential — finer
+  // than the driver again. (Review of this head, finding 3.)
+  const socketScheme = canonicalScheme === 'socket';
+  const host = emptyHost ? '' : socketScheme ? url.pathname : effective('host', url.hostname, true);
   const canonicalHost = host.startsWith('/') ? host : host.toLowerCase();
   // JSON.stringify, not a NUL-joined string: the parts are percent-DECODED
   // before they are joined, so a `%00` inside a role name used to shift the
   // field boundaries and merge two different secrets into one key — measured in
   // the review of #118. An array encodes its own boundaries.
+  // AND AN ABSENT DATABASE IS THE ROLE'S NAME, because that is what `pg` does
+  // (`connection-parameters.js`: `this.database = this.database || this.user`),
+  // measured: `parse('…@db')` reports `database: null`. Representing `pg`'s
+  // PORT default while ignoring its DATABASE default was a difference with no
+  // stated reason, in the dangerous direction — `…@db` and `…@db/daftar_app`
+  // are one credential and were keyed as two. (Review of this head, finding 2.)
+  const effectiveUser = effective('user', url.username, true);
+  const database = rawDatabase === '' ? `/${effectiveUser}` : rawDatabase;
   return JSON.stringify([
     canonicalScheme,
-    effective('user', url.username, true),
+    effectiveUser,
     effective('password', url.password, true),
     canonicalHost,
     port === DEFAULT_POSTGRES_PORT ? '' : port,
