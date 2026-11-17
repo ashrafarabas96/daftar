@@ -133,7 +133,12 @@ describe('C1.5 §1 — the floor this build requires is the DDL it ships', () =>
   });
 
   it('the ordinal is parsed from the name, and an unplaceable name parses to null rather than to zero', () => {
-    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(86);
+    // A LITERAL, and deliberately not `migrationOrdinal(REQUIRED_SCHEMA_MIGRATION)`:
+    // deriving it would assert the parser against itself and the floor could
+    // then move with the constant UNANNOUNCED, which is the whole thing this
+    // case exists to prevent. The literal is what makes a slice that moves the
+    // constant also come here and say so out loud. 92 since `0092` shipped.
+    expect(schemaFloor(), `the floor is the ordinal of ${REQUIRED_SCHEMA_MIGRATION}`).toBe(92);
     expect(migrationOrdinal('0083_phase4_ar_outstanding_set_based.sql'), 'a four-digit prefix').toBe(83);
     expect(migrationOrdinal('10000_far_future.sql'), 'a five-digit prefix is placed by VALUE, not by string order').toBe(10_000);
     // The reason the comparison is numeric rather than lexicographic. While
@@ -338,7 +343,9 @@ describe('C1.5 §4 — an unidentifiable schema is refused, never assumed adequa
 });
 
 describe('C1.5 §5 — the SURFACE half bites where the ledger cannot be read, or lies', () => {
-  it('a database at 0083 whose ledger CLAIMS 0086 is still refused, named on the five-column invoice_outstanding', async () => {
+  // The name in this title is the REQUIRED migration, so it moves with the
+  // constant — `0086` here was 0086's own value, not a fact about this case.
+  it('a database at 0083 whose ledger CLAIMS 0092 is still refused, named on the five-column invoice_outstanding', async () => {
     // This is the case that protects a real deployment. On the live database
     // the API's principal cannot read `schema_migrations` at all (§3), so the
     // ordinal half never runs there and the surface half is the ONLY thing

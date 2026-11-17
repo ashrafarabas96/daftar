@@ -272,6 +272,8 @@ tests/golden-regression/phase4/01-cross-tenant.golden.test.ts	1683	find-shift	sa
 tests/golden-regression/phase4/04-schema-lint.golden.test.ts	162	find-shift	safe	R-RECEIVER	const column = columns.find((a) => a.relation === relation && a.column === required);
 tests/guards/mig-0084-end-state-signature-law.test.ts	442	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
 tests/guards/mig-0084-end-state-signature-law.test.ts	466	find-shift	safe	R-RECEIVER	const creation = CREATIONS.find((c) => c.key === a.key);
+tests/guards/mig-0092-statement-running-balance-law.test.ts	423	find-shift	safe	R-RECEIVER	const l1 = LAWS.find((l) => l.id === 'L1');
+tests/guards/mig-0092-statement-running-balance-law.test.ts	480	find-shift	safe	R-RECEIVER	const l8 = LAWS.find((l) => l.id === 'L8');
 tests/guards/p4s1-roster-floor-and-deference.test.ts	82	find-shift	safe	R-RECEIVER	const found = S7_ROWS.find((r) => r.file.endsWith(suffix));
 tests/guards/p4s4-command-refusal-audit-law.test.ts	146	find-shift	safe	R-RECEIVER	const named = problems.find((p) => p.includes(`${TILL}: close`)) ?? '';
 tests/guards/p4s4-customer-aging-bucket-mapping.test.ts	916	find-shift	safe	R-RECEIVER	const first = rows.find((r) => r.currency_code === currency);
@@ -358,6 +360,8 @@ tests/integration/dr71-fx-settlement-closure.test.ts	545	find-shift	safe	R-RECEI
 tests/integration/inventory-seam.test.ts	240	find-shift	safe	R-RECEIVER	const seamClient = must(issued.find((q) => q.text === SERVER_VIEW)).client;
 tests/integration/invitation-lifecycle.test.ts	111	find-shift	safe	R-RECEIVER	const item = (list.body.items as { email: string; status: string }[]).find((i) => i.email === email);
 tests/integration/invitation-lifecycle.test.ts	180	find-shift	safe	R-RECEIVER	const maxUsers = (ent.body.limits as { key: string; usage: number }[]).find((l) => l.key === 'MAX_USERS');
+tests/integration/l3-customer-statement-running-balance.test.ts	700	find-shift	safe	R-RECEIVER	const credit = creditRows.find((r) => r.kind_rank === 4);
+tests/integration/l3-customer-statement-running-balance.test.ts	701	find-shift	safe	R-RECEIVER	const application = creditRows.find((r) => r.kind_rank === 5);
 tests/integration/migration-upgrade.test.ts	995	find-shift	safe	R-RECEIVER	expect(manifest.migrations.find((m) => m.name === '0049_accounting_periods.sql')?.sha256).toBe(
 tests/integration/onboarding.test.ts	51	find-shift	safe	R-RECEIVER	expect(roles.rows.find((r) => r.key === 'owner')?.is_system).toBe(true);
 tests/integration/p3c-td20-default-warehouse-name.test.ts	369	find-shift	safe	R-RECEIVER	after.find((r) => r.id === id),
