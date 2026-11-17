@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { INVOICE_REDUCER_VOCABULARY, phase4Sql, readTables } from '../../scripts/phase4-s1-gate';
+import { INVOICE_REDUCER_VOCABULARY, phase4Sql, readTables, stripSql } from '../../scripts/phase4-s1-gate';
 
 /**
  * 0092 — THE STATEMENT READER'S OWN LAWS, AND EACH ONE'S RED.
@@ -352,7 +352,18 @@ const LAWS: readonly Law[] = [
       // forever. Seam S-P4-03's own family check does the same thing.
       if (reducers.length === 0)
         return 'L8 has no subject: the Phase 4 DDL declares no relation matching INVOICE_REDUCER_VOCABULARY, so "the statement names every reducer" is a claim about an empty set';
-      const bodies = allBodies(w.migration);
+      // COMMENTS STRIPPED FIRST, and this is not tidiness: the money review of
+      // 24d5add9 planted ONE `--` line saying a reducer "is not handled here"
+      // and L8 went GREEN with that reducer genuinely unsubtracted. A law that
+      // a developer silences by writing a comment about the thing it guards is
+      // worse than no law, because it reads as coverage. `stripSql` is the
+      // gate's own function (phase4-s1-gate.ts:694): it deletes `--` lines,
+      // blanks `/* */` blocks, and KEEPS string literals -- so a relation name
+      // inside a quoted literal would still satisfy this law, which is a limit
+      // worth stating and not one SQL reaches, since relation names in these
+      // bodies are identifiers and never quoted strings. Section D below plants
+      // exactly that comment and requires the law to stay RED.
+      const bodies = allBodies(w.migration).map(stripSql);
       if (bodies.length === 0) return 'L8 has no subject: no `AS $$ … $$;` body in the migration, so there is no reader to judge';
       const missing: string[] = [];
       for (const [i, body] of bodies.entries())
@@ -448,5 +459,79 @@ describe('0092 — C: every arm of L1 refuses on its own, not merely the law as 
     // AND IT REFUSES FOR THE RIGHT REASON: a law that went red on some other
     // arm would hide the fact that this one is unguarded.
     expect(verdict ?? '', `L1 refused, but not for ${arm}: ${verdict ?? ''}`).toContain(spec.says);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SECTION D — a COMMENT does not satisfy L8.
+//
+// The money review of `24d5add9` found L8 satisfiable by prose: it read the raw
+// body, so one `--` line naming a reducer made the law green while the reducer
+// was genuinely unsubtracted. That is the defect this very file names for L1 --
+// "a comment that mentions a window is not a window" -- reappearing in the law
+// written to close a money blocker.
+//
+// Two plants, and the first is the control for the second: without it, a green
+// on the comment plant could mean the DROP failed rather than that the comment
+// was ignored. Section B's discipline is kept: the world digest must MOVE
+// before any verdict is read.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('0092 — D: L8 reads SQL, not prose', () => {
+  const l8 = LAWS.find((l) => l.id === 'L8');
+
+  it('L8 is present, or this section has no subject', () => {
+    expect(l8, 'L8 must exist for its prose-immunity to be judged').toBeDefined();
+  });
+
+  it('a reducer the tree has is discovered, or both plants below are vacuous', () => {
+    expect(reducersInTree().length, 'no reducer relation in the tree, so nothing can be dropped').toBeGreaterThan(0);
+  });
+
+  /** Every line naming `name` removed; throws if there was none, so a blind plant cannot pass. */
+  const withoutLinesNaming = (text: string, name: string): string => {
+    const lines = text.split('\n');
+    const kept = lines.filter((l) => !l.includes(name));
+    if (kept.length === lines.length) throw new Error(`plant is blind: no line names ${name}`);
+    return kept.join('\n');
+  };
+
+  it('CONTROL — dropping the relation reddens L8, so the plant below is testing the comment and not the drop', () => {
+    const law = l8 as Law;
+    const name = reducersInTree()[0] as string;
+    const before = worldSha(WORLD);
+    const mutant: Texts = { ...WORLD, migration: withoutLinesNaming(WORLD.migration, name) };
+    expect(worldSha(mutant), 'the drop changed nothing, so this control proves nothing').not.toBe(before);
+    const verdict = law.holds(mutant);
+    expect(verdict, `L8 stayed green with ${name} dropped`).not.toBeNull();
+    expect(verdict ?? '', `L8 refused, but did not name ${name}`).toContain(name);
+  });
+
+  it('a `--` comment naming the dropped relation does NOT bring L8 back to green', () => {
+    const law = l8 as Law;
+    const name = reducersInTree()[0] as string;
+    const dropped = withoutLinesNaming(WORLD.migration, name);
+    // The comment goes INSIDE the body, which is the only place that could
+    // satisfy the law -- a comment outside it was never a candidate.
+    const opener = 'AS $$';
+    expect(dropped.split(opener).length - 1, 'the body opener is not unique, so the comment lands nowhere definite').toBe(1);
+    // A REPLACEMENT FUNCTION, NOT A STRING, and this is measured rather than
+    // stylistic: in a replacement STRING `$$` inserts a single `$`, so
+    // `.replace('AS $$', `AS $$...`)` writes `AS $` and DESTROYS the body
+    // opener. The first form of this plant did exactly that; L8 then answered
+    // 'no body', which is non-null -- so the case PASSED for entirely the wrong
+    // reason while proving nothing about comments at all. Measured directly:
+    // with a replacement string, 'x AS $$...'.replace('AS $$', 'AS $$\n-- note')
+    // gives 'x AS $\n-- note'; with a function it keeps 'AS $$'.
+    const planted = dropped.replace(opener, () => `${opener}\n  -- ${name} is not handled here`);
+    // AND THE BODY SURVIVED THE PLANT. Without this the class above returns
+    // silently: a verdict of 'no body' is a refusal, and a refusal reads as a
+    // law that fired.
+    expect(allBodies(planted).length, 'the plant destroyed the body, so this case would pass without testing a comment').toBe(1);
+    const mutant: Texts = { ...WORLD, migration: planted };
+    expect(worldSha(mutant), 'the comment plant changed nothing').not.toBe(worldSha({ ...WORLD, migration: dropped }));
+    expect(planted.includes(`-- ${name} is not handled here`), 'the comment did not land in the text').toBe(true);
+    const verdict = law.holds(mutant);
+    expect(verdict, `a comment naming ${name} silenced L8 — the law reads prose as code`).not.toBeNull();
+    expect(verdict ?? '', `L8 refused, but did not name ${name}`).toContain(name);
   });
 });
