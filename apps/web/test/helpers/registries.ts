@@ -16,6 +16,7 @@ export const PAGE_AREAS: Readonly<Record<string, string>> = {
   purchases: 'purchases',
   suppliers: 'suppliers',
   pos: 'pos',
+  customers: 'customers',
   invoices: 'invoices',
 };
 
