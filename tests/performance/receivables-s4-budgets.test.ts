@@ -154,6 +154,7 @@ import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
+import { READER_STRIP_CASES, readerOfRecordCall, stripReaderOfRecordCalls } from './reader-of-record-calls';
 import {
   FAT_TAIL,
   FOREIGN_CURRENCY,
@@ -739,8 +740,16 @@ function readersOfRecord(root: string): string[] {
       // quietly exempted from the ceiling. `invoice_outstanding` itself
       // carries two live signatures (`0084:526`, `0084:593`), which is where
       // this was measured (TL-P4-S5-R1, §H of the refund guard). Widening it
-      // is byte-neutral on the tree as it stands — the set is the same four
-      // names — and strictly wider the day it is not.
+      // is byte-neutral on the tree as it stands — the set is the same EIGHT
+      // names — and strictly wider the day it is not. Both halves were
+      // remeasured on this head with the gate's own helpers: reading every
+      // definition and reading only the last one give the identical eight-name
+      // set, and the distinction is live rather than vacuous because six
+      // routines in the Phase 4 DDL carry more than one definition
+      // (`invoice_outstanding`, `customer_ar_outstanding`, `customer_ar_aging`,
+      // `customer_collect_payment`, `accounting_sale_entry_complete`,
+      // `accounting_reversals_20_domain_source_guard`). "Four" was never the
+      // closure's count; the byte-neutrality claim itself holds, measured.
       const definitions = phase4RoutineBodies(root, name);
       if (definitions.length === 0) continue; // unreadable bodies are the S1 gate's subject, not this one's
       if (definitions.some((body) => [...known].some((r) => new RegExp(`\\b${r}\\s*\\(`, 'i').test(body)))) {
@@ -754,8 +763,7 @@ function readersOfRecord(root: string): string[] {
 }
 
 const READERS_OF_RECORD = readersOfRecord(join(__dirname, '..', '..'));
-const READER_OF_RECORD_CALL = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\s*\\(`, 'i');
-const READER_OF_RECORD_CALL_G = new RegExp(`\\b(?:public\\.)?(?:${READERS_OF_RECORD.join('|')})\\([^)]*\\)`, 'gi');
+const READER_OF_RECORD_CALL = readerOfRecordCall(READERS_OF_RECORD);
 
 /** The three reads of one customer, labelled, so the fat-tail and median arms are built identically. */
 const readsOf = (
@@ -1175,7 +1183,10 @@ async function postedEntries(paymentId: string): Promise<{ readonly entries: num
  * whose expected size is derived from whatever happened to execute is not a
  * census. The audit names every missing case, so a mismatch is never a riddle.
  */
-const DECLARED_CASES = 18;
+// 19 since the P4-AL-07 class table got its own arm beside the GATE that asks
+// the law of the statements this cluster happens to issue: the runner found 19
+// where the literal said 18, which is the census doing exactly its job.
+const DECLARED_CASES = 19;
 
 /** The P4-D read series this file declares: three fat-tail HTTP reads + median + the two RLS halves. */
 const DECLARED_READ_SERIES = 3;
@@ -1676,10 +1687,44 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
       for (const c of statements) {
         // A `sum(` in the read's OWN statement would be the second copy. The
         // readers of record sum inside their own bodies, which is the point.
-        expect(/\bsum\s*\(/i.test(c.text.replace(READER_OF_RECORD_CALL_G, '')), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
+        expect(/\bsum\s*\(/i.test(stripReaderOfRecordCalls(c.text, READERS_OF_RECORD)), `${label}: this read sums money itself:\n${c.text}`).toBe(false);
       }
     }
     console.log(`\nREADERS OF RECORD — P4-D\n${JSON.stringify(byRead, null, 1)}\n`);
+  });
+
+  /**
+   * The GATE above asks the law of the statements this cluster's reads HAPPEN
+   * to issue; this arm asks it of the CLASSES the removal must refuse, which no
+   * read has to contain for the removal to be wrong. It is the same table the
+   * database-free suite reads (`READER_STRIP_CASES`), asserted here because
+   * nothing on the runner reaches that file — measured by its name's absence
+   * everywhere but its own doc comment, which is the reach question and not the
+   * narrower "is it named in `ci.yml`" one. A law whose teeth are measured only
+   * on a developer's machine is a law with no runner's verdict. No fixture: the
+   * removal is a pure function of text and names.
+   */
+  it('GATE: the reader-of-record removal refuses a second copy of the arithmetic in every class, and refuses nothing else', () => {
+    for (const c of READER_STRIP_CASES) {
+      const remainder = stripReaderOfRecordCalls(c.text, c.names);
+      expect(remainder, `${c.what}\nthe removal left something other than the pinned remainder:\n${c.text}`).toBe(c.remainder);
+      expect(
+        /\bsum\s*\(/i.test(remainder),
+        `${c.what}\nstatement: ${c.text}\nremainder: ${JSON.stringify(remainder)}\nP4-AL-07 tightens and is never relaxed.`,
+      ).toBe(c.mustRefuse);
+    }
+    // The seed that proves this arm can go red (DR-55, RULE-27): the removal
+    // this replaced — a pattern that cannot balance parentheses — must get at
+    // least one class WRONG, or the classes are vacuous and agree with any
+    // implementation. The second expectation keeps the seed from being a probe
+    // that matches nothing.
+    const unbalanced = (text: string, names: readonly string[]): string =>
+      text.replace(new RegExp(`\\b(?:public\\.)?(?:${names.join('|')})\\([^)]*\\)`, 'gi'), '');
+    expect(
+      READER_STRIP_CASES.filter((c) => /\bsum\s*\(/i.test(unbalanced(c.text, c.names)) !== c.mustRefuse).length,
+      'the unbalanced pattern this removal replaced satisfies every class, so these classes cannot tell the two apart',
+    ).toBeGreaterThan(0);
+    expect(unbalanced('SELECT invoice_outstanding($1)', ['invoice_outstanding']), 'the seed pattern matched nothing').toBe('SELECT ');
   });
 
   /**
