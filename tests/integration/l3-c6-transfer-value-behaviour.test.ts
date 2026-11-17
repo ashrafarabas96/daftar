@@ -23,7 +23,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { seedS3World, type S3World } from '../helpers/inventory-commands';
-import { seedOwnerTransfer } from '../helpers/stock-ledger';
+import { seedOwnerTransfer, seedOwnerTransferLines } from '../helpers/stock-ledger';
 
 let world: S3World;
 
@@ -78,9 +78,16 @@ describe('C6 — a complete transfer whose value does not cancel', () => {
             // cases fail on that constraint instead of on this card's law -- §1
             // was then refused by the WRONG rule, which is the same false
             // attribution this arm's own message guards against. Pinning it at 10
-            // in both cases also keeps `value` the ONLY field that differs between
-            // §1 and §2, which is what makes §2 a control rather than a second
-            // experiment. Measured: no constraint ties value to qty x cost, so 21
+            // in both cases keeps the COST identical between §1 and §2, so the
+            // difference between them is a value difference and not a cost one.
+            // CORRECTION, measured by the money review of 798d6cdb: an earlier
+            // form of this note said `value` was the ONLY field that differs, and
+            // that was false -- `cache.valuation` (21 against 20) and `cache.avg`
+            // (10.5 against 10) differ too. The attribution still holds, because
+            // the trigger reads `stock_movements.value_delta_base_minor` alone and
+            // the refusal is asserted BY NAME, but the sentence claimed two fields
+            // more than it had. A false statement in a test comment is read as
+            // evidence here, so it is corrected rather than quietly dropped. Measured: no constraint ties value to qty x cost, so 21
             // against a cost of 10 is a legal row and a planted imbalance.
             // THE IMBALANCE, and it is one minor unit: value is not conserved,
             // the quantities still are. A guard that only compared quantities
@@ -132,5 +139,185 @@ describe('C6 — a complete transfer whose value does not cancel', () => {
       );
     });
     expect(outcome.ok, `the balanced pair must commit, or §1 proves nothing about value: ${outcome.ok === false ? outcome.message : ''}`).toBe(true);
+  }, 300_000);
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // §3 and §4 — THE LINE IS THE SUBJECT, NOT THE DOCUMENT.
+  //
+  // The independent review of `798d6cdb` found `0093` summing over the whole
+  // transfer document while its trigger is named `..._per_line`, fires FOR EACH
+  // ROW on a line, and the card asks for the line. §1 and §2 above cannot tell
+  // the two designs apart, and that is not an oversight of theirs: they use
+  // `seedOwnerTransfer`, which pins `line_no` to 1, and ON A SINGLE LINE THE
+  // DOCUMENT IS THE LINE. So the green of this file proved the law existed and
+  // said nothing about its subject.
+  //
+  // §3 is the case that separates them, and its numbers do the separating:
+  //
+  //   line A   out -100   in +150   ->  line sum  +50
+  //   line B   out -100   in  +50   ->  line sum  -50
+  //                                     DOCUMENT   0
+  //
+  // A document-wide sum sees zero and stays silent; a per-line sum sees +50 and
+  // refuses. The harm the card names is exactly this shape: variant A's
+  // valuation is inflated by 50 and variant B's is drained by 50, quantities
+  // match line by line so the completeness guard is satisfied, and not one unit
+  // has moved off a shelf. Cost of sales is then measured on a manufactured
+  // average.
+  // ───────────────────────────────────────────────────────────────────────────
+
+  it('§3 a two-line transfer whose DOCUMENT sums to zero while each LINE does not is refused by name', async () => {
+    const a = world.A;
+    const v1 = a.variantProduct.variantIds[0];
+    const v2 = a.variantProduct.variantIds[1];
+
+    // THE FIXTURE DISCRIMINATES, asserted from its own numbers before the
+    // database is asked anything. Without this, a red here could come from a
+    // fixture that is simply unbalanced document-wide, which §1 already covers
+    // and which would prove nothing new.
+    const lineA = [-100, 150];
+    const lineB = [-100, 50];
+    const sum = (xs: readonly number[]): number => xs.reduce((t, x) => t + x, 0);
+    expect(sum([...lineA, ...lineB]), 'the DOCUMENT must sum to zero, or this case does not separate the two designs').toBe(0);
+    expect(sum(lineA), 'line A must NOT sum to zero').not.toBe(0);
+    expect(sum(lineB), 'line B must NOT sum to zero').not.toBe(0);
+    expect(sum(lineA) + sum(lineB), 'the two line errors must cancel exactly, which is what hides them from a document-wide sum').toBe(0);
+
+    const outcome = await atCommit(async (conn) => {
+      await seedOwnerTransferLines(
+        conn,
+        { tenantId: a.tenantId, businessId: a.businessId, userId: a.userId },
+        {
+          sourceWarehouseId: a.w1,
+          destinationWarehouseId: a.w2,
+          lines: [
+            {
+              variantId: v1,
+              qty: '2',
+              legs: [
+                {
+                  kind: 'transfer_out',
+                  warehouseId: a.w1,
+                  qty: '-2',
+                  value: '-100',
+                  unitCost: '50',
+                  stockSeq: 3,
+                  cache: { onHand: '0', valuation: '0', avg: null },
+                },
+                {
+                  kind: 'transfer_in',
+                  warehouseId: a.w2,
+                  qty: '2',
+                  value: '150',
+                  unitCost: '50',
+                  stockSeq: 3,
+                  cache: { onHand: '2', valuation: '150', avg: '75' },
+                },
+              ],
+            },
+            {
+              variantId: v2,
+              qty: '2',
+              legs: [
+                {
+                  kind: 'transfer_out',
+                  warehouseId: a.w1,
+                  qty: '-2',
+                  value: '-100',
+                  unitCost: '50',
+                  stockSeq: 3,
+                  cache: { onHand: '0', valuation: '0', avg: null },
+                },
+                {
+                  kind: 'transfer_in',
+                  warehouseId: a.w2,
+                  qty: '2',
+                  value: '50',
+                  unitCost: '50',
+                  stockSeq: 3,
+                  cache: { onHand: '2', valuation: '50', avg: '25' },
+                },
+              ],
+            },
+          ],
+        },
+      );
+    });
+
+    expect(outcome.ok, 'a per-line imbalance that cancels across the document must still not commit').toBe(false);
+    expect(
+      outcome.ok === false ? outcome.message : '',
+      `the refusal must be THIS law and not a balance, kind or completeness rule: ${outcome.ok === false ? outcome.message : ''}`,
+    ).toContain('inventory.transfer_value_not_conserved');
+  }, 300_000);
+
+  it('§4 while the same two-line shape with each line balanced commits, so §3 is the per-line imbalance and not the second line', async () => {
+    const a = world.A;
+    const v1 = a.variantProduct.variantIds[0];
+    const v2 = a.variantProduct.variantIds[1];
+    const outcome = await atCommit(async (conn) => {
+      await seedOwnerTransferLines(
+        conn,
+        { tenantId: a.tenantId, businessId: a.businessId, userId: a.userId },
+        {
+          sourceWarehouseId: a.w1,
+          destinationWarehouseId: a.w2,
+          lines: [
+            {
+              variantId: v1,
+              qty: '2',
+              legs: [
+                {
+                  kind: 'transfer_out',
+                  warehouseId: a.w1,
+                  qty: '-2',
+                  value: '-100',
+                  unitCost: '50',
+                  stockSeq: 4,
+                  cache: { onHand: '0', valuation: '0', avg: null },
+                },
+                {
+                  kind: 'transfer_in',
+                  warehouseId: a.w2,
+                  qty: '2',
+                  value: '100',
+                  unitCost: '50',
+                  stockSeq: 4,
+                  cache: { onHand: '2', valuation: '100', avg: '50' },
+                },
+              ],
+            },
+            {
+              variantId: v2,
+              qty: '2',
+              legs: [
+                {
+                  kind: 'transfer_out',
+                  warehouseId: a.w1,
+                  qty: '-2',
+                  value: '-100',
+                  unitCost: '50',
+                  stockSeq: 4,
+                  cache: { onHand: '0', valuation: '0', avg: null },
+                },
+                {
+                  kind: 'transfer_in',
+                  warehouseId: a.w2,
+                  qty: '2',
+                  value: '100',
+                  unitCost: '50',
+                  stockSeq: 4,
+                  cache: { onHand: '2', valuation: '100', avg: '50' },
+                },
+              ],
+            },
+          ],
+        },
+      );
+    });
+    expect(
+      outcome.ok,
+      `a two-line transfer with every line balanced must commit, or §3 proves nothing about the LINE: ${outcome.ok === false ? outcome.message : ''}`,
+    ).toBe(true);
   }, 300_000);
 });

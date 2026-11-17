@@ -22,10 +22,21 @@
 --     forbids.
 --
 -- SO THE ARM IS A DIFFERENT SHAPE, and it needs no column: the value deltas of
--- a transfer's own movements must SUM TO ZERO. That is the conservation the
--- quantity trigger cannot see, and a transfer written with an inbound value
+-- EACH TRANSFER LINE's own movements must SUM TO ZERO. That is the conservation
+-- the quantity trigger cannot see, and a line written with an inbound value
 -- that is not the negative of its outbound value is refused by name rather
 -- than passing because both quantities matched.
+--
+-- PER LINE, AND THE DISTINCTION IS NOT PEDANTRY. The first form of this guard
+-- summed over the whole DOCUMENT, which the card never asked for and which the
+-- trigger's own name contradicts. On a two-line transfer -- `lines` is an array
+-- in `inventory-movements.schemas.ts`, so an ordinary shape and not a rare one
+-- -- line A written -100/+150 and line B written -100/+50 sum to ZERO across
+-- the document. The completeness guard accepts each line, because quantities
+-- match line by line, and a document-wide sum then stays SILENT while one
+-- variant's valuation is inflated by 50 and another's is drained by 50, with
+-- not one unit moved off a shelf. Cost of sales is then measured on a
+-- manufactured average. The independent review of 798d6cdb found it.
 --
 -- WHAT THIS FILE DOES NOT DO: it does not edit a sealed migration. 0077's
 -- registry function is READ and replaced by `CREATE OR REPLACE` here, with
@@ -43,9 +54,8 @@ GRANT CREATE ON SCHEMA public TO daftar_inventory_internal;
 CREATE OR REPLACE FUNCTION inventory_transfer_value_conserved() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
-  v_sum   NUMERIC;
-  v_legs  BIGINT;
-  v_lines BIGINT;
+  v_sum  NUMERIC;
+  v_legs BIGINT;
 BEGIN
   -- A transfer moves value between two warehouses: it may not create or
   -- destroy any.
@@ -77,22 +87,26 @@ BEGIN
   -- proves the completeness guard is what refuses cannot do its work while
   -- another law refuses the same row.
   --
-  -- So the precondition is structural and coarse ON PURPOSE: as many movements
-  -- as two per line, or this law has nothing to say. It is NOT a copy of the
-  -- completeness law -- that one also matches each leg's kind, warehouse and
-  -- quantity, and none of that is repeated here. Where the counts do not
+  -- THE SUBJECT IS THIS LINE, not the document. The trigger fires FOR EACH ROW
+  -- on `inventory_transfer_lines` and is named `..._per_line`; summing the
+  -- document here made the body disagree with its own name, with the card, and
+  -- with the harm the card describes -- a two-line transfer can net to zero
+  -- across the document while each line is out by the same amount in opposite
+  -- directions, and nothing on a shelf has moved.
+  --
+  -- So the precondition is structural and coarse ON PURPOSE: exactly two
+  -- movements for THIS line, or this law has nothing to say. It is NOT a copy
+  -- of the completeness law -- that one also matches each leg's kind, warehouse
+  -- and quantity, and none of that is repeated here. Where the count does not
   -- match, the set is incomplete and `source_movement_set_incomplete` owns the
-  -- refusal; this law's subject is the COMPLETE document, which is what a
-  -- `value_complete` arm means in the registry.
-  SELECT count(*) INTO v_lines
-  FROM inventory_transfer_lines l
-  WHERE l.business_id = NEW.business_id AND l.transfer_id = NEW.transfer_id;
+  -- refusal; and that guard pins two legs PER LINE (0061:912-923), so where
+  -- this law speaks at all the count is two.
   SELECT count(*) INTO v_legs
   FROM stock_source_bridge_inventory_transfer b
   JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
                         AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
-  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id;
-  IF v_legs <> 2 * v_lines THEN
+  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id AND b.source_line_id = NEW.id;
+  IF v_legs <> 2 THEN
     RETURN NULL;
   END IF;
 
@@ -100,16 +114,16 @@ BEGIN
   FROM stock_source_bridge_inventory_transfer b
   JOIN stock_movements m ON m.business_id = b.business_id AND m.source_type = b.source_type AND m.source_id = b.source_id
                         AND m.source_line_id = b.source_line_id AND m.movement_kind = b.movement_kind
-  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id;
+  WHERE b.business_id = NEW.business_id AND b.source_id = NEW.transfer_id AND b.source_line_id = NEW.id;
   IF v_sum IS DISTINCT FROM 0::numeric THEN
-    RAISE EXCEPTION 'inventory.transfer_value_not_conserved: a transfer moves value between warehouses and must not create or destroy it' USING ERRCODE = 'P0001';
+    RAISE EXCEPTION 'inventory.transfer_value_not_conserved: a transfer line moves value between warehouses and must not create or destroy it' USING ERRCODE = 'P0001';
   END IF;
   RETURN NULL;
 END;
 $$;
 
 COMMENT ON FUNCTION inventory_transfer_value_conserved() IS
-  'C6 (INV-INV-05, INV-INV-07): the value deltas of an inventory transfer''s movements sum to zero. A deferred constraint trigger, because the movements are written after the header in the same transaction. No stored total is read: inventory_transfers carries no value column and may not carry one (P4-AL-05).';
+  'C6 (INV-INV-05, INV-INV-07): the value deltas of EACH LINE of an inventory transfer sum to zero, per line and not merely across the document. A deferred constraint trigger, because the movements are written after the header in the same transaction. No stored total is read: inventory_transfers carries no value column and may not carry one (P4-AL-05).';
 
 REVOKE ALL ON FUNCTION inventory_transfer_value_conserved() FROM PUBLIC;
 
@@ -187,7 +201,7 @@ DECLARE
     "stock_source_complete_sale()": "0d66d946ae01292345ded8215710f96283e7cb60ad8a6cb3a8219a7cec96ba5b",
     "stock_source_complete_sale_header()": "6aa21ff188d72c53cc887c0a88e5c302953f78d58e7dc95a0909b01a830c89b1",
     "sale_header_guard()": "b5d218c0114b7ea43e9e84fe4470f383be2a5c9d86486749e1312126d7a6bcc3",
-    "inventory_transfer_value_conserved()": "c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc"
+    "inventory_transfer_value_conserved()": "bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP

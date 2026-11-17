@@ -13,15 +13,24 @@
  * row out of `pg_trigger` and `pg_proc` so the numbers in the migration's
  * header are measured rather than asserted by their own author.
  *
- * WHAT THIS FILE DOES NOT YET CARRY, and the earlier version of this comment
- * wrongly said it did: a behavioural control writing a COMPLETE transfer whose
- * movements do not cancel, so the law is seen refusing. It is owed, and it is
- * owed more loudly since `0093` gained its leg-count precondition — a guard
- * that only ever sees balanced input is a guard nobody has seen work. Writing
- * it needs the owner-level movement harness (`stock_levels`, the movement and
- * the bridge row), which lives in another lane's test file and is not
- * exported; the choice between exporting it, duplicating it here, or resting
- * on the registry and the T-05 vector is with the coordinator.
+ * WHAT THIS FILE DOES NOT CARRY, AND WHO DOES CARRY IT NOW. The behavioural
+ * control — a COMPLETE transfer whose movements do not cancel, so the law is
+ * SEEN refusing — is no longer owed and no longer a question for the
+ * coordinator: it is in `l3-c6-transfer-value-behaviour.test.ts` on this
+ * branch, where §1 plants a one-minor-unit imbalance and asserts the refusal BY
+ * NAME, §2 commits the same shape balanced, §3 plants a two-line document that
+ * sums to zero while each line is out by 50 in opposite directions, and §4
+ * commits that same two-line shape balanced. The owner-level harness that was
+ * missing is `seedOwnerTransfer` and `seedOwnerTransferLines` in
+ * `tests/helpers/stock-ledger.ts`.
+ *
+ * An earlier form of this comment said the control was "owed" and left the
+ * choice with the coordinator, and it stayed that way after the branch itself
+ * delivered it. Two independent reviews of `798d6cdb` flagged it, and both were
+ * right to: in this project a comment is read as a measurement record, so a
+ * stale one UNDERSTATES this branch's own coverage and keeps a settled question
+ * open. What this file does carry is the textual and registry half, which is
+ * the half a cluster cannot prove.
  */
 import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
