@@ -685,8 +685,9 @@ function releaseReach(read: (file: string) => string): { required: string[]; unr
     const live = read(file)
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/(^|[^:])\/\/.*$/gm, '$1');
-    for (const m of live.matchAll(/gate:phase(?:1|2:s\d+)\b/g)) {
-      if (!seen.has(m[0])) {
+    // The whole script name, not a prefix of one: `gate:phase1` must not match inside `gate:phase1:release`.
+    for (const m of live.matchAll(/gate:phase[12](?::\w+)*(?![\w:-])/g)) {
+      if (pkg.scripts[m[0]] !== undefined && !seen.has(m[0])) {
         seen.add(m[0]);
         queue.push(m[0]);
       }
@@ -717,6 +718,12 @@ describe('the release path reaches every Phase 2 slice gate and the Phase 1 gate
   it('RED: a link in the middle of the chain is dropped (P2-S4 no longer runs P2-S3)', () => {
     const r = releaseReach(without('scripts/phase2-s4-gate.ts', /gate:phase2:s3/g));
     expect(r.unreached).toContain('gate:phase2:s3');
+  });
+
+  it('RED: both real calls of the Phase 1 gate are cut, while the release script still names a longer script', () => {
+    const planted = (f: string): string =>
+      f === 'scripts/phase2-s1-gate.ts' || f === 'scripts/phase1-release-gate.ts' ? real(f).replace(/gate:phase1(?![\w:-])/g, 'x') : real(f);
+    expect(releaseReach(planted).unreached).toContain('gate:phase1');
   });
 
   it('NEGATIVE CONTROL: a call named only in a comment does not count as reached', () => {
