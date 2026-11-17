@@ -1883,8 +1883,19 @@ export interface OwnerTransferLineSpec {
  * mismatch by reading, not by a red test, which is exactly the gap this
  * function closes.
  *
- * A pure ADDITION: `seedOwnerTransfer` is not touched and its 46 call sites are
- * unaffected. Note the two constraints that shape a caller's fixture --
+ * A pure ADDITION: `seedOwnerTransfer` is not touched. The count this sentence
+ * first carried -- "its 46 call sites" -- was a quantity that does not exist,
+ * and the money review of a6a8fb51 caught it. Measured instead, with the
+ * identity of each count named: `seedOwnerTransfer` is ABSENT on the merge
+ * base 8c8475db (so it is new in this branch, not a shared fixture), and at
+ * HEAD it is CALLED in exactly 2 places, both of them
+ * `l3-c6-transfer-value-behaviour.test.ts:56` and `:118`. The identifier also
+ * appears on 4 lines of this file and 1 of the arm cluster, which are
+ * definition and prose rather than calls -- lines containing an identifier and
+ * call sites are two different quantities (RULE-30), and writing 46 for either
+ * of them was unmeasured.
+ *
+ * Note the two constraints that shape a caller's fixture --
  * `inventory_transfer_lines_line_no_uq` and `inventory_transfer_lines_variant_uq`
  * (0061:533-534) -- so the lines are numbered from 1 upward and EACH LINE NEEDS
  * ITS OWN VARIANT.

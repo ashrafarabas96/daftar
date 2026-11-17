@@ -92,6 +92,16 @@ describe('C6 — the transfer value arm on a cluster', () => {
     //   OLD  c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc
     //   NEW  bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d
     //
+    // AND IT MOVED AGAIN, for a REASON worth recording rather than a value:
+    // a narrow round of a6a8fb51 found a sentence still inside the body that
+    // stated the REJECTED design -- "The sum is still the whole document's,
+    // not the line's" -- twenty lines above the block that says the subject
+    // is the line. Deleting prose changes `prosrc`, so the digest moved a
+    // third time. The chain, so no reader has to reconstruct it:
+    //   first   c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc   (document-wide body)
+    //   then    bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d   (per-line body, stale prose)
+    //   now     49e7db9679170a7cf272ff61e8eca14a731cb5f89b0f87cc843817b4b5f6b725   (per-line body, prose corrected)
+    //
     // The body changed because `0093`'s conservation became PER LINE: the
     // queries gained `AND b.source_line_id = NEW.id` and the leg count became
     // exactly two, after the independent review of 798d6cdb found the sum was
@@ -103,7 +113,7 @@ describe('C6 — the transfer value arm on a cluster', () => {
     // `prosrc`, and it returned exactly the value my local extraction had
     // computed, so the extraction method proved against the old digest also
     // agrees with the database.
-    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d');
+    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('49e7db9679170a7cf272ff61e8eca14a731cb5f89b0f87cc843817b4b5f6b725');
   });
 
   it('§3 the schema floor constant names the head this build ships', async () => {

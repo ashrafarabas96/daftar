@@ -72,7 +72,7 @@ BEGIN
   -- sorts after `stock_source_complete_inventory_transfer`, PostgreSQL fires
   -- the completeness guard first for each line (triggers on the same event
   -- fire in alphabetical order by name) and this law speaks only about a set
-  -- that is complete. The sum is still the whole document's, not the line's. The claim is a SUM over the document's movements and not a
+  -- that is complete. The claim is a SUM over the LINE's movements and not a
   -- comparison against a stored total, because `inventory_transfers` carries
   -- no value column and may not carry one -- the same rule that leaves the
   -- `sale` source without a value_complete arm (P4-AL-05 and the
@@ -201,7 +201,7 @@ DECLARE
     "stock_source_complete_sale()": "0d66d946ae01292345ded8215710f96283e7cb60ad8a6cb3a8219a7cec96ba5b",
     "stock_source_complete_sale_header()": "6aa21ff188d72c53cc887c0a88e5c302953f78d58e7dc95a0909b01a830c89b1",
     "sale_header_guard()": "b5d218c0114b7ea43e9e84fe4470f383be2a5c9d86486749e1312126d7a6bcc3",
-    "inventory_transfer_value_conserved()": "bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d"
+    "inventory_transfer_value_conserved()": "49e7db9679170a7cf272ff61e8eca14a731cb5f89b0f87cc843817b4b5f6b725"
   }';
 BEGIN
   FOR v_type IN SELECT t.source_type FROM stock_source_types t ORDER BY t.source_type LOOP

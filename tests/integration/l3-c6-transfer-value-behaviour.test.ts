@@ -168,79 +168,90 @@ describe('C6 — a complete transfer whose value does not cancel', () => {
 
   it('§3 a two-line transfer whose DOCUMENT sums to zero while each LINE does not is refused by name', async () => {
     const a = world.A;
-    const v1 = a.variantProduct.variantIds[0];
-    const v2 = a.variantProduct.variantIds[1];
 
-    // THE FIXTURE DISCRIMINATES, asserted from its own numbers before the
-    // database is asked anything. Without this, a red here could come from a
-    // fixture that is simply unbalanced document-wide, which §1 already covers
-    // and which would prove nothing new.
-    const lineA = [-100, 150];
-    const lineB = [-100, 50];
-    const sum = (xs: readonly number[]): number => xs.reduce((t, x) => t + x, 0);
-    expect(sum([...lineA, ...lineB]), 'the DOCUMENT must sum to zero, or this case does not separate the two designs').toBe(0);
-    expect(sum(lineA), 'line A must NOT sum to zero').not.toBe(0);
-    expect(sum(lineB), 'line B must NOT sum to zero').not.toBe(0);
-    expect(sum(lineA) + sum(lineB), 'the two line errors must cancel exactly, which is what hides them from a document-wide sum').toBe(0);
+    // ONE SOURCE OF TRUTH FOR THE PLANTED FIGURES. The lines are built first
+    // and the discrimination is then read OUT OF THEM, so the arithmetic below
+    // and the rows actually written cannot drift apart. An earlier form of this
+    // case kept a parallel copy of the numbers (`const lineA = [-100, 150]`),
+    // and the narrow round of a6a8fb51 named the hazard: change a planted
+    // `value` and the assertions stay green while the fixture stops
+    // discriminating. Reading the legs back is what removes that.
+    const lines = [
+      {
+        variantId: a.variantProduct.variantIds[0],
+        qty: '2',
+        legs: [
+          {
+            kind: 'transfer_out' as const,
+            warehouseId: a.w1,
+            qty: '-2',
+            value: '-100',
+            unitCost: '50',
+            stockSeq: 3,
+            cache: { onHand: '0', valuation: '0', avg: null },
+          },
+          {
+            kind: 'transfer_in' as const,
+            warehouseId: a.w2,
+            qty: '2',
+            value: '150',
+            unitCost: '50',
+            stockSeq: 3,
+            cache: { onHand: '2', valuation: '150', avg: '75' },
+          },
+        ] as const,
+      },
+      {
+        variantId: a.variantProduct.variantIds[1],
+        qty: '2',
+        legs: [
+          {
+            kind: 'transfer_out' as const,
+            warehouseId: a.w1,
+            qty: '-2',
+            value: '-100',
+            unitCost: '50',
+            stockSeq: 3,
+            cache: { onHand: '0', valuation: '0', avg: null },
+          },
+          {
+            kind: 'transfer_in' as const,
+            warehouseId: a.w2,
+            qty: '2',
+            value: '50',
+            unitCost: '50',
+            stockSeq: 3,
+            cache: { onHand: '2', valuation: '50', avg: '25' },
+          },
+        ] as const,
+      },
+    ] as const;
+
+    // THE FIXTURE DISCRIMINATES, read from the legs that will actually be
+    // written, before the database is asked anything. Without this, a red here
+    // could come from a fixture that is simply unbalanced document-wide, which
+    // §1 already covers and which would prove nothing new.
+    //
+    // WHAT THIS DOES NOT PROVE, said rather than left to be assumed: it does
+    // NOT prove the per-line guard refuses. It proves only that this case can
+    // tell the two designs apart -- a document-wide sum of zero with per-line
+    // sums that are not. Whether the guard then refuses is the runner's to say,
+    // and §3 was never executed against a document-summing body (the remedy and
+    // this case landed in one commit), so "red first" holds here by inference
+    // and NOT by measurement. That is stated plainly rather than implied.
+    const lineSum = (l: (typeof lines)[number]): number => l.legs.reduce((t, leg) => t + Number(leg.value), 0);
+    const documentSum = lines.reduce((t, l) => t + lineSum(l), 0);
+    expect(lines.length, 'a document of one line cannot separate the designs, because the document IS the line').toBeGreaterThan(1);
+    expect(documentSum, 'the DOCUMENT must sum to zero, or this case does not separate the two designs').toBe(0);
+    for (const [index, line] of lines.entries()) {
+      expect(lineSum(line), `line ${index + 1} must NOT sum to zero`).not.toBe(0);
+    }
 
     const outcome = await atCommit(async (conn) => {
       await seedOwnerTransferLines(
         conn,
         { tenantId: a.tenantId, businessId: a.businessId, userId: a.userId },
-        {
-          sourceWarehouseId: a.w1,
-          destinationWarehouseId: a.w2,
-          lines: [
-            {
-              variantId: v1,
-              qty: '2',
-              legs: [
-                {
-                  kind: 'transfer_out',
-                  warehouseId: a.w1,
-                  qty: '-2',
-                  value: '-100',
-                  unitCost: '50',
-                  stockSeq: 3,
-                  cache: { onHand: '0', valuation: '0', avg: null },
-                },
-                {
-                  kind: 'transfer_in',
-                  warehouseId: a.w2,
-                  qty: '2',
-                  value: '150',
-                  unitCost: '50',
-                  stockSeq: 3,
-                  cache: { onHand: '2', valuation: '150', avg: '75' },
-                },
-              ],
-            },
-            {
-              variantId: v2,
-              qty: '2',
-              legs: [
-                {
-                  kind: 'transfer_out',
-                  warehouseId: a.w1,
-                  qty: '-2',
-                  value: '-100',
-                  unitCost: '50',
-                  stockSeq: 3,
-                  cache: { onHand: '0', valuation: '0', avg: null },
-                },
-                {
-                  kind: 'transfer_in',
-                  warehouseId: a.w2,
-                  qty: '2',
-                  value: '50',
-                  unitCost: '50',
-                  stockSeq: 3,
-                  cache: { onHand: '2', valuation: '50', avg: '25' },
-                },
-              ],
-            },
-          ],
-        },
+        { sourceWarehouseId: a.w1, destinationWarehouseId: a.w2, lines: lines.map((l) => ({ ...l, legs: [l.legs[0], l.legs[1]] as const })) },
       );
     });
 
