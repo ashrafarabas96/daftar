@@ -91,6 +91,21 @@ describe('P4-AL-72 paired measurement', () => {
       const planted: PairSide[] = Array.from({ length: N }, () => ['F', 'M'] as PairSide[]).flat();
       expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
     });
+    it('negative: two BLOCKS (FM x half, then MF x half) are balanced but never alternate, so it turns red', () => {
+      const half = N / 2;
+      const planted: PairSide[] = [
+        ...Array.from({ length: half }, () => ['F', 'M'] as PairSide[]).flat(),
+        ...Array.from({ length: N - half }, () => ['M', 'F'] as PairSide[]).flat(),
+      ];
+      expect(planted.length).toBe(2 * N);
+      expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
+    });
+    it('negative: ONE swapped pair in the middle of the real alternation turns red', () => {
+      const real = pairedRun(N);
+      const planted = real.slice();
+      [planted[4], planted[5]] = [planted[5]!, planted[4]!];
+      expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
+    });
     it('negative: an EMPTY fingerprint fails and does not pass as nothing', () => {
       expect(fingerprintProblems([], N).length).toBeGreaterThan(0);
     });

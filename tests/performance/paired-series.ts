@@ -80,6 +80,15 @@ export function fingerprintProblems(order: readonly PairSide[], iterationsPerSid
     if (order[i] === 'F') fatFirst += 1;
   }
   if (mixedPairs !== Math.floor(order.length / 2)) problems.push('some iteration did not read both sides exactly once');
+  // The first side must flip EVERY iteration: a balanced count of who goes first would also pass
+  // FM x half then MF x half, two blocks that leave the host's phase drift between the sides.
+  let sameFirstAsPrevious = 0;
+  for (let i = 2; i + 1 < order.length; i += 2) {
+    if (order[i] === order[i - 2]) sameFirstAsPrevious += 1;
+  }
+  if (sameFirstAsPrevious > 0) {
+    problems.push(`the first side did not flip in ${sameFirstAsPrevious} consecutive iterations; a paired alternation flips it every iteration`);
+  }
   if (Math.abs(fatFirst - (order.length / 2 - fatFirst)) > 1) {
     problems.push(`the order inside the pair does not alternate: the fat-tail read was first in ${fatFirst} of ${order.length / 2} iterations`);
   }
