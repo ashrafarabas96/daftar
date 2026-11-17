@@ -663,3 +663,64 @@ describe('the Phase 2 chain is composed by the job, not nested in P2-S8 (C-14, D
     expect(p2NestProblems(ci, `// npm run 'gate:phase2:s7'\n${gate}`)).toEqual([]);
   });
 });
+
+/**
+ * C-15 (DR-170) — the release path still reaches every Phase 2 slice gate and the Phase 1 gate. C-14 lets the P2-S8
+ * gate stop calling the P2-S7 gate because CI runs the seven as separate steps; a release has no such job, so the
+ * release gate has to reach them itself. The required set is DERIVED, not written here: every `gate:phase2:sN` script
+ * that package.json declares, plus `gate:phase1`. The reach is DERIVED too: from the `gate:phase2:release` script,
+ * follow every `gate:phase1` / `gate:phase2:sN` call found in the live text (comments stripped) of each script file.
+ * A dropped call, anywhere on a path, shows up as a gate that is no longer reached.
+ */
+function releaseReach(read: (file: string) => string): { required: string[]; unreached: string[] } {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+  const fileOf = (name: string): string | undefined => /scripts\/[\w-]+\.ts/.exec(pkg.scripts[name] ?? '')?.[0];
+  const required = Object.keys(pkg.scripts).filter((k) => /^gate:phase2:s\d+$/.test(k) || k === 'gate:phase1');
+  const seen = new Set<string>(['gate:phase2:release']);
+  const queue = ['gate:phase2:release'];
+  while (queue.length > 0) {
+    const name = queue.shift() as string;
+    const file = fileOf(name);
+    if (file === undefined) continue;
+    const live = read(file)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    for (const m of live.matchAll(/gate:phase(?:1|2:s\d+)\b/g)) {
+      if (!seen.has(m[0])) {
+        seen.add(m[0]);
+        queue.push(m[0]);
+      }
+    }
+  }
+  return { required, unreached: required.filter((r) => !seen.has(r)) };
+}
+
+describe('the release path reaches every Phase 2 slice gate and the Phase 1 gate (C-15, DR-170)', () => {
+  const real = (file: string): string => readFileSync(join(ROOT, file), 'utf8');
+  const without =
+    (file: string, needle: RegExp) =>
+    (f: string): string =>
+      f === file ? real(f).replace(needle, '') : real(f);
+
+  it('POSITIVE: nothing is unreached, and the probe saw nine required gates (s1 .. s8 and phase1)', () => {
+    const r = releaseReach(real);
+    expect(r.unreached).toEqual([]);
+    expect(r.required).toHaveLength(9);
+  });
+
+  it('RED: the release gate stops running the P2-S7 gate', () => {
+    const r = releaseReach(without('scripts/phase2-release-gate.ts', /gate:phase2:s7/g));
+    expect(r.unreached).toContain('gate:phase2:s7');
+    expect(r.unreached).toContain('gate:phase2:s1');
+  });
+
+  it('RED: a link in the middle of the chain is dropped (P2-S4 no longer runs P2-S3)', () => {
+    const r = releaseReach(without('scripts/phase2-s4-gate.ts', /gate:phase2:s3/g));
+    expect(r.unreached).toContain('gate:phase2:s3');
+  });
+
+  it('NEGATIVE CONTROL: a call named only in a comment does not count as reached', () => {
+    const planted = (f: string): string => (f === 'scripts/phase2-release-gate.ts' ? '// gate:phase2:s7' + real(f).replace(/gate:phase2:s7/g, 'x') : real(f));
+    expect(releaseReach(planted).unreached).toContain('gate:phase2:s7');
+  });
+});
