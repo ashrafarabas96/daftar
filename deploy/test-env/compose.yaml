@@ -1,0 +1,75 @@
+# TEST ENVIRONMENT ONLY (DR-173/5): one host, no real secrets, no merchant data, no domain.
+# Not a production configuration and not "ready" for one (production is a deferred card).
+# SEC-01: `worker` is given its own env file ONLY (see the guard test for the session-key rule).
+name: daftar-test-env
+
+x-app: &app
+  build:
+    context: ../..
+    dockerfile: deploy/test-env/Dockerfile
+  restart: unless-stopped
+  depends_on:
+    migrate:
+      condition: service_completed_successfully
+    redis:
+      condition: service_started
+
+services:
+  postgres:
+    image: postgres:16
+    env_file: [env/postgres.env]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d daftar']
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+
+  # Roles first (bootstrap.sql carries __X_DB_PASSWORD__ markers), then migrations.
+  # Migrations run over a DIRECT connection, never a transaction-mode pooler (migrate.ts).
+  bootstrap:
+    image: postgres:16
+    env_file: [env/postgres.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ../../infrastructure/database/bootstrap.sql:/bootstrap.sql:ro
+    entrypoint: ['/bin/sh', '-ec']
+    command:
+      - |
+        sed -e 's/__APP_DB_PASSWORD__/PLACEHOLDER-app/g' \
+            -e 's/__PLATFORM_DB_PASSWORD__/PLACEHOLDER-platform/g' \
+            -e 's/__WORKER_DB_PASSWORD__/PLACEHOLDER-worker/g' \
+            -e 's/__RESOLVER_DB_PASSWORD__/PLACEHOLDER-resolver/g' \
+            -e 's/__IDENTITY_DB_PASSWORD__/PLACEHOLDER-identity/g' \
+            -e 's/__PROVISIONER_DB_PASSWORD__/PLACEHOLDER-provisioner/g'             -e 's/__MIGRATOR_DB_PASSWORD__/PLACEHOLDER-migrator/g'             -e 's/__RECONCILER_DB_PASSWORD__/PLACEHOLDER-reconciler/g' /bootstrap.sql > /tmp/b.sql
+        PGPASSWORD="$$POSTGRES_PASSWORD" psql -h postgres -U postgres -d daftar -v ON_ERROR_STOP=1 -f /tmp/b.sql
+    restart: 'no'
+
+  migrate:
+    <<: *app
+    depends_on:
+      bootstrap: { condition: service_completed_successfully }
+    env_file: [env/migrate.env]
+    command: ['npm', 'run', 'migrate', '-w', '@daftar/api']
+    restart: 'no'
+
+  merchant-api:
+    <<: *app
+    env_file: [env/merchant-api.env]
+    ports: ['127.0.0.1:3000:3000']
+
+  platform-api:
+    <<: *app
+    env_file: [env/platform-api.env]
+    ports: ['127.0.0.1:3001:3001']
+
+  worker:
+    <<: *app
+    env_file: [env/worker.env]
+
+volumes:
+  pgdata:
