@@ -511,6 +511,8 @@ const evidence = {
     logOpts: secretScan?.logOpts ?? null,
     commitsInRange: secretScan?.commitsInRange ?? null,
     mergesInRange: secretScan?.mergesInRange ?? null,
+    commitsWithPatch: secretScan?.commitsWithPatch ?? null,
+    patchlessCommits: secretScan?.patchlessCommits ?? null,
     commitsScanned: secretScan?.commitsScanned ?? null,
     findings: secretScan?.findings ?? null,
     allowlisted: secretScan?.allowlisted ?? null,
@@ -535,7 +537,7 @@ console.log(`  repository gate      ${String(repoGate?.verdict ?? null)}`);
 console.log(`  archive gate         ${String(archiveGate?.verdict ?? null)}`);
 console.log(
   `  secret history scan  ${String(secretScan?.result ?? null)}: ${String(secretScan?.base ?? null)}..${String(secretScan?.head ?? null)}, ` +
-    `${String(secretScan?.commitsScanned ?? null)}/${String(secretScan?.commitsInRange ?? null)} commits, ` +
+    `${String(secretScan?.commitsScanned ?? null)}/${String(secretScan?.commitsWithPatch ?? null)} commits carrying a patch (range ${String(secretScan?.commitsInRange ?? null)}), ` +
     `${String(secretScan?.findings ?? null)} findings, ${String(secretScan?.remaining?.length ?? null)} remaining`,
 );
 console.log(`\nP3-S9 RELEASE EVIDENCE: ${evidence.verdict}`);
