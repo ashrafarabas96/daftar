@@ -1868,8 +1868,16 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - name: Dependency audit
-        run: npm audit --audit-level=high
+      # DR-173/4. Two blocking steps, narrowing the single whole-tree audit
+      # this replaced: production at `moderate` (stricter than before), and the
+      # development tree at `high` for every advisory except GHSA-fc5q-39xc-vjpf
+      # (picomatch, no patched release, development tools only), which
+      # `scripts/dependency-audit.ts` waives until 2026-12-31 and turns red by
+      # itself when a fix appears, the date passes, or it reaches production.
+      - name: Dependency audit (production, moderate)
+        run: npm audit --omit=dev --audit-level=moderate
+      - name: Dependency audit (development tools, one dated waiver)
+        run: npx tsx scripts/dependency-audit.ts
       - name: Forbidden artifact scan
         run: |
           set -e
