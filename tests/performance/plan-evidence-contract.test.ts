@@ -282,7 +282,97 @@ describe('every discovered plan-shape claim is executed by required CI against p
     // And the control: unplanted, the same file is reached.
     expect(unreachedBy(ci, ['tests/performance/pos-s3-budgets.test.ts'])).toEqual([]);
   });
+
+  /**
+   * The required jobs are a SET (DR-147/1): a plan-gate step that lives in
+   * another part of the family still counts, and the same step in a job the
+   * aggregate does not need still does not. Each is planted on a COPY of the
+   * text, the step moved rather than deleted, so the only thing that changes
+   * is WHERE the step runs.
+   */
+  describe('the required jobs are the set the aggregate needs', () => {
+    const POS_FILE = ['tests/performance/pos-s3-budgets.test.ts'];
+    const STEP = / {6}- name: POS read budgets — P4-A and P4-B, measured[\s\S]*?PG_PORT: '5432'\n/;
+    const moveStepTo = (text: string, job: string): string => {
+      const step = STEP.exec(text)?.[0];
+      expect(step, 'the POS read budgets step was not found to move — update this proof').toBeDefined();
+      const withoutStep = text.replace(STEP, '');
+      const target = new RegExp(`(\\n {2}${job}:[\\s\\S]*?\\n {4}steps:\\n)`);
+      const moved = withoutStep.replace(target, `$1${step as string}`);
+      expect(moved, `the \`${job}\` job was not found to receive the step — update this proof`).not.toBe(withoutStep);
+      return moved;
+    };
+
+    it('the aggregate lists the jobs, and `backend` alone is not the whole set', () => {
+      expect(requiredJobs(ci)).toContain('backend');
+      expect(requiredJobs(ci).length).toBeGreaterThan(1);
+    });
+
+    it('POSITIVE: the step moved to another part the aggregate needs is still reached', () => {
+      const part = requiredJobs(ci).find((id) => id !== 'backend') as string;
+      expect(unreachedBy(moveStepTo(ci, part), POS_FILE)).toEqual([]);
+    });
+
+    it('RED: an unreadable aggregate fails by NAME and does not quietly narrow the set', () => {
+      const planted = ci.replace(/(\n {2}backend-required:[\s\S]*?\n {4})needs:/, '$1needz:');
+      expect(planted, 'the aggregate needs key was not found to corrupt — update this proof').not.toBe(ci);
+      expect(() => requiredJobs(planted)).toThrow('could not read the `needs` list of `backend-required`');
+      expect(() => unreachedBy(planted, POS_FILE)).toThrow('could not read the `needs` list of `backend-required`');
+    });
+
+    it('RED: the same step moved to a job the aggregate does not need is not reached', () => {
+      expect(unreachedBy(moveStepTo(ci, 'web-admin'), POS_FILE)).toEqual(POS_FILE);
+    });
+
+    it('RED: the part that holds the step is dropped from the aggregate, so it is no longer required', () => {
+      const part = requiredJobs(ci).find((id) => id !== 'backend') as string;
+      const moved = moveStepTo(ci, part);
+      const planted = moved.replace(new RegExp(`(\\n {4}needs: \\[[^\\]]*), ${part}`), '$1');
+      expect(planted, 'the part was not found in the aggregate needs — update this proof').not.toBe(moved);
+      expect(unreachedBy(planted, POS_FILE)).toEqual(POS_FILE);
+    });
+  });
 });
+
+/** One top-level job's text: from its `  id:` line to the next job key. */
+function jobBlock(ciText: string, id: string): string {
+  const lines = ciText.split('\n');
+  const start = lines.findIndex((l) => l === `  ${id}:`);
+  if (start < 0) return '';
+  let end = lines.length;
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^ {2}[A-Za-z0-9_-]+:/.test(lines[i] ?? '')) {
+      end = i;
+      break;
+    }
+  }
+  return lines.slice(start, end).join('\n');
+}
+
+/**
+ * The jobs that count as "the required job": `backend` and every job the
+ * aggregate `backend-required` (the check named `backend`) `needs`. If the
+ * aggregate or its list cannot be read, this THROWS with that reason: reading
+ * `backend` alone instead would fail the contract with a different question
+ * (every moved claim unreached) and a false failure is how a law gets disabled.
+ */
+function requiredJobs(ciText: string): string[] {
+  const aggregate = jobBlock(ciText, 'backend-required');
+  const needs =
+    /^ {4}needs:\s*\[([^\]]*)\]/m
+      .exec(aggregate)?.[1]
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter((s) => s !== '') ?? [];
+  if (needs.length === 0) {
+    throw new Error(
+      'plan-evidence contract: could not read the `needs` list of `backend-required` (the check named `backend`), ' +
+        'so the set of required jobs is unknown. Failing by name instead of quietly reading `backend` alone: ' +
+        'a narrower set would redden every claim for the wrong reason.',
+    );
+  }
+  return [...new Set(['backend', ...needs])];
+}
 
 /**
  * Which of `files` the required `backend` job of `ciText` never executes.
@@ -293,7 +383,15 @@ describe('every discovered plan-shape claim is executed by required CI against p
  * gate is composed only if the script actually names the suite.
  */
 function unreachedBy(ciText: string, files: readonly string[]): string[] {
-  const backend = ciText.slice(ciText.indexOf('\n  backend:'), ciText.indexOf('\n  web-admin:'));
+  // The text of the REQUIRED jobs: `backend` and every job the aggregate that
+  // carries the required check name `backend` needs (`backend-required`). The
+  // old reading sliced the file positionally from `\n  backend:` to
+  // `\n  web-admin:`, which made a job's position a rule and a step moved to
+  // another part of the family invisible to this contract. A job outside that
+  // set is still not required CI: its steps do not count here.
+  const backend = requiredJobs(ciText)
+    .map((id) => jobBlock(ciText, id))
+    .join('\n');
   const commands = [...backend.matchAll(/run:\s*(npm run [\w:-]+|npx [^\n]+)/g)].map((m) => (m[1] ?? '').trim());
   const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as {
     scripts: Record<string, string>;

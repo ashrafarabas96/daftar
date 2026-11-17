@@ -584,6 +584,17 @@ const EnvSchema = z
     }
     // §31: ACTUAL PRINCIPALS MUST DIFFER — no aliasing one role's credentials
     // for another pool via misconfiguration.
+    //
+    // `PROVISIONER_DATABASE_URL` is a member as of the owner's order of
+    // 2026-11-15 («تشديد أمني لا تخفيف»). It was absent, and `:521-522`
+    // compares it only against APP and PLATFORM by hand — so a provisioner
+    // credential equal to IDENTITY or to RESOLVER started a production
+    // merchant-api, measured by loading the config once per pair. The fix is
+    // membership and not two more hand comparisons, so that the separation set
+    // keeps ONE definition and the next credential added is covered by it.
+    // Pinned by `tests-unit/config-provisioner-principal-separation-law.test.ts`;
+    // the set's own reach is pinned by
+    // `tests-unit/config-duplicate-db-principal-law.test.ts`.
     const urls: Record<string, string | undefined> = {
       APP_DATABASE_URL: c.APP_DATABASE_URL,
       PLATFORM_DATABASE_URL: c.PLATFORM_DATABASE_URL,
@@ -591,6 +602,7 @@ const EnvSchema = z
       RESOLVER_DATABASE_URL: c.RESOLVER_DATABASE_URL,
       WORKER_DATABASE_URL: c.WORKER_DATABASE_URL,
       RECONCILER_DATABASE_URL: c.RECONCILER_DATABASE_URL,
+      PROVISIONER_DATABASE_URL: c.PROVISIONER_DATABASE_URL,
     };
     const seen = new Map<string, string>();
     for (const [name, url] of Object.entries(urls)) {
