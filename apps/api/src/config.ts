@@ -628,7 +628,7 @@ const EnvSchema = z
  * against the shipped migration set by a test, so this cannot quietly fall
  * behind the DDL the code was written against.
  */
-export const REQUIRED_SCHEMA_MIGRATION = '0086_phase4_rls_quals_once_per_query.sql';
+export const REQUIRED_SCHEMA_MIGRATION = '0093_c6_transfer_value_conservation.sql';
 
 /**
  * The ordinal of a migration file name — `0084_…sql` → `84`.
