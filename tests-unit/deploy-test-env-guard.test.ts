@@ -57,7 +57,7 @@ const realLooking = (env: Record<string, string>): string[] =>
 /** A value that names a host with a dot-TLD or a public scheme: a domain. */
 const domains = (env: Record<string, string>): string[] =>
   Object.entries(env)
-    .filter(([, v]) => /https?:\/\/|@[\w-]+\.[a-z]{2,}\b|\b[\w-]+\.(com|net|org|io|app|dev|sa|ae|co)\b/i.test(v))
+    .filter(([, v]) => /\b(?:\d{1,3}\.){3}\d{1,3}\b(?!\/)|https?:\/\/|@[\w-]+\.[a-z]{2,}\b|\b[\w-]+\.(com|net|org|io|app|dev|sa|ae|co)\b/i.test(v))
     .map(([k]) => k);
 
 const MODES = ['merchant-api', 'platform-api', 'worker'] as const;
@@ -101,7 +101,9 @@ describe('DR-173/5 test environment files — what they say', () => {
       'JWT_SECRET',
     ]);
     expect(domains({ CORS_ORIGINS: 'https://app.example.com' })).toEqual(['CORS_ORIGINS']);
-    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres']) {
+    expect(domains({ TESTENV_HOST_ADDRESS: '203.0.113.7' })).toEqual(['TESTENV_HOST_ADDRESS']); // a public address is refused
+    expect(domains({ TRUSTED_PROXIES: '172.16.0.0/12' })).toEqual([]); // a CIDR range is not an address
+    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
       const e = envFile(f);
       expect(Object.keys(e).length, `${f}.env parsed empty — the probe is blind`).toBeGreaterThan(0);
       expect(realLooking(e), `${f}.env`).toEqual([]);
@@ -109,8 +111,14 @@ describe('DR-173/5 test environment files — what they say', () => {
     }
   });
 
+  it('the host address is a named placeholder input, not a built-in value', () => {
+    const h = envFile('host');
+    expect(h['TESTENV_HOST_ADDRESS']).toBe('PLACEHOLDER-host-address');
+    expect(code(read(`${DIR}/compose.yaml`)).replaceAll('127.0.0.1', 'LOOPBACK')).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b(?!\/)/);
+  });
+
   it('every secret-class variable in the files is a named placeholder', () => {
-    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres']) {
+    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
       for (const [k, v] of Object.entries(envFile(f))) {
         if (SECRET_NAME.test(k) && /(KEY|SECRET|PASSWORD|TOKEN|DATABASE_URL)/.test(k)) {
           expect(isPlaceholder(v), `${f}.env ${k}`).toBe(true);
