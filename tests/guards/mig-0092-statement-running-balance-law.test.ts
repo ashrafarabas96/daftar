@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { INVOICE_REDUCER_VOCABULARY, phase4Sql, readTables } from '../../scripts/phase4-s1-gate';
 
 /**
  * 0092 — THE STATEMENT READER'S OWN LAWS, AND EACH ONE'S RED.
@@ -129,6 +130,50 @@ const bodyOf = (text: string): string => {
   if (open < 0 || close < 0) return '';
   return text.slice(open + 'AS $$'.length, close);
 };
+
+/**
+ * EVERY `AS $$ … $$;` body in the text, not the first one.
+ *
+ * `bodyOf` above returns the FIRST body, which is right for the laws that
+ * speak about the one window. L8 is an ABSENCE claim over a set of
+ * definitions -- "no definition omits a reducer" -- and the tree states in its
+ * own words why that distinction matters: `scripts/phase4-s1-gate.ts:1480-1488`
+ * warns that a reader taking the LAST definition of a routine is
+ * signature-blind, that it is "NEVER a subject for an absence claim", and that
+ * the hole TL-P4-S5-R1 closed was measured on `invoice_outstanding`'s two live
+ * forms. So L8 reads them ALL. If `0092` ever carries a second definition of
+ * the statement, the law judges it too instead of silently judging one.
+ */
+const allBodies = (text: string): string[] => {
+  const out: string[] = [];
+  let at = 0;
+  for (;;) {
+    const open = text.indexOf('AS $$', at);
+    if (open < 0) break;
+    const close = text.indexOf('\n$$;', open);
+    if (close < 0) break;
+    out.push(text.slice(open + 'AS $$'.length, close));
+    at = close + 1;
+  }
+  return out;
+};
+
+/**
+ * The reducer relations THE TREE HAS, discovered exactly as seam S-P4-03
+ * discovers them: `readTables` over the Phase 4 DDL, filtered by
+ * `INVOICE_REDUCER_VOCABULARY`. Never a list written here -- a list written
+ * here would be a second place to forget, which is the defect this law exists
+ * to prevent rather than to re-create.
+ *
+ * Read from DISK on purpose, so a mutation of the statement's own text cannot
+ * shrink the law's subject: the mutant must fail by omitting a reducer, not by
+ * making the law forget that the reducer exists.
+ */
+const reducersInTree = (): string[] =>
+  readTables(phase4Sql(REPO_ROOT))
+    .tables.map((t) => t.name)
+    .filter((n) => INVOICE_REDUCER_VOCABULARY.test(n))
+    .sort();
 
 const LAWS: readonly Law[] = [
   {
@@ -295,6 +340,36 @@ const LAWS: readonly Law[] = [
       return problems.length === 0 ? null : problems.join(' ; ');
     },
     kill: (w) => ({ ...w, migration: w.migration.replace(`-- ${MIGRATION}\n`, '-- 0087_p4s1_customer_account_statement_reader.sql\n') }),
+  },
+  {
+    id: 'L8',
+    claim:
+      "the credit side names EVERY reducer relation the tree has, so the statement cannot keep subtracting one reduction while the reader of record subtracts two. `invoice_outstanding` has a GUARDED extension point -- seam S-P4-03 makes its last definition name every relation that settles an invoice, and `0084:661` says in its own words that the slice adding a reducer appends one UNION ALL branch. This reader copies that set by hand, and nothing in `scripts/` names it (measured: zero hits for `customer_account_statement`, against four for the probe's own positive control), so neither half of TL-P4-S5-R1 reaches it: not the name half, because `customer_account_statement` carries none of `outstanding|receivable|aging|settlement_state`, and not the dependency half, because its executable body calls no member of the family. The day a third reducer is appended to `invoice_outstanding`, `customer_ar_outstanding` subtracts it and this statement does not -- and the statement's balance is then HIGHER than the debt, on the document a merchant collects with. That direction is the whole reason this law is blocking rather than cosmetic.",
+    holds: (w) => {
+      const reducers = reducersInTree();
+      // NO SUBJECT IS NOT A PASS. If the tree has no reducer relation at all,
+      // every assertion below is vacuous, and a vacuous law reads green
+      // forever. Seam S-P4-03's own family check does the same thing.
+      if (reducers.length === 0)
+        return 'L8 has no subject: the Phase 4 DDL declares no relation matching INVOICE_REDUCER_VOCABULARY, so "the statement names every reducer" is a claim about an empty set';
+      const bodies = allBodies(w.migration);
+      if (bodies.length === 0) return 'L8 has no subject: no `AS $$ … $$;` body in the migration, so there is no reader to judge';
+      const missing: string[] = [];
+      for (const [i, body] of bodies.entries())
+        for (const name of reducers) if (!new RegExp(`\\b${name}\\b`).test(body)) missing.push(`definition #${i + 1} does not name ${name}`);
+      return missing.length === 0
+        ? null
+        : `the statement omits a reducer the reader of record subtracts, so its balance would be HIGHER than the debt: ${missing.join('; ')}`;
+    },
+    // The mutation is the real failure mode, not a typo: a reducer relation
+    // that exists in the tree and that the statement stops naming. Dropping
+    // the lines that name the FIRST discovered reducer is exactly what the
+    // next slice would do by forgetting to add the next one.
+    kill: (w) => {
+      const reducers = reducersInTree();
+      if (reducers.length === 0) throw new Error('kill is blind: no reducer relation in the tree to drop');
+      return { ...w, migration: dropLines(w.migration, reducers[0] as string) };
+    },
   },
 ];
 
