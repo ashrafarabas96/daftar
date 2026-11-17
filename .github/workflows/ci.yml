@@ -1878,6 +1878,8 @@ jobs:
         run: npm audit --omit=dev --audit-level=moderate
       - name: Dependency audit (development tools, one dated waiver)
         run: npx tsx scripts/dependency-audit.ts
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Forbidden artifact scan
         run: |
           set -e

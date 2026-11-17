@@ -12,7 +12,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { judge, WAIVED_ADVISORY, WAIVER_EXPIRES, type AuditJson, type LockJson } from '../../scripts/dependency-audit';
+import { judge, WAIVED_ADVISORY, WAIVER_EXPIRES, type AdvisoryDoc, type AuditJson, type LockJson } from '../../scripts/dependency-audit';
 
 const root = join(__dirname, '..', '..');
 const raw = readFileSync(join(root, 'tests/fixtures/dependency-audit/npm-audit-full-2026-11-18.json'), 'utf8');
@@ -34,9 +34,18 @@ function entry(full: AuditJson, name: string): { fixAvailable: unknown; via: unk
   return e;
 }
 
+const advisoryRaw = readFileSync(join(root, 'tests/fixtures/dependency-audit/advisory-GHSA-fc5q-39xc-vjpf-2026-11-18.json'), 'utf8');
+const advisoryCapture = (): AdvisoryDoc => JSON.parse(advisoryRaw) as AdvisoryDoc;
+
 const base = () => {
   const full = capture();
-  return { full, lock: lockOf(full), registryVersions: ['3.0.1', '4.0.6', '4.0.7'], today: '2026-11-18' };
+  return {
+    full,
+    lock: lockOf(full),
+    registryVersions: ['3.0.1', '4.0.6', '4.0.7'],
+    advisory: advisoryCapture() as AdvisoryDoc | undefined,
+    today: '2026-11-18',
+  };
 };
 
 describe('dependency-audit law (DR-173/4)', () => {
@@ -61,6 +70,26 @@ describe('dependency-audit law (DR-173/4)', () => {
   it('a fix appears: a newer stable release on the registry reddens', () => {
     const p = judge({ ...base(), registryVersions: ['4.0.7', '4.0.8'] });
     expect(p.join('\n')).toMatch(/stable release newer than the installed 4\.0\.7/);
+  });
+
+  it('a fix appears: the advisory itself lists a patched release (read from the advisory document, not a constant)', () => {
+    const advisory = advisoryCapture();
+    expect(advisory.vulnerabilities?.[0]?.first_patched_version).toBeNull(); // control: the real capture says null
+    const planted = advisoryCapture();
+    const first = planted.vulnerabilities?.[0];
+    if (first === undefined) throw new Error('fixture has no vulnerabilities entry');
+    first.first_patched_version = '4.0.8';
+    expect(judge({ ...base(), advisory: planted }).join('\n')).toMatch(/advisory lists a patched release of picomatch \(4\.0\.8\)/);
+  });
+
+  it('an advisory that could not be read, or is a different document, reddens instead of passing', () => {
+    expect(judge({ ...base(), advisory: undefined }).join('\n')).toMatch(/could not be read/);
+    expect(judge({ ...base(), advisory: { ghsa_id: 'GHSA-aaaa-bbbb-cccc', vulnerabilities: [] } }).join('\n')).toMatch(/not the GHSA-fc5q-39xc-vjpf advisory/);
+    const other = advisoryCapture();
+    const first = other.vulnerabilities?.[0];
+    if (first === undefined) throw new Error('fixture has no vulnerabilities entry');
+    first.package = { name: 'micromatch' };
+    expect(judge({ ...base(), advisory: other }).join('\n')).toMatch(/0 matching entries/);
   });
 
   it('a prerelease newer than the installed one is not a fix signal (negative control for the plant above)', () => {

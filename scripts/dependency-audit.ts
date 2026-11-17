@@ -54,12 +54,22 @@ export interface AuditJson {
 export interface LockJson {
   packages?: Record<string, { version?: string; dev?: boolean }>;
 }
+export interface AdvisoryDoc {
+  ghsa_id?: string;
+  vulnerabilities?: { first_patched_version: string | null; package?: { name?: string } }[];
+}
 export interface JudgeInput {
   /** `npm audit --json` over the whole tree (dev tools included). */
   full: AuditJson;
   lock: LockJson;
   /** Every version of WAIVED_PACKAGE the registry lists. */
   registryVersions: string[];
+  /**
+   * The advisory itself, as GitHub publishes it (`GET /advisories/<id>`), or
+   * `undefined` when it could not be read. `first_patched_version` is read
+   * from here, never from a constant in this file.
+   */
+  advisory: AdvisoryDoc | undefined;
   /** Today, UTC, `YYYY-MM-DD`. */
   today: string;
 }
@@ -141,6 +151,22 @@ export function judge(input: JudgeInput): string[] {
       problems.push(`${WAIVED_PACKAGE} has a stable release newer than the installed ${top.join('.')}: a fix may exist, the waiver no longer holds`);
     }
   }
+  // (2b) the advisory's own word: a patched release is published
+  const adv = input.advisory;
+  const advVulns = (adv?.vulnerabilities ?? []).filter((x) => x.package?.name === WAIVED_PACKAGE);
+  if (adv === undefined) {
+    problems.push(`the advisory ${WAIVED_ADVISORY} could not be read: the fix test would be blind`);
+  } else if (adv.ghsa_id !== WAIVED_ADVISORY || advVulns.length === 0) {
+    problems.push(
+      `the document read is not the ${WAIVED_ADVISORY} advisory for ${WAIVED_PACKAGE} (id ${String(adv.ghsa_id)}, ${advVulns.length} matching entries): the fix test would be blind`,
+    );
+  } else {
+    for (const x of advVulns) {
+      if (x.first_patched_version !== null) {
+        problems.push(`the advisory lists a patched release of ${WAIVED_PACKAGE} (${String(x.first_patched_version)}): the waiver no longer holds`);
+      }
+    }
+  }
   const fix = vulns[WAIVED_PACKAGE]?.fixAvailable;
   if (fix === true || (typeof fix === 'object' && fix !== null && fix.name === WAIVED_PACKAGE)) {
     problems.push(`npm audit reports a direct fix for ${WAIVED_PACKAGE}: the waiver no longer holds`);
@@ -165,7 +191,19 @@ function runNpm(args: string[]): { stdout: string; status: number | null } {
   return { stdout: r.stdout ?? '', status: r.status };
 }
 
-function main(): number {
+async function readAdvisory(): Promise<AdvisoryDoc | undefined> {
+  const token = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
+  try {
+    const res = await fetch(`https://api.github.com/advisories/${WAIVED_ADVISORY}`, {
+      headers: { accept: 'application/vnd.github+json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    });
+    return res.ok ? ((await res.json()) as AdvisoryDoc) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function main(): Promise<number> {
   const root = process.cwd();
   const auditRun = runNpm(['audit', '--json']);
   let full: AuditJson;
@@ -184,7 +222,8 @@ function main(): number {
     return 1;
   }
   const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as LockJson;
-  const problems = judge({ full, lock, registryVersions: versions, today: new Date().toISOString().slice(0, 10) });
+  const advisory = await readAdvisory();
+  const problems = judge({ full, lock, registryVersions: versions, advisory, today: new Date().toISOString().slice(0, 10) });
   if (problems.length > 0) {
     console.error('dependency-audit: FAIL');
     for (const p of problems) console.error(`  - ${p}`);
@@ -196,4 +235,4 @@ function main(): number {
 }
 
 const entry = process.argv[1]?.replace(/\\/g, '/') ?? '';
-if (/scripts\/dependency-audit\.[cm]?[tj]s$/.test(entry)) process.exit(main());
+if (/scripts\/dependency-audit\.[cm]?[tj]s$/.test(entry)) void main().then((code) => process.exit(code));
