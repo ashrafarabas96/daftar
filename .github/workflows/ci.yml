@@ -1023,285 +1023,10 @@ jobs:
         env:
           PG_PORT: '5432'
           POS_PERF_IN_DB_DELAY_MS: '200'
-      # DR-98, extended to the P4-S4 receivables budgets. `P4-D` and `P4-F`
-      # in-transaction are now asserted on the time PostgreSQL spent EXECUTING
-      # (pg_stat_statements), not on the client's wall clock, so the two
-      # controls below have OPPOSITE required outcomes and BOTH run:
-      #
-      #   1. a delay planted INSIDE the database (`pg_sleep`, 200 ms, on a
-      #      `daftar_app` connection, inside every measured window) must turn
-      #      the suite red ON the two converted budgets' own assertions. 200 ms
-      #      and not 50: it has to exceed the ceiling it is meant to break, and
-      #      `P4-D`'s ceiling is 100 ms.
-      #   2. a delay planted OUTSIDE the database (`setTimeout`, 200 ms, at the
-      #      head of the same windows) must leave BOTH converted budgets green —
-      #      and must turn `P4-F over HTTP` RED, because that budget is still
-      #      judged on the wall clock by decision and the HTTP window CONTAINS
-      #      the transaction window. That red is the control's second half, not
-      #      its failure: it is the executable proof that the unconverted budget
-      #      really was left unconverted.
-      #
-      # WHY THE MARKERS AND NOT THE PROSE. Each budget's assertion message opens
-      # with a pure-ASCII `P4-S4-BUDGET-FAIL-<tag>` that appears if and only if
-      # that assertion failed, and each verdict that HELD prints
-      # `P4-S4-INDB-OK-<tag>` afterwards. Control 2's claim is an ABSENCE — the
-      # two converted budgets did not fail — so it carries its own positive
-      # control in the same log: the HTTP marker MUST be there, which proves the
-      # grep can see a marker in this very run, and the `-INDB-OK-` lines MUST
-      # be there, which proves the verdicts were actually reached. A run that
-      # matched no test, or a delay that never fired, satisfies neither.
-      #
-      # `--reporter=verbose` is not decoration: MEASURED on Vitest 4.1.11, the
-      # default reporter DROPS the `console.log` of a passing case, and every
-      # monitor line a control reads is printed by a case that passes.
-      #
-      # Neither step touches a ceiling, an iteration count, a percentile or a
-      # timeout, neither carries `continue-on-error` or an `if:`, and the knobs
-      # are unset — and then inert — in every other step of this job. Neither
-      # step names the measured npm script: that step is pinned by name and by
-      # script body (`scripts/phase4-s4-gate.ts`, `S4_EVIDENCE_STEPS`) and must
-      # appear in this job exactly once, so a control that reached the suite
-      # through that script would make the measured step ambiguous.
-      - name: Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-receivables-in-db.log"
-          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
-            tail -80 "$log"
-            echo "the in-database-SLOWED receivables budgets PASSED — P4-D and P4-F-TXN cannot fail on database time, so their green means nothing"; exit 1
-          fi
-          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
-          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
-            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=inDatabaseExecMs" "$log" || {
-              tail -160 "$log"
-              echo "the in-database-slowed run failed, but NOT on $tag's own in-database assertion — the control proves nothing about that budget"; exit 1
-            }
-          done
-          grep -h 'P4-S4-MONITOR-' "$log" || true
-        env:
-          PG_PORT: '5432'
-          P4_S4_IN_DB_DELAY_MS: '200'
-      - name: Budget negative control — a delay OUTSIDE the database must NOT fail the P4-D and P4-F-TXN budgets
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-receivables-client-side.log"
-          # The run is EXPECTED to fail, on the one budget this card left on the
-          # wall clock and on that budget alone.
-          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
-            tail -80 "$log"
-            echo "a 200 ms CLIENT-SIDE delay left P4-F over HTTP green — that budget is judged on the wall clock, so this run proves the delay never reached it"; exit 1
-          fi
-          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
-          # POSITIVE CONTROL for the absence claims below: the wall-clock budget
-          # DID fail, in this log, so the marker grep can see a marker here.
-          for tag in FHTTP-BASE-5 FHTTP-FOREIGN-5; do
-            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=wallClockClientMs" "$log" || {
-              tail -160 "$log"
-              echo "the client-side-delayed run did not fail on $tag — either the delay never fired or the marker is not in this log, and then every absence below is unmeasured"; exit 1
-            }
-          done
-          # THE CLAIM: no converted budget failed, and each verdict was reached.
-          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
-            if grep -q "P4-S4-BUDGET-FAIL-$tag " "$log"; then
-              tail -160 "$log"
-              echo "a CLIENT-SIDE delay failed $tag — that budget's verdict still listens to something outside PostgreSQL"; exit 1
-            fi
-            grep -q "P4-S4-INDB-OK-$tag" "$log" || {
-              tail -160 "$log"
-              echo "$tag printed no P4-S4-INDB-OK line, so its verdict was never reached and its silence is not a pass"; exit 1
-            }
-          done
-          # AND THE NUMBERS, not just the exit code: the wall clock really was
-          # inflated by the delay, and the in-database series still sat inside
-          # the ceiling. Read from the monitor lines the suite printed.
-          grep -h 'P4-S4-MONITOR-' "$log" >"$RUNNER_TEMP/monitor.txt" || true
-          test -s "$RUNNER_TEMP/monitor.txt" || { echo "no P4-S4-MONITOR line was printed, so neither figure can be read"; exit 1; }
-          cat "$RUNNER_TEMP/monitor.txt"
-          node -e '
-            const fs = require("fs");
-            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-MONITOR-"));
-            const want = ["D-RECEIVABLE", "D-AGING", "D-OPENINVOICES", "FTXN-BASE-5", "FTXN-FOREIGN-5"];
-            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
-            let bad = 0;
-            for (const tag of want) {
-              const l = lines.find((x) => x.includes("P4-S4-MONITOR-" + tag + " "));
-              if (l === undefined) { console.log("MISSING monitor line for " + tag); bad += 1; continue; }
-              const wall = num(l, "wallP50"), inDb = num(l, "inDbP95"), ceiling = num(l, "budgetMs");
-              const ok = wall >= 200 && inDb <= ceiling;
-              console.log(tag + ": wall p50 " + wall + " ms (must be >= 200), in-database p95 " + inDb + " ms (ceiling " + ceiling + ")");
-              if (!ok) bad += 1;
-            }
-            process.exit(bad === 0 ? 0 : 1);
-          ' "$RUNNER_TEMP/monitor.txt" || {
-            echo "the client-side control did not prove what it claims: either the delay never reached the wall clock or an in-database series missed its ceiling"; exit 1
-          }
-        env:
-          PG_PORT: '5432'
-          P4_S4_CLIENT_DELAY_MS: '200'
-      # DR-98 EXTENDED TO `P4-AL-72`'s ALLOCATION SCALING RATIO (owner decision
-      # 2026-11-07). BOTH halves of that quotient are now the IN-DATABASE
-      # series, read from `pg_stat_statements` around the same transaction
-      # windows, so the ratio has controls of its own and BOTH of them run.
-      #
-      # WHY IT CANNOT BORROW STEPS 54 AND 55. Step 54's knob plants its delay at
-      # the head of EVERY measured window, so it adds the same `d` to the
-      # numerator and to the denominator: `(a + d) / (b + d)` moves TOWARDS 1
-      # and can never exceed `a / b`. Step 54 therefore CANNOT make this verdict
-      # miss, and reading its green as this ratio's control would be reading a
-      # control that never ran — the false negative RULE-27 and DR-55 are about.
-      # `P4_S4_IN_DB_DELAY_MS_FIVE` plants the delay in the FIVE-INVOICE arm
-      # alone, which is the one shape that raises a quotient.
-      #
-      # `-t 'P4-AL-72, OD-P4-14'` pins both runs to that single case. The string
-      # is a literal with no regex metacharacter and it matches exactly ONE `it`
-      # in the whole test tree (measured on this tree), so step A's red is that
-      # case's red and not another budget's. The fixture still seeds and still
-      # measures both arms in full; only the verdicts are filtered.
-      #
-      # Neither step touches a ceiling, a ratio constant, an iteration count, a
-      # percentile or a timeout; neither carries `continue-on-error` or an `if:`;
-      # and the knob is unset — and then inert — in every other step of this job.
-      - name: Ratio negative control — a delay INSIDE the database in the FIVE-invoice arm alone must fail P4-AL-72
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-al72-numerator.log"
-          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1; then
-            tail -80 "$log"
-            echo "a 200 ms pg_sleep planted in the NUMERATOR arm alone left P4-AL-72 green — then that ratio cannot fail on database time and its green means nothing"; exit 1
-          fi
-          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
-          # POSITIVE CONTROL FOR THE RED: the case actually REACHED its verdict.
-          # A `-t` that matched no test also exits non-zero, and a fixture that
-          # died before the arms were measured does too — either would make the
-          # red above unattributed.
-          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
-            tail -160 "$log"
-            echo "the run failed but printed no in-database ratio monitor line, so the P4-AL-72 case never reached its verdict and this red says nothing about it"; exit 1
-          }
-          # THE CLAIM: it failed on P4-AL-72's OWN assertion, by its own marker.
-          grep -q 'P4-S4-RATIO-FAIL-AL72 judgedOn=inDatabaseExecMs' "$log" || {
-            tail -160 "$log"
-            echo "the run failed, but NOT on P4-AL-72's own in-database assertion — the control proves nothing about that ratio"; exit 1
-          }
-          if grep -q 'P4-S4-RATIO-OK-AL72' "$log"; then
-            echo "the same run printed both the FAIL and the OK marker for P4-AL-72, so the markers do not distinguish a miss from a hold"; exit 1
-          fi
-          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log"
-        env:
-          PG_PORT: '5432'
-          P4_S4_IN_DB_DELAY_MS_FIVE: '200'
-      - name: Ratio negative control — a delay OUTSIDE the database must NOT fail P4-AL-72
-        run: |
-          set -e
-          log="$RUNNER_TEMP/negative-control-al72-client-side.log"
-          # ── WHY THIS STEP WAS REWRITTEN, MEASURED AND NOT SUPPOSED ────────
-          #
-          # It used to read `npx vitest ... || { echo "a 200 ms CLIENT-SIDE
-          # delay failed the P4-AL-72 in-database ratio"; exit 1; }` — the
-          # EXIT CODE as the ratio's verdict. That is false on this file by
-          # construction: `auditTheRun` is a census of `DECLARED_CASES = 18`
-          # and `-t` leaves 17 of them unrun, so a `-t` run of this file ALWAYS
-          # exits non-zero whatever the ratio did. Measured: run 42431995284,
-          # job 128582737049, step 59 — the ratio case RAN and PASSED (`Tests
-          # 1 passed | 17 skipped`), the failure was `auditTheRun` at
-          # `receivables-s4-budgets.test.ts:1595`, and the step printed a
-          # sentence blaming the ratio for a red the ratio did not cause. Step
-          # 58 reads the same non-zero code safely only because it gates on
-          # `P4-S4-RATIO-FAIL-AL72` afterwards; this step had no such gate on
-          # the path it actually took, so it never reached its own numeric
-          # checks — RULE-1 exactly, and the control was unexecuted.
-          #
-          # SO THE EXIT CODE IS NO LONGER READ AS THE VERDICT. The markers are,
-          # and the exit code must then AGREE with them: a non-zero code is
-          # accepted only when the log proves the census — and nothing else —
-          # is what failed. Nothing is skipped, and no failure is tolerated
-          # without being named.
-          set +e
-          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1
-          rc=$?
-          set -e
-          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
-          # A COPY WITH THE COLOUR BYTES REMOVED, because vitest's own tally
-          # line is not contiguous text. Measured on run 42482725647, step 57:
-          # every marker gate below passed and the census gate passed, and this
-          # step still died on `Tests[[:space:]]+1 passed \| 17 skipped`,
-          # because the reporter writes
-          # `Tests \e[1m\e[32m1 passed\e[39m\e[22m\e[2m | \e[22m\e[33m17 skipped`
-          # — the words are there and the ADJACENCY is not. That is RULE-20's
-          # class: a pattern that cannot see escape sequences reports absence
-          # where there is content. Stripping them changes no assertion; the
-          # tally below still demands exactly `1 passed | 17 skipped`.
-          plain="$RUNNER_TEMP/negative-control-al72-client-side.plain.log"
-          sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" >"$plain"
-          # POSITIVE CONTROL on the stripper itself: an empty or unwritten copy
-          # would make every grep below report a clean absence (RULE-11).
-          test -s "$plain" || { echo "the colour-stripped copy of the control log is empty, so nothing may be read from it"; exit 1; }
-          # 1. THE CASE REACHED ITS VERDICT. No silent skip: a `-t` that matched
-          #    nothing, or a fixture that died, leaves this line absent.
-          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
-            tail -160 "$log"
-            echo "the P4-AL-72 in-database case never reached its verdict (no judgedOn=inDatabaseExecMs monitor line), so this run says NOTHING about that ratio — an unexecuted control is a failure, never a pass"; exit 1
-          }
-          # 2. AND IT HELD.
-          grep -q 'P4-S4-RATIO-OK-AL72' "$log" || {
-            tail -160 "$log"
-            echo "the P4-AL-72 case reached its verdict and did NOT print P4-S4-RATIO-OK-AL72, so a delay OUTSIDE the database moved an in-database quotient"; exit 1
-          }
-          if grep -q 'P4-S4-RATIO-FAIL-AL72' "$log"; then
-            tail -160 "$log"
-            echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio by its own marker — that verdict still listens to something outside PostgreSQL"; exit 1
-          fi
-          # 3. THE EXIT CODE AGREES WITH THE MARKERS, by name on both branches.
-          if [ "$rc" -eq 0 ]; then
-            if grep -q 'declared cases did not run to a verdict' "$log"; then
-              echo "the run exited 0 while the census reported unrun cases — the exit code and the audit disagree"; exit 1
-            fi
-          else
-            grep -q '17 of 18 declared cases did not run to a verdict' "$log" || {
-              tail -160 "$log"
-              echo "the run exited $rc for something OTHER than the -t census of this file, and an unexplained red cannot be read as this control holding"; exit 1
-            }
-            grep -qE 'Tests[[:space:]]+1 passed \| 17 skipped' "$plain" || {
-              tail -160 "$plain"
-              echo "the run exited $rc and its own tally is not '1 passed | 17 skipped', so more than the census failed"; exit 1
-            }
-          fi
-          # AND THE VERDICT IS PRINTED FROM THE LOG, not asserted in prose.
-          echo "P4-AL-72 CLIENT-SIDE CONTROL — the verdict as the run itself recorded it:"
-          grep -hE 'P4-S4-RATIO-OK-AL72|Tests[[:space:]]+[0-9]+ passed' "$plain"
-          echo "wrapper exit code $rc, and the only failure in the log is the -t census (proven above, not assumed)"
-          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log" >"$RUNNER_TEMP/al72-monitor.txt" || true
-          test -s "$RUNNER_TEMP/al72-monitor.txt" || { echo "no P4-S4-RATIO-MONITOR-AL72 line was printed, so neither quotient can be read"; exit 1; }
-          cat "$RUNNER_TEMP/al72-monitor.txt"
-          # AND THE NUMBERS, not just the exit code: the client delay really did
-          # reach the WALL figures of both arms, and the in-database quotient
-          # stayed inside the constant while it did.
-          node -e '
-            const fs = require("fs");
-            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-RATIO-MONITOR-AL72"));
-            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
-            const wall = lines.find((l) => l.includes("depth=in-transaction"));
-            const indb = lines.find((l) => l.includes("depth=in-database"));
-            let bad = 0;
-            if (wall === undefined) { console.log("MISSING the in-transaction wall monitor line"); bad += 1; }
-            else {
-              const one = num(wall, "oneP95"), five = num(wall, "fiveP95");
-              console.log("wall p95: 1-invoice " + one + " ms, 5-invoice " + five + " ms (both must be >= 200, or the client delay never fired)");
-              if (!(one >= 200 && five >= 200)) bad += 1;
-            }
-            if (indb === undefined) { console.log("MISSING the in-database monitor line"); bad += 1; }
-            else {
-              const ratio = num(indb, "ratio"), max = num(indb, "max");
-              console.log("in-database ratio " + ratio + " against the constant " + max);
-              if (!(ratio > 0 && ratio <= max)) bad += 1;
-            }
-            process.exit(bad === 0 ? 0 : 1);
-          ' "$RUNNER_TEMP/al72-monitor.txt" || {
-            echo "the client-side ratio control did not prove what it claims: either the delay never reached the wall figures or the in-database quotient did not hold"; exit 1
-          }
-        env:
-          PG_PORT: '5432'
-          P4_S4_CLIENT_DELAY_MS: '200'
+      # Grade 2 (DR-147 / DR-153): the four receivables negative controls that used
+      # to end this job run in their own jobs now, in parallel — `backend-ctl-budget-in`,
+      # `backend-ctl-budget-out`, `backend-ctl-ratio-in`, `backend-ctl-ratio-out`. Each
+      # is the same step text; the measured step above stays here, once.
 
   # -------------------------------------------------------------------------
   # 3. Web + Admin builds.
@@ -2720,6 +2445,1341 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
 
+  # Grade 2 of the CI-speed split (DR-147 / DR-153). The four negative controls of
+  # the receivables budgets used to run at the tail of `backend`, one after the other
+  # on the same runner: each re-seeds its own data (about 15 minutes) and the four
+  # together were about 88 of the 230 minutes of `backend-work` (run 43613646565).
+  # They share nothing with each other or with the steps they left, so each now has
+  # its own job and they run in parallel. The step, its script and its markers are
+  # byte for byte what they were; only the job that hosts it moved.
+  #
+  # The setup steps are the same text as in `backend` (the law
+  # tests/guards/ci-job-conservation.test.ts C-11 compares them), the image is the
+  # same, and the postgres service is the same. There is NO redis service here: no
+  # step below reads REDIS_URL, and TD-24 allows that container in `backend` only.
+  backend-ctl-budget-in:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # DR-98, extended to the P4-S4 receivables budgets. `P4-D` and `P4-F`
+      # in-transaction are now asserted on the time PostgreSQL spent EXECUTING
+      # (pg_stat_statements), not on the client's wall clock, so the two
+      # controls below have OPPOSITE required outcomes and BOTH run:
+      #
+      #   1. a delay planted INSIDE the database (`pg_sleep`, 200 ms, on a
+      #      `daftar_app` connection, inside every measured window) must turn
+      #      the suite red ON the two converted budgets' own assertions. 200 ms
+      #      and not 50: it has to exceed the ceiling it is meant to break, and
+      #      `P4-D`'s ceiling is 100 ms.
+      #   2. a delay planted OUTSIDE the database (`setTimeout`, 200 ms, at the
+      #      head of the same windows) must leave BOTH converted budgets green —
+      #      and must turn `P4-F over HTTP` RED, because that budget is still
+      #      judged on the wall clock by decision and the HTTP window CONTAINS
+      #      the transaction window. That red is the control's second half, not
+      #      its failure: it is the executable proof that the unconverted budget
+      #      really was left unconverted.
+      #
+      # WHY THE MARKERS AND NOT THE PROSE. Each budget's assertion message opens
+      # with a pure-ASCII `P4-S4-BUDGET-FAIL-<tag>` that appears if and only if
+      # that assertion failed, and each verdict that HELD prints
+      # `P4-S4-INDB-OK-<tag>` afterwards. Control 2's claim is an ABSENCE — the
+      # two converted budgets did not fail — so it carries its own positive
+      # control in the same log: the HTTP marker MUST be there, which proves the
+      # grep can see a marker in this very run, and the `-INDB-OK-` lines MUST
+      # be there, which proves the verdicts were actually reached. A run that
+      # matched no test, or a delay that never fired, satisfies neither.
+      #
+      # `--reporter=verbose` is not decoration: MEASURED on Vitest 4.1.11, the
+      # default reporter DROPS the `console.log` of a passing case, and every
+      # monitor line a control reads is printed by a case that passes.
+      #
+      # Neither step touches a ceiling, an iteration count, a percentile or a
+      # timeout, neither carries `continue-on-error` or an `if:`, and the knobs
+      # are unset — and then inert — in every other step of this job. Neither
+      # step names the measured npm script: that step is pinned by name and by
+      # script body (`scripts/phase4-s4-gate.ts`, `S4_EVIDENCE_STEPS`) and must
+      # appear in this job exactly once, so a control that reached the suite
+      # through that script would make the measured step ambiguous.
+      - name: Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-receivables-in-db.log"
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "the in-database-SLOWED receivables budgets PASSED — P4-D and P4-F-TXN cannot fail on database time, so their green means nothing"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
+            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=inDatabaseExecMs" "$log" || {
+              tail -160 "$log"
+              echo "the in-database-slowed run failed, but NOT on $tag's own in-database assertion — the control proves nothing about that budget"; exit 1
+            }
+          done
+          grep -h 'P4-S4-MONITOR-' "$log" || true
+        env:
+          PG_PORT: '5432'
+          P4_S4_IN_DB_DELAY_MS: '200'
+
+  # Grade 2 of the CI-speed split: this control moved out of `backend` unchanged.
+  # Setup, image and postgres service are the same text as in `backend`
+  # (C-11 of tests/guards/ci-job-conservation.test.ts compares them); there is no
+  # redis service, which TD-24 allows in `backend` only.
+  backend-ctl-budget-out:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Budget negative control — a delay OUTSIDE the database must NOT fail the P4-D and P4-F-TXN budgets
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-receivables-client-side.log"
+          # The run is EXPECTED to fail, on the one budget this card left on the
+          # wall clock and on that budget alone.
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "a 200 ms CLIENT-SIDE delay left P4-F over HTTP green — that budget is judged on the wall clock, so this run proves the delay never reached it"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # POSITIVE CONTROL for the absence claims below: the wall-clock budget
+          # DID fail, in this log, so the marker grep can see a marker here.
+          for tag in FHTTP-BASE-5 FHTTP-FOREIGN-5; do
+            grep -q "P4-S4-BUDGET-FAIL-$tag judgedOn=wallClockClientMs" "$log" || {
+              tail -160 "$log"
+              echo "the client-side-delayed run did not fail on $tag — either the delay never fired or the marker is not in this log, and then every absence below is unmeasured"; exit 1
+            }
+          done
+          # THE CLAIM: no converted budget failed, and each verdict was reached.
+          for tag in D-RECEIVABLE D-AGING D-OPENINVOICES FTXN-BASE-5 FTXN-FOREIGN-5; do
+            if grep -q "P4-S4-BUDGET-FAIL-$tag " "$log"; then
+              tail -160 "$log"
+              echo "a CLIENT-SIDE delay failed $tag — that budget's verdict still listens to something outside PostgreSQL"; exit 1
+            fi
+            grep -q "P4-S4-INDB-OK-$tag" "$log" || {
+              tail -160 "$log"
+              echo "$tag printed no P4-S4-INDB-OK line, so its verdict was never reached and its silence is not a pass"; exit 1
+            }
+          done
+          # AND THE NUMBERS, not just the exit code: the wall clock really was
+          # inflated by the delay, and the in-database series still sat inside
+          # the ceiling. Read from the monitor lines the suite printed.
+          grep -h 'P4-S4-MONITOR-' "$log" >"$RUNNER_TEMP/monitor.txt" || true
+          test -s "$RUNNER_TEMP/monitor.txt" || { echo "no P4-S4-MONITOR line was printed, so neither figure can be read"; exit 1; }
+          cat "$RUNNER_TEMP/monitor.txt"
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-MONITOR-"));
+            const want = ["D-RECEIVABLE", "D-AGING", "D-OPENINVOICES", "FTXN-BASE-5", "FTXN-FOREIGN-5"];
+            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
+            let bad = 0;
+            for (const tag of want) {
+              const l = lines.find((x) => x.includes("P4-S4-MONITOR-" + tag + " "));
+              if (l === undefined) { console.log("MISSING monitor line for " + tag); bad += 1; continue; }
+              const wall = num(l, "wallP50"), inDb = num(l, "inDbP95"), ceiling = num(l, "budgetMs");
+              const ok = wall >= 200 && inDb <= ceiling;
+              console.log(tag + ": wall p50 " + wall + " ms (must be >= 200), in-database p95 " + inDb + " ms (ceiling " + ceiling + ")");
+              if (!ok) bad += 1;
+            }
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$RUNNER_TEMP/monitor.txt" || {
+            echo "the client-side control did not prove what it claims: either the delay never reached the wall clock or an in-database series missed its ceiling"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          P4_S4_CLIENT_DELAY_MS: '200'
+
+  # Grade 2 of the CI-speed split: this control moved out of `backend` unchanged.
+  # Setup, image and postgres service are the same text as in `backend`
+  # (C-11 of tests/guards/ci-job-conservation.test.ts compares them); there is no
+  # redis service, which TD-24 allows in `backend` only.
+  backend-ctl-ratio-in:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # DR-98 EXTENDED TO `P4-AL-72`'s ALLOCATION SCALING RATIO (owner decision
+      # 2026-11-07). BOTH halves of that quotient are now the IN-DATABASE
+      # series, read from `pg_stat_statements` around the same transaction
+      # windows, so the ratio has controls of its own and BOTH of them run.
+      #
+      # WHY IT CANNOT BORROW STEPS 54 AND 55. Step 54's knob plants its delay at
+      # the head of EVERY measured window, so it adds the same `d` to the
+      # numerator and to the denominator: `(a + d) / (b + d)` moves TOWARDS 1
+      # and can never exceed `a / b`. Step 54 therefore CANNOT make this verdict
+      # miss, and reading its green as this ratio's control would be reading a
+      # control that never ran — the false negative RULE-27 and DR-55 are about.
+      # `P4_S4_IN_DB_DELAY_MS_FIVE` plants the delay in the FIVE-INVOICE arm
+      # alone, which is the one shape that raises a quotient.
+      #
+      # `-t 'P4-AL-72, OD-P4-14'` pins both runs to that single case. The string
+      # is a literal with no regex metacharacter and it matches exactly ONE `it`
+      # in the whole test tree (measured on this tree), so step A's red is that
+      # case's red and not another budget's. The fixture still seeds and still
+      # measures both arms in full; only the verdicts are filtered.
+      #
+      # Neither step touches a ceiling, a ratio constant, an iteration count, a
+      # percentile or a timeout; neither carries `continue-on-error` or an `if:`;
+      # and the knob is unset — and then inert — in every other step of this job.
+      - name: Ratio negative control — a delay INSIDE the database in the FIVE-invoice arm alone must fail P4-AL-72
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-al72-numerator.log"
+          if npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1; then
+            tail -80 "$log"
+            echo "a 200 ms pg_sleep planted in the NUMERATOR arm alone left P4-AL-72 green — then that ratio cannot fail on database time and its green means nothing"; exit 1
+          fi
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # POSITIVE CONTROL FOR THE RED: the case actually REACHED its verdict.
+          # A `-t` that matched no test also exits non-zero, and a fixture that
+          # died before the arms were measured does too — either would make the
+          # red above unattributed.
+          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the run failed but printed no in-database ratio monitor line, so the P4-AL-72 case never reached its verdict and this red says nothing about it"; exit 1
+          }
+          # THE CLAIM: it failed on P4-AL-72's OWN assertion, by its own marker.
+          grep -q 'P4-S4-RATIO-FAIL-AL72 judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the run failed, but NOT on P4-AL-72's own in-database assertion — the control proves nothing about that ratio"; exit 1
+          }
+          if grep -q 'P4-S4-RATIO-OK-AL72' "$log"; then
+            echo "the same run printed both the FAIL and the OK marker for P4-AL-72, so the markers do not distinguish a miss from a hold"; exit 1
+          fi
+          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log"
+        env:
+          PG_PORT: '5432'
+          P4_S4_IN_DB_DELAY_MS_FIVE: '200'
+
+  # Grade 2 of the CI-speed split: this control moved out of `backend` unchanged.
+  # Setup, image and postgres service are the same text as in `backend`
+  # (C-11 of tests/guards/ci-job-conservation.test.ts compares them); there is no
+  # redis service, which TD-24 allows in `backend` only.
+  backend-ctl-ratio-out:
+    needs: workspaces
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)
+        run: |
+          set -euo pipefail
+          cid=$(docker ps --filter "publish=5432" --filter "ancestor=postgres:16" -q)
+          # Exactly one container, named: an empty id, or two, is not a service
+          # we may restart.
+          test -n "$cid"
+          test "$(printf '%s\n' "$cid" | grep -c .)" -eq 1
+          dsql() { docker exec "$cid" psql -U postgres -d postgres -v ON_ERROR_STOP=1 -tA -c "$1"; }
+          dsql "ALTER SYSTEM SET shared_preload_libraries = 'pg_stat_statements'"
+          docker restart "$cid" >/dev/null
+          ready=0
+          for i in $(seq 1 60); do
+            if docker exec "$cid" pg_isready -U postgres -d postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 1
+          done
+          test "$ready" -eq 1
+          # The library's own parameters do not exist as parameters until the
+          # library is loaded: measured on PR #48's first run, where
+          # `ALTER SYSTEM SET pg_stat_statements.track` before the restart
+          # failed with `unrecognized configuration parameter`. So they are set
+          # AFTER the restart and applied with a reload, not a second restart.
+          dsql "ALTER SYSTEM SET pg_stat_statements.track = 'top'"
+          dsql "ALTER SYSTEM SET pg_stat_statements.track_utility = 'on'"
+          # `pg_stat_statements.max` IS LEFT AT THE SERVER DEFAULT (5 000), AND
+          # THAT IS A MEASURED DECISION, NOT AN OVERSIGHT. Raising it to 50 000
+          # was tried, and the two runs are each other's control:
+          #
+          #   max=5000  (c5bbf8b2, job 128184300110): instrument cost per arm
+          #             p50 32.516 / 32.995 ms, `P4-F over HTTP` under its
+          #             100 ms ceiling, zero evictions.
+          #   max=50000 (8f3219b1, job 128284370050): instrument cost per arm
+          #             p50 386.358 / 383.384 ms -- TWELVE TIMES -- and
+          #             `P4-F over HTTP` p95 447.823 / 444.677 ms against 100,
+          #             with min 422, so the whole distribution moved, not a
+          #             tail. Zero evictions there too.
+          #
+          # The cause is read from the code, not guessed: the instrument's two
+          # reads sum `total_exec_time` across the view and sit INSIDE the HTTP
+          # window by design (`receivables-s4-budgets.test.ts` says so and
+          # prints the cost), so a ten-times-larger table makes the budget that
+          # DR-98 deliberately left on the wall clock ten times more expensive.
+          # Trading a rare eviction for a certain inflation of a judged budget
+          # is a worse measurement, so the table stays small and the eviction
+          # question is answered where it belongs: per measured WINDOW, in
+          # `tests/helpers/in-database-time.ts`, which refuses a window that
+          # lost an entry instead of reporting its figure.
+          dsql "SELECT pg_reload_conf()" >/dev/null
+          # Read back from the server, not assumed from what was written.
+          libs=$(dsql "SHOW shared_preload_libraries")
+          track=$(dsql "SHOW pg_stat_statements.track")
+          utility=$(dsql "SHOW pg_stat_statements.track_utility")
+          # Printed for monitoring, asserted as nothing: the value is the
+          # server's own default and this step does not set it.
+          pgssmax=$(dsql "SHOW pg_stat_statements.max")
+          echo "shared_preload_libraries=$libs track=$track track_utility=$utility max=$pgssmax"
+          test -n "$libs"
+          printf '%s' "$libs" | grep -q 'pg_stat_statements'
+          test "$track" = "top"
+          test "$utility" = "on"
+          # And through the published port, which is where every later step
+          # looks. A bash TCP open, not `pg_isready`: the client packages are
+          # installed by a later step and this one must not depend on them.
+          timeout 10 bash -c 'exec 3<>/dev/tcp/127.0.0.1/5432'
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Ratio negative control — a delay OUTSIDE the database must NOT fail P4-AL-72
+        run: |
+          set -e
+          log="$RUNNER_TEMP/negative-control-al72-client-side.log"
+          # ── WHY THIS STEP WAS REWRITTEN, MEASURED AND NOT SUPPOSED ────────
+          #
+          # It used to read `npx vitest ... || { echo "a 200 ms CLIENT-SIDE
+          # delay failed the P4-AL-72 in-database ratio"; exit 1; }` — the
+          # EXIT CODE as the ratio's verdict. That is false on this file by
+          # construction: `auditTheRun` is a census of `DECLARED_CASES = 18`
+          # and `-t` leaves 17 of them unrun, so a `-t` run of this file ALWAYS
+          # exits non-zero whatever the ratio did. Measured: run 42431995284,
+          # job 128582737049, step 59 — the ratio case RAN and PASSED (`Tests
+          # 1 passed | 17 skipped`), the failure was `auditTheRun` at
+          # `receivables-s4-budgets.test.ts:1595`, and the step printed a
+          # sentence blaming the ratio for a red the ratio did not cause. Step
+          # 58 reads the same non-zero code safely only because it gates on
+          # `P4-S4-RATIO-FAIL-AL72` afterwards; this step had no such gate on
+          # the path it actually took, so it never reached its own numeric
+          # checks — RULE-1 exactly, and the control was unexecuted.
+          #
+          # SO THE EXIT CODE IS NO LONGER READ AS THE VERDICT. The markers are,
+          # and the exit code must then AGREE with them: a non-zero code is
+          # accepted only when the log proves the census — and nothing else —
+          # is what failed. Nothing is skipped, and no failure is tolerated
+          # without being named.
+          set +e
+          npx vitest run --reporter=verbose tests/performance/receivables-s4-budgets.test.ts -t 'P4-AL-72, OD-P4-14' >"$log" 2>&1
+          rc=$?
+          set -e
+          test -s "$log" || { echo "the control produced no log at all, so nothing in it can be read as a result"; exit 1; }
+          # A COPY WITH THE COLOUR BYTES REMOVED, because vitest's own tally
+          # line is not contiguous text. Measured on run 42482725647, step 57:
+          # every marker gate below passed and the census gate passed, and this
+          # step still died on `Tests[[:space:]]+1 passed \| 17 skipped`,
+          # because the reporter writes
+          # `Tests \e[1m\e[32m1 passed\e[39m\e[22m\e[2m | \e[22m\e[33m17 skipped`
+          # — the words are there and the ADJACENCY is not. That is RULE-20's
+          # class: a pattern that cannot see escape sequences reports absence
+          # where there is content. Stripping them changes no assertion; the
+          # tally below still demands exactly `1 passed | 17 skipped`.
+          plain="$RUNNER_TEMP/negative-control-al72-client-side.plain.log"
+          sed -E 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$log" >"$plain"
+          # POSITIVE CONTROL on the stripper itself: an empty or unwritten copy
+          # would make every grep below report a clean absence (RULE-11).
+          test -s "$plain" || { echo "the colour-stripped copy of the control log is empty, so nothing may be read from it"; exit 1; }
+          # 1. THE CASE REACHED ITS VERDICT. No silent skip: a `-t` that matched
+          #    nothing, or a fixture that died, leaves this line absent.
+          grep -q 'P4-S4-RATIO-MONITOR-AL72 depth=in-database judgedOn=inDatabaseExecMs' "$log" || {
+            tail -160 "$log"
+            echo "the P4-AL-72 in-database case never reached its verdict (no judgedOn=inDatabaseExecMs monitor line), so this run says NOTHING about that ratio — an unexecuted control is a failure, never a pass"; exit 1
+          }
+          # 2. AND IT HELD.
+          grep -q 'P4-S4-RATIO-OK-AL72' "$log" || {
+            tail -160 "$log"
+            echo "the P4-AL-72 case reached its verdict and did NOT print P4-S4-RATIO-OK-AL72, so a delay OUTSIDE the database moved an in-database quotient"; exit 1
+          }
+          if grep -q 'P4-S4-RATIO-FAIL-AL72' "$log"; then
+            tail -160 "$log"
+            echo "a 200 ms CLIENT-SIDE delay failed the P4-AL-72 in-database ratio by its own marker — that verdict still listens to something outside PostgreSQL"; exit 1
+          fi
+          # 3. THE EXIT CODE AGREES WITH THE MARKERS, by name on both branches.
+          if [ "$rc" -eq 0 ]; then
+            if grep -q 'declared cases did not run to a verdict' "$log"; then
+              echo "the run exited 0 while the census reported unrun cases — the exit code and the audit disagree"; exit 1
+            fi
+          else
+            grep -q '17 of 18 declared cases did not run to a verdict' "$log" || {
+              tail -160 "$log"
+              echo "the run exited $rc for something OTHER than the -t census of this file, and an unexplained red cannot be read as this control holding"; exit 1
+            }
+            grep -qE 'Tests[[:space:]]+1 passed \| 17 skipped' "$plain" || {
+              tail -160 "$plain"
+              echo "the run exited $rc and its own tally is not '1 passed | 17 skipped', so more than the census failed"; exit 1
+            }
+          fi
+          # AND THE VERDICT IS PRINTED FROM THE LOG, not asserted in prose.
+          echo "P4-AL-72 CLIENT-SIDE CONTROL — the verdict as the run itself recorded it:"
+          grep -hE 'P4-S4-RATIO-OK-AL72|Tests[[:space:]]+[0-9]+ passed' "$plain"
+          echo "wrapper exit code $rc, and the only failure in the log is the -t census (proven above, not assumed)"
+          grep -h 'P4-S4-RATIO-MONITOR-AL72' "$log" >"$RUNNER_TEMP/al72-monitor.txt" || true
+          test -s "$RUNNER_TEMP/al72-monitor.txt" || { echo "no P4-S4-RATIO-MONITOR-AL72 line was printed, so neither quotient can be read"; exit 1; }
+          cat "$RUNNER_TEMP/al72-monitor.txt"
+          # AND THE NUMBERS, not just the exit code: the client delay really did
+          # reach the WALL figures of both arms, and the in-database quotient
+          # stayed inside the constant while it did.
+          node -e '
+            const fs = require("fs");
+            const lines = fs.readFileSync(process.argv[1], "utf8").split("\n").filter((l) => l.includes("P4-S4-RATIO-MONITOR-AL72"));
+            const num = (l, k) => Number((new RegExp(k + "=([0-9.]+)").exec(l) || [])[1]);
+            const wall = lines.find((l) => l.includes("depth=in-transaction"));
+            const indb = lines.find((l) => l.includes("depth=in-database"));
+            let bad = 0;
+            if (wall === undefined) { console.log("MISSING the in-transaction wall monitor line"); bad += 1; }
+            else {
+              const one = num(wall, "oneP95"), five = num(wall, "fiveP95");
+              console.log("wall p95: 1-invoice " + one + " ms, 5-invoice " + five + " ms (both must be >= 200, or the client delay never fired)");
+              if (!(one >= 200 && five >= 200)) bad += 1;
+            }
+            if (indb === undefined) { console.log("MISSING the in-database monitor line"); bad += 1; }
+            else {
+              const ratio = num(indb, "ratio"), max = num(indb, "max");
+              console.log("in-database ratio " + ratio + " against the constant " + max);
+              if (!(ratio > 0 && ratio <= max)) bad += 1;
+            }
+            process.exit(bad === 0 ? 0 : 1);
+          ' "$RUNNER_TEMP/al72-monitor.txt" || {
+            echo "the client-side ratio control did not prove what it claims: either the delay never reached the wall figures or the in-database quotient did not hold"; exit 1
+          }
+        env:
+          PG_PORT: '5432'
+          P4_S4_CLIENT_DELAY_MS: '200'
+
   # -------------------------------------------------------------------------
   # 2e. Backend — the REQUIRED check. It does no work; it reads the four parts.
   # -------------------------------------------------------------------------
@@ -2734,7 +3794,11 @@ jobs:
   # `backend-work`, so exactly one check-run is named `backend`.
   backend-required:
     name: backend
-    needs: [backend, backend-static, backend-gates-p2, backend-golden]
+    # prettier-ignore: the list stays on one line, because the hand-written workflow
+    # reader of tests/guards/required-ci-chain-composition.test.ts takes flow
+    # sequences only when they do not wrap.
+    # prettier-ignore
+    needs: [backend, backend-static, backend-gates-p2, backend-golden, backend-ctl-budget-in, backend-ctl-budget-out, backend-ctl-ratio-in, backend-ctl-ratio-out]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2744,9 +3808,13 @@ jobs:
           BACKEND_STATIC: ${{ needs.backend-static.result }}
           BACKEND_GATES_P2: ${{ needs.backend-gates-p2.result }}
           BACKEND_GOLDEN: ${{ needs.backend-golden.result }}
+          BACKEND_CTL_BUDGET_IN: ${{ needs.backend-ctl-budget-in.result }}
+          BACKEND_CTL_BUDGET_OUT: ${{ needs.backend-ctl-budget-out.result }}
+          BACKEND_CTL_RATIO_IN: ${{ needs.backend-ctl-ratio-in.result }}
+          BACKEND_CTL_RATIO_OUT: ${{ needs.backend-ctl-ratio-out.result }}
         run: |
           failed=0
-          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do
+          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN BACKEND_CTL_BUDGET_IN BACKEND_CTL_BUDGET_OUT BACKEND_CTL_RATIO_IN BACKEND_CTL_RATIO_OUT; do
             result="${!part}"
             if [ "$result" != "success" ]; then
               echo "::error::$part finished '$result', not 'success'"
