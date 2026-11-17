@@ -84,7 +84,7 @@ function attachedCodeFields(): Map<string, string[]> {
           if (!DOMAIN_CODE_VALUE.test(match[2] ?? '')) continue;
           const field = match[1] ?? '';
           if (!found.has(field)) found.set(field, []);
-          // Repository-relative and `/`-separated, the way `od03.test.ts:84`
+          // Repository-relative and `/`-separated, the way `s7Sources` in `od03.test.ts`
           // spells the same kind of path. `refusalModules` builds its paths with
           // `join`, so on Windows this slice yielded
           // `apps\api\src\modules\selling\selling-errors.ts`, and the assertion
