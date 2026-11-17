@@ -83,7 +83,27 @@ describe('C6 — the transfer value arm on a cluster', () => {
     expect(row?.owner).toBe('daftar_inventory_internal');
     expect(row?.secdef, 'SECURITY DEFINER').toBe(true);
     expect(row?.proconfig, 'the pinned search_path').toEqual(['search_path=pg_catalog, public, pg_temp']);
-    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc');
+    // THE DIGEST MOVED WITH THE BODY, and this literal is SUPPOSED to be a
+    // tripwire rather than a derivation: reading it out of the migration file
+    // would make the assertion agree with any body, which is the opposite of
+    // what it is for. So it is pinned, and it moves by hand when the body
+    // moves, with both values named (DR-103/7):
+    //
+    //   OLD  c211ab86ac19c1f886367cff71f6c7656448b853bcf502c4090b0f40e30a9cfc
+    //   NEW  bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d
+    //
+    // The body changed because `0093`'s conservation became PER LINE: the
+    // queries gained `AND b.source_line_id = NEW.id` and the leg count became
+    // exactly two, after the independent review of 798d6cdb found the sum was
+    // taken over the whole document while the trigger is named `..._per_line`.
+    // Run 44107148875 failed on THIS line alone -- the only failure in 6683
+    // cases -- which is the tripwire doing its job: a third place pinned the
+    // digest and I had moved only two of them (the migration's own c_digest
+    // and nothing else). `row?.digest` is computed by POSTGRES over the stored
+    // `prosrc`, and it returned exactly the value my local extraction had
+    // computed, so the extraction method proved against the old digest also
+    // agrees with the database.
+    expect(row?.digest, 'the digest 0093 recorded for this body').toBe('bfdb2f2b98d8ccbe0f829b1b65e2bf2660828d2e1c1a0e88b29b832789e0a33d');
   });
 
   it('§3 the schema floor constant names the head this build ships', async () => {
