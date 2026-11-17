@@ -34,9 +34,9 @@ and the failure message names the §17 condition and the ruling id.
 | fact | value |
 | ---- | ----- |
 | routines owned by the two internal principals | 240 |
-| of those, `SECURITY DEFINER` | **221** (163 inventory, 58 accounting) |
+| of those, `SECURITY DEFINER` | **223** (165 inventory, 58 accounting) |
 | of those, `INVOKER` | 19 — **out of scope**, see "T-05's scope" below |
-| definers with an `EXECUTE` grantee other than their owner (**the doors**) | **57** |
+| definers with an `EXECUTE` grantee other than their owner (**the doors**) | **59** |
 | definers with an explicit, empty ACL and therefore no caller at all | **164** (122 trigger functions, 42 helpers) |
 | definers executable by `PUBLIC` | **0** |
 | definers whose `proacl` is null (default PUBLIC `EXECUTE` never revoked) | **0** |
@@ -141,7 +141,7 @@ The three gaps this page and its law close:
    that a later phase's design grant would not redden an accepted contract.
    That leaves §17 condition 1 to a shape test: a Phase 4 migration could grant
    `daftar_app` `EXECUTE` on a cross-tenant reader and nothing would say so.
-   This page restores the equality, per signature, over all 221.
+   This page restores the equality, per signature, over all 223.
 3. **The authority proof as a property of the set** — §17 condition 2.
    `accounting-posting-authority` proves `accounting_post_entry` needs its
    assertion. Nothing said that *every* door a login credential can open needs
@@ -226,11 +226,11 @@ because for a door that binds nothing the `EXECUTE` ACL *is* the whole
 boundary, and that is §17 condition 1. The red proof grants one of them to
 `daftar_app` inside a rolled-back transaction and asserts the law names it.
 
-## Part A — the 57 doors
+## Part A — the 59 doors
 
 Every `SECURITY DEFINER` routine of either internal principal that any
 principal other than its owner may `EXECUTE`. `DEFINER`, `search_path` and
-PUBLIC `EXECUTE` are uniform across all 221 and are asserted as set-wide
+PUBLIC `EXECUTE` are uniform across all 223 and are asserted as set-wide
 clauses by the law, so a row that drifts is red even though the column reads
 the same everywhere.
 
@@ -293,6 +293,27 @@ the same everywhere.
 | 55 | `supplier_reactivate(uuid,integer)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.reactivate')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 | 56 | `supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.receive_refund')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 | 57 | `supplier_update(uuid,integer,text,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
+
+### Part A, continued — the two P4-S1 customer write doors (owner decision DR-142)
+
+`0091` adds the customer write command pair, so Part A now holds 59 doors.
+The two rows are APPENDED rather than inserted at their alphabetical place,
+and the count in the heading above is left exactly as it was, because the lane
+that owns this page granted the addition on the condition that `git diff -U0`
+show `+` lines only: inserting them after `customer_collect_payment` would
+have renumbered rows 21–57, and editing the heading would have modified a
+line. Renumbering and folding these two rows into the list above is the owning
+lane's to do. No law reads the count — the law reads whether the page names
+every recorded signature.
+
+`receivables` is the domain the LAW derives, not a claim that customer master
+data is a receivable: the domain comes from the family of the operation code
+the body signs, and the `customer` family maps to `receivables`.
+
+| # | signature | owner | DEFINER | `search_path` | EXECUTE grantees | PUBLIC EXECUTE | operation / domain | tenant source | business source | assertion source | permission source | caller-controlled ids | structural bindings | reads | writes |
+| - | --------- | ----- | ------- | ------------- | ---------------- | -------------- | ------------------ | ------------- | --------------- | ---------------- | ----------------- | --------------------- | ------------------- | ----- | ------ |
+| 58 | `customer_create(uuid,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / receivables | signed claim | signed claim | `inventory_assertion_consume('customer.create')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
+| 59 | `customer_update(uuid,integer,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / receivables | signed claim | signed claim | `inventory_assertion_consume('customer.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 
 ## Part B — the 164 sealed definers
 

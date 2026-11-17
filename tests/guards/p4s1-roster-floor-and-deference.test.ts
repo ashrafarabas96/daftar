@@ -49,6 +49,7 @@ import {
   foreignRosterProblems,
   isPending,
   liveDeclaration,
+  suiteProblems,
   unrosteredElsewhere,
 } from '../../scripts/phase4-s1-gate';
 
@@ -240,5 +241,51 @@ describe('§C the sliced basename and the foreign roster', () => {
     expect(re.test('S4_BASENAME = /^(?:p4s4-)/;'), 'a bare assignment is accepted as a declaration').toBe(false);
     expect(re.test('const S4_BASENAME_OLD = /^(?:p4s4-)/;'), 'a different constant is accepted').toBe(false);
     expect(re.test('const S4_BASENAME = /^(?:p4s4-|x)/;'), 'a different expression is accepted').toBe(false);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// §D THE ROSTER SCAN SEEN GOING RED, which §C does not show.
+//
+// §C proves the PREDICATE classifies a basename. That is a different sentence
+// from "the gate reports a suite that is on disk and in no row", and the
+// second is the one the owner's fifth condition (`OWNER_DECISIONS_AR.md:4545`)
+// asks to be proved by a plant. The distance between those two sentences is
+// not theoretical here: this card's own roster row carried a WRONG case floor
+// TWICE (13 against 15, then 15 against 16) and the guard was green both
+// times. A guard nobody has seen refuse is the defect class this lane keeps
+// writing rules against, and it had written one against itself.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('§D the roster scan: a Phase 4 suite on disk that no row lists', () => {
+  const SUITE = "import { describe, it } from 'vitest';\ndescribe('x', () => {\n  it('y', () => {});\n});\n";
+  const ESCAPEE = 'p4s1-roster-escapee-PLANT.test.ts';
+
+  it('RED: a p4sN- suite present on disk and absent from S1_SUITES is reported by name', () => {
+    const root = treeWith({ [`tests/integration/${ESCAPEE}`]: SUITE });
+    const named = about(suiteProblems(root), ESCAPEE);
+    // ONE finding, not "at least one": the scan must name this file once, so a
+    // flood of unrelated problems cannot be read as this plant being caught.
+    expect(named, `the scan must name the suite no row lists; it said: ${named.join(' | ')}`).toHaveLength(1);
+    expect(named[0], 'and it must be the roster that refuses it, not some other rule').toContain('no S1_SUITES entry lists');
+  });
+
+  it('and the CONTROL: a basename this roster does not claim is NOT reported from the same tree', () => {
+    // Same probe, same directory, one character of difference in the kind of
+    // name — so the finding above is the roster's judgement and not merely
+    // "there is a file here". Without this, §D would pass for a scan that
+    // complained about every file it saw.
+    const root = treeWith({ 'tests/integration/selling.service.test.ts': SUITE });
+    expect(
+      about(suiteProblems(root), 'selling.service.test.ts'),
+      'a suite of no phase must not be claimed by this roster, or the plant above proves nothing about rostering',
+    ).toStrictEqual([]);
+  });
+
+  it('and the real tree holds no escapee: every Phase 4 suite on disk is listed', () => {
+    // The live claim the plant above makes meaningful. It is asserted on the
+    // REAL root, and it is the one that would catch the next card that adds a
+    // suite and forgets the row — including the doors `0091` opened.
+    const escapees = suiteProblems(ROOT).filter((p) => p.includes('no S1_SUITES entry lists') || p.includes('no S1_SUITES entry lists'));
+    expect(escapees, `a Phase 4 suite on disk is in no roster row: ${escapees.join(' | ')}`).toStrictEqual([]);
   });
 });
