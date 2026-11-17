@@ -60,9 +60,19 @@ interface Register {
   baseline: { rev: string; job: string; steps: number; namesSha256: string };
   p2TestFileOverlaps: Record<string, string[]>;
   jobs: string[];
-  totals: { shared: number; assigned: number };
+  totals: { shared: number; assigned: number; added: number };
   shared: string[];
   assignment: Record<string, string>;
+  added: Record<string, AddedStep>;
+  addedSha256: string;
+}
+
+/** A step added AFTER the split: declared, with whose decision it was and why. */
+interface AddedStep {
+  job: string;
+  reason: string;
+  lane: string;
+  decision: string;
 }
 
 const register = JSON.parse(readFileSync(REGISTER_PATH, 'utf8')) as Register;
@@ -186,6 +196,58 @@ function fingerprintProblems(reg: Register): string[] {
       ];
 }
 
+/**
+ * The digest of the DECLARED additions, whole: every name AND its job, reason,
+ * lane and decision, in name order. Hashing the names alone would let a signed
+ * reason be rewritten silently; hashing the whole entry makes the declaration a
+ * decision someone has to re-sign (the digest in the register has to change in
+ * the same commit as the words).
+ */
+function addedDigest(added: Record<string, AddedStep>): string {
+  const canon = Object.keys(added)
+    .sort()
+    .map((name) => {
+      const d = added[name] as AddedStep;
+      return [name, d.job, d.reason, d.lane, d.decision].join('\u0000');
+    })
+    .join('\n');
+  return createHash('sha256').update(canon, 'utf8').digest('hex');
+}
+
+/**
+ * C-12 — a step that was ADDED after the split is declared, not tolerated.
+ * The baseline (61 steps at the pre-split revision) stays frozen; a later
+ * step has to appear in `added` with its job, reason, lane and decision, run
+ * exactly once in that job, and be covered by the digest. A step that is not
+ * declared stays red under C-2, so this is a declaration and not an allow-list.
+ */
+function addedProblems(found: Map<string, string[]>, reg: Register): string[] {
+  const problems: string[] = [];
+  const names = Object.keys(reg.added);
+  for (const step of names) {
+    const d = reg.added[step] as AddedStep;
+    for (const field of ['job', 'reason', 'lane', 'decision'] as const) {
+      if (typeof d[field] !== 'string' || d[field].trim() === '') problems.push(`C-12: the declared addition \`${step}\` has an empty \`${field}\``);
+    }
+    if (reg.shared.includes(step) || reg.assignment[step] !== undefined) {
+      problems.push(`C-12: \`${step}\` is declared as an addition but is already in the frozen baseline lists`);
+    }
+    if (!reg.jobs.includes(d.job)) problems.push(`C-12: the declared addition \`${step}\` names job \`${d.job}\`, which is not a job of the family`);
+    const jobs = found.get(step) ?? [];
+    if (jobs.length === 0) problems.push(`C-12: \`${step}\` is declared as an addition and runs in NO job — a declaration for work that does not exist`);
+    else if (jobs.length > 1) problems.push(`C-12: the declared addition \`${step}\` runs in ${jobs.length} jobs: ${jobs.join(', ')}`);
+    else if (jobs[0] !== d.job) problems.push(`C-12: the declared addition \`${step}\` runs in \`${jobs[0]}\` but is declared for \`${d.job}\``);
+  }
+  if (names.length !== reg.totals.added) problems.push(`C-12: the register lists ${names.length} additions but declares ${reg.totals.added}`);
+  const digest = addedDigest(reg.added);
+  if (digest !== reg.addedSha256) {
+    problems.push(
+      `C-12: the additions hash to ${digest}, not the pinned ${reg.addedSha256} — a declaration (or its reason, lane or decision) changed without being re-signed`,
+    );
+  }
+  return problems;
+}
+
 /** Everything wrong with `ciText` as judged against the committed register. */
 function conservationProblems(ciText: string, reg: Register): string[] {
   const problems: string[] = [];
@@ -220,6 +282,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
   for (const [step, jobs] of found) {
     const assigned = reg.assignment[step];
     if (reg.shared.includes(step)) continue;
+    if (assigned === undefined && reg.added[step] !== undefined) continue; // judged by C-12 below
     if (assigned === undefined) {
       problems.push(`C-2: \`${step}\` runs in ${jobs.join(', ')} and is in neither list of the register`);
       continue;
@@ -253,7 +316,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
     }
   }
 
-  problems.push(...fingerprintProblems(reg), ...hollowProblems(ciText, reg));
+  problems.push(...addedProblems(found, reg), ...fingerprintProblems(reg), ...hollowProblems(ciText, reg));
   return problems;
 }
 
@@ -584,5 +647,69 @@ describe('the required-check aggregate (DR-147/1)', () => {
     );
     expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
     expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
+  });
+});
+
+describe('declared additions after the split (C-12)', () => {
+  const ANCHOR = '      - name: Phase 4 slice gate — P4-S2\n';
+  const STEP = 'Planted declared step (proof only)';
+  const plantStep = (name: string) => {
+    const planted = ci.replace(ANCHOR, `      - name: ${name}\n        run: echo planted\n${ANCHOR}`);
+    expect(planted, 'the anchor to plant a step before was not found — update this proof').not.toBe(ci);
+    return planted;
+  };
+  const declare = (entries: Record<string, AddedStep>, over: Partial<Register> = {}): Register => ({
+    ...register,
+    added: entries,
+    addedSha256: addedDigest(entries),
+    totals: { ...register.totals, added: Object.keys(entries).length },
+    ...over,
+  });
+  const GOOD: AddedStep = { job: 'backend', reason: 'a lane that needs its own database', lane: 'P5REL', decision: 'DR-xyz' };
+
+  it('the unplanted workflow declares no addition and C-12 has nothing to say', () => {
+    expect(Object.keys(register.added)).toEqual([]);
+    expect(addedProblems(new Map(), register)).toEqual([]);
+    expect(register.addedSha256).toBe(addedDigest({}));
+  });
+
+  it('POSITIVE: a step declared with its job, reason, lane and decision is accepted', () => {
+    expect(conservationProblems(plantStep(STEP), declare({ [STEP]: GOOD }))).toEqual([]);
+  });
+
+  it('RED: the same step without a declaration stays red under C-2', () => {
+    expect(conservationProblems(plantStep(STEP), register).join('\n')).toContain(`C-2: \`${STEP}\` runs in backend and is in neither list`);
+  });
+
+  it('RED: a declaration with an empty reason or lane is refused', () => {
+    expect(conservationProblems(plantStep(STEP), declare({ [STEP]: { ...GOOD, reason: '  ' } })).join('\n')).toContain('has an empty `reason`');
+    expect(conservationProblems(plantStep(STEP), declare({ [STEP]: { ...GOOD, lane: '' } })).join('\n')).toContain('has an empty `lane`');
+  });
+
+  it('RED: a declaration for a step that runs nowhere is refused', () => {
+    expect(conservationProblems(ci, declare({ [STEP]: GOOD })).join('\n')).toContain('runs in NO job');
+  });
+
+  it('RED: a declaration naming the wrong job is refused', () => {
+    expect(conservationProblems(plantStep(STEP), declare({ [STEP]: { ...GOOD, job: 'backend-static' } })).join('\n')).toContain(
+      'runs in `backend` but is declared for `backend-static`',
+    );
+  });
+
+  it('RED: the reason is rewritten and the digest is not re-signed', () => {
+    const entries = { [STEP]: GOOD };
+    const stale = { ...declare(entries), added: { [STEP]: { ...GOOD, reason: 'a different reason, quietly' } } };
+    expect(conservationProblems(plantStep(STEP), stale).join('\n')).toContain('changed without being re-signed');
+  });
+
+  it('RED: a baseline step cannot be re-declared as an addition', () => {
+    const name = 'Typecheck';
+    expect(conservationProblems(ci, declare({ [name]: { ...GOOD, job: 'backend-static' } })).join('\n')).toContain('already in the frozen baseline lists');
+  });
+
+  it('RED: the declared count is wrong', () => {
+    expect(conservationProblems(plantStep(STEP), declare({ [STEP]: GOOD }, { totals: { ...register.totals, added: 0 } })).join('\n')).toContain(
+      'lists 1 additions but declares 0',
+    );
   });
 });
