@@ -586,3 +586,148 @@ describe('the required-check aggregate (DR-147/1)', () => {
     expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
   });
 });
+
+/**
+ * C-14 (DR-170) — the Phase 2 chain is composed by the JOB, not nested in a gate. Required
+ * CI runs `gate:phase2:s1` .. `gate:phase2:s7` as seven separate steps of `backend-gates-p2`,
+ * each of which composes its own predecessors already. P2-S8 used to call `gate:phase2:s7`
+ * again, so the same P2-S1..S7 matrices ran a second time in `backend-work`, and a third time
+ * under the P3-S1 gate. Dropping that one call is only sound while (a) every one of the
+ * seven steps exists in `backend-gates-p2` with exactly that command, and (b) the P2-S8 gate
+ * really does not call a P2 gate any more. Both are read here, from the files.
+ */
+function p2NestProblems(ciText: string, gateText: string): string[] {
+  const problems: string[] = [];
+  const blocks = stepBlocks(ciText, 'backend-gates-p2');
+  for (let n = 1; n <= 7; n += 1) {
+    const name = `Phase 2 slice gate — P2-S${n}`;
+    const runLine = blocks
+      .find((b) => b.name === name)
+      ?.text.split(String.fromCharCode(10))
+      .find((l) => /^\s*run:/.test(l));
+    const run = runLine?.replace(/^\s*run:\s*/, '').trim();
+    if (blocks.find((b) => b.name === name) === undefined) problems.push(`C-14: \`backend-gates-p2\` has no step "${name}"`);
+    else if (run !== `npm run gate:phase2:s${n}`) problems.push(`C-14: "${name}" runs \`${run ?? ''}\`, expected \`npm run gate:phase2:s${n}\``);
+  }
+  const live = gateText.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+  const calls = [...live.matchAll(/gate:phase2:s/g)].map((m) => m[0]);
+  if (calls.length > 0) problems.push(`C-14: the P2-S8 gate calls ${calls.join(', ')}; the chain is composed by \`backend-gates-p2\``);
+  if (!live.includes("'check:migrations'")) problems.push('C-14: the gate text read here has no check:migrations, so the call scan above read the wrong file');
+  return problems;
+}
+
+describe('the Phase 2 chain is composed by the job, not nested in P2-S8 (C-14, DR-170)', () => {
+  const gate = readFileSync(join(ROOT, 'scripts', 'phase2-s8-gate.ts'), 'utf8');
+  const plant = (from: string, to: string) => {
+    const slice = jobText(ci, 'backend-gates-p2');
+    const mutated = slice.replace(from, to);
+    expect(mutated, 'the text to plant was not found — update this proof').not.toBe(slice);
+    return ci.replace(slice, mutated);
+  };
+
+  it('POSITIVE: the committed files satisfy it, and the probe saw seven steps and a gate with a live step list', () => {
+    expect(p2NestProblems(ci, gate)).toEqual([]);
+    expect(stepBlocks(ci, 'backend-gates-p2').filter((b) => /^Phase 2 slice gate — P2-S[1-7]$/.test(b.name))).toHaveLength(7);
+  });
+
+  it('RED: a P2 step is dropped from the job', () => {
+    const planted = plant('name: Phase 2 slice gate — P2-S4', 'name: Phase 2 slice gate — P2-S4 (renamed)');
+    expect(p2NestProblems(planted, gate).join('\n')).toContain('no step "Phase 2 slice gate — P2-S4"');
+  });
+
+  it('RED: a P2 step runs a different command', () => {
+    const planted = plant('run: npm run gate:phase2:s6', 'run: npm run gate:phase2:s5');
+    expect(p2NestProblems(planted, gate).join('\n')).toContain('"Phase 2 slice gate — P2-S6" runs');
+  });
+
+  it('RED: the P2-S8 gate calls the P2-S7 gate again', () => {
+    const nested = gate.replace(
+      "  { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },\n",
+      "  { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },\n  { name: 'P2-S7 gate', cmd: npm, args: ['run', 'gate:phase2:s7'] },\n",
+    );
+    expect(nested).not.toBe(gate);
+    expect(p2NestProblems(ci, nested).join('\n')).toContain('the P2-S8 gate calls gate:phase2:s');
+  });
+
+  it('RED: the call is spelled with double quotes or in a template literal', () => {
+    const marker = "args: ['run', 'check:migrations'] },";
+    const dq = gate.replace(marker, `${marker} { name: 'x', cmd: npm, args: ['run', "gate:phase2:s7"] },`);
+    const tpl = gate.replace(marker, `${marker} { name: 'x', cmd: npm, args: ['run', \`gate:phase2:s\${7}\`] },`);
+    expect(dq).not.toBe(gate);
+    expect(tpl).not.toBe(gate);
+    expect(p2NestProblems(ci, dq).join(' ')).toContain('the P2-S8 gate calls gate:phase2:s');
+    expect(p2NestProblems(ci, tpl).join(' ')).toContain('the P2-S8 gate calls gate:phase2:s');
+  });
+
+  it('NEGATIVE CONTROL: a call named only in a comment is not a call', () => {
+    expect(p2NestProblems(ci, `// npm run 'gate:phase2:s7'\n${gate}`)).toEqual([]);
+  });
+});
+
+/**
+ * C-15 (DR-170) — the release path still reaches every Phase 2 slice gate and the Phase 1 gate. C-14 lets the P2-S8
+ * gate stop calling the P2-S7 gate because CI runs the seven as separate steps; a release has no such job, so the
+ * release gate has to reach them itself. The required set is DERIVED, not written here: every `gate:phase2:sN` script
+ * that package.json declares, plus `gate:phase1`. The reach is DERIVED too: from the `gate:phase2:release` script,
+ * follow every `gate:phase1` / `gate:phase2:sN` call found in the live text (comments stripped) of each script file.
+ * A dropped call, anywhere on a path, shows up as a gate that is no longer reached.
+ */
+function releaseReach(read: (file: string) => string): { required: string[]; unreached: string[] } {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+  const fileOf = (name: string): string | undefined => /scripts\/[\w-]+\.ts/.exec(pkg.scripts[name] ?? '')?.[0];
+  const required = Object.keys(pkg.scripts).filter((k) => /^gate:phase2:s\d+$/.test(k) || k === 'gate:phase1');
+  const seen = new Set<string>(['gate:phase2:release']);
+  const queue = ['gate:phase2:release'];
+  while (queue.length > 0) {
+    const name = queue.shift() as string;
+    const file = fileOf(name);
+    if (file === undefined) continue;
+    const live = read(file)
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    // The whole script name, not a prefix of one: `gate:phase1` must not match inside `gate:phase1:release`.
+    for (const m of live.matchAll(/gate:phase[12](?::\w+)*(?![\w:-])/g)) {
+      if (pkg.scripts[m[0]] !== undefined && !seen.has(m[0])) {
+        seen.add(m[0]);
+        queue.push(m[0]);
+      }
+    }
+  }
+  return { required, unreached: required.filter((r) => !seen.has(r)) };
+}
+
+describe('the release path reaches every Phase 2 slice gate and the Phase 1 gate (C-15, DR-170)', () => {
+  const real = (file: string): string => readFileSync(join(ROOT, file), 'utf8');
+  const without =
+    (file: string, needle: RegExp) =>
+    (f: string): string =>
+      f === file ? real(f).replace(needle, '') : real(f);
+
+  it('POSITIVE: nothing is unreached, and the probe saw nine required gates (s1 .. s8 and phase1)', () => {
+    const r = releaseReach(real);
+    expect(r.unreached).toEqual([]);
+    expect(r.required).toHaveLength(9);
+  });
+
+  it('RED: the release gate stops running the P2-S7 gate', () => {
+    const r = releaseReach(without('scripts/phase2-release-gate.ts', /gate:phase2:s7/g));
+    expect(r.unreached).toContain('gate:phase2:s7');
+    expect(r.unreached).toContain('gate:phase2:s1');
+  });
+
+  it('RED: a link in the middle of the chain is dropped (P2-S4 no longer runs P2-S3)', () => {
+    const r = releaseReach(without('scripts/phase2-s4-gate.ts', /gate:phase2:s3/g));
+    expect(r.unreached).toContain('gate:phase2:s3');
+  });
+
+  it('RED: both real calls of the Phase 1 gate are cut, while the release script still names a longer script', () => {
+    const planted = (f: string): string =>
+      f === 'scripts/phase2-s1-gate.ts' || f === 'scripts/phase1-release-gate.ts' ? real(f).replace(/gate:phase1(?![\w:-])/g, 'x') : real(f);
+    expect(releaseReach(planted).unreached).toContain('gate:phase1');
+  });
+
+  it('NEGATIVE CONTROL: a call named only in a comment does not count as reached', () => {
+    const planted = (f: string): string => (f === 'scripts/phase2-release-gate.ts' ? '// gate:phase2:s7' + real(f).replace(/gate:phase2:s7/g, 'x') : real(f));
+    expect(releaseReach(planted).unreached).toContain('gate:phase2:s7');
+  });
+});
