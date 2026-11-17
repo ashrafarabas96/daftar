@@ -34,12 +34,18 @@
  * an earlier wording here said "every arm seeds, builds, boots, and reads the
  * preflight" and that was false of three of them: `REL10-P1` and `REL10-P2`
  * seed NOTHING (they measure the tree as it stands), and `REL10-N3` neither
- * boots nor sends a request (the compiler refuses its seed, which is the
- * finding — so it is the one seeded arm that proves its seed did NOT reach the
- * program). What holds of every arm that BOOTS is that it proves its seed
- * reached the compiled program, both before the boot and again after the
- * preflight — so an arm can never report "closed" when it merely failed to
- * apply, nor when another arm's late rebuild took the seed away.
+ * boots nor sends a request: what it proves is that `tsc` REFUSES that seed —
+ * a non-zero exit status carrying TS2783 — and NOT that the seed fails to
+ * reach the program. That distinction is load-bearing and was got wrong here
+ * once: this project's `tsconfig` sets no `noEmitOnError`, so `tsc` exits 2
+ * AND EMITS, and a build that ignores the exit status would ship that route.
+ * The refusal is a gate somebody must keep honouring, not an impossibility.
+ * What holds of every arm that SEEDS AND BOOTS (`REL10-R1`/`R2`/`R3` and
+ * `REL10-N1`/`N2` — not `P1`/`P2`, which seed nothing, nor `N3`, which does
+ * not boot) is that it proves its seed reached the compiled program, both
+ * before the boot and again after the preflight — so such an arm can never
+ * report "closed" when it merely failed to apply, nor when another arm's late
+ * rebuild took the seed away.
  * `REL10-R1`/`REL10-R2` assert the header comes back `true` on the same
  * request `REL10-P1` asserts it is absent on, which IS the red-first proof of
  * `REL10-P1`: with either seed in the tree, `REL10-P1` fails.
@@ -255,14 +261,21 @@ async function boot(corsOrigins: string): Promise<Booted> {
 async function stopChild(child: ChildProcess): Promise<void> {
   await new Promise<void>((ok) => {
     if (child.exitCode !== null || child.signalCode !== null) return (spawned.delete(child), ok());
-    const done = (): void => {
+    // ONLY A REPORTED EXIT RELEASES THE HANDLE. The fallback below resolves
+    // the promise so the suite is not held up, but it must NOT forget the
+    // child: a process that never reports its exit is the ONE case this net
+    // exists for, and deleting it here would drop it out of `afterAll`'s
+    // reach — the net dropping its handle in exactly the case it was built
+    // for. (Review of this file, note 3.)
+    const released = (): void => {
       spawned.delete(child);
       ok();
     };
-    child.once('exit', done);
+    child.once('exit', released);
     child.kill('SIGKILL');
-    // The timer must not keep the event loop alive once the child is gone.
-    const late = setTimeout(done, 5_000);
+    // `unref` so the timer cannot keep the event loop alive once the child is
+    // gone; the child's own handle is what keeps it referenced until then.
+    const late = setTimeout(ok, 5_000);
     late.unref();
   });
 }
