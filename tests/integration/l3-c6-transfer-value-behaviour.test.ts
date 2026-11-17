@@ -19,7 +19,7 @@
  *   §2 the SAME shape with values that cancel commits — so §1's refusal is the
  *      imbalance and not the fixture, the legs, or the owner-level write.
  */
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { PoolClient } from 'pg';
 import { ensurePostgres, ownerPool, resetData } from '../helpers/test-app';
 import { seedS3World, type S3World } from '../helpers/inventory-commands';
@@ -30,7 +30,7 @@ let world: S3World;
 beforeAll(async () => {
   await ensurePostgres();
   await resetData();
-  world = await seedS3World(ownerPool(), 'l3 c6 value behaviour');
+  world = await seedS3World(ownerPool(), 'l3-c6-value');
 }, 900_000);
 
 /** Run `body` in its own transaction and return the COMMIT's outcome, since the guard is deferred. */
