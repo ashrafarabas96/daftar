@@ -62,11 +62,38 @@ describe('C6 — a complete transfer whose value does not cancel', () => {
           destinationWarehouseId: a.w2,
           qty: '2',
           legs: [
-            { kind: 'transfer_out', warehouseId: a.w1, qty: '-2', value: '-20', stockSeq: 1, cache: { onHand: '0', valuation: '0', avg: null } },
+            {
+              kind: 'transfer_out',
+              warehouseId: a.w1,
+              qty: '-2',
+              value: '-20',
+              unitCost: '10',
+              stockSeq: 1,
+              cache: { onHand: '0', valuation: '0', avg: null },
+            },
+            // `unitCost` is 10 on ALL FOUR legs of both cases, and it is not
+            // decoration: `stock_movements_cost_snapshot_ck` (0059:151) is
+            // `(qty_delta = 0) = (unit_cost_base_minor IS NULL)`, so a leg that
+            // moves quantity MUST carry a cost. Leaving it out is what made both
+            // cases fail on that constraint instead of on this card's law -- §1
+            // was then refused by the WRONG rule, which is the same false
+            // attribution this arm's own message guards against. Pinning it at 10
+            // in both cases also keeps `value` the ONLY field that differs between
+            // §1 and §2, which is what makes §2 a control rather than a second
+            // experiment. Measured: no constraint ties value to qty x cost, so 21
+            // against a cost of 10 is a legal row and a planted imbalance.
             // THE IMBALANCE, and it is one minor unit: value is not conserved,
             // the quantities still are. A guard that only compared quantities
             // would pass this, which is the whole reason the arm exists.
-            { kind: 'transfer_in', warehouseId: a.w2, qty: '2', value: '21', stockSeq: 1, cache: { onHand: '2', valuation: '21', avg: '10.5' } },
+            {
+              kind: 'transfer_in',
+              warehouseId: a.w2,
+              qty: '2',
+              value: '21',
+              unitCost: '10',
+              stockSeq: 1,
+              cache: { onHand: '2', valuation: '21', avg: '10.5' },
+            },
           ],
         },
       );
@@ -90,8 +117,16 @@ describe('C6 — a complete transfer whose value does not cancel', () => {
           destinationWarehouseId: a.w2,
           qty: '2',
           legs: [
-            { kind: 'transfer_out', warehouseId: a.w1, qty: '-2', value: '-20', stockSeq: 2, cache: { onHand: '0', valuation: '0', avg: null } },
-            { kind: 'transfer_in', warehouseId: a.w2, qty: '2', value: '20', stockSeq: 2, cache: { onHand: '2', valuation: '20', avg: '10' } },
+            {
+              kind: 'transfer_out',
+              warehouseId: a.w1,
+              qty: '-2',
+              value: '-20',
+              unitCost: '10',
+              stockSeq: 2,
+              cache: { onHand: '0', valuation: '0', avg: null },
+            },
+            { kind: 'transfer_in', warehouseId: a.w2, qty: '2', value: '20', unitCost: '10', stockSeq: 2, cache: { onHand: '2', valuation: '20', avg: '10' } },
           ],
         },
       );
