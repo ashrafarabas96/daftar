@@ -86,17 +86,31 @@ describe('SEC-01 pre-launch gate item 6: the deployment inventory it rests on', 
     expect(files.filter((f) => f.startsWith('infrastructure/')).length, 'the infrastructure tree exists').toBeGreaterThan(0);
   });
 
-  it('zero tracked deployment artefacts, so what a deployed worker receives is UNKNOWN from here', () => {
+  /**
+   * DR-173/5 (2026-11-18): the owner chose a single test host and told L5 to write
+   * its deployment files in this repository. Gate item 6 was re-read against them:
+   * `deploy/test-env/env/worker.vars` carries no JWT_SECRET and no JWT_KEYS, compose
+   * gives the worker that file alone, and `tests-unit/deploy-test-env-guard.test.ts`
+   * holds both (red controls included). The paths below are the reviewed set — a
+   * NEW artefact outside it still fails this test and still needs the same read.
+   */
+  const REVIEWED_AGAINST_ITEM_6 = [
+    'deploy/test-env/.dockerignore (container image)',
+    'deploy/test-env/Dockerfile (container image)',
+    'deploy/test-env/compose.yaml (compose)',
+  ];
+
+  it('tracked deployment artefacts are exactly the set reviewed against gate item 6 (DR-173/5)', () => {
     const hits = tracked()
       .map((p) => ({ p, kind: DEPLOYMENT_ARTEFACT(p) }))
       .filter((h): h is { p: string; kind: string } => h.kind !== null);
 
     expect(
-      hits.map((h) => `${h.p} (${h.kind})`),
+      hits.map((h) => `${h.p} (${h.kind})`).sort(),
       'A deployment artefact is now tracked. This is not forbidden — but gate item 6 of docs/DAFTAR_RELEASE_GATES.md rests on there being none, ' +
         'so read it against this file: does it pass JWT_SECRET or JWT_KEYS to a PROCESS_MODE=worker process? config.ts refuses both in every ' +
         'environment, so a worker deployed with either will not start. Update the gate, then add the path to this test.',
-    ).toEqual([]);
+    ).toEqual(REVIEWED_AGAINST_ITEM_6);
   });
 
   it('and gate item 6 still names the two variables, the worker mode and the ordering', () => {

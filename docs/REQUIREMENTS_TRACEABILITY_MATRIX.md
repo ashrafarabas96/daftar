@@ -117,6 +117,8 @@
 | SEC-003 | لا Fix مباشر في Production؛ Repair بأدوات رسمية | 147–148 | P0 | Ops | Process review | Dry-run+Backup+Audit+Verify | Documented |
 | SEC-004 | Rate limiting + Input validation + Secrets management | — | P0 | API | Security tests | 429/رفض/لا أسرار في الكود | Documented |
 | SEC-005 | Branch protection + CI Gate + Code Review checklist | 90–92 | P0 | CI/CD | CI | لا merge مع فشل | Documented |
+| SEC-006 | لا `JWT_SECRET`/`JWT_KEYS` في عملية `PROCESS_MODE=worker` (SEC-01) | — | P0 | Config/Deploy | رفض الإقلاع (`config.ts:199-209`) + حارس الجرد؛ **والإثبات الحي**: زوج أحمر ثم أخضر على بيئة منشورة | الشق الأول: عامل مع أحدهما لا يُقلع. الشق الثاني: لا ملف نشر في الجرد يمرّر السر | **Landed, not ready** — الشق الحي ناقص، لا بيئة منشورة (`SEC-01-DEPLOY`) |
+| SEC-007 | حواجز الإطلاق REL-09 (HSTS/CSP) وREL-10 (CORS) وTD-24 وCROSSSLOT | — | P0 | API/Infra | اختبارات كل حاجز (#69 #70 #46 #77) | كل حاجز حيّ على بيئة منشورة بدليل | **Landed, not ready** — نزلت في `main` ولم تُوقَّع بوّابة |
 
 ## SUB — الاشتراكات
 
@@ -222,7 +224,7 @@
 | CORR-J | ممنوع Void مباشر لفاتورة مدفوعة؛ void_invoice مركّب ذرّي (عكس دفعات ثم فاتورة) | J | P0 | Sales | GOLD-27 | لا أرصدة/نقدية غير متسقة | Done (Phase 0) |
 | CORR-K | AP كامل: supplier_payments + allocations متعددة العملات + دفعات جزئية + رصيد مشتق؛ Purchase بكل الحقول | K | P0 | Purchases | GOLD-32 | لا supplier.balance يدوي | Done (Phase 0) |
 | CORR-L | PaymentMethod بيانات Business-level (system_type مغلق + أسماء معرّبة + is_active + requires_reference) | L | P1 | Payments | Integration | إضافة "محفظة/شيك" بلا تعديل كود | Done (Phase 0) |
-| CORR-M | سياسة مخزون سالب موحّدة: ممنوع إلا إعداد صريح أو offline_oversell_exception مدقّق + needs_attention + Alert + منع لاحق | M | P0 | Inventory/Offline | GOLD-25 | لا تناقض Rule/Implementation | Done (Phase 0) |
+| CORR-M | **سياسة مخزون سالب موحّدة بنص `DR-130` (2026-11-11): لا مخزون سالب، ولا بيع فوق المخزون، بلا استثناء** — مطابقةً للمختوم `OD-P4-05` الخيار A. **والبابان مرفوضان**: الإعداد الصريح و`offline_oversell_exception`. والبيع دون اتصال المتجاوز يدخل مسار التعارض القائم (`409`) فيُعرَض للتاجر بلا إعادة آلية | M | P0 | Inventory/Offline | GOLD-25 · **`GOLD-25` منسوخ موضوعًا بـ`DR-130`** | لا تناقض Rule/Implementation | Done (Phase 0) · **محسوم بـ`DR-130`: النص عُدّل، والإنفاذ قائم قياسًا** |
 | CORR-N | Moving Weighted Average لكل variant×warehouse بصيغ موثقة لكل حدث؛ cost_minor مرجع عرض؛ GL=valuation | N | P0 | Inventory/Accounting | GOLD-33 | INV-INV-06/INV-ACC-11 خضراء | Done (Phase 0) |
 | CORR-O | كميات NUMERIC(18,4) + UoM (unit_code/unit_decimals) — fractional مدعوم تصميمًا | O | P1 | Inventory | GOLD-34 | Core لا يمنع الكسور | Done (Phase 0) |
 | CORR-P | سعر المنتج بالعملة الأساسية للـBusiness دائمًا؛ Price Lists محجوزة للمستقبل | P | P0 | Catalog | Unit | لا currency_code غامض على المنتج | Done (Phase 0) |

@@ -1,0 +1,45 @@
+[
+  {
+    "id": "HARNESS-REJECT",
+    "label": "a CHECK refuses the violating row, and its sibling is accepted",
+    "mechanism": "a scratch table this case creates; it measures the harness, not the schema",
+    "setup": ["CREATE TABLE IF NOT EXISTS probe_self_check (x integer CHECK (x > 0))"],
+    "plant": "INSERT INTO probe_self_check (x) VALUES (-1)",
+    "expect": "reject",
+    "expectText": "probe_self_check_x_check",
+    "control": ["CREATE TABLE IF NOT EXISTS probe_self_check (x integer CHECK (x > 0))", "INSERT INTO probe_self_check (x) VALUES (1)"],
+    "deferred": false,
+    "notes": "The control carries its own setup: a refused plant rolls its setup back with it."
+  },
+  {
+    "id": "HARNESS-REJECT-DEFERRED",
+    "label": "a refusal that arrives at COMMIT is read, not missed",
+    "mechanism": "a DEFERRABLE INITIALLY DEFERRED unique constraint this case creates",
+    "setup": [
+      "CREATE TABLE IF NOT EXISTS probe_self_deferred (x integer)",
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'probe_self_deferred_u') THEN ALTER TABLE probe_self_deferred ADD CONSTRAINT probe_self_deferred_u UNIQUE (x) DEFERRABLE INITIALLY DEFERRED; END IF; END $$",
+      "INSERT INTO probe_self_deferred (x) VALUES (7)"
+    ],
+    "plant": "INSERT INTO probe_self_deferred (x) VALUES (7)",
+    "expect": "reject",
+    "expectText": "probe_self_deferred_u",
+    "control": [
+      "CREATE TABLE IF NOT EXISTS probe_self_deferred (x integer)",
+      "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'probe_self_deferred_u') THEN ALTER TABLE probe_self_deferred ADD CONSTRAINT probe_self_deferred_u UNIQUE (x) DEFERRABLE INITIALLY DEFERRED; END IF; END $$",
+      "INSERT INTO probe_self_deferred (x) VALUES (8)"
+    ],
+    "deferred": true,
+    "notes": "Without this the harness could report every deferred guard as a gap, because the statement itself succeeds."
+  },
+  {
+    "id": "HARNESS-GAP-POSITIVE",
+    "label": "where nothing guards, the violating row goes in — which is how a gap is proved",
+    "mechanism": "a scratch table with no constraint",
+    "setup": ["CREATE TABLE IF NOT EXISTS probe_self_gap (x integer)"],
+    "plant": "INSERT INTO probe_self_gap (x) VALUES (-1)",
+    "expect": "accept",
+    "control": ["CREATE TABLE IF NOT EXISTS probe_self_gap (x integer)", "INSERT INTO probe_self_gap (x) VALUES (1)"],
+    "deferred": false,
+    "notes": "An accepted violating row is the positive evidence of an absent guard, which is what a 'not enforced' verdict needs."
+  }
+]
