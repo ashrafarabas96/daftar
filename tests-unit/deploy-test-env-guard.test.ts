@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -37,7 +38,7 @@ const code = (text: string): string =>
     .split('\n')
     .filter((l) => !l.trim().startsWith('#'))
     .join('\n');
-const envFile = (n: string): Record<string, string> => parseEnv(read(`${DIR}/env/${n}.env`));
+const envFile = (n: string): Record<string, string> => parseEnv(read(`${DIR}/env/${n}.vars`));
 
 const SECRET_NAME = /(SECRET|KEY|PASSWORD|TOKEN|_URL)$/;
 const decoded = (v: string): string => {
@@ -81,11 +82,11 @@ describe('DR-173/5 test environment files — what they say', () => {
     expect(envFile('platform-api')['JWT_SECRET']).toBeTruthy();
   });
 
-  it('SEC-01: compose gives the worker worker.env alone — no environment: block, no other source', () => {
+  it('SEC-01: compose gives the worker worker.vars alone — no environment: block, no other source', () => {
     const compose = code(read(`${DIR}/compose.yaml`));
-    const block = compose.split(/\n  (?=[a-z-]+:\n)/).find((b) => b.startsWith('worker:')) ?? '';
+    const block = compose.split(/\n {2}(?=[a-z-]+:\n)/).find((b) => b.startsWith('worker:')) ?? '';
     expect(block, 'worker service not found in compose.yaml').not.toBe('');
-    expect(block).toMatch(/env_file: \[env\/worker\.env\]/);
+    expect(block).toMatch(/env_file: \[env\/worker.vars\]/);
     expect(block).not.toMatch(/^\s+environment:/m);
     expect(block).not.toMatch(/JWT/);
     // The shared anchor must give nobody a secret either.
@@ -105,9 +106,9 @@ describe('DR-173/5 test environment files — what they say', () => {
     expect(domains({ TRUSTED_PROXIES: '172.16.0.0/12' })).toEqual([]); // a CIDR range is not an address
     for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
       const e = envFile(f);
-      expect(Object.keys(e).length, `${f}.env parsed empty — the probe is blind`).toBeGreaterThan(0);
-      expect(realLooking(e), `${f}.env`).toEqual([]);
-      expect(domains(e), `${f}.env`).toEqual([]);
+      expect(Object.keys(e).length, `${f}.vars parsed empty — the probe is blind`).toBeGreaterThan(0);
+      expect(realLooking(e), `${f}.vars`).toEqual([]);
+      expect(domains(e), `${f}.vars`).toEqual([]);
     }
   });
 
@@ -117,11 +118,20 @@ describe('DR-173/5 test environment files — what they say', () => {
     expect(code(read(`${DIR}/compose.yaml`)).replaceAll('127.0.0.1', 'LOOPBACK')).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b(?!\/)/);
   });
 
+  it('P1-GOLD-33 is respected as written: no file under deploy/ is an .env file (the placeholder files are .vars)', () => {
+    // tests/golden-regression/phase1/05-artifact-hygiene.golden.test.ts forbids /\.env($|\.)/ anywhere in the tree.
+    // The files here hold placeholders only (held by the tests above); the name is chosen so the golden stays untouched.
+    const names = execFileSync('git', ['ls-files', DIR], { cwd: ROOT, encoding: 'utf8' }).split('\n').filter(Boolean);
+    expect(names.length, 'git ls-files saw nothing — the probe is blind').toBeGreaterThan(5);
+    expect(names.filter((f) => /\.env($|\.)/.test(f))).toEqual([]);
+    expect(names.filter((f) => f.endsWith('.vars')).length).toBe(6);
+  });
+
   it('every secret-class variable in the files is a named placeholder', () => {
     for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
       for (const [k, v] of Object.entries(envFile(f))) {
         if (SECRET_NAME.test(k) && /(KEY|SECRET|PASSWORD|TOKEN|DATABASE_URL)/.test(k)) {
-          expect(isPlaceholder(v), `${f}.env ${k}`).toBe(true);
+          expect(isPlaceholder(v), `${f}.vars ${k}`).toBe(true);
         }
       }
     }

@@ -89,7 +89,7 @@ describe('SEC-01 pre-launch gate item 6: the deployment inventory it rests on', 
   /**
    * DR-173/5 (2026-11-18): the owner chose a single test host and told L5 to write
    * its deployment files in this repository. Gate item 6 was re-read against them:
-   * `deploy/test-env/env/worker.env` carries no JWT_SECRET and no JWT_KEYS, compose
+   * `deploy/test-env/env/worker.vars` carries no JWT_SECRET and no JWT_KEYS, compose
    * gives the worker that file alone, and `tests-unit/deploy-test-env-guard.test.ts`
    * holds both (red controls included). The paths below are the reviewed set — a
    * NEW artefact outside it still fails this test and still needs the same read.

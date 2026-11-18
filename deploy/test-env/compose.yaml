@@ -17,7 +17,7 @@ x-app: &app
 services:
   postgres:
     image: postgres:16
-    env_file: [env/postgres.env]
+    env_file: [env/postgres.vars]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
   # Migrations run over a DIRECT connection, never a transaction-mode pooler (migrate.ts).
   bootstrap:
     image: postgres:16
-    env_file: [env/postgres.env]
+    env_file: [env/postgres.vars]
     depends_on:
       postgres: { condition: service_healthy }
     volumes:
@@ -53,23 +53,23 @@ services:
     <<: *app
     depends_on:
       bootstrap: { condition: service_completed_successfully }
-    env_file: [env/migrate.env]
+    env_file: [env/migrate.vars]
     command: ['npm', 'run', 'migrate', '-w', '@daftar/api']
     restart: 'no'
 
   merchant-api:
     <<: *app
-    env_file: [env/merchant-api.env]
+    env_file: [env/merchant-api.vars]
     ports: ['127.0.0.1:3000:3000']
 
   platform-api:
     <<: *app
-    env_file: [env/platform-api.env]
+    env_file: [env/platform-api.vars]
     ports: ['127.0.0.1:3001:3001']
 
   worker:
     <<: *app
-    env_file: [env/worker.env]
+    env_file: [env/worker.vars]
 
 volumes:
   pgdata:
