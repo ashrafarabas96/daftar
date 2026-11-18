@@ -44,12 +44,19 @@
  * `apps/api/src/config.ts` belongs to the BASE and not to this change.
  * Anything else here is mine.
  *
- * NOT RUN YET, AND I WILL NOT CALL IT MEASURED UNTIL IT IS: this worktree was
- * cut fresh and has no `node_modules`, and installing them is a network-heavy
- * job while CI runs are in flight, which RULE-10 forbids. So the red below is
- * INTENDED, not observed. The moment the runner is free: one install, then
- * this file and its unit sibling, and the observed codes recorded in the
- * commit message.
+ * MEASURED RED, on a real cluster of my own, with the runner idle (0 runs in
+ * flight at the moment of starting): `Tests 2 failed | 1 passed (3)`. The app
+ * booted and routed -- it answered `404 {"error":{"code":"NOT_FOUND"...}}`,
+ * a structured envelope and not a connection error -- so the 404 is the
+ * absence of THIS route and not a dead application.
+ *
+ * AND ONE OF THE THREE PASSED FOR THE WRONG REASON, which is worth more than
+ * the two that failed: §3 expects 404 for an unknown customer, and right now
+ * EVERY request to this path answers 404, so its green today is VACUOUS. It
+ * discriminates only once §1 and §2 are green, because only then does a 404
+ * mean "no such customer" rather than "no such route". Nobody should read
+ * today's `1 passed` as coverage of the unknown-customer refusal; I write this
+ * here rather than in a report because the file is what the next reader opens.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 
