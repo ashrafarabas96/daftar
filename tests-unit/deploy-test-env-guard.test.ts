@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../apps/api/src/config';
@@ -62,6 +62,10 @@ const domains = (env: Record<string, string>): string[] =>
     .map(([k]) => k);
 
 const MODES = ['merchant-api', 'platform-api', 'worker'] as const;
+/** The env directory is WALKED, not listed: a file added tomorrow is checked tomorrow (P1-GOLD-33 guards the .env shape; this guards the .vars shape). */ const ALL_VARS: string[] =
+  readdirSync(resolve(ROOT, DIR, 'env'))
+    .filter((f) => f.endsWith('.vars'))
+    .map((f) => f.slice(0, -'.vars'.length));
 
 describe('DR-173/5 test environment files — what they say', () => {
   it('each process env file loads through the real loadConfig, in its own mode', () => {
@@ -104,7 +108,7 @@ describe('DR-173/5 test environment files — what they say', () => {
     expect(domains({ CORS_ORIGINS: 'https://app.example.com' })).toEqual(['CORS_ORIGINS']);
     expect(domains({ TESTENV_HOST_ADDRESS: '203.0.113.7' })).toEqual(['TESTENV_HOST_ADDRESS']); // a public address is refused
     expect(domains({ TRUSTED_PROXIES: '172.16.0.0/12' })).toEqual([]); // a CIDR range is not an address
-    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
+    for (const f of ALL_VARS) {
       const e = envFile(f);
       expect(Object.keys(e).length, `${f}.vars parsed empty — the probe is blind`).toBeGreaterThan(0);
       expect(realLooking(e), `${f}.vars`).toEqual([]);
@@ -127,8 +131,18 @@ describe('DR-173/5 test environment files — what they say', () => {
     expect(names.filter((f) => f.endsWith('.vars')).length).toBe(6);
   });
 
+  it('the directory walk is sighted and holds nothing but .vars files', () => {
+    const all = readdirSync(resolve(ROOT, DIR, 'env'));
+    expect(ALL_VARS.length, 'the walk found no .vars files — the probe is blind').toBeGreaterThanOrEqual(6);
+    expect(
+      all.filter((f) => !f.endsWith('.vars')),
+      'a non-.vars file sits in the env directory',
+    ).toEqual([]);
+    for (const named of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) expect(ALL_VARS).toContain(named);
+  });
+
   it('every secret-class variable in the files is a named placeholder', () => {
-    for (const f of ['merchant-api', 'platform-api', 'worker', 'migrate', 'postgres', 'host']) {
+    for (const f of ALL_VARS) {
       for (const [k, v] of Object.entries(envFile(f))) {
         if (SECRET_NAME.test(k) && /(KEY|SECRET|PASSWORD|TOKEN|DATABASE_URL)/.test(k)) {
           expect(isPlaceholder(v), `${f}.vars ${k}`).toBe(true);
