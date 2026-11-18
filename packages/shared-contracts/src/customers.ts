@@ -509,6 +509,38 @@ export interface CustomerOpenInvoiceDto {
 }
 
 /** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */
+/**
+ * One entry of a customer's account statement, exactly as
+ * `customer_account_statement` (`0092`) reports it. Every amount is MINOR UNITS
+ * AS TEXT: these are `BIGINT` in the database and a JSON number would silently
+ * lose precision above 2^53 -- a money field is not a place to find that out.
+ */
+export interface CustomerStatementRowDto {
+  readonly entryKind: string;
+  readonly entryId: string;
+  readonly entryDate: string;
+  /** The tie-break the database orders by within one date; carried so a client can reproduce the order. */
+  readonly kindRank: number;
+  readonly documentNumber: string | null;
+  readonly relatedId: string | null;
+  readonly currency: string;
+  readonly debitTxnMinor: string;
+  readonly creditTxnMinor: string;
+  readonly amountTxnMinor: string;
+  readonly amountBaseMinor: string;
+  readonly creditOriginalTxnMinor: string | null;
+  readonly creditRemainingTxnMinor: string | null;
+  readonly creditRemainingBaseMinor: string | null;
+  readonly reference: string | null;
+  /** The balance AFTER this entry, carried by the database and never recomputed by a reader. */
+  readonly runningBalanceTxnMinor: string;
+}
+
+export interface CustomerStatementDto {
+  readonly customerId: string;
+  readonly rows: readonly CustomerStatementRowDto[];
+}
+
 export interface CustomerOpenInvoicesDto {
   customerId: string;
   asOf: string;
