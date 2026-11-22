@@ -152,7 +152,7 @@ import {
 import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput, type PaymentInput } from '../golden-regression/phase4-s4/settlement-path';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
-import { fingerprintOf, fingerprintProblems, pairOrder, ratioVerdict, type PairSide } from './paired-series';
+import { fingerprintOf, fingerprintProblems, medianOfRoundRatios, PAIRED_ROUNDS, pairOrder, ratioVerdict, type PairSide } from './paired-series';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
@@ -1878,6 +1878,8 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     const med = must(medianReceivable, 'the median receivable series');
     const { fatP95, medP95, ratio } = ratioVerdict(fat.samplesMs, med.samplesMs, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
     if (fatP95 === null || medP95 === null) throw new Error('a ratio series is empty: nothing was measured');
+    // THE VERDICT (owner order 2026-11-22): the median of five paired rounds, not the one whole-run quotient above, which is printed for the record.
+    const rounds = medianOfRoundRatios(fat.samplesMs, med.samplesMs, PAIRED_ROUNDS, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
     diagnose(fat, BUDGET.D_BALANCE_P95);
     diagnose(med, BUDGET.D_BALANCE_P95);
     console.log(
@@ -1889,13 +1891,16 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         fatOpenInvoices: volume.fatOpenInvoices,
         medianOpenInvoices: MEDIAN.invoicesEach,
         pairedOrder: fingerprintOf(pairedReadOrder),
+        roundRatios: rounds.roundRatios,
+        medianOfRounds: rounds.medianRatio,
       })}\n`,
     );
     expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();
+    expect(rounds.medianRatio, 'a round measured a zero denominator, or the series could not be cut into five equal rounds').not.toBeNull();
     expect(
-      must(ratio),
-      `P4-AL-72's host-independent ratio for this budget is p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median). ` +
-        `Measured ${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}. ` +
+      must(rounds.medianRatio),
+      `P4-AL-72's host-independent ratio for this budget is p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median), judged on the MEDIAN of ${PAIRED_ROUNDS} paired rounds. ` +
+        `Round ratios ${JSON.stringify(rounds.roundRatios.map((x) => (x === null ? null : Number(x.toFixed(3)))))}; whole-run ${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}. ` +
         `A miss here is a statement about the read's GROWTH, not about this host, and it is a FAIL to be diagnosed (P4-AL-76): ` +
         `the ratio may never be raised to obtain a pass (OD-P4-14, tighten-only).\n` +
         `fat-tail series: ${JSON.stringify(distribution(fat.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
