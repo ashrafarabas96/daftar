@@ -1,5 +1,12 @@
 import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
-import type { CustomerAgingDto, CustomerDto, CustomerOpenInvoicesDto, CustomerPageDto, CustomerReceivableDto, CustomerStatementDto } from '@daftar/shared-contracts';
+import type {
+  CustomerAgingDto,
+  CustomerDto,
+  CustomerOpenInvoicesDto,
+  CustomerPageDto,
+  CustomerReceivableDto,
+  CustomerStatementDto,
+} from '@daftar/shared-contracts';
 import { Membership } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { strictUuidParam } from '../inventory/canonical-id';

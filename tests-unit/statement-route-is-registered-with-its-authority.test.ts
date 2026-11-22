@@ -36,10 +36,7 @@ import type { CustomerStatementRowDto } from '../packages/shared-contracts/src/c
  * all, because the values already arrive null: nothing fails until a client
  * renders the null as 0, which is the defect the money review caught.
  */
-const NULLABLE_SIDES: Pick<
-  CustomerStatementRowDto,
-  'debitTxnMinor' | 'creditTxnMinor' | 'amountTxnMinor' | 'amountBaseMinor'
-> = {
+const NULLABLE_SIDES: Pick<CustomerStatementRowDto, 'debitTxnMinor' | 'creditTxnMinor' | 'amountTxnMinor' | 'amountBaseMinor'> = {
   debitTxnMinor: null,
   creditTxnMinor: null,
   amountTxnMinor: null,
@@ -80,13 +77,8 @@ describe('the customer statement route and the authority it is declared with', (
     // would also pass if both were wrong together, and it would say nothing
     // about WHICH field drifted on the day one does.
     expect(entry?.permission, 'a statement is a receivables read').toBe('receivables.view');
-    expect(
-      entry?.businessWide,
-      'a statement spans the business, so a branch-scoped member must not read it through a branch token',
-    ).toBe(true);
-    expect(entry?.permission, 'the statement must not be reachable with less authority than the open-invoices picker').toBe(
-      sibling?.permission,
-    );
+    expect(entry?.businessWide, 'a statement spans the business, so a branch-scoped member must not read it through a branch token').toBe(true);
+    expect(entry?.permission, 'the statement must not be reachable with less authority than the open-invoices picker').toBe(sibling?.permission);
     expect(entry?.businessWide).toBe(sibling?.businessWide);
   });
 });

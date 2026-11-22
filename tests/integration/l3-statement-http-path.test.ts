@@ -87,7 +87,7 @@ describe('GET /v1/customers/:customerId/statement', () => {
     expect(res.body.rows.length, 'two credit sales must produce at least two entries').toBeGreaterThanOrEqual(2);
   }, 300_000);
 
-  it('§2 each row\'s running balance is the cumulative sum of the rows up to it', async () => {
+  it("§2 each row's running balance is the cumulative sum of the rows up to it", async () => {
     const res = await w.t.request.get(statementPath(customerId)).set(w.headers);
     expect(res.status).toBe(200);
 
@@ -107,20 +107,19 @@ describe('GET /v1/customers/:customerId/statement', () => {
     // keeps the distinction. The money review of bb45d8ec found this suite
     // reading `string` where the database returns null on four columns.
     const minor = (v: string | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
+    // ONLY the debit side is gathered as an array, because only it is used --
+    // for the discrimination check below. The credit side is read per row
+    // inside the loop. An earlier form kept BOTH arrays after I moved the
+    // arithmetic into the loop, and eslint caught `credits` as dead: dead
+    // credit-side arithmetic sitting in a money suite, which the money review
+    // rightly refused to wave through as formatting.
     const debits = rows.map((r) => minor(r.debitTxnMinor));
-    const credits = rows.map((r) => minor(r.creditTxnMinor));
-    expect(
-      debits.reduce((t, d) => t + d, 0n) > 0n,
-      'the fixture produced no debits, so this arm cannot discriminate',
-    ).toBe(true);
+    expect(debits.reduce((t, d) => t + d, 0n) > 0n, 'the fixture produced no debits, so this arm cannot discriminate').toBe(true);
 
     let cumulative = 0n;
     rows.forEach((row, index) => {
       cumulative += minor(row.debitTxnMinor) - minor(row.creditTxnMinor);
-      expect(
-        minor(row.runningBalanceTxnMinor),
-        `row ${index + 1} (${row.entryKind}) must carry the cumulative balance, not its own amount`,
-      ).toBe(cumulative);
+      expect(minor(row.runningBalanceTxnMinor), `row ${index + 1} (${row.entryKind}) must carry the cumulative balance, not its own amount`).toBe(cumulative);
     });
   }, 300_000);
 
@@ -128,5 +127,4 @@ describe('GET /v1/customers/:customerId/statement', () => {
     const res = await w.t.request.get(statementPath('00000000-0000-4000-8000-000000000000')).set(w.headers);
     expect(res.status, 'an unknown customer must not read as a customer with no entries').toBe(404);
   }, 300_000);
-
 });

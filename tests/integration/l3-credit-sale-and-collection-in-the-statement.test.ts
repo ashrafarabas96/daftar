@@ -35,14 +35,7 @@
  */
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import {
-  collectOnAccount,
-  newCustomer,
-  sellOnCredit,
-  settlementWorld,
-  stockUp,
-  type SettlementWorld,
-} from '../golden-regression/phase4-s4/settlement-world';
+import { collectOnAccount, newCustomer, sellOnCredit, settlementWorld, stockUp, type SettlementWorld } from '../golden-regression/phase4-s4/settlement-world';
 
 let w: SettlementWorld;
 let customerId: string;
@@ -89,10 +82,7 @@ beforeAll(async () => {
 describe('a credit sale and a collection, as the statement reports them', () => {
   it('§1 after the sale alone, the last running balance IS the invoice total', async () => {
     const rows = await statement();
-    expect(
-      last(rows).runningBalanceTxnMinor,
-      `the debt after one credit sale is the invoice total ${totalTxnMinor}`,
-    ).toBe(totalTxnMinor);
+    expect(last(rows).runningBalanceTxnMinor, `the debt after one credit sale is the invoice total ${totalTxnMinor}`).toBe(totalTxnMinor);
   }, 300_000);
 
   it('§2 after a PARTIAL collection, the last running balance is total minus paid', async () => {
@@ -102,10 +92,9 @@ describe('a credit sale and a collection, as the statement reports them', () => 
 
     const rows = await statement();
     expect(rows.length, 'the collection must ADD an entry to the statement').toBeGreaterThan(before);
-    expect(
-      last(rows).runningBalanceTxnMinor,
-      `the remaining debt is ${totalTxnMinor} - ${PAID_MINOR}`,
-    ).toBe((BigInt(totalTxnMinor) - BigInt(PAID_MINOR)).toString());
+    expect(last(rows).runningBalanceTxnMinor, `the remaining debt is ${totalTxnMinor} - ${PAID_MINOR}`).toBe(
+      (BigInt(totalTxnMinor) - BigInt(PAID_MINOR)).toString(),
+    );
   }, 300_000);
 
   it('§3 the receipt is on the CREDIT side, asserted apart from the arithmetic', async () => {
