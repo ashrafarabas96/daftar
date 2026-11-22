@@ -105,7 +105,10 @@ describe('P4-AL-72 paired measurement', () => {
     it('negative: ONE swapped pair in the middle of the real alternation turns red', () => {
       const real = pairedRun(N);
       const planted = real.slice();
-      [planted[4], planted[5]] = [planted[5]!, planted[4]!];
+      const first = real[4] as PairSide;
+      const second = real[5] as PairSide;
+      planted[4] = second;
+      planted[5] = first;
       expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
     });
     it('negative: an EMPTY fingerprint fails and does not pass as nothing', () => {
