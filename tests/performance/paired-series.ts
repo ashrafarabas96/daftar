@@ -29,9 +29,37 @@
  * denominator spread with 1.99x. If it does not narrow, the diagnosis was
  * wrong and the remedy is NOT declared successful.
  *
- * NOT RUN: the 200-sample Postgres arm (CI Linux only) and its planted-delay
- * negative control (needs a new knob in `ci.yml`, owned by lane L2). The unit
- * arms in `tests-unit/paired-series-law.test.ts` cover the logic only.
+ * DR-175 — THE MEDIAN OF FIVE PAIRED ROUNDS. Pairing alone did not settle it:
+ * measured on two heads that BOTH carry the pairing, the same gate read
+ * `2.644` on `3c61ace8` and `3.023` on `fe9f78e8` (19.816 ms over 6.553 ms,
+ * step 25 of run `44197016914`) — a 0.8% miss that failed a cart whose own
+ * change was a dependency audit. So the ratio is now read FIVE times, each
+ * read a complete paired round, and the gate judges the MEDIAN of the five.
+ *
+ * WHAT DR-175 DOES NOT CHANGE, and each of these is asserted, not promised:
+ * the limit (3, `EXPECTED_RATIO_MAX`, and `ratioLimitProblems` reddens if the
+ * ratchet ever disagrees), the samples per side per round (200), the warm-up,
+ * the percentile, and the pair's alternation — which is now checked for EVERY
+ * round, not once.
+ *
+ * AND WHAT IT DOES CHANGE, said here because a remedy that is quiet about its
+ * own cost is the thing this project calls a disguised relaxation: a median of
+ * five DISCARDS THE TWO EXTREMES. One hostile round no longer fails the gate;
+ * three of five must miss for the verdict to miss. That is a deliberate trade
+ * of sensitivity-to-one-round for independence-from-one-host, and it is the
+ * owner's decision (DR-175), not this file's. What survives is the direction
+ * the gate exists for: a read that is genuinely growing misses in every round,
+ * so the median misses — `medianRatioVerdict` is pinned on exactly that in
+ * `tests-unit/paired-series-law.test.ts`, including the arm where three of
+ * five miss and the arm where one does.
+ *
+ * NOT RUN HERE: the 200-sample Postgres arm is CI-Linux-only. Its planted-delay
+ * negative control needs a knob in `ci.yml`, which lane L2 owns — and measured
+ * 2026-11-22, the two CI steps NAMED «Ratio negative control … P4-AL-72»
+ * filter on `-t 'P4-AL-72, OD-P4-14'`, which is ANOTHER test's title, so THIS
+ * gate has no red control in CI and did not have one before DR-175 either.
+ * The unit arms cover the logic, and they are what holds the median honest
+ * until that knob exists.
  */
 import { quantile } from './percentile';
 
@@ -100,6 +128,45 @@ export function ratioVerdict(fat: readonly number[], med: readonly number[], max
   const medP95 = quantile(med, 0.95);
   const ratio = medP95 === 0 ? null : fatP95 / medP95;
   return { fatP95, medP95, ratio, withinMax: ratio !== null && ratio <= max };
+}
+
+/** DR-175: how many complete paired rounds the verdict is the median of. */
+export const MEDIAN_ROUNDS = 5;
+
+export interface MedianRatioVerdict {
+  /** Every round's ratio, in the order measured; a `null` is a round that produced none. */
+  readonly ratios: readonly (number | null)[];
+  /** The median of the rounds, or `null` if the rounds cannot yield one. */
+  readonly median: number | null;
+  readonly withinMax: boolean;
+  /** Why this reading cannot be judged at all. Empty = it can. */
+  readonly problems: readonly string[];
+}
+
+/**
+ * The median of the rounds' ratios against `max`. FAILS CLOSED on every shape
+ * that is not five readable ratios: a missing round, a round whose series was
+ * empty, a zero denominator. None of those is a pass, and none of them is
+ * silently dropped to make the median easier — a median taken over the rounds
+ * that happened to work would be exactly the quiet relaxation this file
+ * refuses.
+ */
+export function medianRatioVerdict(rounds: readonly RatioVerdict[], max: number, expectedRounds = MEDIAN_ROUNDS): MedianRatioVerdict {
+  const ratios = rounds.map((r) => r.ratio);
+  const problems: string[] = [];
+  if (rounds.length !== expectedRounds) {
+    problems.push(`${rounds.length} paired rounds were measured and ${expectedRounds} were declared (DR-175)`);
+  }
+  const missing = ratios.filter((r) => r === null).length;
+  if (missing > 0)
+    problems.push(`${missing} of ${rounds.length} rounds produced no ratio: an empty series or a zero denominator is a FAIL, never a dropped sample`);
+  if (problems.length > 0) return { ratios, median: null, withinMax: false, problems };
+  const sorted = [...(ratios as number[])].sort((a, b) => a - b);
+  // An odd count has a true middle; an even one takes the mean of the two
+  // middles, which is the ordinary definition and not a choice in our favour.
+  const mid = sorted.length >> 1;
+  const median = sorted.length % 2 === 1 ? (sorted[mid] as number) : ((sorted[mid - 1] as number) + (sorted[mid] as number)) / 2;
+  return { ratios, median, withinMax: median <= max, problems: [] };
 }
 
 /** Why the ratchet's declaration of the ratio is not the one this arm was accepted under. */
