@@ -1914,6 +1914,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         pairedOrder: fingerprintOf(pairedReadOrder),
         roundRatios: rounds.roundRatios,
         medianOfRounds: rounds.medianRatio,
+        roundDetails: rounds.roundDetails,
       })}\n`,
     );
     expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();

@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RATIOS } from '../scripts/phase4-budget-ratchet';
+import { quantile } from '../tests/performance/percentile';
 import {
   bothStatisticsVerdict,
   EXPECTED_RATIO_MAX,
@@ -165,6 +166,24 @@ describe('P4-AL-72 paired measurement', () => {
     it('negative: a run whose every round is just above 3 stays red; the gate was not loosened', () => {
       const { fat, med } = rounds([3.05, 3.05, 3.05, 3.05, 3.05]);
       expect(medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3).withinMax).toBe(false);
+    });
+    it('diagnostic: every round reports n, p50 and p95 of BOTH sides, read from its own block, and the verdict does not move', () => {
+      const { fat, med } = rounds([1.8, 2.3, 3.0, 3.3, 3.5]);
+      const v = medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3);
+      expect(v.roundDetails).toHaveLength(PAIRED_ROUNDS);
+      for (const [r, d] of v.roundDetails.entries()) {
+        const f = fat.slice(r * PER_ROUND, (r + 1) * PER_ROUND);
+        const m = med.slice(r * PER_ROUND, (r + 1) * PER_ROUND);
+        expect(d.n).toBe(PER_ROUND);
+        expect(d.fatP95).toBe(quantile(f, 0.95));
+        expect(d.medP95).toBe(quantile(m, 0.95));
+        expect(d.fatP50).toBe(quantile(f, 0.5));
+        expect(d.medP50).toBe(quantile(m, 0.5));
+        expect(v.roundRatios[r]).toBeCloseTo(d.fatP95 / d.medP95, 12);
+      }
+      // the same input judged before the diagnostic was added: median 3.0 <= 3
+      expect(v.medianRatio).toBeCloseTo(3.0, 6);
+      expect(v.withinMax).toBe(true);
     });
     it('negative: empty, unequal, or not divisible into five equal rounds fails and never passes as nothing', () => {
       const { fat, med } = rounds([2.5, 2.5, 2.5, 2.5, 2.5]);
