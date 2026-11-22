@@ -143,12 +143,7 @@ const REFUSED: RoundsVerdict = { roundRatios: [], medianRatio: null, withinMax: 
  * equal blocks is REFUSED (fails), never passed as nothing. A round whose
  * denominator measured zero makes the whole verdict fail.
  */
-export function medianOfRoundRatios(
-  fat: readonly number[],
-  med: readonly number[],
-  rounds: number,
-  max: number,
-): RoundsVerdict {
+export function medianOfRoundRatios(fat: readonly number[], med: readonly number[], rounds: number, max: number): RoundsVerdict {
   if (fat.length === 0 || med.length === 0) return REFUSED;
   if (fat.length !== med.length) return REFUSED;
   if (!Number.isInteger(rounds) || rounds < 1 || fat.length % rounds !== 0) return REFUSED;
