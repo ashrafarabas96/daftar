@@ -114,15 +114,26 @@ export function ratioVerdict(fat: readonly number[], med: readonly number[], max
 /** How many paired rounds the verdict is taken over (owner order 2026-11-22). */
 export const PAIRED_ROUNDS = 5;
 
+/** What one round read on each side. Printed for diagnosis (P4-AL-76); it takes no part in the verdict. */
+export interface RoundDetail {
+  readonly n: number;
+  readonly fatP95: number;
+  readonly medP95: number;
+  readonly fatP50: number;
+  readonly medP50: number;
+}
+
 export interface RoundsVerdict {
   /** One p95/p95 per round, in run order; `null` where a round's denominator measured zero. */
   readonly roundRatios: readonly (number | null)[];
+  /** The two sides of every round, in run order, so a drift can be told to the side that moves. */
+  readonly roundDetails: readonly RoundDetail[];
   /** The median of `roundRatios`, or `null` when any round could not be computed. */
   readonly medianRatio: number | null;
   readonly withinMax: boolean;
 }
 
-const REFUSED: RoundsVerdict = { roundRatios: [], medianRatio: null, withinMax: false };
+const REFUSED: RoundsVerdict = { roundRatios: [], roundDetails: [], medianRatio: null, withinMax: false };
 
 /**
  * THE VERDICT OF `P4-AL-72`'s RATIO: the MEDIAN of `rounds` paired rounds.
@@ -149,12 +160,16 @@ export function medianOfRoundRatios(fat: readonly number[], med: readonly number
   if (!Number.isInteger(rounds) || rounds < 1 || fat.length % rounds !== 0) return REFUSED;
   const per = fat.length / rounds;
   const roundRatios: (number | null)[] = [];
+  const roundDetails: RoundDetail[] = [];
   for (let r = 0; r < rounds; r += 1) {
-    const f = quantile(fat.slice(r * per, (r + 1) * per), 0.95);
-    const m = quantile(med.slice(r * per, (r + 1) * per), 0.95);
+    const fatBlock = fat.slice(r * per, (r + 1) * per);
+    const medBlock = med.slice(r * per, (r + 1) * per);
+    const f = quantile(fatBlock, 0.95);
+    const m = quantile(medBlock, 0.95);
     roundRatios.push(m === 0 ? null : f / m);
+    roundDetails.push({ n: per, fatP95: f, medP95: m, fatP50: quantile(fatBlock, 0.5), medP50: quantile(medBlock, 0.5) });
   }
-  if (roundRatios.some((x) => x === null)) return { roundRatios, medianRatio: null, withinMax: false };
+  if (roundRatios.some((x) => x === null)) return { roundRatios, roundDetails, medianRatio: null, withinMax: false };
   const sorted = (roundRatios as number[]).slice().sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   const at = (i: number): number => {
@@ -163,7 +178,7 @@ export function medianOfRoundRatios(fat: readonly number[], med: readonly number
     return v;
   };
   const medianRatio = sorted.length % 2 === 1 ? at(mid) : (at(mid - 1) + at(mid)) / 2;
-  return { roundRatios, medianRatio, withinMax: medianRatio <= max };
+  return { roundRatios, roundDetails, medianRatio, withinMax: medianRatio <= max };
 }
 
 /** Why the ratchet's declaration of the ratio is not the one this arm was accepted under. */
