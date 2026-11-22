@@ -157,7 +157,12 @@ export function medianOfRoundRatios(fat: readonly number[], med: readonly number
   if (roundRatios.some((x) => x === null)) return { roundRatios, medianRatio: null, withinMax: false };
   const sorted = (roundRatios as number[]).slice().sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
-  const medianRatio = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  const at = (i: number): number => {
+    const v = sorted[i];
+    if (v === undefined) throw new Error(`medianOfRoundRatios: no round at index ${i} of ${sorted.length}`);
+    return v;
+  };
+  const medianRatio = sorted.length % 2 === 1 ? at(mid) : (at(mid - 1) + at(mid)) / 2;
   return { roundRatios, medianRatio, withinMax: medianRatio <= max };
 }
 
