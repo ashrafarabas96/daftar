@@ -60,6 +60,36 @@ export class PlantedController {
 }
 `;
 
+/**
+ * THE PLANTED PATH MUST BE ONE THE PRODUCT WILL NEVER MOUNT.
+ *
+ * This guard used to plant `customers/:customerId/statement`, chosen because
+ * no such route existed. Then one was built (PR #139), the golden named it as
+ * it must, and both RED arms went silent: the plant was no longer missing from
+ * the golden, so `crossTenantProblems` reported nothing and
+ * `expected [] to have a length of 1` was the result. The guard did not become
+ * wrong — it became VACUOUS, which is worse, and it would have stayed green on
+ * a tree where the law it protects had been broken.
+ *
+ * So the plant is now a path with a reserved segment no controller may serve,
+ * and the arm below PROVES it absent from the real surface before any plant is
+ * written. If anybody ever mounts it, this guard fails by name instead of
+ * quietly losing its subject.
+ */
+const PLANTED_PATH = 'customers/:customerId/__cross-tenant-probe';
+const PLANTED_ROUTE = `GET /v1/${PLANTED_PATH}`;
+
+describe('the plant itself is a usable control', () => {
+  it('the planted route is ABSENT from the real route surface, so planting it means something', () => {
+    const discovered = discoverPhase4Routes(REPO);
+    expect(discovered.length, 'an empty surface would make every claim below vacuous').toBeGreaterThan(0);
+    expect(
+      discovered,
+      `${PLANTED_ROUTE} is now a real route — this guard has lost its subject and the plant must be renamed, not the assertion relaxed`,
+    ).not.toContain(PLANTED_ROUTE);
+  });
+});
+
 describe('the golden is declared as this gate’s subject', () => {
   it('a real golden row carries the cross-tenant file, so the check reads a file and not an empty string', () => {
     const files = S1_SUITES.flatMap((e) => ('file' in e && e.area === 'golden' ? [e.file] : []));
@@ -77,18 +107,18 @@ describe('the golden is declared as this gate’s subject', () => {
 describe('RED: a planted Phase 4 route with no cross-tenant case is named', () => {
   it('a ninth route the golden does not mention is a finding, and the finding names it', () => {
     const root = sandbox();
-    writeFileSync(join(root, CONTROLLERS, 'planted.controller.ts'), plantedController('customers/:customerId/statement'));
+    writeFileSync(join(root, CONTROLLERS, 'planted.controller.ts'), plantedController(PLANTED_PATH));
     const problems = crossTenantProblems(root);
     expect(problems).toHaveLength(1);
-    expect(problems[0]).toContain('/v1/customers/:customerId/statement');
+    expect(problems[0]).toContain(`/v1/${PLANTED_PATH}`);
     expect(problems[0]).toContain('enumerated from the route surface');
   });
 
   it('NOT A FINDING: the same route, once the golden names it', () => {
     const root = sandbox();
-    writeFileSync(join(root, CONTROLLERS, 'planted.controller.ts'), plantedController('customers/:customerId/statement'));
+    writeFileSync(join(root, CONTROLLERS, 'planted.controller.ts'), plantedController(PLANTED_PATH));
     const golden = join(root, GOLDEN);
-    writeFileSync(golden, `${readFileSync(golden, 'utf8')}\n// 'GET /v1/customers/:customerId/statement'\n`);
+    writeFileSync(golden, `${readFileSync(golden, 'utf8')}\n// '${PLANTED_ROUTE}'\n`);
     expect(crossTenantProblems(root)).toEqual([]);
   });
 
@@ -109,7 +139,7 @@ import { Controller, Get } from '@nestjs/common';
 
 @Controller('/v1')
 export class PlantedController {
-  @Get('customers/:customerId/statement')
+  @Get('${PLANTED_PATH}')
   a(): Record<string, never> {
     return {};
   }
