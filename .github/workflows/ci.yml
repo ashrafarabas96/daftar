@@ -694,6 +694,13 @@ jobs:
           # The browser build. On a cache hit this reports it as already
           # installed and downloads nothing.
           npx playwright-core install chromium
+      # DR-170, owner order 2026-11-22: this gate NO LONGER composes the Phase 3
+      # corrective gate, whatever the paragraphs above and the step name still
+      # say. The corrective gate runs as its own step of the job
+      # `backend-gates-p3`, in parallel, and the aggregate `backend` needs that
+      # job. The name below is left as it is because the required-CI chain law
+      # (`tests/guards/required-ci-chain-composition.test.ts`, not this lane's
+      # file) matches it exactly; renaming it is a card to its owner.
       - name: Phase 4 slice gate — P4-S1 (composes the Phase 3 corrective gate)
         run: npm run gate:phase4:s1
         env:
@@ -1938,8 +1945,8 @@ jobs:
     #
     # It has NO `needs` on the work job `backend` (check name `backend-work`)
     # and that job has none on it. The REQUIRED check named `backend` is the
-    # aggregate `backend-required` at the end of this file: it needs all four
-    # parts, runs `if: always()` and fails unless every part finished
+    # aggregate `backend-required` at the end of this file: it needs every
+    # part, runs `if: always()` and fails unless every part finished
     # `success`, so a part that fails, is cancelled or is skipped drops
     # `backend`. Each of these jobs is ALSO a required check of its own, added
     # to `main`'s protection WITHOUT removing any existing one.
@@ -2118,8 +2125,8 @@ jobs:
     #
     # It has NO `needs` on the work job `backend` (check name `backend-work`)
     # and that job has none on it. The REQUIRED check named `backend` is the
-    # aggregate `backend-required` at the end of this file: it needs all four
-    # parts, runs `if: always()` and fails unless every part finished
+    # aggregate `backend-required` at the end of this file: it needs every
+    # part, runs `if: always()` and fails unless every part finished
     # `success`, so a part that fails, is cancelled or is skipped drops
     # `backend`. Each of these jobs is ALSO a required check of its own, added
     # to `main`'s protection WITHOUT removing any existing one.
@@ -2453,6 +2460,341 @@ jobs:
           PG_PORT: '5432'
 
   # -------------------------------------------------------------------------
+  # 2b'. Backend — the Phase 3 corrective gate, and through it P3-S8 ... P3-S1,
+  #      P2-S8 and the chain back to Phase 1.
+  # -------------------------------------------------------------------------
+  backend-gates-p3:
+    needs: workspaces
+    # The Phase 3 corrective gate used to run INSIDE the P4-S1 gate, as its
+    # first stream (the 54 minutes of `backend-work` step 21). It is the same
+    # command, moved to its own job so it runs in PARALLEL with `backend`
+    # instead of before the rest of it. Owner order, DR-170: split P4-S1, on
+    # the condition that the executed tests and their names are equal before
+    # and after. No limit, timeout, `if:`, `retry` or `continue-on-error` is
+    # touched, and nothing here is new work.
+    #
+    # It has NO `needs` on `backend` and `backend` has none on it. The
+    # required check `backend` is the aggregate `backend-required`: it needs
+    # every part and fails unless each finished `success`, so this job failing,
+    # being cancelled or being skipped drops `backend`.
+    #
+    # The `postgres:16` service and the PGDG cluster bring-up are repeated
+    # from zero, as in `backend-gates-p2`: the jobs run in parallel and cannot
+    # share a database. The Chromium steps are repeated because the corrective
+    # gate runs the real-browser matrix; they are the same steps `backend`
+    # still runs for its own gates.
+    #
+    # It is written AFTER `web-admin:`, as `backend-gates-p2` is: the
+    # plan-evidence contract slices this file positionally from `backend:` to
+    # `web-admin:`.
+    #
+    # The P4-S1 gate no longer composes this one, so `npm run gate:phase4:s1`
+    # run alone no longer proves the accepted chain; CI runs both, and the
+    # release path reaches the corrective gate through `gate:phase3:release`
+    # (law C-16 in `tests/guards/ci-job-conservation.test.ts`).
+    runs-on: ubuntu-26.04
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      # DR-18, item 5. A GitHub-hosted runner is a fresh virtual machine, so a
+      # green run there also says the tree was clean. A self-hosted runner is
+      # not disposable: `_work` is reused, and a job could pass on a file some
+      # earlier run left behind — a build output, a generated migration, a
+      # `release/` artefact, a stale `node_modules`. That would be a green tick
+      # that proves nothing, which is worse than a red one.
+      #
+      # So the work folder is emptied before checkout, `.git` included, and
+      # every job re-clones. `actions/checkout`'s own `clean` is not enough: it
+      # cleans the repository it finds, and says nothing about anything outside
+      # it or about a half-written checkout.
+      #
+      # The npm cache and the tool cache live in the runner's HOME, outside the
+      # work folder, and are deliberately kept — they are content-addressed
+      # inputs, not test state.
+      #
+      # It is one step with a shell branch rather than two steps with `if:`,
+      # because an `if:` would leave a `skipped` step in every GitHub-hosted
+      # run, and this project does not read `skipped` as evidence.
+      - name: Empty the work folder before checkout (self-hosted is not disposable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ runner.environment }}" != "self-hosted" ]; then
+            echo "github-hosted: the machine is disposable, nothing to clean"
+            exit 0
+          fi
+          test -n "${GITHUB_WORKSPACE:-}"
+          # Refuse anything shallow or home-like before deleting. Two earlier
+          # versions of this guard were each narrower than they claimed:
+          # `/home/*/` demands a trailing slash, so a workspace that WAS the
+          # runner user's home passed it; and `${GITHUB_WORKSPACE%/}` strips
+          # exactly ONE slash, so `/home/laptop//` and `/home/laptop/..` still
+          # got through. Both were found by running the arms, not by reading them.
+          #
+          # So the path is RESOLVED rather than trimmed: `pwd -P` collapses
+          # repeated slashes, resolves `..` and symlinks, and returns an
+          # absolute path with no trailing slash (except for `/` itself). The
+          # directory is created first because creating one is not destructive.
+          #
+          # Under `set -euo pipefail` a failing `mkdir` or `cd` aborts the step
+          # before the `case` is reached, so the failure is closed either way;
+          # the `""` arm is kept as a belt, not because it is the mechanism.
+          mkdir -p "$GITHUB_WORKSPACE"
+          ws=$(cd "$GITHUB_WORKSPACE" && pwd -P)
+          case "$ws" in
+            ""|/|/bin|/boot|/dev|/etc|/home|/lib|/opt|/proc|/root|/run|/srv|/sys|/tmp|/usr|/var)
+              echo "refusing to wipe system path '$ws'"; exit 1 ;;
+          esac
+          if [ "$ws" = "${HOME%/}" ]; then
+            echo "refusing to wipe the runner user's home $ws"; exit 1
+          fi
+          depth=$(printf '%s' "$ws" | awk -F/ '{print NF-1}')
+          if [ "$depth" -lt 3 ]; then
+            echo "refusing to wipe shallow path $ws (depth $depth, need 3+)"; exit 1
+          fi
+          # Everything below operates on `$ws`, the value the guard actually
+          # checked. Deleting `$GITHUB_WORKSPACE` here instead would mean
+          # validating one path and wiping another whenever the two differ.
+          before=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          find "$ws" -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+          after=$(find "$ws" -mindepth 1 -maxdepth 1 | wc -l)
+          echo "work folder: $ws"
+          echo "top-level entries removed: $before -> $after"
+          test "$after" -eq 0
+      # Full history: the corrective gate runs the explicit Phase 3 secret
+      # range scan from 0f2b09e7… and the full review-index check, and
+      # neither can reach the Phase 3 base from a depth-1 checkout.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build contract, accounting and design-system packages
+        # typecheck/lint of apps/web and apps/admin resolve @daftar/design-system
+        # from its built dist/ — an unbuilt package fails them with TS2307.
+        # @daftar/accounting is on the same footing since P2-S3: the API's
+        # posting module imports it by package name, so the integration and
+        # security suites cannot even load without its dist/.
+        # domain-core must be built before accounting, which depends on it.
+        # @daftar/inventory joins them in P3-S1: the merchant API mints the
+        # invctl/1 inventory command assertion through it by package name.
+        run: |
+          npm run build -w packages/domain-core -w packages/shared-contracts -w packages/design-system
+          npm run build -w packages/accounting
+          npm run build -w packages/inventory
+      # §55–56: a FRESH PostgreSQL starts from ZERO — database + roles first (no
+      # manually prepared database), then migrations, then a no-op second pass,
+      # then the test suites run against THAT database (PG_PORT=5432 makes the
+      # test harness reuse the service instead of an embedded instance).
+      - name: Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster
+        run: |
+          set -euo pipefail
+          # DR-91. WHY, measured: ubuntu-26.04 ships PostgreSQL 18.6 where
+          # ubuntu-24.04 shipped 16.15 -- read from each image's own
+          # runner-images readme, each serving as the other's positive
+          # control. The deployment-authority script starts its OWN
+          # throw-away cluster out of /usr/lib/postgresql/16/bin
+          # (scripts/phase2-deployment-authority.ts:98), so on 26.04 that
+          # path is absent, the spawn fails ENOENT, and the script printed
+          # `failed (signal)` only because it reports `res.status ?? 'signal'`.
+          # Measured on run 41823029477: ONE root failure in backend step 34
+          # that cascaded P3-S1..P3-S6 -> the corrective gate -> P4-S1 FAIL (2),
+          # with PERF01 never reached and so never measured.
+          #
+          # DEPLOY_PG_BIN is NOT changed and no gate is touched: the version
+          # the gate names is the version installed, and 16.15 is the same
+          # minor the 24.04 image carried.
+          #
+          # The `services:` postgres:16 container owns port 5432, and every
+          # `psql ...localhost:5432` step in this job resolves to it. Debian
+          # packaging would create and START a host cluster on 5432 too, so
+          # cluster creation is switched off BEFORE the install rather than a
+          # cluster being dropped after one has already bound a port.
+          sudo install -d -m 0755 /etc/postgresql-common
+          printf 'create_main_cluster = false\n' | sudo tee /etc/postgresql-common/createcluster.conf >/dev/null
+          # The signing key is fetched from postgresql.org over HTTPS into a
+          # keyring named for this one source, and the source list is written
+          # only after the key is in place. No piped installer script, and
+          # nothing is fetched from the archive before it is signed-by that key.
+          sudo install -d -m 0755 /usr/share/keyrings
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo gpg --dearmor -o /usr/share/keyrings/pgdg.gpg
+          # A keyring of zero bytes is not a key: dearmor of an error page
+          # would otherwise leave a file that `apt` rejects much later, with a
+          # message about the archive rather than about this step.
+          test -s /usr/share/keyrings/pgdg.gpg
+          # `resolute` is not a guess: the packages in that suite are versioned
+          # pgdg26.04, which is what ties it to this image.
+          echo "deb [signed-by=/usr/share/keyrings/pgdg.gpg] https://apt.postgresql.org/pub/repos/apt resolute-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          # Exact versions, never a loose `postgresql-16`: a pin that has gone
+          # from the archive must fail loudly here instead of installing
+          # whatever is newest.
+          sudo apt-get install -y --no-install-recommends \
+            postgresql-16=16.15-1.pgdg26.04+2 \
+            postgresql-client-16=16.15-1.pgdg26.04+2
+
+      - name: PostgreSQL 16 is where the gate looks, and the container still owns 5432
+        run: |
+          set -euo pipefail
+          test -x /usr/lib/postgresql/16/bin/initdb
+          /usr/lib/postgresql/16/bin/initdb --version
+          # The major is read out of that output rather than trusted from the
+          # package name, and compared as a number this step names.
+          v=$(/usr/lib/postgresql/16/bin/initdb --version | grep -oE "[0-9]+" | head -1)
+          echo "initdb major = $v"
+          test -n "$v"
+          test "$v" = "16"
+          # And a positive control that the install was HARMLESS -- stated about
+          # rows this step can NAME, never about a total. A count is a fact
+          # about its identity and not about the tree: this image carries its
+          # OWN PostgreSQL 18 cluster, measured as `18 main 5432 down`, which
+          # was there before this job and is not this step's to judge. The
+          # first writing of this check asserted zero clusters outright and
+          # went red on that pre-existing row -- caught by the control itself,
+          # which is the whole reason a control is written.
+          pg_lsclusters
+          rows=$(pg_lsclusters | tail -n +2 | grep -c . || true)
+          echo "host clusters listed = $rows"
+          # Non-empty first: a listing that printed nothing at all would let
+          # both counts below pass vacuously.
+          test "$rows" -ge 1
+          # 1. This install created no cluster of its own, which is what
+          #    create_main_cluster = false is for -- proven by looking.
+          sixteen=$(pg_lsclusters | tail -n +2 | awk '$1 == 16' | grep -c . || true)
+          echo "version-16 clusters = $sixteen (must be 0)"
+          test "$sixteen" -eq 0
+          # 2. And nothing host-side is serving, so the container is what
+          #    answers on 5432: every listed cluster must be down.
+          online=$(pg_lsclusters | tail -n +2 | awk '$4 != "down"' | grep -c . || true)
+          echo "clusters not down = $online (must be 0)"
+          test "$online" -eq 0
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: Create DAFTAR database + DB roles (fresh PostgreSQL from zero)
+        run: |
+          set -e
+          psql postgres://postgres:postgres@localhost:5432/postgres -c "CREATE DATABASE daftar" >/dev/null
+          npm run bootstrap:db-roles
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+          APP_DB_PASSWORD: test_app_password_123
+          PLATFORM_DB_PASSWORD: test_platform_password_123
+          WORKER_DB_PASSWORD: test_worker_password_123
+          RESOLVER_DB_PASSWORD: test_resolver_password_123
+          IDENTITY_DB_PASSWORD: test_identity_password_123
+          PROVISIONER_DB_PASSWORD: test_provisioner_password_123
+          RECONCILER_DB_PASSWORD: test_reconciler_password_123
+          # Deployment, not runtime: the non-superuser migration principal.
+          MIGRATOR_DB_PASSWORD: test_migrator_password_123
+      - name: Fresh database migrate (0000 → latest)
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Re-migrate latest → no-op
+        run: npm run migrate -w @daftar/api
+        env:
+          MIGRATION_DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      - name: Migration history verify
+        run: npm run verify:history
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
+      # Phase 2 slice gate: structural boundary checks (migration numbers,
+      # frozen history, no journal/posting surface, the 21-key registry, guard
+      # G-3) plus the composed P2-S1 suites. A gate that only runs locally is a
+      # gate that drifts.
+      - name: Chromium install inputs (pinned playwright-core, runner image)
+        id: chromium-inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package-lock.json').packages['node_modules/playwright-core'].version")
+          case "$version" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "refusing an unreadable playwright-core version: '$version'" >&2; exit 1 ;;
+          esac
+          echo "playwright-core: $version"
+          echo "runner image: ImageOS=${ImageOS:-unset} ImageVersion=${ImageVersion:-unset}"
+          test -n "${ImageOS:-}"
+          echo "key=chromium-${ImageOS}-pw${version}-v1" >> "$GITHUB_OUTPUT"
+      - name: Restore the Chromium build (nothing is downloaded on a hit)
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ steps.chromium-inputs.outputs.key }}-browser
+      - name: Restore the Chromium apt dependencies as .deb archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/chromium-deb
+          key: ${{ steps.chromium-inputs.outputs.key }}-deb
+      - name: Install Chromium for the gate's real-browser matrix
+        env:
+          DEB_DIR: ${{ runner.temp }}/chromium-deb
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEB_DIR"
+          # The missing set is named by the pinned playwright-core itself, never
+          # hand-written here: `install-deps --dry-run` simulates the install
+          # with `apt-get install -s`, which reads the image's OWN package lists
+          # and reaches no network, and exits non-zero while anything is
+          # missing. Its own documented words, from the pinned version: `On
+          # Linux, simulate the install via apt-get and exit with a non-zero
+          # code if any required packages are missing`. So the same command at
+          # the end of this step is the verdict on it, and the `|| true` here is
+          # on the LISTING only — the verdict below carries no `|| true`.
+          missing=$(npx playwright-core install-deps --dry-run chromium || true)
+          printf '%s\n' "$missing"
+          pkgs=$(printf '%s\n' "$missing" | sed -n 's/^  \([a-z][a-z0-9.+:-]*\)$/\1/p')
+          if [ -z "$pkgs" ]; then
+            echo "every apt dependency is already present on this image: nothing to fetch"
+          elif [ -f "$DEB_DIR/.list" ] && [ "$(cat "$DEB_DIR/.list")" = "$pkgs" ]; then
+            debs=$(find "$DEB_DIR" -maxdepth 1 -name '*.deb' | wc -l)
+            echo "cache hit: installing $debs cached .deb archive(s) from disk, no apt fetch"
+            test "$debs" -gt 0
+            sudo dpkg -i "$DEB_DIR"/*.deb
+          else
+            # A miss, or an image whose baseline moved under the same key. The
+            # archives are fetched ONCE and then installed from disk. This is
+            # the only arm that touches the network, and it is the FIRST fill of
+            # the cache rather than a second attempt at anything.
+            echo "cache fill: fetching $(printf '%s\n' "$pkgs" | wc -l) archive(s) once"
+            rm -rf "$DEB_DIR"
+            mkdir -p "$DEB_DIR"
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends --download-only \
+              -o Dir::Cache::archives="$DEB_DIR" $pkgs
+            sudo chown -R "$(id -u):$(id -g)" "$DEB_DIR"
+            find "$DEB_DIR" -mindepth 1 -maxdepth 1 -type d -exec rm -rf -- {} +
+            sudo dpkg -i "$DEB_DIR"/*.deb
+            printf '%s\n' "$pkgs" > "$DEB_DIR/.list"
+          fi
+          # playwright-core's own verdict, taken AFTER the install: a non-zero
+          # exit here means a dependency is still missing, and the step fails.
+          npx playwright-core install-deps --dry-run chromium
+          # The browser build. On a cache hit this reports it as already
+          # installed and downloads nothing.
+          npx playwright-core install chromium
+      - name: Phase 3 corrective gate (composes P3-S8 ... P3-S1, P2-S8 and Phase 1)
+        run: npm run gate:phase3:corrective
+        env:
+          PG_PORT: '5432'
+          BROWSER_PG_DIR: ${{ runner.temp }}/corrective-browser-pg
+          # The range scan's head: the PR head on a pull_request run (the
+          # checkout is GitHub's merge commit), the pushed SHA on a push run.
+          PHASE3_SCAN_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+
+  # -------------------------------------------------------------------------
   # 2c. Backend — the golden regression suite and the tamper proof.
   # -------------------------------------------------------------------------
   backend-golden:
@@ -2464,8 +2806,8 @@ jobs:
     #
     # It has NO `needs` on the work job `backend` (check name `backend-work`)
     # and that job has none on it. The REQUIRED check named `backend` is the
-    # aggregate `backend-required` at the end of this file: it needs all four
-    # parts, runs `if: always()` and fails unless every part finished
+    # aggregate `backend-required` at the end of this file: it needs every
+    # part, runs `if: always()` and fails unless every part finished
     # `success`, so a part that fails, is cancelled or is skipped drops
     # `backend`. Each of these jobs is ALSO a required check of its own, added
     # to `main`'s protection WITHOUT removing any existing one.
@@ -2720,20 +3062,20 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@localhost:5432/daftar
 
   # -------------------------------------------------------------------------
-  # 2e. Backend — the REQUIRED check. It does no work; it reads the four parts.
+  # 2e. Backend — the REQUIRED check. It does no work; it reads every part.
   # -------------------------------------------------------------------------
   # DR-147/1 (owner condition on #87). `main`'s protection requires a check
   # named `backend`. Before the split that name was the one job that ran
   # everything; after it, that job holds only part of the work, so a part that
   # failed, was cancelled or was skipped would leave `backend` green. This job
-  # carries the NAME `backend` and nothing else: it `needs` all four parts,
+  # carries the NAME `backend` and nothing else: it `needs` every part,
   # runs `if: always()` (without it a skipped part skips this job too, and a
   # skipped required check reads as green), and fails unless every part
   # finished `success`. The work job keeps its id `backend` and is reported as
   # `backend-work`, so exactly one check-run is named `backend`.
   backend-required:
     name: backend
-    needs: [backend, backend-static, backend-gates-p2, backend-golden]
+    needs: [backend, backend-static, backend-gates-p2, backend-gates-p3, backend-golden]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -2742,10 +3084,11 @@ jobs:
           BACKEND_WORK: ${{ needs.backend.result }}
           BACKEND_STATIC: ${{ needs.backend-static.result }}
           BACKEND_GATES_P2: ${{ needs.backend-gates-p2.result }}
+          BACKEND_GATES_P3: ${{ needs.backend-gates-p3.result }}
           BACKEND_GOLDEN: ${{ needs.backend-golden.result }}
         run: |
           failed=0
-          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do
+          for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GATES_P3 BACKEND_GOLDEN; do
             result="${!part}"
             if [ "$result" != "success" ]; then
               echo "::error::$part finished '$result', not 'success'"

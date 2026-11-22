@@ -7,24 +7,31 @@
     "steps": 61,
     "namesSha256": "ce243f80140403c3ab23c9e51cc5808b49eacb7c95bd7791dccdea083c4d959e"
   },
-  "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-golden"],
+  "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-gates-p3", "backend-golden"],
   "totals": {
-    "shared": 11,
-    "assigned": 50
+    "shared": 15,
+    "assigned": 46
   },
   "shared": [
     "Build contract, accounting and design-system packages",
+    "Chromium install inputs (pinned playwright-core, runner image)",
     "Create DAFTAR database + DB roles (fresh PostgreSQL from zero)",
     "Empty the work folder before checkout (self-hosted is not disposable)",
     "Fresh database migrate (0000 → latest)",
+    "Install Chromium for the gate's real-browser matrix",
     "Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster",
     "Migration history verify",
     "PostgreSQL 16 is where the gate looks, and the container still owns 5432",
     "Re-migrate latest → no-op",
+    "Restore the Chromium apt dependencies as .deb archives",
+    "Restore the Chromium build (nothing is downloaded on a hit)",
     "actions/checkout@v4",
     "actions/setup-node@v4",
     "run:npm ci"
   ],
+  "added": {
+    "Phase 3 corrective gate (composes P3-S8 ... P3-S1, P2-S8 and Phase 1)": "backend-gates-p3"
+  },
   "assignment": {
     "API build": "backend-static",
     "Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets": "backend",
@@ -37,10 +44,6 @@
     "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)": "backend",
     "Format": "backend-static",
     "Golden regression suite": "backend-golden",
-    "Chromium install inputs (pinned playwright-core, runner image)": "backend",
-    "Restore the Chromium build (nothing is downloaded on a hit)": "backend",
-    "Restore the Chromium apt dependencies as .deb archives": "backend",
-    "Install Chromium for the gate's real-browser matrix": "backend",
     "Integration + security tests": "backend",
     "Keep the gate's browser screenshots and results": "backend",
     "Lint": "backend-static",
