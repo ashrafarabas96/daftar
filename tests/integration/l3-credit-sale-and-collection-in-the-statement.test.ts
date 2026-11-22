@@ -53,8 +53,8 @@ const PAID_MINOR = '400';
 
 interface StatementRow {
   readonly entryKind: string;
-  readonly debitTxnMinor: string;
-  readonly creditTxnMinor: string;
+  readonly debitTxnMinor: string | null;
+  readonly creditTxnMinor: string | null;
   readonly runningBalanceTxnMinor: string;
 }
 
@@ -113,9 +113,16 @@ describe('a credit sale and a collection, as the statement reports them', () => 
     // Named on its own because two sign errors cancel: a receipt booked as a
     // debit with a negated amount would satisfy §2 and still be wrong, and the
     // merchant reads the side, not only the total.
-    const receipts = rows.filter((r) => BigInt(r.creditTxnMinor) === BigInt(PAID_MINOR));
+    // NULL-SAFE, and I write this comment because I made the exact mistake the
+    // money review had just taught me: `creditTxnMinor` is NULL on every
+    // debit-bearing entry, and `BigInt(null)` THROWS. The first run of this arm
+    // died on the invoice row before it ever reached the receipt. Knowing a
+    // field is nullable is not the same as handling it.
+    const receipts = rows.filter((r) => r.creditTxnMinor !== null && BigInt(r.creditTxnMinor) === BigInt(PAID_MINOR));
     expect(receipts.length, `exactly one entry credits ${PAID_MINOR}; rows: ${JSON.stringify(rows)}`).toBe(1);
     const receipt = receipts[0] as StatementRow;
-    expect(BigInt(receipt.debitTxnMinor), 'a receipt debits nothing').toBe(0n);
+    // A receipt debits nothing: on this reader that is NULL, not '0'. Asserting
+    // 0n here would have demanded a coercion the contract deliberately refuses.
+    expect(receipt.debitTxnMinor, 'a receipt has no debit side at all').toBeNull();
   }, 300_000);
 });
