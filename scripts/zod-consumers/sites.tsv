@@ -19,6 +19,10 @@ apps/web/src/app/[locale]/catalog/[id]/page.tsx	193	client-details	safe	HAND	<h2
 apps/web/src/app/[locale]/catalog/[id]/page.tsx	340	find-shift	safe	R-RECEIVER	const found = items.items.find((i) => i.productId === productId);
 apps/web/src/app/[locale]/catalog/[id]/page.tsx	363	find-shift	safe	R-RECEIVER	const found = again.items.find((i) => i.productId === productId);
 apps/web/src/app/[locale]/catalog/page.tsx	227	find-shift	safe	R-RECEIVER	render: (c) => (c.parentId ? (categories.find((x) => x.id === c.parentId)?.translations[locale] ?? '—') : '—'),
+apps/web/src/app/[locale]/customers/[customerId]/collect/collect-page-kit.ts	51	find-shift	safe	R-RECEIVER	const found = mine.items.find((b) => b.businessId === currentBusinessId());
+apps/web/src/app/[locale]/customers/[customerId]/collect/page.tsx	169	find-shift	safe	R-RECEIVER	const method = activeMethodChoices(methods, locale, t).find((m) => m.paymentMethodId === form.methodId);
+apps/web/src/app/[locale]/customers/[customerId]/collect/page.tsx	183	errors-access	safe	R-RECEIVER	setScreen((s) => (s ? { ...s, form: { ...s.form, [field]: value, errors: { ...s.form.errors, ...cleared } } } : s));
+apps/web/src/app/[locale]/customers/[customerId]/collect/page.tsx	192	errors-access	safe	R-RECEIVER	form: { ...s.form, errors: { ...s.form.errors, rows: false, otherCurrency: false, tooMany: false } },
 apps/web/src/app/[locale]/pos/page.tsx	218	errors-access	safe	R-RECEIVER	const next = { ...errors };
 apps/web/src/app/[locale]/pos/page.tsx	234	errors-access	safe	R-RECEIVER	const next = { ...errors };
 apps/web/src/app/[locale]/pos/page.tsx	248	errors-access	safe	R-RECEIVER	setDiscountErrors((errors) => ({ ...errors, [cartLineId]: 'pos.discount.invalid' }));
@@ -65,6 +69,17 @@ apps/web/src/lib/client.ts	206	client-details	safe	HAND	const value = details['c
 apps/web/src/lib/client.ts	273	client-details	safe	HAND	throw new ApiError(res.status, data.error?.code ?? `HTTP_${res.status}`, plainObject(data.error?.details));
 apps/web/src/lib/phase3-format.ts	61	find-shift	safe	R-RECEIVER	const decimalSep = nf.formatToParts(0.5).find((p) => p.type === 'decimal')?.value ?? '.';
 apps/web/src/middleware.ts	30	find-shift	safe	R-RECEIVER	const preferred = LOCALES.find((l) => accept.toLowerCase().startsWith(l)) ?? DEFAULT_LOCALE;
+apps/web/src/views/customers/CollectPaymentView.tsx	87	find-shift	safe	R-RECEIVER	const method = methods.find((m) => m.paymentMethodId === form.methodId);
+apps/web/src/views/customers/CollectPaymentView.tsx	94	errors-access	safe	R-RECEIVER	error={form.errors.method ? t('customers.collect.methodRequired') : undefined}
+apps/web/src/views/customers/CollectPaymentView.tsx	110	errors-access	safe	R-RECEIVER	error={form.errors.amount ? t('customers.collect.amountInvalid') : undefined}
+apps/web/src/views/customers/CollectPaymentView.tsx	117	errors-access	safe	R-RECEIVER	error={form.errors.date ? t('customers.collect.dateRequired') : undefined}
+apps/web/src/views/customers/CollectPaymentView.tsx	123	errors-access	safe	R-RECEIVER	error={form.errors.reference ? t('customers.collect.referenceRequired') : undefined}
+apps/web/src/views/customers/CollectPaymentView.tsx	129	errors-access	safe	R-RECEIVER	{form.errors.rows ? <Notice tone="danger">{t('customers.collect.rowsInvalid')}</Notice> : null}
+apps/web/src/views/customers/CollectPaymentView.tsx	130	errors-access	safe	R-RECEIVER	{form.errors.otherCurrency ? <Notice tone="danger">{t('customers.collect.otherCurrencyTyped')}</Notice> : null}
+apps/web/src/views/customers/CollectPaymentView.tsx	131	errors-access	safe	R-RECEIVER	{form.errors.tooMany ? <Notice tone="danger">{t('customers.collect.tooMany')}</Notice> : null}
+apps/web/src/views/customers/collect-flow.ts	195	errors-access	safe	R-RECEIVER	if (!planned.ok) return Promise.resolve({ kind: 'invalid', errors: planned.errors, invalidRows: planned.invalidRows });
+apps/web/src/views/customers/collect-flow.ts	247	errors-access	safe	R-RECEIVER	form: { ...state.form, errors: outcome.errors },
+apps/web/src/views/customers/registry.ts	206	errors-access	safe	R-RECEIVER	return { errors: plan.errors, invalidRows: plan.invalidRows };
 apps/web/src/views/pos/TillView.tsx	76	find-shift	safe	R-RECEIVER	const placeName = props.places.find((p) => p.id === (session?.warehouse_id ?? props.placeId))?.name ?? '';
 apps/web/src/views/purchases/PurchaseListView.tsx	85	find-shift	safe	R-RECEIVER	return FILTERS.find((f) => f === key) ?? 'all';
 apps/web/src/views/purchases/ReceivePurchaseView.tsx	124	errors-access	safe	R-RECEIVER	error={form.errors.warehouse ? t('purchasing.receive.warehouseRequired') : undefined}
@@ -101,6 +116,20 @@ apps/web/src/views/suppliers/SupplierDetailView.tsx	241	errors-access	safe	R-REC
 apps/web/test/bff-session-notice.test.tsx	20	find-shift	safe	R-RECEIVER	const status = [...elements(frame)].find((e) => e.attrs['role'] === 'status');
 apps/web/test/bff-session-notice.test.tsx	22	find-shift	safe	R-RECEIVER	const button = [...elements(frame)].find((e) => e.tag === 'button');
 apps/web/test/bff-session-retry.test.ts	23	find-shift	safe	R-RECEIVER	const next = answers.shift();
+apps/web/test/collect-payment-amount.test.ts	296	errors-access	safe	R-RECEIVER	expect(p.errors.otherCurrency).toBe(true);
+apps/web/test/collect-payment-amount.test.ts	297	errors-access	safe	R-RECEIVER	expect(p.errors.rows).toBe(false);
+apps/web/test/collect-payment-amount.test.ts	345	errors-access	safe	R-RECEIVER	expect(p.errors.rows).toBe(true);
+apps/web/test/collect-payment-amount.test.ts	352	errors-access	safe	R-RECEIVER	expect(p.errors).toMatchObject({ method: true, amount: true, date: true });
+apps/web/test/collect-payment-amount.test.ts	355	errors-access	safe	R-RECEIVER	if (!r.ok) expect(r.errors.reference).toBe(true);
+apps/web/test/collect-payment-amount.test.ts	371	errors-access	safe	R-RECEIVER	if (!fiftyOne.ok) expect(fiftyOne.errors.tooMany).toBe(true);
+apps/web/test/collect-payment-flow.test.ts	544	errors-access	safe	R-RECEIVER	const after = afterOutcome(before, { kind: 'invalid', errors: plan.errors, invalidRows: plan.invalidRows });
+apps/web/test/collect-payment-flow.test.ts	546	errors-access	safe	R-RECEIVER	expect(after.form.errors.rows).toBe(true);
+apps/web/test/collect-payment-screens.test.tsx	24	find-shift	safe	R-RECEIVER	const found = VIEW_REGISTRY.find((e) => e.name === 'CollectPaymentView')?.fixtures.find((f) => f.name === name);
+apps/web/test/collect-payment-screens.test.tsx	34	find-shift	safe	R-RECEIVER	const found = all(r, 'button').find((b) => textOf(b) === label);
+apps/web/test/collect-payment-screens.test.tsx	72	find-shift	safe	R-RECEIVER	const entry = VIEW_REGISTRY.find((e) => e.name === 'CollectPaymentView');
+apps/web/test/collect-payment-screens.test.tsx	175	find-shift	safe	R-RECEIVER	const entry = VIEW_REGISTRY.find((e) => e.name === 'CollectPaymentView');
+apps/web/test/collect-payment-screens.test.tsx	213	errors-access	safe	R-RECEIVER	expect(props.form.errors.otherCurrency).toBe(true);
+apps/web/test/collect-payment-screens.test.tsx	214	errors-access	safe	R-RECEIVER	expect(props.form.errors.rows).toBe(false);
 apps/web/test/csp.test.ts	77	find-shift	safe	R-RECEIVER	const nonceSource = script.find((s) => s.startsWith(`'nonce-`));
 apps/web/test/invoice-screens.test.tsx	57	find-shift	safe	R-RECEIVER	const found = entries.find((e) => e.name === view)?.fixtures.find((f) => f.name === fixture);
 apps/web/test/invoice-screens.test.tsx	152	find-shift	safe	R-RECEIVER	const fixture = INVOICE_VIEWS[0]?.fixtures.find((f) => f.name === ALL)?.props as { invoices: readonly { documentNumber: string }[] };
