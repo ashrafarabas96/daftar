@@ -22,6 +22,8 @@ import {
   ratioLimitProblems,
   ratioVerdict,
   type PairSide,
+  MEDIAN_ROUNDS,
+  medianRatioVerdict,
 } from '../tests/performance/paired-series';
 
 const N = 200;
@@ -97,6 +99,85 @@ describe('P4-AL-72 paired measurement', () => {
     it('negative: a fingerprint of the wrong length or a foreign symbol fails', () => {
       expect(fingerprintProblems(pairedRun(N - 1), N).length).toBeGreaterThan(0);
       expect(fingerprintProblems(['X' as PairSide, ...pairedRun(N).slice(1)], N).length).toBeGreaterThan(0);
+    });
+  });
+
+  /**
+   * DR-175 — THE MEDIAN OF FIVE ROUNDS. Every input here has an answer known
+   * before the function is called: the limit is 3, and the medians below are
+   * read off the sorted list by hand. Nothing in this block is derived from
+   * the implementation, which is the only way an arm about a statistic can
+   * fail honestly.
+   */
+  describe('DR-175: the verdict is the median of five rounds, and it still misses when the read grows', () => {
+    const v = (ratio: number | null) => ({
+      fatP95: ratio === null ? null : 10,
+      medP95: ratio === null ? null : 10 / (ratio || 1),
+      ratio,
+      withinMax: ratio !== null && ratio <= 3,
+    });
+
+    it('positive: the median of five is the middle of the SORTED rounds, not the last or the mean', () => {
+      // sorted: 1, 2, 3, 4, 90 -> 3. A mean would be 20 and would fail; the
+      // last would be 90. The arm is written so those two answers are visibly
+      // different from the right one.
+      const r = medianRatioVerdict([v(2), v(90), v(1), v(4), v(3)], 3);
+      expect(r.problems).toEqual([]);
+      expect(r.median).toBe(3);
+      expect(r.withinMax).toBe(true);
+    });
+
+    it('positive: ONE hostile round does not fail the gate — the trade DR-175 makes, stated as an arm', () => {
+      // four rounds at 2.6 (the value measured on `3c61ace8`) and one at 3.02
+      // (the value measured on `fe9f78e8`): median 2.6, so the cart that failed
+      // on a 0.8% miss would now pass.
+      const r = medianRatioVerdict([v(2.6), v(2.6), v(3.02), v(2.6), v(2.6)], 3);
+      expect(r.median).toBe(2.6);
+      expect(r.withinMax).toBe(true);
+    });
+
+    it('NEGATIVE CONTROL: three of five over the limit MISSES — a growing read is still refused', () => {
+      // This is the direction the gate exists for: a read that is genuinely
+      // slower misses in most rounds, so the median misses. Without this arm
+      // the median would be a relaxation with no floor.
+      const r = medianRatioVerdict([v(3.4), v(2.9), v(3.6), v(2.8), v(3.5)], 3);
+      expect(r.median).toBe(3.4);
+      expect(r.withinMax).toBe(false);
+    });
+
+    it('NEGATIVE CONTROL: a planted delay in EVERY round misses, which is what the CI control plants', () => {
+      const r = medianRatioVerdict([v(7), v(8), v(9), v(7.5), v(8.5)], 3);
+      expect(r.withinMax).toBe(false);
+      expect(r.median).toBe(8);
+    });
+
+    it('fails CLOSED on a round that produced no ratio — it is never dropped to make a median', () => {
+      const r = medianRatioVerdict([v(2), v(null), v(2), v(2), v(2)], 3);
+      expect(r.median).toBeNull();
+      expect(r.withinMax).toBe(false);
+      expect(r.problems.join(' ')).toMatch(/no ratio/);
+      // and the surviving four would have had a median of 2, which is exactly
+      // the pass this must not give.
+      expect(medianRatioVerdict([v(2), v(2), v(2), v(2)], 3, 4).withinMax).toBe(true);
+    });
+
+    it('fails CLOSED on the wrong number of rounds, in both directions', () => {
+      expect(medianRatioVerdict([v(2), v(2), v(2), v(2)], 3).problems.length).toBeGreaterThan(0);
+      expect(medianRatioVerdict([v(2), v(2), v(2), v(2), v(2), v(2)], 3).problems.length).toBeGreaterThan(0);
+      expect(medianRatioVerdict([], 3).problems.length).toBeGreaterThan(0);
+    });
+
+    it('the exact limit passes and a hair above it misses, so `<=` is the comparison', () => {
+      expect(medianRatioVerdict([v(3), v(3), v(3), v(3), v(3)], 3).withinMax).toBe(true);
+      expect(medianRatioVerdict([v(3.001), v(3.001), v(3.001), v(3.001), v(3.001)], 3).withinMax).toBe(false);
+    });
+
+    it('MEDIAN_ROUNDS is five, and the suite reads its rounds through this helper', () => {
+      expect(MEDIAN_ROUNDS).toBe(5);
+      const src = readFileSync(join(__dirname, '..', 'tests', 'performance', 'receivables-s4-budgets.test.ts'), 'utf8');
+      expect(src).toContain('medianRatioVerdict(');
+      // and the judged quantity is the median, not round 1's ratio
+      expect(src).toContain('must(verdict.median)');
     });
   });
 
