@@ -91,22 +91,34 @@ describe('GET /v1/customers/:customerId/statement', () => {
     const res = await w.t.request.get(statementPath(customerId)).set(w.headers);
     expect(res.status).toBe(200);
 
-    const rows = res.body.rows as readonly Record<string, string>[];
+    const rows = res.body.rows as readonly Record<string, string | null>[];
     // The fixture must be able to tell the designs apart BEFORE the reader is
     // asked anything: if every debit were zero, a reader that returned zero
     // for every running balance would pass this arm and prove nothing.
-    const debits = rows.map((r) => Number(r.debitTxnMinor ?? 0));
-    const credits = rows.map((r) => Number(r.creditTxnMinor ?? 0));
+    // BIGINT, NOT `Number`. These are `BIGINT` columns and the DTO carries them
+    // as text precisely because a JSON number loses precision above 2^53; doing
+    // the comparison in `Number` would throw that away inside the very suite
+    // meant to protect it. It also produced this file's only two `tsc` errors
+    // (TS2532 at the old line 107), because an index into a `number[]` is
+    // `number | undefined` under this project's settings.
+    //
+    // AND NULL IS NOT ZERO: `0092` leaves the side an entry does not belong on
+    // NULL, so a missing side counts 0n toward the running sum while the DTO
+    // keeps the distinction. The money review of bb45d8ec found this suite
+    // reading `string` where the database returns null on four columns.
+    const minor = (v: string | null | undefined): bigint => (v === null || v === undefined ? 0n : BigInt(v));
+    const debits = rows.map((r) => minor(r.debitTxnMinor));
+    const credits = rows.map((r) => minor(r.creditTxnMinor));
     expect(
-      debits.reduce((t, d) => t + d, 0),
+      debits.reduce((t, d) => t + d, 0n) > 0n,
       'the fixture produced no debits, so this arm cannot discriminate',
-    ).toBeGreaterThan(0);
+    ).toBe(true);
 
-    let cumulative = 0;
+    let cumulative = 0n;
     rows.forEach((row, index) => {
-      cumulative += debits[index] - credits[index];
+      cumulative += minor(row.debitTxnMinor) - minor(row.creditTxnMinor);
       expect(
-        Number(row.runningBalanceTxnMinor),
+        minor(row.runningBalanceTxnMinor),
         `row ${index + 1} (${row.entryKind}) must carry the cumulative balance, not its own amount`,
       ).toBe(cumulative);
     });

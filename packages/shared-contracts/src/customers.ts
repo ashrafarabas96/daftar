@@ -508,12 +508,27 @@ export interface CustomerOpenInvoiceDto {
   isCredit: boolean;
 }
 
-/** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */
 /**
  * One entry of a customer's account statement, exactly as
  * `customer_account_statement` (`0092`) reports it. Every amount is MINOR UNITS
  * AS TEXT: these are `BIGINT` in the database and a JSON number would silently
  * lose precision above 2^53 -- a money field is not a place to find that out.
+ *
+ * FOUR OF THESE AMOUNTS ARE NULLABLE, AND THAT IS `0092`'s SHAPE, NOT A
+ * CONVENIENCE: a statement entry carries the side it belongs on and leaves the
+ * other side empty, so `debitTxnMinor` is null on every credit-bearing entry
+ * and `creditTxnMinor` on every debit-bearing one, and the preserved-credit
+ * branch leaves BOTH `amountTxnMinor` and `amountBaseMinor` null. These were
+ * declared `string` first. The money review of `bb45d8ec` caught it on a LIVE
+ * cluster -- the rows of the green run itself carried `"credit_txn_minor":null`
+ * -- and the lie was invisible to `tsc` because the reader's internal row type
+ * told it too. A money field whose type says "always a number" and whose value
+ * is sometimes absent is how a client renders 0 for "not applicable".
+ *
+ * They are NOT coerced to `'0'` here. Zero is a measured amount; null is "this
+ * entry has no such side", and collapsing the two would need an owner's
+ * decision about what the merchant reads, not a reader's convenience.
+ *
  */
 export interface CustomerStatementRowDto {
   readonly entryKind: string;
@@ -524,10 +539,10 @@ export interface CustomerStatementRowDto {
   readonly documentNumber: string | null;
   readonly relatedId: string | null;
   readonly currency: string;
-  readonly debitTxnMinor: string;
-  readonly creditTxnMinor: string;
-  readonly amountTxnMinor: string;
-  readonly amountBaseMinor: string;
+  readonly debitTxnMinor: string | null;
+  readonly creditTxnMinor: string | null;
+  readonly amountTxnMinor: string | null;
+  readonly amountBaseMinor: string | null;
   readonly creditOriginalTxnMinor: string | null;
   readonly creditRemainingTxnMinor: string | null;
   readonly creditRemainingBaseMinor: string | null;
@@ -541,6 +556,7 @@ export interface CustomerStatementDto {
   readonly rows: readonly CustomerStatementRowDto[];
 }
 
+/** `GET /v1/customers/:customerId/open-invoices` — requires `receivables.view`. */
 export interface CustomerOpenInvoicesDto {
   customerId: string;
   asOf: string;

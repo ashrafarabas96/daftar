@@ -26,6 +26,25 @@
 import { describe, expect, it } from 'vitest';
 
 import { SELLING_ROUTE_AUTHORITY } from '../apps/api/src/modules/selling/selling-permissions';
+import type { CustomerStatementRowDto } from '../packages/shared-contracts/src/customers';
+
+/**
+ * A COMPILE-TIME ARM, and the only kind that can state this claim: the four
+ * amounts `0092` leaves empty must be declared nullable. `tsc` is the runner
+ * for this one — if any of these fields were `string`, the object below would
+ * not compile, and that is its red. A runtime assertion could not say it at
+ * all, because the values already arrive null: nothing fails until a client
+ * renders the null as 0, which is the defect the money review caught.
+ */
+const NULLABLE_SIDES: Pick<
+  CustomerStatementRowDto,
+  'debitTxnMinor' | 'creditTxnMinor' | 'amountTxnMinor' | 'amountBaseMinor'
+> = {
+  debitTxnMinor: null,
+  creditTxnMinor: null,
+  amountTxnMinor: null,
+  amountBaseMinor: null,
+};
 
 const PATH = '/v1/customers/:customerId/statement';
 const SIBLING = '/v1/customers/:customerId/open-invoices';
@@ -39,6 +58,15 @@ describe('the customer statement route and the authority it is declared with', (
     // a `find` over an empty array would make a NEGATIVE law pass vacuously.
     expect(SELLING_ROUTE_AUTHORITY.length, 'the authority table came back empty -- the import is wrong, not the table').toBeGreaterThan(5);
     expect(entryFor(SIBLING), `the sibling ${SIBLING} is absent, so this probe cannot speak about ${PATH}`).toBeDefined();
+  });
+
+  it('the four sides `0092` can leave empty are declared nullable', () => {
+    // The typed object above IS the claim; this arm reports it rather than
+    // leaving a reader to notice a type alias at the top of the file.
+    expect(NULLABLE_SIDES.debitTxnMinor, 'a credit-bearing entry has no debit side').toBeNull();
+    expect(NULLABLE_SIDES.creditTxnMinor, 'a debit-bearing entry has no credit side').toBeNull();
+    expect(NULLABLE_SIDES.amountTxnMinor, 'the preserved-credit branch leaves both amount columns empty').toBeNull();
+    expect(NULLABLE_SIDES.amountBaseMinor).toBeNull();
   });
 
   it('the statement route is declared in the authority table', () => {

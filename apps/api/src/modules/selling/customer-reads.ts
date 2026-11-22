@@ -853,87 +853,6 @@ export class CustomerReadService {
    * through it is `invoice.not_found` from the one definition, and
    * `customer.not_found` above it is this module's own and unchanged.
    */
-  /**
-   * `GET /v1/customers/:customerId/statement` — one customer's ledger, entry
-   * by entry, with the running balance the merchant reads down the page.
-   *
-   * Every figure here is `customer_account_statement` (`0092`)'s answer, not
-   * this module's: no arithmetic is redone in TypeScript, because a second
-   * implementation of a running balance is a second source of truth for a
-   * number the merchant acts on.
-   *
-   * THE ORDER IS RESTATED HERE ON PURPOSE. `0092` ends with
-   * `ORDER BY s.entry_date, s.kind_rank, s.entry_id` (`0092:282`), and a
-   * running balance is meaningless in any other order — but the row order of a
-   * set-returning function is not a guarantee an outer query inherits. So this
-   * query names the SAME three keys rather than leaning on the function's
-   * ordering surviving. If the two ever disagree, the explicit one here is the
-   * contract the client was given.
-   */
-  async statement(m: MembershipContext, customerId: string): Promise<CustomerStatementDto> {
-    const row = await findCustomer(this.db, this.scope(m), customerId);
-    if (row === null) throw sellingRefusal('customer.not_found');
-
-    const found = await this.db.scoped<
-      QueryResultRow & {
-        entry_kind: string;
-        entry_id: string;
-        entry_date: string;
-        kind_rank: number;
-        document_number: string | null;
-        related_id: string | null;
-        currency_code: string;
-        debit_txn_minor: string;
-        credit_txn_minor: string;
-        amount_txn_minor: string;
-        amount_base_minor: string;
-        credit_original_txn_minor: string | null;
-        credit_remaining_txn_minor: string | null;
-        credit_remaining_base_minor: string | null;
-        reference: string | null;
-        running_balance_txn_minor: string;
-      }
-    >(
-      this.scope(m),
-      `SELECT s.entry_kind, s.entry_id,
-              to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date,
-              s.kind_rank, s.document_number, s.related_id, s.currency_code,
-              s.debit_txn_minor::text              AS debit_txn_minor,
-              s.credit_txn_minor::text             AS credit_txn_minor,
-              s.amount_txn_minor::text             AS amount_txn_minor,
-              s.amount_base_minor::text            AS amount_base_minor,
-              s.credit_original_txn_minor::text    AS credit_original_txn_minor,
-              s.credit_remaining_txn_minor::text   AS credit_remaining_txn_minor,
-              s.credit_remaining_base_minor::text  AS credit_remaining_base_minor,
-              s.reference,
-              s.running_balance_txn_minor::text    AS running_balance_txn_minor
-         FROM customer_account_statement($1, $2) s
-        ORDER BY s.entry_date, s.kind_rank, s.entry_id`,
-      [m.businessId, customerId],
-    );
-
-    const rows: CustomerStatementRowDto[] = found.rows.map((r) => ({
-      entryKind: r.entry_kind,
-      entryId: r.entry_id,
-      entryDate: r.entry_date,
-      kindRank: r.kind_rank,
-      documentNumber: r.document_number,
-      relatedId: r.related_id,
-      currency: r.currency_code,
-      debitTxnMinor: r.debit_txn_minor,
-      creditTxnMinor: r.credit_txn_minor,
-      amountTxnMinor: r.amount_txn_minor,
-      amountBaseMinor: r.amount_base_minor,
-      creditOriginalTxnMinor: r.credit_original_txn_minor,
-      creditRemainingTxnMinor: r.credit_remaining_txn_minor,
-      creditRemainingBaseMinor: r.credit_remaining_base_minor,
-      reference: r.reference,
-      runningBalanceTxnMinor: r.running_balance_txn_minor,
-    }));
-
-    return { customerId, rows };
-  }
-
   async openInvoices(m: MembershipContext, customerId: string, q: CustomerOpenInvoicesQuery): Promise<CustomerOpenInvoicesDto> {
     const row = await findCustomer(this.db, this.scope(m), customerId);
     if (row === null) throw sellingRefusal('customer.not_found');
@@ -997,5 +916,86 @@ export class CustomerReadService {
       items,
       nextCursor: found.rows.length > size ? (items[items.length - 1]?.invoiceId ?? null) : null,
     };
+  }
+
+  /**
+   * `GET /v1/customers/:customerId/statement` — one customer's ledger, entry
+   * by entry, with the running balance the merchant reads down the page.
+   *
+   * Every figure here is `customer_account_statement` (`0092`)'s answer, not
+   * this module's: no arithmetic is redone in TypeScript, because a second
+   * implementation of a running balance is a second source of truth for a
+   * number the merchant acts on.
+   *
+   * THE ORDER IS RESTATED HERE ON PURPOSE. `0092` ends with
+   * `ORDER BY s.entry_date, s.kind_rank, s.entry_id` (`0092:282`), and a
+   * running balance is meaningless in any other order — but the row order of a
+   * set-returning function is not a guarantee an outer query inherits. So this
+   * query names the SAME three keys rather than leaning on the function's
+   * ordering surviving. If the two ever disagree, the explicit one here is the
+   * contract the client was given.
+   */
+  async statement(m: MembershipContext, customerId: string): Promise<CustomerStatementDto> {
+    const row = await findCustomer(this.db, this.scope(m), customerId);
+    if (row === null) throw sellingRefusal('customer.not_found');
+
+    const found = await this.db.scoped<
+      QueryResultRow & {
+        entry_kind: string;
+        entry_id: string;
+        entry_date: string;
+        kind_rank: number;
+        document_number: string | null;
+        related_id: string | null;
+        currency_code: string;
+        debit_txn_minor: string | null;
+        credit_txn_minor: string | null;
+        amount_txn_minor: string | null;
+        amount_base_minor: string | null;
+        credit_original_txn_minor: string | null;
+        credit_remaining_txn_minor: string | null;
+        credit_remaining_base_minor: string | null;
+        reference: string | null;
+        running_balance_txn_minor: string;
+      }
+    >(
+      this.scope(m),
+      `SELECT s.entry_kind, s.entry_id,
+              to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date,
+              s.kind_rank, s.document_number, s.related_id, s.currency_code,
+              s.debit_txn_minor::text              AS debit_txn_minor,
+              s.credit_txn_minor::text             AS credit_txn_minor,
+              s.amount_txn_minor::text             AS amount_txn_minor,
+              s.amount_base_minor::text            AS amount_base_minor,
+              s.credit_original_txn_minor::text    AS credit_original_txn_minor,
+              s.credit_remaining_txn_minor::text   AS credit_remaining_txn_minor,
+              s.credit_remaining_base_minor::text  AS credit_remaining_base_minor,
+              s.reference,
+              s.running_balance_txn_minor::text    AS running_balance_txn_minor
+         FROM customer_account_statement($1, $2) s
+        ORDER BY s.entry_date, s.kind_rank, s.entry_id`,
+      [m.businessId, customerId],
+    );
+
+    const rows: CustomerStatementRowDto[] = found.rows.map((r) => ({
+      entryKind: r.entry_kind,
+      entryId: r.entry_id,
+      entryDate: r.entry_date,
+      kindRank: r.kind_rank,
+      documentNumber: r.document_number,
+      relatedId: r.related_id,
+      currency: r.currency_code,
+      debitTxnMinor: r.debit_txn_minor,
+      creditTxnMinor: r.credit_txn_minor,
+      amountTxnMinor: r.amount_txn_minor,
+      amountBaseMinor: r.amount_base_minor,
+      creditOriginalTxnMinor: r.credit_original_txn_minor,
+      creditRemainingTxnMinor: r.credit_remaining_txn_minor,
+      creditRemainingBaseMinor: r.credit_remaining_base_minor,
+      reference: r.reference,
+      runningBalanceTxnMinor: r.running_balance_txn_minor,
+    }));
+
+    return { customerId, rows };
   }
 }
