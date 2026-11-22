@@ -111,6 +111,61 @@ export function ratioVerdict(fat: readonly number[], med: readonly number[], max
   return { fatP95, medP95, ratio, withinMax: ratio !== null && ratio <= max };
 }
 
+/** How many paired rounds the verdict is taken over (owner order 2026-11-22). */
+export const PAIRED_ROUNDS = 5;
+
+export interface RoundsVerdict {
+  /** One p95/p95 per round, in run order; `null` where a round's denominator measured zero. */
+  readonly roundRatios: readonly (number | null)[];
+  /** The median of `roundRatios`, or `null` when any round could not be computed. */
+  readonly medianRatio: number | null;
+  readonly withinMax: boolean;
+}
+
+const REFUSED: RoundsVerdict = { roundRatios: [], medianRatio: null, withinMax: false };
+
+/**
+ * THE VERDICT OF `P4-AL-72`'s RATIO: the MEDIAN of `rounds` paired rounds.
+ *
+ * The 200 paired samples of each side are cut into `rounds` CONTIGUOUS equal
+ * blocks (40 each at 5 rounds). Each block yields its own p95(fat) / p95(med),
+ * by the same estimator as everywhere (`quantile`), and the run is judged on
+ * the median of those quotients against `max`. One host phase change then
+ * moves at most the rounds it covers, and the median ignores a minority of
+ * them; two of five may be outliers, three above the limit is a regression
+ * and fails. A run whose every round is above `max` fails: nothing is loosened.
+ *
+ * WHAT IT DOES NOT DO: it does not change `max`, the number of samples, or the
+ * estimator; a block of 40 reads its p95 at index 38 (`floor(0.95 * 40)`), the
+ * second-worst of the block, which is why one reading is never the verdict.
+ *
+ * A series that is empty, of unequal length, or not divisible into `rounds`
+ * equal blocks is REFUSED (fails), never passed as nothing. A round whose
+ * denominator measured zero makes the whole verdict fail.
+ */
+export function medianOfRoundRatios(
+  fat: readonly number[],
+  med: readonly number[],
+  rounds: number,
+  max: number,
+): RoundsVerdict {
+  if (fat.length === 0 || med.length === 0) return REFUSED;
+  if (fat.length !== med.length) return REFUSED;
+  if (!Number.isInteger(rounds) || rounds < 1 || fat.length % rounds !== 0) return REFUSED;
+  const per = fat.length / rounds;
+  const roundRatios: (number | null)[] = [];
+  for (let r = 0; r < rounds; r += 1) {
+    const f = quantile(fat.slice(r * per, (r + 1) * per), 0.95);
+    const m = quantile(med.slice(r * per, (r + 1) * per), 0.95);
+    roundRatios.push(m === 0 ? null : f / m);
+  }
+  if (roundRatios.some((x) => x === null)) return { roundRatios, medianRatio: null, withinMax: false };
+  const sorted = (roundRatios as number[]).slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const medianRatio = sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+  return { roundRatios, medianRatio, withinMax: medianRatio <= max };
+}
+
 /** Why the ratchet's declaration of the ratio is not the one this arm was accepted under. */
 export function ratioLimitProblems(r: { readonly max: number; readonly provisional: boolean }): string[] {
   const problems: string[] = [];
