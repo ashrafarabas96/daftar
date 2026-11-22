@@ -230,6 +230,7 @@ tests-unit/npm-audit-minimatch-override.test.ts	93	find-shift	safe	R-RECEIVER	co
 tests-unit/rel11-secret-scan-scope-law.test.ts	278	find-shift	safe	R-RECEIVER	const hit = steps.find((s) => s.name === stepName);
 tests-unit/rel11-secret-scan-scope-law.test.ts	377	find-shift	safe	R-RECEIVER	const job = queue.shift() as string;
 tests-unit/rel11-secret-scan-scope-law.test.ts	571	find-shift	safe	R-RECEIVER	const snapshot = HYGIENE_STEPS.find((s) => s.name === SNAPSHOT_STEP);
+tests-unit/statement-route-is-registered-with-its-authority.test.ts	33	find-shift	safe	R-RECEIVER	const entryFor = (path: string) => SELLING_ROUTE_AUTHORITY.find((r) => r.path === path && r.method === 'GET');
 tests-unit/td24-ci-redis-service-law.test.ts	144	find-shift	safe	R-RECEIVER	const line = (serviceLines ?? []).find((l) => l.trim().startsWith('image:'));
 tests-unit/td24-ci-redis-service-law.test.ts	162	find-shift	safe	R-RECEIVER	const run = stepLines.find((l) => l.trim().startsWith('run:'));
 tests-unit/td24-ci-redis-service-law.test.ts	199	find-shift	safe	R-RECEIVER	const url = step.env.find((l) => l.trim().startsWith('REDIS_URL:'));
