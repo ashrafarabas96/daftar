@@ -34,6 +34,23 @@
  * NUMBER. That every one of them is signed is a property of the doors, and it
  * is `p4s4-internal-definer-inventory.test.ts` that proves it; this suite
  * would be claiming its neighbour's result if it said otherwise.
+ *
+ * AND THE DIVISION OF LABOUR, STATED HERE SO A GREEN CANNOT BE MISREAD. Both
+ * sections measure ONE thing: that the page AGREES with the live catalogue of
+ * the tree under test. Neither says that the live catalogue is the one
+ * intended. If a migration granted a door that should never have existed, the
+ * catalogue would hold it, the page would be updated to state it, and this
+ * suite would be GREEN — correctly, because the page would not be stale. What
+ * authority OUGHT to exist is the subject of the signature-and-doors law in
+ * `p4s4-internal-definer-inventory.test.ts` (every door's proof, the signed
+ * gate, the sealed set, the §14 completeness arm and its red proof). So:
+ *
+ *   green here  = the summary is not stale.
+ *   green here != the authority it summarises is safe.
+ *
+ * Two laws, one page, read independently. Restating the neighbour's claim here
+ * would make a single document carry two witnesses that look like two
+ * measurements, and the weaker one would be read as confirming the stronger.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
