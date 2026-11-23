@@ -700,7 +700,7 @@
     },
     {
       "file": "apps/api/src/modules/selling/selling-errors.ts",
-      "line": 809,
+      "line": 813,
       "phase": "cross-phase",
       "signals": ["seq-scan"],
       "kind": "mention",

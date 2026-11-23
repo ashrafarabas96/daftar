@@ -52,7 +52,7 @@ function atLeast(a: string, b: string): boolean {
 }
 
 const FLOORS: ReadonlyArray<readonly [string, string, string]> = [
-  ['next', '15.5.28', 'the advisory this batch closes'],
+  ['next', '15.5.29', 'the patched release of the three moderate advisories (15.5.28 is affected)'],
   ['sharp', '0.35.5', 'image decoding, reached by every upload'],
   ['multer', '2.5.0', 'the multipart parser in front of the upload route'],
   ['vite', '7.3.7', 'build toolchain'],
@@ -69,6 +69,15 @@ describe('T-10: the lock, not the range', () => {
       expect(atLeast(got, floor), `${name} resolved to ${got}, below the ${floor} this batch requires`).toBe(true);
     });
   }
+
+  it('negative control: the floor for next rejects 15.5.28, the release the patched 15.5.29 replaced', () => {
+    // On the tree this was written for, the lock resolves 15.5.29. A floor left at 15.5.28 let a tree
+    // slide back onto the affected release with this suite green, because `atLeast` is true on equality.
+    const nextFloor = FLOORS.find(([name]) => name === 'next')?.[1];
+    expect(nextFloor).toBeDefined();
+    expect(atLeast('15.5.28', nextFloor ?? '')).toBe(false);
+    expect(atLeast('15.5.29', nextFloor ?? '')).toBe(true);
+  });
 
   it('zod resolves to exactly 4.6.7 — the DoS advisory floor AND the behaviour the error-contract tests were written against', () => {
     // Pinned both ways on purpose: below it the advisory is open, and above

@@ -15,7 +15,8 @@
  * Voiding is likewise absent here: P4-AL-24 makes it a compound command that
  * reverses the revenue entry once, reverses the inventory entry, returns the
  * stock and issues any refund from the credit-note source only — a direct
- * `UPDATE invoices SET status='void'` is refused by a trigger.
+ * `UPDATE invoices SET status='void'` is not refused by the transition trigger
+ * (it permits open to void), so nothing but that command keeps the books whole.
  *
  * Conventions:
  *
