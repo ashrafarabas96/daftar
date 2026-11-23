@@ -18,6 +18,8 @@ import {
   EXPECTED_RATIO_MAX,
   fingerprintOf,
   fingerprintProblems,
+  medianOfRoundRatios,
+  PAIRED_ROUNDS,
   pairOrder,
   ratioLimitProblems,
   ratioVerdict,
@@ -91,6 +93,24 @@ describe('P4-AL-72 paired measurement', () => {
       const planted: PairSide[] = Array.from({ length: N }, () => ['F', 'M'] as PairSide[]).flat();
       expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
     });
+    it('negative: two BLOCKS (FM x half, then MF x half) are balanced but never alternate, so it turns red', () => {
+      const half = N / 2;
+      const planted: PairSide[] = [
+        ...Array.from({ length: half }, () => ['F', 'M'] as PairSide[]).flat(),
+        ...Array.from({ length: N - half }, () => ['M', 'F'] as PairSide[]).flat(),
+      ];
+      expect(planted.length).toBe(2 * N);
+      expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
+    });
+    it('negative: ONE swapped pair in the middle of the real alternation turns red', () => {
+      const real = pairedRun(N);
+      const planted = real.slice();
+      const first = real[4] as PairSide;
+      const second = real[5] as PairSide;
+      planted[4] = second;
+      planted[5] = first;
+      expect(fingerprintProblems(planted, N).length).toBeGreaterThan(0);
+    });
     it('negative: an EMPTY fingerprint fails and does not pass as nothing', () => {
       expect(fingerprintProblems([], N).length).toBeGreaterThan(0);
     });
@@ -100,12 +120,74 @@ describe('P4-AL-72 paired measurement', () => {
     });
   });
 
+  describe('(f) the verdict is the MEDIAN of five paired rounds, not one reading (owner order 2026-11-22)', () => {
+    const PER_ROUND = N / PAIRED_ROUNDS;
+    /** fat = per-round scale x the base shape, med = the base shape: round r's ratio is exactly scales[r]. */
+    function rounds(scales: readonly number[]): { fat: number[]; med: number[] } {
+      return {
+        fat: scales.flatMap((k) => series(k, PER_ROUND)),
+        med: scales.flatMap(() => series(1, PER_ROUND)),
+      };
+    }
+    it('the round count is five and the limit it is judged against is the ratchet limit 3', () => {
+      expect(PAIRED_ROUNDS).toBe(5);
+      expect(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max).toBe(3);
+    });
+    it('positive: a healthy run (every round near 2.5x) is within 3', () => {
+      const { fat, med } = rounds([2.5, 2.5, 2.5, 2.5, 2.5]);
+      const v = medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3);
+      expect(v.roundRatios).toHaveLength(5);
+      expect(v.withinMax).toBe(true);
+    });
+    it('negative: a PLANTED 4x regression in the fat-tail read turns the verdict red (and the same run without it is green)', () => {
+      const healthy = rounds([2.5, 2.5, 2.5, 2.5, 2.5]);
+      const planted = { fat: healthy.fat.map((x) => x * 1.6), med: healthy.med };
+      expect(medianOfRoundRatios(healthy.fat, healthy.med, PAIRED_ROUNDS, 3).withinMax).toBe(true);
+      const v = medianOfRoundRatios(planted.fat, planted.med, PAIRED_ROUNDS, 3);
+      expect(v.medianRatio).toBeGreaterThan(3.9);
+      expect(v.withinMax).toBe(false);
+    });
+    it('positive: ONE bad round (the denominator shrinks for a stretch) does not turn a healthy run red', () => {
+      const { fat, med } = rounds([2.5, 2.5, 3.6, 2.5, 2.5]);
+      const v = medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3);
+      expect(Math.max(...v.roundRatios.map((r) => r ?? 0))).toBeGreaterThan(3);
+      expect(v.withinMax).toBe(true);
+    });
+    it('positive: TWO bad rounds of five still leave the median healthy (the tolerance is stated, not hidden)', () => {
+      const { fat, med } = rounds([3.6, 2.5, 2.5, 3.6, 2.5]);
+      expect(medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3).withinMax).toBe(true);
+    });
+    it('negative: THREE rounds of five above the limit is a regression, and one lucky round cannot hide it', () => {
+      const { fat, med } = rounds([3.6, 2.2, 3.6, 3.6, 2.5]);
+      expect(medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3).withinMax).toBe(false);
+    });
+    it('negative: a run whose every round is just above 3 stays red; the gate was not loosened', () => {
+      const { fat, med } = rounds([3.05, 3.05, 3.05, 3.05, 3.05]);
+      expect(medianOfRoundRatios(fat, med, PAIRED_ROUNDS, 3).withinMax).toBe(false);
+    });
+    it('negative: empty, unequal, or not divisible into five equal rounds fails and never passes as nothing', () => {
+      const { fat, med } = rounds([2.5, 2.5, 2.5, 2.5, 2.5]);
+      expect(medianOfRoundRatios([], [], PAIRED_ROUNDS, 3).withinMax).toBe(false);
+      expect(medianOfRoundRatios(fat.slice(1), med.slice(1), PAIRED_ROUNDS, 3).withinMax).toBe(false);
+      expect(medianOfRoundRatios(fat, med.slice(1), PAIRED_ROUNDS, 3).withinMax).toBe(false);
+    });
+    it('negative: a round whose denominator measured zero fails; a zero is not a pass', () => {
+      const { fat, med } = rounds([2.5, 2.5, 2.5, 2.5, 2.5]);
+      const zeroed = med.map((x, i) => (i < PER_ROUND ? 0 : x));
+      expect(medianOfRoundRatios(fat, zeroed, PAIRED_ROUNDS, 3).withinMax).toBe(false);
+    });
+  });
+
   describe('the suite is wired to the paired helper (a text law, which proves writing, not behaviour)', () => {
     const src = readFileSync(join(__dirname, '..', 'tests', 'performance', 'receivables-s4-budgets.test.ts'), 'utf8');
     it('positive: the ratio denominator comes from the paired measurement and its fingerprint is asserted', () => {
       expect(src).toContain('measurePairedReceivable(');
       expect(src).toContain('fingerprintProblems(');
       expect(src).toContain('ratioVerdict(');
+      expect(src).toContain('medianOfRoundRatios(');
+    });
+    it('negative: the gate no longer judges the single whole-run quotient', () => {
+      expect(src).not.toMatch(/must\(ratio\),\s+`P4-AL-72/);
     });
     it('negative: the denominator is no longer a second, consecutive `measure(` series', () => {
       expect(src).not.toMatch(/medianReceivable = await measure\(/);
