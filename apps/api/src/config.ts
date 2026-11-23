@@ -381,8 +381,29 @@ function dbPrincipalKey(raw: string): string {
   // returning (`:51`). Honouring it here made two `socket:` URLs that differ
   // only in `?host=` key differently while reaching ONE credential — finer
   // than the driver again. (Review of this head, finding 3.)
+  //
+  // And that overwrite is `decodeURI(result.pathname)`, not the raw pathname:
+  // `socket:/var/run/pg` and `socket:/var/run/%70g` are ONE host at the
+  // driver, measured, so taking the path raw made this key finer than the
+  // driver inside the one branch written to make it coarser. (Seventh review,
+  // finding 2.)
+  //
+  // An EMPTY host is NOT the empty string whenever `?host=` is present. The
+  // driver's `:54-57` only fills `config.host` `if (!config.host)` — so a
+  // non-empty `host` parameter, already assigned by the loop at `:40-42`,
+  // WINS, exactly as `effective` defines winning. Forcing `''` here read
+  // `…@/daftar?host=db` and `…@db/daftar` as two principals although `parse()`
+  // reports one and the same user, password, host, port and database for
+  // both — finer than the driver again, and in the same function and the same
+  // review that closed that class once already. It is `effective` that is
+  // right about this, not a special case: the ONLY thing the empty host
+  // changes is the fallback, from the URL's (placeholder) hostname to `''`,
+  // which is what `decodeURIComponent('')` gives the driver. And a pair that
+  // differs only in two DIFFERENT `?host=` values stays two principals, which
+  // is measured too, so the fix does not buy coarseness by collapsing them.
+  // (Seventh review, finding 1.)
   const socketScheme = canonicalScheme === 'socket';
-  const host = emptyHost ? '' : socketScheme ? url.pathname : effective('host', url.hostname, true);
+  const host = socketScheme ? decodeUriOnce(url.pathname) : effective('host', emptyHost ? '' : url.hostname, true);
   const canonicalHost = host.startsWith('/') ? host : host.toLowerCase();
   // JSON.stringify, not a NUL-joined string: the parts are percent-DECODED
   // before they are joined, so a `%00` inside a role name used to shift the

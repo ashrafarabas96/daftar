@@ -175,6 +175,60 @@ describe('§31 compares credentials, not strings', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
   });
 
+  /**
+   * AND THE TWO THE SEVENTH REVIEW MEASURED — both in lines this branch had
+   * already written, and both the same dangerous direction as the three
+   * above. The arms for the three were written over the branch that the fix
+   * then stopped taking, so they passed through the surviving branch and
+   * pinned nothing: seeding the fix away left the law green. These two name
+   * the branch they pin, and each was proved red before the fix was kept.
+   */
+  it('refuses an EMPTY host with `?host=` against the same host spelled in the authority', () => {
+    // `:54-57` fills `config.host` only `if (!config.host)`, and the loop at
+    // `:40-42` has already set it from `?host=`, so the parameter WINS.
+    // Measured on `parse()`: both of these report
+    // `{user:daftar_app, password:x, host:db, port:'', database:daftar}`.
+    // Forcing the host to `''` whenever the authority was empty keyed them
+    // as two principals and the process STARTED.
+    const a = 'postgresql://daftar_app:x@/daftar?host=db';
+    const b = 'postgresql://daftar_app:x@db/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('refuses a `socket:` pair whose path differs only by percent-encoding', () => {
+    // `:48` is `decodeURI(result.pathname)`, so the driver reads one host
+    // here: measured, both report `host: '/var/run/daftar-pg'`. Taking the
+    // path raw made this key finer than the driver inside the very branch
+    // written to make it coarser.
+    const a = 'socket:/var/run/daftar-pg?db=daftar';
+    const b = 'socket:/var/run/daftar-%70g?db=daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('RULES: `%2F` in a path is NOT a separator, so the pair STARTS — which is why this is `decodeURI` and not `decodeURIComponent`', () => {
+    // The driver decodes the DATABASE with `decodeURI` (`:67`), which leaves
+    // reserved characters alone: measured, `…/a%2Fb` reports
+    // `database: 'a%2Fb'` and `…/a/b` reports `database: 'a/b'`, so these are
+    // TWO databases and two principals. Swapping in `decodeURIComponent`
+    // merges them and REFUSES a correct deployment — the safe direction, so
+    // not blocking, but it was the one element of this key whose choice of
+    // function nothing pinned. This arm is that pin, and it reddens on the
+    // swap. (Seventh review, finding 3.)
+    const a = 'postgresql://daftar_app:x@db/a%2Fb';
+    const b = 'postgresql://daftar_app:x@db/a/b';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('NEGATIVE CONTROL: two DIFFERENT `?host=` values under an empty authority stay two principals', () => {
+    // The fix for the empty host must not buy its coarseness by collapsing
+    // the parameter it now honours. Measured: `parse()` reports `host: 'db'`
+    // for the first and `host: 'other'` for the second, so these are two
+    // servers and a real deployment can have both.
+    const a = 'postgresql://daftar_app:x@/daftar?host=db';
+    const b = 'postgresql://daftar_app:x@/daftar?host=other';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
   it('refuses the byte-identical spelling too, which is what held before this law', () => {
     expect(() => loadConfig(withIdentity(APP))).toThrow(DUP);
   });
