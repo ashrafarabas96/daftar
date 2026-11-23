@@ -63,6 +63,8 @@ interface Register {
   totals: { shared: number; assigned: number };
   shared: string[];
   assignment: Record<string, string>;
+  /** Steps added after the baseline by an owner decision, each assigned to exactly one job (DR-170). */
+  added?: Record<string, string>;
 }
 
 const register = JSON.parse(readFileSync(REGISTER_PATH, 'utf8')) as Register;
@@ -218,7 +220,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
 
   // C-2 — nothing runs that the register does not know about.
   for (const [step, jobs] of found) {
-    const assigned = reg.assignment[step];
+    const assigned = reg.assignment[step] ?? reg.added?.[step];
     if (reg.shared.includes(step)) continue;
     if (assigned === undefined) {
       problems.push(`C-2: \`${step}\` runs in ${jobs.join(', ')} and is in neither list of the register`);
@@ -243,6 +245,13 @@ function conservationProblems(ciText: string, reg: Register): string[] {
     }
   }
 
+  // C-3b — a step added by decision runs exactly once, in its own job.
+  for (const [step, job] of Object.entries(reg.added ?? {})) {
+    const jobs = found.get(step);
+    if (jobs === undefined) problems.push(`C-3: \`${step}\` is added to \`${job}\` and runs in NO job of the family`);
+    else if (jobs.length !== 1 || jobs[0] !== job) problems.push(`C-3: \`${step}\` is added to \`${job}\` but runs in ${jobs.join(', ')}`);
+  }
+
   // C-4 — "shared" has to be earned.
   for (const step of reg.shared) {
     const jobs = found.get(step) ?? [];
@@ -257,7 +266,7 @@ function conservationProblems(ciText: string, reg: Register): string[] {
   return problems;
 }
 
-const PARTS = ['backend', 'backend-static', 'backend-gates-p2', 'backend-golden'];
+const PARTS = ['backend', 'backend-static', 'backend-gates-p2', 'backend-gates-p3', 'backend-golden'];
 const AGG_JOB = 'backend-required';
 const CHECK_NAME = 'backend';
 
@@ -398,8 +407,8 @@ function p2Overlaps(): Record<string, string[]> {
 }
 
 describe('the job-conservation law (DR-105)', () => {
-  it('C-5: the four jobs of the family exist and have steps', () => {
-    expect(register.jobs).toEqual(['backend', 'backend-static', 'backend-gates-p2', 'backend-golden']);
+  it('C-5: the five jobs of the family exist and have steps', () => {
+    expect(register.jobs).toEqual(['backend', 'backend-static', 'backend-gates-p2', 'backend-gates-p3', 'backend-golden']);
     for (const job of register.jobs) expect(stepsOf(ci, job).length, job).toBeGreaterThan(0);
   });
 
@@ -525,7 +534,10 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED: a part is dropped from `needs`', () => {
-    const planted = ci.replace('needs: [backend, backend-static, backend-gates-p2, backend-golden]', 'needs: [backend, backend-static, backend-gates-p2]');
+    const planted = ci.replace(
+      'needs: [backend, backend-static, backend-gates-p2, backend-gates-p3, backend-golden]',
+      'needs: [backend, backend-static, backend-gates-p2, backend-gates-p3]',
+    );
     expect(planted, 'the needs line was not found to shorten — update this proof').not.toBe(ci);
     expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-golden`');
   });
@@ -579,8 +591,8 @@ describe('the required-check aggregate (DR-147/1)', () => {
 
   it('RED (behaviour): one part is simply not read by the script', () => {
     const planted = ci.replace(
-      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do',
-      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2; do',
+      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GATES_P3 BACKEND_GOLDEN; do',
+      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GATES_P3; do',
     );
     expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
     expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
@@ -729,5 +741,168 @@ describe('the release path reaches every Phase 2 slice gate and the Phase 1 gate
   it('NEGATIVE CONTROL: a call named only in a comment does not count as reached', () => {
     const planted = (f: string): string => (f === 'scripts/phase2-release-gate.ts' ? '// gate:phase2:s7' + real(f).replace(/gate:phase2:s7/g, 'x') : real(f));
     expect(releaseReach(planted).unreached).toContain('gate:phase2:s7');
+  });
+});
+
+/**
+ * C-16 (DR-170, owner order 2026-11-22) — the Phase 3 corrective gate is composed by the JOB, not nested in P4-S1.
+ * The P4-S1 gate used to run `gate:phase3:corrective` as its first stream (the 54-minute step of `backend-work`). CI
+ * now runs it as its own step of `backend-gates-p3`, in parallel. That is only sound while (a) that step exists with
+ * exactly that command, (b) the P4-S1 plan really calls no Phase 2 or Phase 3 gate any more, (c) the job is a part of
+ * the required aggregate (C-9), and (d) the release path still reaches the corrective gate by itself, because a release
+ * has no such job. All four are read from the files.
+ */
+const P3_JOB = 'backend-gates-p3';
+const P3_STEP = 'Phase 3 corrective gate (composes P3-S8 ... P3-S1, P2-S8 and Phase 1)';
+
+/**
+ * The corrective chain runs the P2-S8 gate, whose budgets test asserts on `pg_stat_statements`
+ * (`PERF01-INSTRUMENT-UNAVAILABLE` when the library is not loaded). The `backend` job enables it
+ * in a step of its own; the job that carries the chain has to enable it too, or the chain fails
+ * for a reason that is the job's and not the code's (run 45066670142, step 18 of `backend-gates-p3`).
+ */
+const PGSS_STEP = 'Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)';
+
+const liveText = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+function p3SplitProblems(ciText: string, gateText: string): string[] {
+  const problems: string[] = [];
+  const block = stepBlocks(ciText, P3_JOB).find((b) => b.name === P3_STEP);
+  if (block === undefined) problems.push(`C-16: \`${P3_JOB}\` has no step "${P3_STEP}"`);
+  else {
+    const runs = [...block.text.matchAll(/^ {8}run:\s*(.+?)\s*$/gm)].map((m) => m[1]);
+    if (runs.length !== 1 || runs[0] !== 'npm run gate:phase3:corrective') {
+      problems.push(`C-16: "${P3_STEP}" runs \`${runs.join(' | ')}\`, expected exactly \`npm run gate:phase3:corrective\``);
+    }
+  }
+  const steps = stepsOf(ciText, P3_JOB);
+  const pgss = steps.indexOf(PGSS_STEP);
+  const chain = steps.indexOf(P3_STEP);
+  if (pgss < 0) problems.push(`C-16: \`${P3_JOB}\` has no step "${PGSS_STEP}" — the P2-S8 budgets inside the chain cannot measure without it`);
+  else if (chain >= 0 && pgss > chain) problems.push(`C-16: "${PGSS_STEP}" runs after the corrective gate in \`${P3_JOB}\``);
+  const live = liveText(gateText);
+  const at = live.indexOf('export function s1Plan');
+  const end = live.indexOf('\n}\n', at);
+  if (at < 0 || end < 0) problems.push('C-16: the gate text read here has no s1Plan, so the call scan read the wrong file');
+  else {
+    const plan = live.slice(at, end);
+    const calls = [...plan.matchAll(/gate:phase\d|PREDECESSOR_SCRIPT/g)].map((m) => m[0]);
+    if (calls.length > 0) problems.push(`C-16: the P4-S1 plan names ${calls.join(', ')}; the corrective gate is composed by \`${P3_JOB}\``);
+    if (!plan.includes('S1_COMMANDS')) problems.push('C-16: the s1Plan read here does not list the permanent core commands, so it is not the plan');
+  }
+  return problems;
+}
+
+/** Every gate reachable from `start` by following whole-name calls (those of `family`) in the live text of each script. */
+function reachFrom(start: string, family: RegExp, read: (file: string) => string): Set<string> {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts: Record<string, string> };
+  const fileOf = (name: string): string | undefined => /scripts\/[\w-]+\.ts/.exec(pkg.scripts[name] ?? '')?.[0];
+  const seen = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length > 0) {
+    const name = queue.shift() as string;
+    const file = fileOf(name);
+    if (file === undefined) continue;
+    for (const m of liveText(read(file)).matchAll(family)) {
+      if (pkg.scripts[m[0]] !== undefined && !seen.has(m[0])) {
+        seen.add(m[0]);
+        queue.push(m[0]);
+      }
+    }
+  }
+  return seen;
+}
+
+describe('the Phase 3 corrective gate is composed by the job, not nested in P4-S1 (C-16, DR-170)', () => {
+  const real = (file: string): string => readFileSync(join(ROOT, file), 'utf8');
+  const gate = real('scripts/phase4-s1-gate.ts');
+  const plant = (from: string, to: string): string => {
+    const slice = jobText(ci, P3_JOB);
+    const mutated = slice.replace(from, to);
+    expect(mutated, 'the text to plant was not found — update this proof').not.toBe(slice);
+    return ci.replace(slice, mutated);
+  };
+  const family = /gate:phase3(?::\w+)*(?![\w:-])/g;
+  const planHead = '  return [\n    ...commands.map(';
+
+  it('POSITIVE: the committed files satisfy it, and the probe saw the job, its step and a live plan', () => {
+    expect(p3SplitProblems(ci, gate)).toEqual([]);
+    expect(stepsOf(ci, P3_JOB)).toContain(P3_STEP);
+    expect(gate).toContain(planHead);
+  });
+
+  it('RED: the step is renamed, so the job no longer carries the corrective gate by name', () => {
+    expect(p3SplitProblems(plant(`name: ${P3_STEP}`, `name: ${P3_STEP} (renamed)`), gate).join('\n')).toContain(`has no step "${P3_STEP}"`);
+  });
+
+  it('RED: the step runs another command', () => {
+    expect(p3SplitProblems(plant('run: npm run gate:phase3:corrective', 'run: npm run gate:phase3:s8'), gate).join('\n')).toContain('expected exactly');
+  });
+
+  it('RED: the job does not enable pg_stat_statements (the defect of run 45066670142)', () => {
+    expect(p3SplitProblems(plant(`name: ${PGSS_STEP}`, `name: ${PGSS_STEP} (renamed)`), gate).join('\n')).toContain(`has no step "${PGSS_STEP}"`);
+  });
+
+  it('RED: the job enables pg_stat_statements only after the corrective gate has run', () => {
+    const slice = jobText(ci, P3_JOB);
+    const at = slice.indexOf(`      - name: ${PGSS_STEP}`);
+    const end = slice.indexOf('      - run: npm ci', at);
+    expect(at).toBeGreaterThan(-1);
+    const moved = slice.slice(at, end);
+    const tail = `${slice.replace(moved, '').replace(/\n*$/, '\n')}${moved.replace(/\n*$/, '')}`;
+    expect(tail).not.toBe(slice);
+    expect(p3SplitProblems(ci.replace(slice, tail), gate).join('\n')).toContain('runs after the corrective gate');
+  });
+
+  it('RED: the job is gone', () => {
+    expect(p3SplitProblems(ci.replace(`  ${P3_JOB}:`, '  backend-gates-p3-gone:'), gate).join('\n')).toContain(`has no step "${P3_STEP}"`);
+  });
+
+  it('RED: the P4-S1 plan composes the corrective gate again', () => {
+    const nested = gate.replace(
+      planHead,
+      `  return [\n    { kind: 'command' as const, name: 'predecessor', area: 'predecessor', cmd: npm, args: ['run', 'gate:phase3:corrective'] },\n    ...commands.map(`,
+    );
+    expect(nested, 'the text to plant was not found — update this proof').not.toBe(gate);
+    expect(p3SplitProblems(ci, nested).join('\n')).toContain('the P4-S1 plan names gate:phase3');
+  });
+
+  it('RED: the old constant comes back in the plan', () => {
+    const nested = gate.replace(
+      planHead,
+      `  return [\n    { kind: 'command' as const, name: 'p', area: 'predecessor', cmd: npm, args: ['run', PREDECESSOR_SCRIPT] },\n    ...commands.map(`,
+    );
+    expect(nested).not.toBe(gate);
+    expect(p3SplitProblems(ci, nested).join('\n')).toContain('PREDECESSOR_SCRIPT');
+  });
+
+  it('NEGATIVE CONTROL: the corrective gate named only in a comment of the plan is not a call', () => {
+    const commented = gate.replace(planHead, `  // npm run gate:phase3:corrective, now composed by the job\n${planHead}`);
+    expect(commented).not.toBe(gate);
+    expect(p3SplitProblems(ci, commented)).toEqual([]);
+  });
+
+  it('RELEASE: the Phase 4 release path still reaches the corrective gate by itself (probe: it also reaches gate:phase3:release)', () => {
+    const seen = reachFrom('gate:phase4:release', family, real);
+    expect(seen.has('gate:phase3:release')).toBe(true);
+    expect(seen.has('gate:phase3:corrective')).toBe(true);
+  });
+
+  it('RED (release): the Phase 3 release gate stops running the corrective gate', () => {
+    const planted = (f: string): string => (f === 'scripts/phase3-release-gate.ts' ? real(f).replace(/gate:phase3:corrective/g, 'x') : real(f));
+    expect(reachFrom('gate:phase4:release', family, planted).has('gate:phase3:corrective')).toBe(false);
+  });
+
+  it('NEGATIVE CONTROL (release): the corrective gate named only in a comment is not reached', () => {
+    const planted = (f: string): string =>
+      f === 'scripts/phase3-release-gate.ts' ? `// gate:phase3:corrective\n${real(f).replace(/gate:phase3:corrective/g, 'x')}` : real(f);
+    expect(reachFrom('gate:phase4:release', family, planted).has('gate:phase3:corrective')).toBe(false);
+  });
+
+  it('RED (aggregate): the new part is dropped from the `needs` of the required check', () => {
+    const slice = jobText(ci, AGG_JOB);
+    const planted = ci.replace(slice, slice.replace('backend-gates-p3, ', ''));
+    expect(planted).not.toBe(ci);
+    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-gates-p3`');
   });
 });

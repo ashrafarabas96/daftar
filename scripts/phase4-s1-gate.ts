@@ -4,8 +4,9 @@
  * (docs/PHASE_4_EXECUTION_PLAN.md §5 and the P4-S1 section; lock §17.1
  * P4-AL-57, §17.2 P4-AL-60/61/62, §17.3 P4-AL-63/88, §17.4 G-02/G-03/G-07/G-19).
  *
- * The first Phase 4 gate. It composes `gate:phase3:corrective` — and through it
- * the whole accepted chain back to Phase 1 — plus the permanent core
+ * The first Phase 4 gate. It used to compose `gate:phase3:corrective` — and
+ * through it the whole accepted chain back to Phase 1 — as its first stream;
+ * CI now runs that as its own job (DR-170, see `s1Plan`). It runs the permanent core
  * (`check:migrations`, `check:guards`, `check:localization`,
  * `check:deployment-authority`) and the three prefix modules, and adds P4-S1's
  * own business: the Phase 4 migration boundary in two tenses, forward
@@ -360,7 +361,7 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
   },
 ];
 
-/** The permanent core, run as commands after the predecessor gate. */
+/** The permanent core, run as commands. */
 export const S1_COMMANDS: readonly (CommandEntry | Pending)[] = [
   { id: 'CORE-MIG', area: 'core', npmScript: 'check:migrations', args: [] },
   { id: 'CORE-GUARD', area: 'core', npmScript: 'check:guards', args: [] },
@@ -368,7 +369,11 @@ export const S1_COMMANDS: readonly (CommandEntry | Pending)[] = [
   { id: 'CORE-DEPLOY', area: 'core', npmScript: 'check:deployment-authority', args: [] },
 ];
 
-/** The predecessor this gate composes, and through it the whole accepted chain. */
+/**
+ * The predecessor of this gate and, through it, the whole accepted chain. This
+ * gate no longer RUNS it (see `s1Plan`); the constant stays so that the
+ * existence check below still fails if the script is renamed away.
+ */
 export const PREDECESSOR_SCRIPT = 'gate:phase3:corrective';
 
 /**
@@ -2538,10 +2543,16 @@ const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 export type Step = { readonly kind: 'command'; readonly name: string; readonly area: string; readonly cmd: string; readonly args: readonly string[] };
 
 /**
- * The runtime half, in order: the predecessor gate first (it composes the whole
- * accepted chain), then the permanent core, then P4-S1's own suites, then the
- * Phase 4 goldens — which also run in `test:golden`, and the duplicate
+ * The runtime half, in order: the permanent core, then P4-S1's own suites, then
+ * the Phase 4 goldens — which also run in `test:golden`, and the duplicate
  * execution is accepted (`OD-P4-10` OPTION A). It is not optimised away.
+ *
+ * The predecessor gate (`PREDECESSOR_SCRIPT`) is NOT a step here any more
+ * (DR-170, owner order 2026-11-22): CI runs it as its own step of the job
+ * `backend-gates-p3`, in parallel with the job that runs this gate, and the
+ * release path reaches it through `gate:phase3:release`. Run alone, this gate
+ * no longer proves the accepted chain; `gate:phase3:corrective` does. The law
+ * that holds this is C-16 in `tests/guards/ci-job-conservation.test.ts`.
  */
 export function s1Plan(): readonly Step[] {
   const suites = S1_SUITES.filter((e): e is SuiteEntry => !isPending(e));
@@ -2553,13 +2564,6 @@ export function s1Plan(): readonly Step[] {
   const guardProofs = suites.filter((e) => e.area === 'guard-proofs').map((e) => e.file);
   const commands = S1_COMMANDS.filter((c): c is CommandEntry => !isPending(c));
   return [
-    {
-      kind: 'command',
-      name: `${PREDECESSOR_SCRIPT} (permanent predecessor; composes the whole accepted chain back to Phase 1)`,
-      area: 'predecessor',
-      cmd: npm,
-      args: ['run', PREDECESSOR_SCRIPT],
-    },
     ...commands.map(
       (c): Step => ({
         kind: 'command',
@@ -2644,7 +2648,7 @@ function runGate(root: string, listOnly: boolean, structuralOnly: boolean, evide
 
   if (listOnly) {
     console.log(`P4-S1 GATE plan (${tense} tense) at ${root}:`);
-    console.log(`  composes:   npm run ${PREDECESSOR_SCRIPT}, and through it the whole accepted chain back to Phase 1`);
+    console.log(`  composes:   nothing; \`npm run ${PREDECESSOR_SCRIPT}\` (the accepted chain back to Phase 1) runs as its own CI job, \`backend-gates-p3\``);
     console.log(`  subject:    ${migrations.length} Phase 4 migration(s) (${migrations.join(', ') || 'none'}); ${routes.length} Phase 4 route(s)`);
     console.log('  structural checks:');
     for (const c of CHECKS)
