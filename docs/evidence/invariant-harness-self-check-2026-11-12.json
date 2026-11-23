@@ -1,0 +1,100 @@
+{
+  "tool": "scripts/invariant-live-rejection.ts",
+  "at": "2026-11-11T22:28:14.116Z",
+  "node": "v24.20.0",
+  "platform": "linux-x64",
+  "cluster": "7706536532177609331 invariant_probe",
+  "source": "daftar",
+  "target": "invariant_probe",
+  "migrationsApplied": 87,
+  "cases": 3,
+  "passed": 3,
+  "failed": 0,
+  "notRun": 0,
+  "selfCheck": true,
+  "inverseControls": [
+    {
+      "id": "HARNESS-CONTROL-ITSELF-REFUSED",
+      "status": "FAIL",
+      "required": "FAIL"
+    },
+    {
+      "id": "HARNESS-GAP-CLAIMED-ON-A-GUARD",
+      "status": "FAIL",
+      "required": "FAIL"
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "HARNESS-REJECT",
+      "label": "a CHECK refuses the violating row, and its sibling is accepted",
+      "mechanism": "a scratch table this case creates; it measures the harness, not the schema",
+      "expect": "reject",
+      "status": "PASS",
+      "plantOutcome": "rejected",
+      "controlEnds": "commit",
+      "sqlstate": "23514",
+      "message": "23514: new row for relation \"probe_self_check\" violates check constraint \"probe_self_check_x_check\"",
+      "controlOutcome": "accepted",
+      "controlMessage": "",
+      "detail": "the plant was rejected and the control was accepted (control ended in commit)"
+    },
+    {
+      "id": "HARNESS-REJECT-DEFERRED",
+      "label": "a refusal that arrives at COMMIT is read, not missed",
+      "mechanism": "a DEFERRABLE INITIALLY DEFERRED unique constraint this case creates",
+      "expect": "reject",
+      "status": "PASS",
+      "plantOutcome": "rejected",
+      "controlEnds": "commit",
+      "sqlstate": "23505",
+      "message": "23505: duplicate key value violates unique constraint \"probe_self_deferred_u\"",
+      "controlOutcome": "accepted",
+      "controlMessage": "",
+      "detail": "the plant was rejected and the control was accepted (control ended in commit)"
+    },
+    {
+      "id": "HARNESS-GAP-POSITIVE",
+      "label": "where nothing guards, the violating row goes in — which is how a gap is proved",
+      "mechanism": "a scratch table with no constraint",
+      "expect": "accept",
+      "status": "PASS",
+      "plantOutcome": "accepted",
+      "controlEnds": "commit",
+      "sqlstate": "",
+      "message": "",
+      "controlOutcome": "accepted",
+      "controlMessage": "",
+      "detail": "the plant was accepted and the control was accepted (control ended in commit)"
+    },
+    {
+      "id": "HARNESS-CONTROL-ITSELF-REFUSED",
+      "label": "a case whose accept-control is itself refused must NOT pass",
+      "mechanism": "a table that does not exist, named by both the plant and the control",
+      "expect": "reject",
+      "status": "FAIL",
+      "plantOutcome": "rejected",
+      "controlEnds": "commit",
+      "sqlstate": "42P01",
+      "message": "42P01: relation \"probe_self_absent\" does not exist",
+      "controlOutcome": "rejected",
+      "controlMessage": "42P01: relation \"probe_self_absent\" does not exist",
+      "detail": "the accept-control was refused (42P01: relation \"probe_self_absent\" does not exist), so a refusal of the plant would measure nothing"
+    },
+    {
+      "id": "HARNESS-GAP-CLAIMED-ON-A-GUARD",
+      "label": "a gap claimed where a CHECK exists must NOT pass",
+      "mechanism": "a scratch table WITH a CHECK, declared as if nothing guarded it",
+      "expect": "accept",
+      "status": "FAIL",
+      "plantOutcome": "rejected",
+      "controlEnds": "commit",
+      "sqlstate": "23514",
+      "message": "23514: new row for relation \"probe_self_guarded\" violates check constraint \"probe_self_guarded_x_check\"",
+      "controlOutcome": "accepted",
+      "controlMessage": "",
+      "detail": "the plant was rejected where accepted was required"
+    }
+  ],
+  "verdict": "PASS"
+}
