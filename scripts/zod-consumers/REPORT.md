@@ -5,11 +5,11 @@ Scope: `apps/**`, `tests/**`, `packages/**`, `tests-unit/**`, `scripts/**` (the 
 
 ## Totals (informational: they move whenever unrelated code adds a `.find(`)
 
-classified sites: 567 — safe: 534, intended: 33
+classified sites: 568 — safe: 535, intended: 33
 
-by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=433, formatter=13, index=2, issues-access=35, length=7, method=18
+by family: body-consumer=7, client-details=6, destructure=2, errors-access=44, find-shift=434, formatter=13, index=2, issues-access=35, length=7, method=18
 
-by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=457
+by rule: HAND=51, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUARD-ISSUES=7, R-PROSE=9, R-RECEIVER=457
 
 `needs-fixing` sites: 0
 
@@ -84,6 +84,7 @@ by rule: HAND=50, R-BROWSER-GATE=19, R-DR71-SUITE=22, R-FIXTURE-ISSUES=3, R-GUAR
 | tests/security/phase2-s8-gate-tamper.test.ts | find-shift | `const victim = Object.entries(lock.packages).find(` | safe | finds a package in package-lock |
 | tests/security/phase4-route-surface.test.ts | find-shift | `: ((Object.entries(details).find(([k, v]) => /Code$/.test(k) && typeof v === 'string' && /^[a-z_]+\.[a-z_]+$/.` | safe | Scans an AppError `details` object for a key ending in "Code"; those details are product error details, not zod issues (zod refusals carry `issues`, whose entries are {path, code}). |
 | tests/security/t10-upgrade-lock-contract.test.ts | find-shift | `const floor = FLOORS.find(([n]) => n === name)?.[1] ?? (name === 'zod' ? '4.6.7' : undefined);` | safe | finds a version floor by package name |
+| tests/security/t10-upgrade-lock-contract.test.ts | find-shift | `const nextFloor = FLOORS.find(([name]) => name === 'next')?.[1];` | safe | finds a version floor by package name |
 | tests/security/t10-zod-error-contract.test.ts | body-consumer | `const issues = c.body.error.details?.issues ?? [];` | safe | Reads the already-mapped {path, code} list from the response, not zod issues. |
 | tests/security/t10-zod-error-contract.test.ts | body-consumer | `const paths = (c: Captured): readonly string[] => (c.body.error.details?.issues ?? []).map((i) => i.path);` | safe | Maps the response list to paths; consumers use toContain / toEqual on sets. |
 | tests/security/t10-zod-error-contract.test.ts | body-consumer | `expect((c.body.error.details?.issues ?? []).map((i) => i.code)).toEqual(['unrecognized_keys']);` | safe | Single-issue case (`unrecognized_keys`) measured and pinned; zod emits one issue for an unknown key on a strict object. |

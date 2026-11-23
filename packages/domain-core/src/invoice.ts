@@ -45,8 +45,9 @@ export type InvoiceLifecycleState = (typeof INVOICE_LIFECYCLE_STATES)[number];
  * Reaching `void` is a COMPOUND command, not an `UPDATE`: P4-AL-24 requires one
  * transaction that reverses the revenue entry exactly once, reverses the
  * inventory entry, returns the stock and issues any refund from the credit-note
- * source only. A direct `UPDATE invoices SET status = 'void'` is refused by a
- * trigger. That command belongs to a later slice; this table is what it is
+ * source only. A direct `UPDATE invoices SET status = 'void'` is not refused by
+ * the transition trigger (it permits open to void), so nothing but this command
+ * keeps the books whole. That command belongs to a later slice; this table is what it is
  * checked against.
  */
 export const INVOICE_LIFECYCLE_TRANSITIONS: readonly { readonly from: InvoiceLifecycleState; readonly to: InvoiceLifecycleState }[] = Object.freeze([

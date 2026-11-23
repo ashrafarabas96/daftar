@@ -115,7 +115,11 @@ const SELLING_STATUS = {
   'invoice.not_found': 404,
   /** A guard refusal no route can reach: an invoice is never edited (P4-AL-46). */
   'invoice.immutable': 500,
-  /** A direct `UPDATE invoices SET status = …` refused by the transition trigger (P4-AL-24). */
+  /**
+   * A direct `UPDATE invoices SET status = …` outside draft to open and open to void, which the
+   * transition trigger refuses (P4-AL-24). That trigger raises `invoice.status_transition_invalid`;
+   * no migration raises this code.
+   */
   'invoice.status_not_writable': 409,
   'invoice.state_invalid': 409,
   /**
