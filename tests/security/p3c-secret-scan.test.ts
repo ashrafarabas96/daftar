@@ -69,6 +69,13 @@ interface Plan {
   readonly side?: readonly (readonly FileOp[])[];
   /** files the merge commit itself changes (an "evil merge") */
   readonly inMerge?: readonly FileOp[];
+  /**
+   * An extra commit with NO file operations is appended after this
+   * first-parent position — `git commit --allow-empty`, which fast-import
+   * produces by naming no ops. gitleaks has no bytes to scan in it, so it
+   * does not count it, which is what `commitsWithPatch` exists to match.
+   */
+  readonly emptyAfter?: number;
 }
 
 const workDirs: string[] = [];
@@ -118,6 +125,11 @@ function buildRepo(plan: Plan): { repo: string; base: string; head: string } {
       commit('refs/heads/phase', mark, `commit ${pos}`, prev, null, [note, ...(plan.onBranch?.[pos] ?? [])]);
     }
     prev = mark;
+    if (plan.emptyAfter === pos) {
+      mark += 1;
+      commit('refs/heads/phase', mark, `empty ${pos}`, prev, null, []);
+      prev = mark;
+    }
   }
   git(repo, ['fast-import', '--quiet'], stream);
   return { repo, base: git(repo, ['rev-parse', 'main']), head: git(repo, ['rev-parse', 'phase']) };
@@ -181,6 +193,53 @@ describe('Phase 3 secret history range scan', () => {
     expect(GITLEAKS_VERSION).toBe('8.24.3');
     expect(createHash('sha256').update(readFileSync(gitleaks)).digest('hex')).toBe(GITLEAKS_BINARY_SHA256);
     expect(PHASE3_BASE).toBe('0f2b09e7f2bd1015053ff2cb79ad1ceafc25bc6f');
+  });
+
+  it('a PATCHLESS commit in the range does not read as an unscanned commit, and a real secret in the same range still fails', () => {
+    // THE DEFECT THIS ARM EXISTS FOR, measured in CI before it was fixed: run
+    // `43851805698`, job `hygiene`, step «Secret history range scan» —
+    // gitleaks itself reported `no leaks found`, and the guard still failed
+    // with «gitleaks scanned 6 commits but the range b309b3b2..0aa22682
+    // holds 7». The range held exactly one patchless commit. gitleaks does
+    // not count a commit whose patch is empty, because there are no bytes in
+    // it to scan, and that is correct behaviour — so the guard was comparing
+    // two numbers of DIFFERENT IDENTITY (`RULE-30`) and refusing a branch
+    // with no secret in it. A money branch (#120) was blocked by it, and its
+    // author had no way out: the empty commit was already pushed, and
+    // removing it needs a force push, which is forbidden outright.
+    const clean = buildRepo({ emptyAfter: 3 });
+    const r = runScan(clean.repo, clean.base, clean.head);
+    expect(r.problems).toEqual([]);
+    expect(r.result).toBe('PASS');
+    // The range is one LARGER than what carries a patch, and the patchless
+    // commit is NAMED rather than merely subtracted — a difference nobody can
+    // read is the next person's mystery.
+    expect(r.commitsInRange).toBe(HISTORY + 1);
+    expect(r.commitsWithPatch).toBe(HISTORY);
+    expect(r.patchlessCommits).toHaveLength(1);
+    expect(r.commitsScanned).toBe(r.commitsWithPatch);
+
+    // AND THE NARROWING IS NOT A RELAXATION: the same range with a real
+    // secret in a patch-bearing commit still FAILS. Without this half, the
+    // fix above could have been a way to stop counting at all.
+    //
+    // THE SEED IS `plantedToken()`, THE ONE THE REST OF THIS SUITE USES, and
+    // the first version of this arm got that wrong in the way that matters:
+    // it planted `ghp_` followed by thirty-six letter `A`s, which gitleaks
+    // does NOT report — its github-pat rule carries an entropy floor that a
+    // repeated character cannot clear. So the arm read `PASS` and reported
+    // «the fix is a relaxation» when what had actually happened was that the
+    // CONTROL measured nothing. Measured in CI on `08581d13`, run
+    // `43888998108`: this half failed with `expected 'PASS' to be 'FAIL'`
+    // while the patchless half above passed — so the fix was proven and the
+    // control was not. A seed whose detection is not itself established is
+    // not a control, which is the rule this arm now carries in its own body.
+    const leaky = buildRepo({ emptyAfter: 3, onBranch: { 5: [leak(plantedToken())], 6: [unleak] } });
+    const bad = runScan(leaky.repo, leaky.base, leaky.head);
+    expect(bad.result).toBe('FAIL');
+    expect(bad.findings).toBeGreaterThan(0);
+    expect(bad.remaining.length).toBeGreaterThan(0);
+    expect(bad.commitsScanned).toBe(bad.commitsWithPatch);
   });
 
   it('CONTROL: a clean long history with a merged agent branch passes, every commit counted', () => {
@@ -616,6 +675,7 @@ describe('Phase 3 secret history range scan', () => {
       head: SHA,
       mergeBase: PHASE3_BASE,
       commitsInRange: 401,
+      commitsWithPatch: 401,
       commitsScanned: 401,
       findings: 3,
       remaining: [],
@@ -635,7 +695,7 @@ describe('Phase 3 secret history range scan', () => {
     it('refuses a failed or partial scan found in the release directory even when not required', () => {
       const problems = scanProblems(evidence({ ...passing(), result: 'FAIL', commitsScanned: 30 }, false).problems);
       expect(problems.join('\n')).toMatch(/result is FAIL/);
-      expect(problems.join('\n')).toMatch(/read 30 of 401 commits/);
+      expect(problems.join('\n')).toMatch(/read 30 of 401 commits that carry a patch/);
     });
   });
 
@@ -652,6 +712,8 @@ describe('Phase 3 secret history range scan', () => {
       logOpts: `--diff-merges=first-parent ${PHASE3_BASE}..${head}`,
       commitsInRange: 400,
       mergesInRange: 14,
+      commitsWithPatch: 400,
+      patchlessCommits: [],
       commitsScanned: 400,
       findings: 3,
       allowlisted: [],
