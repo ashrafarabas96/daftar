@@ -555,11 +555,10 @@ jobs:
       # merely present but installed through globalSetup; supply-chain
       # hygiene; and the six budgets at Tier 1.
       #
-      # It composes the P2-S7 gate, which composes the whole chain back to
-      # Phase 1. The predecessor step above is NOT removed for that reason:
-      # when a predecessor breaks, a reviewer should see WHICH one failed in
-      # the step list rather than having to read the log of a gate that
-      # contains all of them.
+      # It no longer composes the P2-S7 gate (DR-170): P2-S1 .. P2-S7 run as their
+      # own steps of `backend-gates-p2`, and law C-14 of the conservation guard
+      # holds that. When a predecessor breaks, a reviewer sees WHICH one failed in
+      # that job's step list.
       #
       # WHAT THIS STEP DELIBERATELY DOES NOT COVER: Tier 2 at a hundred
       # thousand and a million lines, the rollback/restore rehearsal, and the
@@ -2157,8 +2156,8 @@ jobs:
     # crossings are named file by file in the evidence.
     #
     # P2-S8 is NOT here. It is pinned to `backend` by the plan-evidence
-    # contract and stays there, which is also why its predecessor step list
-    # still reads correctly: it composes S7 inside itself.
+    # contract and stays there. It does not compose S7 inside itself any more
+    # (DR-170): the seven steps below are the only place P2-S1 .. P2-S7 run in CI.
     runs-on: ubuntu-26.04
     services:
       postgres:

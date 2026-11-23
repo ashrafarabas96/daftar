@@ -1147,7 +1147,13 @@ const STEPS: { name: string; cmd: string; args: string[]; env?: Record<string, s
   { name: 'migration manifest', cmd: npm, args: ['run', 'check:migrations'] },
   { name: 'static guards (G-1…G-6)', cmd: npm, args: ['run', 'check:guards'] },
   { name: 'supply-chain hygiene (§47, f §22)', cmd: npm, args: ['run', 'check:supply-chain'] },
-  { name: 'P2-S7 gate (permanent predecessor, composes P2-S6…P2-S1 and Phase 1)', cmd: npm, args: ['run', 'gate:phase2:s7'] },
+  // The P2-S7 gate (which composes P2-S6 .. P2-S1 and Phase 1) is not run from inside this
+  // gate any more (DR-170). Required CI runs `gate:phase2:s1` .. `gate:phase2:s7` as separate,
+  // visible steps of `backend-gates-p2`, so nesting them here ran the same 590 seconds again,
+  // twice in `backend-work` (this gate's own step, and again under `gate:phase3:s1`). Law C-14
+  // of tests/guards/ci-job-conservation.test.ts holds that every one of those seven steps
+  // exists and that this gate does not call them. Run alone, this gate no longer proves the
+  // predecessors; `npm run gate:phase2:s7` does, and CI runs both.
   {
     name: 'P2-S8 authority, isolation, planted-discrepancy, failure-injection, redaction and reconciliation suites',
     cmd: 'npx',
