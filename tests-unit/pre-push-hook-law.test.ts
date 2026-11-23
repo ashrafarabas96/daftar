@@ -25,10 +25,11 @@
  * nothing.
  */
 import { execFileSync } from 'node:child_process';
-import { copyFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { HOOKS_DIR, wireHooks } from '../scripts/setup-git-hooks';
 
 const ROOT = resolve(__dirname, '..');
 const HOOK = join(ROOT, '.githooks', 'pre-push');
@@ -117,6 +118,126 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     const r = git(clone, 'push', 'origin', 'HEAD:refs/heads/maintenance');
     expect(r.out).not.toMatch(/pre-push: REFUSED/);
     expect(r.code, `a branch named 'maintenance' was refused:\n${r.out}`).toBe(0);
+  });
+
+  // ── THE WIRING AND ITS UNDO, driven through the exported function against a
+  //    throwaway repository, because the restoration must be a REVIEWED
+  //    MECHANISM and not a tool reached for under pressure (the coordinator's
+  //    condition on this cart, after I disarmed 151 of 152 worktrees and
+  //    restored them with a second tool).
+  describe('`wireHooks` wires, refuses, and undoes — measured on real configuration', () => {
+    let repo = '';
+
+    beforeAll(() => {
+      repo = join(work, 'wiring');
+      expect(git(work, 'init', '-q', '-b', 'main', repo).code).toBe(0);
+      mkdirSync(join(repo, HOOKS_DIR), { recursive: true });
+      copyFileSync(HOOK, join(repo, HOOKS_DIR, 'pre-push'));
+      chmodSync(join(repo, HOOKS_DIR, 'pre-push'), 0o755);
+    });
+
+    it('POSITIVE CONTROL: wiring sets the configuration and the hook then actually governs a push', () => {
+      const wired = wireHooks(repo, 'wire');
+      expect(wired.lines.join('\n')).toMatch(/core\.hooksPath .* -> '\.githooks'/);
+      expect(wired.ok).toBe(true);
+      expect(git(repo, 'config', '--get', 'core.hooksPath').out.trim()).toBe(HOOKS_DIR);
+      // and it is in force, not merely configured: a push to main is refused
+      for (const [k, v] of [
+        ['user.email', 'law@example.invalid'],
+        ['user.name', 'wiring law'],
+        ['commit.gpgsign', 'false'],
+      ] as const) {
+        expect(git(repo, 'config', k, v).code).toBe(0);
+      }
+      writeFileSync(join(repo, 'b.txt'), 'b\n');
+      expect(git(repo, 'add', '-A').code).toBe(0);
+      expect(git(repo, 'commit', '-q', '-m', 'first').code).toBe(0);
+      expect(git(repo, 'remote', 'add', 'origin', bare).code).toBe(0);
+      const push = git(repo, 'push', 'origin', 'HEAD:main');
+      expect(push.code).not.toBe(0);
+      expect(push.out).toMatch(/pre-push: REFUSED — push to the protected branch 'main'/);
+    });
+
+    it('`undo` unsets the configuration AND says what guards the checkout afterwards', () => {
+      // `.git/hooks/pre-push` is what governs once the configuration is gone,
+      // so the undo must find it and name it — «undone» is not «guarded».
+      const fallback = join(repo, '.git', 'hooks', 'pre-push');
+      copyFileSync(HOOK, fallback);
+      chmodSync(fallback, 0o755);
+
+      const undone = wireHooks(repo, 'undo');
+      expect(undone.ok, undone.lines.join('\n')).toBe(true);
+      expect(undone.lines.join('\n')).toMatch(/core\.hooksPath '\.githooks' -> unset/);
+      expect(undone.lines.join('\n')).toMatch(/in force now: .*hooks[\\/]pre-push/);
+      expect(git(repo, 'config', '--get', 'core.hooksPath').code, 'the configuration is still set').not.toBe(0);
+      // and the fallback really governs: the same refusal still fires
+      const push = git(repo, 'push', 'origin', 'HEAD:refs/heads/main');
+      expect(push.out).toMatch(/pre-push: REFUSED/);
+    });
+
+    it('`undo` FAILS, rather than reporting success, when nothing would guard the checkout afterwards', () => {
+      // This is the case that made the original mistake invisible: a command
+      // that prints success while the checkout is left with no refusal at all.
+      const other = join(work, 'unguarded');
+      expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
+      mkdirSync(join(other, HOOKS_DIR), { recursive: true });
+      copyFileSync(HOOK, join(other, HOOKS_DIR, 'pre-push'));
+      expect(wireHooks(other, 'wire').ok).toBe(true);
+      rmSync(join(other, '.git', 'hooks', 'pre-push'), { force: true });
+
+      const undone = wireHooks(other, 'undo');
+      expect(undone.ok, 'undo reported success while leaving the checkout unguarded').toBe(false);
+      expect(undone.lines.join('\n')).toMatch(/NO pre-push refusal/);
+    });
+
+    it('REFUSES to wire while any SIBLING WORKTREE lacks the directory — the check the original mistake needed', () => {
+      // THE HEART OF THIS CART, and it would otherwise be pinned by nothing:
+      // every arm above uses a repository with ONE worktree, which passes the
+      // check whether or not the check exists. Here a second worktree is
+      // added and `.githooks/` is untracked, so that worktree does not have
+      // it — exactly the shape that disarmed 151 of 152 worktrees of the real
+      // repository, because `core.hooksPath` is shared and the directory is
+      // not.
+      const shared = join(work, 'shared');
+      expect(git(work, 'init', '-q', '-b', 'main', shared).code).toBe(0);
+      for (const [k, v] of [
+        ['user.email', 'law@example.invalid'],
+        ['user.name', 'wiring law'],
+        ['commit.gpgsign', 'false'],
+      ] as const) {
+        expect(git(shared, 'config', k, v).code).toBe(0);
+      }
+      writeFileSync(join(shared, 'c.txt'), 'c\n');
+      expect(git(shared, 'add', '-A').code).toBe(0);
+      expect(git(shared, 'commit', '-q', '-m', 'first').code).toBe(0);
+      mkdirSync(join(shared, HOOKS_DIR), { recursive: true });
+      copyFileSync(HOOK, join(shared, HOOKS_DIR, 'pre-push'));
+
+      // one worktree: wiring is allowed (the positive control for this arm,
+      // without which «refuses» could be «refuses always»)
+      expect(wireHooks(shared, 'check').lines.join('\n')).not.toMatch(/worktrees have no/);
+
+      const sibling = join(work, 'sibling');
+      expect(git(shared, 'worktree', 'add', '-q', '-b', 'side', sibling).code, 'the sibling worktree could not be created').toBe(0);
+      expect(existsSync(join(sibling, HOOKS_DIR, 'pre-push')), 'the sibling unexpectedly has the hooks directory').toBe(false);
+
+      const refused = wireHooks(shared, 'wire');
+      expect(refused.ok, 'wiring was allowed while a sibling worktree had no hooks directory').toBe(false);
+      expect(refused.lines.join('\n')).toMatch(/of 2 worktrees have no \.githooks\//);
+      expect(refused.lines.join('\n')).toMatch(/core\.hooksPath is SHARED/);
+      // AND NOTHING WAS WRITTEN, which is the part that matters
+      expect(git(shared, 'config', '--get', 'core.hooksPath').code, 'the configuration was written despite the refusal').not.toBe(0);
+    });
+
+    it('`undo` REFUSES to touch a `core.hooksPath` it did not set', () => {
+      const foreign = join(work, 'foreign');
+      expect(git(work, 'init', '-q', '-b', 'main', foreign).code).toBe(0);
+      expect(git(foreign, 'config', 'core.hooksPath', 'somebody-elses-hooks').code).toBe(0);
+      const undone = wireHooks(foreign, 'undo');
+      expect(undone.ok).toBe(false);
+      expect(undone.lines.join('\n')).toMatch(/which this script did not set — it is left alone/);
+      expect(git(foreign, 'config', '--get', 'core.hooksPath').out.trim()).toBe('somebody-elses-hooks');
+    });
   });
 
   it('pins the TWO refusals in the file by their mechanism, so a silent edit cannot pass review as a formatting change', () => {

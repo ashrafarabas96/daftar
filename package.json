@@ -90,7 +90,8 @@
     "rehearse:phase3:deployed": "tsx scripts/phase3-deployed-rehearsal.ts",
     "gate:browser": "tsx tests/browser/gate.ts",
     "setup:hooks": "tsx scripts/setup-git-hooks.ts",
-    "check:hooks": "tsx scripts/setup-git-hooks.ts --check"
+    "check:hooks": "tsx scripts/setup-git-hooks.ts --check",
+    "undo:hooks": "tsx scripts/setup-git-hooks.ts --undo"
   },
   "engines": {
     "node": ">=24 <25"
