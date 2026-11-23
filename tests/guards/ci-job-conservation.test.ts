@@ -755,6 +755,14 @@ describe('the release path reaches every Phase 2 slice gate and the Phase 1 gate
 const P3_JOB = 'backend-gates-p3';
 const P3_STEP = 'Phase 3 corrective gate (composes P3-S8 ... P3-S1, P2-S8 and Phase 1)';
 
+/**
+ * The corrective chain runs the P2-S8 gate, whose budgets test asserts on `pg_stat_statements`
+ * (`PERF01-INSTRUMENT-UNAVAILABLE` when the library is not loaded). The `backend` job enables it
+ * in a step of its own; the job that carries the chain has to enable it too, or the chain fails
+ * for a reason that is the job's and not the code's (run 45066670142, step 18 of `backend-gates-p3`).
+ */
+const PGSS_STEP = 'Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)';
+
 const liveText = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 function p3SplitProblems(ciText: string, gateText: string): string[] {
@@ -767,6 +775,11 @@ function p3SplitProblems(ciText: string, gateText: string): string[] {
       problems.push(`C-16: "${P3_STEP}" runs \`${runs.join(' | ')}\`, expected exactly \`npm run gate:phase3:corrective\``);
     }
   }
+  const steps = stepsOf(ciText, P3_JOB);
+  const pgss = steps.indexOf(PGSS_STEP);
+  const chain = steps.indexOf(P3_STEP);
+  if (pgss < 0) problems.push(`C-16: \`${P3_JOB}\` has no step "${PGSS_STEP}" — the P2-S8 budgets inside the chain cannot measure without it`);
+  else if (chain >= 0 && pgss > chain) problems.push(`C-16: "${PGSS_STEP}" runs after the corrective gate in \`${P3_JOB}\``);
   const live = liveText(gateText);
   const at = live.indexOf('export function s1Plan');
   const end = live.indexOf('\n}\n', at);
@@ -824,6 +837,21 @@ describe('the Phase 3 corrective gate is composed by the job, not nested in P4-S
 
   it('RED: the step runs another command', () => {
     expect(p3SplitProblems(plant('run: npm run gate:phase3:corrective', 'run: npm run gate:phase3:s8'), gate).join('\n')).toContain('expected exactly');
+  });
+
+  it('RED: the job does not enable pg_stat_statements (the defect of run 45066670142)', () => {
+    expect(p3SplitProblems(plant(`name: ${PGSS_STEP}`, `name: ${PGSS_STEP} (renamed)`), gate).join('\n')).toContain(`has no step "${PGSS_STEP}"`);
+  });
+
+  it('RED: the job enables pg_stat_statements only after the corrective gate has run', () => {
+    const slice = jobText(ci, P3_JOB);
+    const at = slice.indexOf(`      - name: ${PGSS_STEP}`);
+    const end = slice.indexOf('      - run: npm ci', at);
+    expect(at).toBeGreaterThan(-1);
+    const moved = slice.slice(at, end);
+    const tail = `${slice.replace(moved, '').replace(/\n*$/, '\n')}${moved.replace(/\n*$/, '')}`;
+    expect(tail).not.toBe(slice);
+    expect(p3SplitProblems(ci.replace(slice, tail), gate).join('\n')).toContain('runs after the corrective gate');
   });
 
   it('RED: the job is gone', () => {

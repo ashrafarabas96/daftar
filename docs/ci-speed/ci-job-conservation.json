@@ -9,14 +9,15 @@
   },
   "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-gates-p3", "backend-golden"],
   "totals": {
-    "shared": 15,
-    "assigned": 46
+    "shared": 16,
+    "assigned": 45
   },
   "shared": [
     "Build contract, accounting and design-system packages",
     "Chromium install inputs (pinned playwright-core, runner image)",
     "Create DAFTAR database + DB roles (fresh PostgreSQL from zero)",
     "Empty the work folder before checkout (self-hosted is not disposable)",
+    "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)",
     "Fresh database migrate (0000 → latest)",
     "Install Chromium for the gate's real-browser matrix",
     "Install PostgreSQL 16 from the PGDG archive, pinned, for the deployment-authority cluster",
@@ -41,7 +42,6 @@
     "Budget negative control — the POS ratio gate and P4-A must be able to fail, and P4-B must NOT fail on a client-side delay": "backend",
     "Budget negative control — a delay INSIDE the database must fail P4-B": "backend",
     "Database contract from zero (throw-away embedded server; same check as the release gate)": "backend-static",
-    "Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)": "backend",
     "Format": "backend-static",
     "Golden regression suite": "backend-golden",
     "Integration + security tests": "backend",
