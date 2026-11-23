@@ -1857,7 +1857,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     );
   });
 
-  it(`MEASUREMENT: p95 of ${SHORT_PERCENTILE_ITERATIONS} warm runs of each fat-tail read is within P4-D (${BUDGET.D_BALANCE_P95} ms)`, () => {
+  it(`MEASUREMENT: p95 of ${SHORT_PERCENTILE_ITERATIONS} warm runs of each fat-tail read, ${PAIRED_ITERATIONS} for the receivable read that carries the ratio, is within P4-D (${BUDGET.D_BALANCE_P95} ms)`, () => {
     requireFixture();
     // EVERY read's verdict is reached, then the run fails on whichever missed:
     // see `everyArm`. The judgement itself is unchanged.
