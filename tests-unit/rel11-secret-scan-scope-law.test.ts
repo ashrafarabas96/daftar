@@ -697,10 +697,19 @@ describe('REL-11: the scope of each secret scan on a push to main', () => {
     const at = afterSteps.findIndex((x) => x.name === RANGE_STEP);
     expect(at, 'the range step was not found at all in the seeded job').toBeGreaterThan(0);
     expect(afterSteps[at - 1]?.name, 'the step the seed put directly above the gate lost its identity to the rename').toBe('uses:actions/checkout@v4');
+    // THE BASELINE IS MEASURED AND THE CLAIM IS \u00abONE MORE\u00bb, not the literal 2.
+    // Writing 2 here is the defect this file's own creed names at `:349` \u2014 a
+    // hardcoded count is tomorrow's false red \u2014 and I committed it while
+    // fixing a note ABOUT a hardcoded count. If the `hygiene` job ever gains
+    // another checkout, the literal reddens on a seed that worked perfectly;
+    // the difference cannot.
+    const checkouts = (steps: readonly { readonly name: string | null }[]): number => steps.filter((x) => x.name === 'uses:actions/checkout@v4').length;
+    const baseline = checkouts(stepsOfJob(WORKFLOW, 'hygiene'));
+    expect(baseline, 'the unseeded job carries no checkout at all, so \u00abone more\u00bb would measure nothing').toBeGreaterThan(0);
     expect(
-      afterSteps.filter((x) => x.name === 'uses:actions/checkout@v4'),
-      'the seeded `uses:` step was folded away: only the job\u2019s own checkout is left',
-    ).toHaveLength(2);
+      checkouts(afterSteps),
+      `the seeded \`uses:\` step was folded away: the job carries ${String(baseline)} checkout(s) of its own and the seed should have made ${String(baseline + 1)}`,
+    ).toBe(baseline + 1);
 
     // 3. AND THE OTHER OPENERS YAML PERMITS DO NOT SWALLOW THE STEP BELOW
     //    THEM. `- id:` and `- env:` carry no condition, so the step they open

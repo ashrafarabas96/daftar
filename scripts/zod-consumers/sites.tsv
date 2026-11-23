@@ -201,9 +201,9 @@ scripts/phase3-review-index.ts	126	find-shift	safe	R-RECEIVER	return GROUP_RULES
 scripts/phase3-review-index.ts	433	find-shift	safe	R-RECEIVER	const h1 = lines.find((l) => /^#\s+\S/.test(l));
 scripts/phase3-review-index.ts	643	find-shift	safe	R-RECEIVER	const windowOf = (i: number): (typeof bounds)[number] | null => bounds.find((b) => i <= b.at) ?? null;
 scripts/phase3-s9-evidence.ts	75	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
-scripts/phase3-secret-scan.ts	502	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
-scripts/phase3-secret-scan.ts	611	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
-scripts/phase3-secret-scan.ts	925	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-secret-scan.ts	515	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
+scripts/phase3-secret-scan.ts	624	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
+scripts/phase3-secret-scan.ts	956	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
 scripts/phase4-gate.ts	342	find-shift	safe	R-RECEIVER	const w = present.find((x) => x.name === n);
 scripts/phase4-gate.ts	822	find-shift	safe	R-RECEIVER	const r = results.find((x) => x.id === st.id);
 scripts/phase4-gate.ts	843	find-shift	safe	R-RECEIVER	const hit = found.find((r) => needle.test(r));
