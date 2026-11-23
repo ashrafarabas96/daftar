@@ -16,9 +16,9 @@
  * that control STARTED, so a refusal below is the pair's doing and not the
  * fixture's:
  *
- *   APP      = IDENTITY    → REFUSED (:494 clause AND §31 clause, both)
+ *   APP      = IDENTITY    → REFUSED (the least-privilege APP/PLATFORM clause AND the §31 membership clause, both)
  *   APP      = RESOLVER    → REFUSED (§31 only)
- *   APP      = PROVISIONER → REFUSED (:522 clause only)
+ *   APP      = PROVISIONER → REFUSED (the least-privilege clause only)
  *   IDENTITY = RESOLVER    → REFUSED (§31 only)
  *   IDENTITY = PROVISIONER → **STARTED**
  *   RESOLVER = PROVISIONER → **STARTED**
@@ -39,16 +39,16 @@
  * among them, which is this branch's whole subject. Three removals and one
  * addition give the four:
  *
- *   `PLATFORM`, `WORKER` → `forbid(...)` at `:437-438` ("merchant API has no
+ *   `PLATFORM`, `WORKER` → `forbid(...)` in the merchant-api block ("merchant API has no
  *                          platform/worker authority"): a merchant API that
  *                          is merely GIVEN either one does not start.
- *   `RECONCILER`         → NOT `forbid`. The §7 converse at `:284-288`,
+ *   `RECONCILER`         → NOT `forbid`. The §7 converse clause,
  *                          "must NOT be set in PROCESS_MODE=merchant-api
  *                          (only the reconciler process holds reconciliation
  *                          authority)". A separate clause with a separate
  *                          wording, written for a separate reason (§7 keeps
  *                          the ledger-wide reader out of every other mode).
- *   `PROVISIONER`        → added to the reachable four, because `:518-522`
+ *   `PROVISIONER`        → added to the reachable four, because the production `merchant-api`
  *                          REQUIRES it in this mode.
  *
  * Measured, not read off the source: on blob `d0d0d99b` of `config.ts`, whose
@@ -57,27 +57,28 @@
  * control STARTED:
  *
  *   fixture alone                      → STARTED
- *   + RECONCILER, distinct credential  → REFUSED, `:284-288` wording only
- *   + RECONCILER = APP                 → REFUSED, `:284-288` AND §31, both in
+ *   + RECONCILER, distinct credential  → REFUSED, the §7 converse wording only
+ *   + RECONCILER = APP                 → REFUSED, the §7 converse AND §31, both in
  *                                        the one message (`fail` accumulates)
  *
  * That last line is why `RECONCILER` cannot be called "excluded from the
  * separation set": it is IN the map and §31 does compare it. It is excluded
  * from the REACHABLE set, by a mode clause, which is a different statement.
- * If `:284-288` were ever relaxed, this file's "four" would become five and
+ * If the §7 converse were ever relaxed, this file's "four" would become five and
  * the enumeration above would be measuring the wrong set — so the clause is
  * named here by line and by wording rather than left to be inferred.
  *
  * ── WHY THE FIX IS A MEMBERSHIP AND NOT A THIRD COMPARISON ──────────────────
  *
- * `:521-522` already compares the provisioner against APP and PLATFORM by
+ * the least-privilege clause already compares the provisioner against APP and PLATFORM by
  * hand. Adding `=== IDENTITY` and `=== RESOLVER` beside it would close these
  * two pairs and leave the next credential to be added exposed again. §31
  * exists precisely so that the separation set has ONE definition, so the fix
- * is to make `PROVISIONER_DATABASE_URL` a member of it. `:521-522` stays as
+ * is to make `PROVISIONER_DATABASE_URL` a member of it. That clause stays as
  * it is: it carries its own least-privilege wording, and in production both
  * clauses now accumulate for `APP = PROVISIONER` (`fail` collects and does not
- * throw at the first defect, `:494`), which the last arm here records.
+ * throw at the first defect: `fail()` accumulates into one message), which
+ * the last arm here records.
  *
  * ── WHO MOVES THIS ─────────────────────────────────────────────────────────
  *
@@ -87,7 +88,7 @@
  * does not leave the separation set silently.
  */
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../apps/api/src/config';
+import { DB_PRINCIPAL_URL_KEYS, loadConfig } from '../apps/api/src/config';
 
 /**
  * A production `merchant-api` that is otherwise complete and correct.
@@ -121,6 +122,40 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://app.example.com',
 };
 
+/**
+ * Read a §31 refusal by the PAIR it names, in EITHER direction.
+ *
+ * `fail()` is called on the key the loop reaches LATER, naming the one it saw
+ * EARLIER, so «A duplicates B» or «B duplicates A» is decided by the order of
+ * `DB_PRINCIPAL_URL_KEYS` and not by the misconfiguration. Matching one
+ * spelling made these arms pass BY POSITION: measured, swapping two members of
+ * that list — membership identical — reddened all three of them although the
+ * refusal still worked perfectly. The order is pinned in ONE place, by the arm
+ * that names the list; these read the pair.
+ */
+function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void {
+  let message = '';
+  try {
+    loadConfig(env);
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
+  const clause = message
+    .split('\n')
+    .filter((l) => l.includes('every DB principal must use distinct credentials'))
+    .join('\n');
+  expect(clause, 'no §31 duplicate clause in the refusal at all').not.toBe('');
+  expect(clause).toContain(a);
+  expect(clause).toContain(b);
+  // AND the clause names THESE TWO and no third principal, so «names both» is
+  // not satisfied by a message that names everything.
+  for (const other of DB_PRINCIPAL_URL_KEYS) {
+    if (other === a || other === b) continue;
+    expect(clause, `the duplicate clause also names ${other}`).not.toContain(other);
+  }
+}
+
 describe('THE LAW: the provisioning credential is a principal in the separation set', () => {
   it('POSITIVE CONTROL: four distinct credentials start the process', () => {
     // Without this arm every refusal below could be the fixture's own doing.
@@ -128,21 +163,19 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
   });
 
   it('refuses a provisioner credential equal to IDENTITY, naming both fields', () => {
-    expect(() =>
-      loadConfig({
-        ...MERCHANT_PROD,
-        PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL,
-      }),
-    ).toThrow(/PROVISIONER_DATABASE_URL: duplicates IDENTITY_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(
+      { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL },
+      'PROVISIONER_DATABASE_URL',
+      'IDENTITY_DATABASE_URL',
+    );
   });
 
   it('refuses a provisioner credential equal to RESOLVER, naming both fields', () => {
-    expect(() =>
-      loadConfig({
-        ...MERCHANT_PROD,
-        PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
-      }),
-    ).toThrow(/PROVISIONER_DATABASE_URL: duplicates RESOLVER_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(
+      { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL },
+      'PROVISIONER_DATABASE_URL',
+      'RESOLVER_DATABASE_URL',
+    );
   });
 
   it('NEGATIVE CONTROL: the same ROLE with a different CREDENTIAL still starts', () => {
@@ -159,7 +192,8 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
   });
 
   it('RECORDS: an APP-equal provisioner now fails under BOTH clauses at once', () => {
-    // Measured, not assumed: `fail` accumulates (`:494`), so the pre-existing
+    // Measured, not assumed: `fail()` accumulates into one message rather than
+    // throwing at the first defect, so the pre-existing
     // least-privilege clause and the new membership both appear in the one
     // message. This arm exists so that removing either clause is visible.
     const env = {
@@ -167,6 +201,57 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
       PROVISIONER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL,
     };
     expect(() => loadConfig(env)).toThrow(/PROVISIONER_DATABASE_URL: must be a distinct role from APP\/PLATFORM \(least-privilege provisioning boundary\)/);
-    expect(() => loadConfig(env)).toThrow(/PROVISIONER_DATABASE_URL: duplicates APP_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'APP_DATABASE_URL');
+  });
+
+  // ── #111's REMAINING NOTES, BOTH ONE DEFECT: THE SET AND ITS ORDER WERE
+  //    PINNED BY NOTHING BUT THIS FILE'S PROSE ──────────────────────────────
+  it('pins the separation set the gate CONSUMES, by name and in order', () => {
+    // The members used to be a local `const urls` literal inside the refusal,
+    // which no test could reach: the claim that a seventh credential had been
+    // ADDED TO THE SET rested on reading the source. The gate now loops this
+    // exported object, so this arm pins what decides.
+    expect([...DB_PRINCIPAL_URL_KEYS]).toEqual([
+      'APP_DATABASE_URL',
+      'PLATFORM_DATABASE_URL',
+      'IDENTITY_DATABASE_URL',
+      'RESOLVER_DATABASE_URL',
+      'WORKER_DATABASE_URL',
+      'RECONCILER_DATABASE_URL',
+      'PROVISIONER_DATABASE_URL',
+    ]);
+    // AN ORDERED SET BY NAME, not a length: `toHaveLength(7)` passes when one
+    // key is swapped for another, and the whole point here is WHICH keys.
+    expect(Object.isFrozen(DB_PRINCIPAL_URL_KEYS)).toBe(true);
+  });
+
+  it('reads the refusal by the PAIR it names, not by which key the loop reached last', () => {
+    // The direction of the message is a consequence of the loop ORDER:
+    // `fail()` is called on the key reached later, naming the one seen
+    // earlier. Every arm above matches `PROVISIONER … duplicates IDENTITY …`
+    // only because `PROVISIONER_DATABASE_URL` is LAST in the set — insert a
+    // key after it and those arms redden although the refusal still works
+    // perfectly. That is the positional trap. This arm accepts EITHER
+    // direction and requires both names, so it survives a reorder, and the
+    // arm above is what makes a reorder visible in ONE place with a named
+    // cause.
+    let message = '';
+    try {
+      loadConfig({ ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL });
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).not.toBe('');
+    expect(message).toMatch(/every DB principal must use distinct credentials/);
+    expect(message).toMatch(/PROVISIONER_DATABASE_URL/);
+    expect(message).toMatch(/IDENTITY_DATABASE_URL/);
+    // AND THE CONTROL that keeps this from being satisfied by any refusal at
+    // all: a THIRD key must not appear in the duplicate clause, or "names both
+    // keys" would be true of a message that named everything.
+    const duplicateClause = message
+      .split('\n')
+      .filter((l) => l.includes('every DB principal must use distinct credentials'))
+      .join('\n');
+    expect(duplicateClause).not.toMatch(/RESOLVER_DATABASE_URL|WORKER_DATABASE_URL|RECONCILER_DATABASE_URL|PLATFORM_DATABASE_URL/);
   });
 });

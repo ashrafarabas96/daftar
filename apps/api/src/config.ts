@@ -117,6 +117,39 @@ function productionCorsOriginProblem(origin: string): string | null {
  * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
  * the IPv6 forms, whose `hostname` keeps the brackets.
  */
+/**
+ * §31's SEPARATION SET: every environment key that carries a database
+ * principal's credential, in the ORDER the refusal walks them.
+ *
+ * EXPORTED, FROZEN, AND CONSUMED BY THE GATE ITSELF — not written beside it as
+ * a local literal, which is what it was. A local `const urls` can only be
+ * pinned from outside by READING THE SOURCE TEXT, so nothing could assert that
+ * a seventh credential had really been added to the set; the review of #111
+ * named that as a claim wider than its mechanism. The gate now loops this very
+ * object, so an arm that pins this list pins what decides.
+ *
+ * AND THE ORDER IS PART OF THE CONTRACT, which is the second half of the same
+ * defect. `fail()` is called on the key reached LATER, naming the key seen
+ * EARLIER, so the direction of «PROVISIONER_DATABASE_URL duplicates
+ * IDENTITY_DATABASE_URL» is a consequence of `PROVISIONER_DATABASE_URL` being
+ * LAST here. Move it, or insert a key after it, and the same misconfiguration
+ * reports the opposite direction — arms that matched one spelling of the
+ * message would redden although the refusal still works perfectly, which is
+ * the positional trap, the sibling of reading a YAML block by where it ends.
+ * `tests-unit/config-provisioner-principal-separation-law.test.ts` therefore
+ * pins this ordered list BY NAME, and asserts that the message names BOTH
+ * keys rather than one direction of the pair.
+ */
+export const DB_PRINCIPAL_URL_KEYS = Object.freeze([
+  'APP_DATABASE_URL',
+  'PLATFORM_DATABASE_URL',
+  'IDENTITY_DATABASE_URL',
+  'RESOLVER_DATABASE_URL',
+  'WORKER_DATABASE_URL',
+  'RECONCILER_DATABASE_URL',
+  'PROVISIONER_DATABASE_URL',
+] as const);
+
 function isLocalHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
@@ -583,10 +616,11 @@ const EnvSchema = z
       }
     }
     // §31: ACTUAL PRINCIPALS MUST DIFFER — no aliasing one role's credentials
-    // for another pool via misconfiguration.
+    // for another pool via misconfiguration. The members and their ORDER are
+    // `DB_PRINCIPAL_URL_KEYS`, defined and exported above this function.
     //
     // `PROVISIONER_DATABASE_URL` is a member as of the owner's order of
-    // 2026-11-15 («تشديد أمني لا تخفيف»). It was absent, and `:521-522`
+    // 2026-11-15 («تشديد أمني لا تخفيف»). It was absent, and the least-privilege clause
     // compares it only against APP and PLATFORM by hand — so a provisioner
     // credential equal to IDENTITY or to RESOLVER started a production
     // merchant-api, measured by loading the config once per pair. The fix is
@@ -594,18 +628,12 @@ const EnvSchema = z
     // keeps ONE definition and the next credential added is covered by it.
     // Pinned by `tests-unit/config-provisioner-principal-separation-law.test.ts`;
     // the set's own reach is pinned by
-    // `tests-unit/config-duplicate-db-principal-law.test.ts`.
-    const urls: Record<string, string | undefined> = {
-      APP_DATABASE_URL: c.APP_DATABASE_URL,
-      PLATFORM_DATABASE_URL: c.PLATFORM_DATABASE_URL,
-      IDENTITY_DATABASE_URL: c.IDENTITY_DATABASE_URL,
-      RESOLVER_DATABASE_URL: c.RESOLVER_DATABASE_URL,
-      WORKER_DATABASE_URL: c.WORKER_DATABASE_URL,
-      RECONCILER_DATABASE_URL: c.RECONCILER_DATABASE_URL,
-      PROVISIONER_DATABASE_URL: c.PROVISIONER_DATABASE_URL,
-    };
+    // `tests-unit/config-duplicate-db-principal-law.test.ts`, and the MEMBERS
+    // themselves by `DB_PRINCIPAL_URL_KEYS` below — which is the whole reason
+    // that list is exported rather than written here as a literal.
     const seen = new Map<string, string>();
-    for (const [name, url] of Object.entries(urls)) {
+    for (const name of DB_PRINCIPAL_URL_KEYS) {
+      const url = c[name];
       if (!url) continue;
       const prior = seen.get(url);
       if (prior) fail(name, `duplicates ${prior} — every DB principal must use distinct credentials`);
