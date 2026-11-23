@@ -1,5 +1,12 @@
 import { Controller, Get, Inject, Param, Query } from '@nestjs/common';
-import type { CustomerAgingDto, CustomerDto, CustomerOpenInvoicesDto, CustomerPageDto, CustomerReceivableDto } from '@daftar/shared-contracts';
+import type {
+  CustomerAgingDto,
+  CustomerDto,
+  CustomerOpenInvoicesDto,
+  CustomerPageDto,
+  CustomerReceivableDto,
+  CustomerStatementDto,
+} from '@daftar/shared-contracts';
 import { Membership } from '../../common/guards';
 import type { MembershipContext } from '../tenancy/tenancy.service';
 import { strictUuidParam } from '../inventory/canonical-id';
@@ -91,6 +98,15 @@ export class CustomersController {
     const id = strictUuidParam(customerId, 'customerId');
     this.assertBusinessWide(m);
     return this.reads.aging(m, id, CustomerAgingQuerySchema.parse(query));
+  }
+
+  /** The customer's ledger with its running balance, oldest first. Requires `receivables.view`. */
+  @Get(':customerId/statement')
+  @phase4Permission('receivables.view')
+  async statement(@Membership() m: MembershipContext, @Param('customerId') customerId: string): Promise<CustomerStatementDto> {
+    const id = strictUuidParam(customerId, 'customerId');
+    this.assertBusinessWide(m);
+    return this.reads.statement(m, id);
   }
 
   /** The customer's still-outstanding documents, oldest first, for the picker. Requires `receivables.view`. */

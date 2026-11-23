@@ -12,6 +12,8 @@ import type {
   CustomerOpenInvoicesDto,
   CustomerPageDto,
   CustomerReceivableDto,
+  CustomerStatementDto,
+  CustomerStatementRowDto,
 } from '@daftar/shared-contracts';
 import type { QueryResultRow } from 'pg';
 import { Database } from '../../infra/database';
@@ -914,5 +916,102 @@ export class CustomerReadService {
       items,
       nextCursor: found.rows.length > size ? (items[items.length - 1]?.invoiceId ?? null) : null,
     };
+  }
+
+  /**
+   * `GET /v1/customers/:customerId/statement` — one customer's ledger, entry
+   * by entry, with the running balance the merchant reads down the page.
+   *
+   * Every figure here is `customer_account_statement` (`0092`)'s answer, not
+   * this module's: no arithmetic is redone in TypeScript, because a second
+   * implementation of a running balance is a second source of truth for a
+   * number the merchant acts on.
+   *
+   * THE ORDER IS RESTATED HERE ON PURPOSE, AND IT IS FOUR KEYS, NOT THREE.
+   * The row order of a set-returning function is not a guarantee an outer
+   * query inherits, so this query names the keys rather than leaning on the
+   * function's ordering surviving.
+   *
+   * The first key is the CURRENCY, and leaving it out was a real defect this
+   * reader shipped with until the review of `c8b1c673` named it. The running
+   * balance is not one series: `0092:200-203` computes it
+   * `OVER (PARTITION BY s.currency_code ORDER BY s.entry_date, s.kind_rank,
+   * s.entry_id)`, and `0092:375` is the migration's own guard that the
+   * partition is there. So there is one independent cumulative series PER
+   * CURRENCY. Ordered by the three date keys alone, a customer holding two
+   * currencies is handed those series INTERLEAVED in one column: every figure
+   * correct on its own row, and the column as a whole a number no merchant can
+   * read. Ordering by `s.currency_code` first makes each series a contiguous
+   * block, which is the shape the window computed and the shape the DTO's
+   * `rows` claims to be.
+   *
+   * For a single-currency customer this changes nothing — which is exactly why
+   * the suites that existed when the defect shipped could not see it, and why
+   * `§2b` below asserts the grouping itself rather than trusting the order.
+   * If the function's order and this one ever disagree, the explicit one here
+   * is the contract the client was given.
+   */
+  async statement(m: MembershipContext, customerId: string): Promise<CustomerStatementDto> {
+    const row = await findCustomer(this.db, this.scope(m), customerId);
+    if (row === null) throw sellingRefusal('customer.not_found');
+
+    const found = await this.db.scoped<
+      QueryResultRow & {
+        entry_kind: string;
+        entry_id: string;
+        entry_date: string;
+        kind_rank: number;
+        document_number: string | null;
+        related_id: string | null;
+        currency_code: string;
+        debit_txn_minor: string | null;
+        credit_txn_minor: string | null;
+        amount_txn_minor: string | null;
+        amount_base_minor: string | null;
+        credit_original_txn_minor: string | null;
+        credit_remaining_txn_minor: string | null;
+        credit_remaining_base_minor: string | null;
+        reference: string | null;
+        running_balance_txn_minor: string;
+      }
+    >(
+      this.scope(m),
+      `SELECT s.entry_kind, s.entry_id,
+              to_char(s.entry_date, 'YYYY-MM-DD') AS entry_date,
+              s.kind_rank, s.document_number, s.related_id, s.currency_code,
+              s.debit_txn_minor::text              AS debit_txn_minor,
+              s.credit_txn_minor::text             AS credit_txn_minor,
+              s.amount_txn_minor::text             AS amount_txn_minor,
+              s.amount_base_minor::text            AS amount_base_minor,
+              s.credit_original_txn_minor::text    AS credit_original_txn_minor,
+              s.credit_remaining_txn_minor::text   AS credit_remaining_txn_minor,
+              s.credit_remaining_base_minor::text  AS credit_remaining_base_minor,
+              s.reference,
+              s.running_balance_txn_minor::text    AS running_balance_txn_minor
+         FROM customer_account_statement($1::uuid, $2::uuid) s
+        ORDER BY s.currency_code, s.entry_date, s.kind_rank, s.entry_id`,
+      [m.businessId, customerId],
+    );
+
+    const rows: CustomerStatementRowDto[] = found.rows.map((r) => ({
+      entryKind: r.entry_kind,
+      entryId: r.entry_id,
+      entryDate: r.entry_date,
+      kindRank: r.kind_rank,
+      documentNumber: r.document_number,
+      relatedId: r.related_id,
+      currency: r.currency_code,
+      debitTxnMinor: r.debit_txn_minor,
+      creditTxnMinor: r.credit_txn_minor,
+      amountTxnMinor: r.amount_txn_minor,
+      amountBaseMinor: r.amount_base_minor,
+      creditOriginalTxnMinor: r.credit_original_txn_minor,
+      creditRemainingTxnMinor: r.credit_remaining_txn_minor,
+      creditRemainingBaseMinor: r.credit_remaining_base_minor,
+      reference: r.reference,
+      runningBalanceTxnMinor: r.running_balance_txn_minor,
+    }));
+
+    return { customerId, rows };
   }
 }

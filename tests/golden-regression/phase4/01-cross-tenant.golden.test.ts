@@ -89,6 +89,7 @@ const PHASE4_ROUTES: readonly string[] = [
   'GET /v1/customers/:customerId/open-invoices',
   'GET /v1/customers/:customerId/receivable',
   'GET /v1/customers/:customerId/receivable/aging',
+  'GET /v1/customers/:customerId/statement',
   'GET /v1/invoices',
   'GET /v1/invoices/:invoiceId',
   'GET /v1/invoices/:invoiceId/settlement',

@@ -168,6 +168,54 @@ export async function sellOnCredit(w: SettlementWorld, customerId: string | null
 }
 
 /**
+ * ONE COLLECTION against one invoice, through the REAL command
+ * `POST /v1/customer-payments` and nothing else.
+ *
+ * `sellOnCredit` above drives the invoice through `POST /v1/sales`, so with
+ * this the whole merchant flow — sell on account, then take money — is driven
+ * over HTTP by the same suite, with no row written by hand. That matters more
+ * than convenience: a fixture that INSERTS a receipt proves nothing about the
+ * command that a merchant's receipt actually goes through, and the allocation
+ * arithmetic lives in that command.
+ *
+ * ONE allocation, deliberately: the surplus and the multi-invoice cases have
+ * their own permanent suites, and a helper that quietly spread an amount would
+ * make every caller's claim about a different document.
+ *
+ * It returns the stored payment's id, read back from the response rather than
+ * assumed from the request.
+ */
+export async function collectOnAccount(
+  w: SettlementWorld,
+  customerId: string,
+  invoiceId: string,
+  amountMinor: string,
+): Promise<{ readonly paymentId: string; readonly status: number }> {
+  const paymentId = randomUUID();
+  const res = await w.t.request
+    .post('/v1/customer-payments')
+    .set(w.headers)
+    .send({
+      paymentId,
+      customerId,
+      paymentMethodId: w.paymentMethodId,
+      paymentDate: w.day,
+      amountMinor,
+      reference: `collection ${amountMinor}`,
+      allocations: [
+        {
+          allocationId: randomUUID(),
+          invoiceId,
+          paymentAmountMinor: amountMinor,
+          invoiceAmountAppliedMinor: amountMinor,
+        },
+      ],
+    });
+  expect(res.status, `the collection commits: ${res.status} ${JSON.stringify(res.body)}`).toBeLessThan(300);
+  return { paymentId, status: res.status };
+}
+
+/**
  * State an FX rate through the REAL `accounting_fx_rate_enter` command, as
  * `daftar_app`, with a real control assertion — the accepted Phase 2 path and
  * the only writer of `accounting_fx_rates`.
