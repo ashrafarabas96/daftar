@@ -231,7 +231,7 @@ describe('P4-AL-72 paired measurement', () => {
     });
     it('positive: the gate judges BOTH statistics — the rounds AND the whole-run quotient (DR-179/1)', () => {
       expect(src).toMatch(/must\(rounds\.medianRatio\)[\s\S]{0,1500}toBeLessThanOrEqual\(RATIOS\.BALANCE_FATTAIL_OVER_MEDIAN\.max\)/);
-      expect(src).toMatch(/must\(ratio\),\s+`P4-AL-72 judges BOTH statistics/);
+      expect(src).toMatch(/expect\(must\(ratio\), `the whole-run quotient is/);
       expect(src).toContain('expect(both.pass');
     });
     it('negative: the denominator is no longer a second, consecutive `measure(` series', () => {
