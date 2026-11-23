@@ -152,7 +152,7 @@ import {
 import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput, type PaymentInput } from '../golden-regression/phase4-s4/settlement-path';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
-import { fingerprintOf, fingerprintProblems, pairOrder, ratioVerdict, type PairSide } from './paired-series';
+import { MEDIAN_ROUNDS, fingerprintOf, fingerprintProblems, medianRatioVerdict, pairOrder, ratioVerdict, type PairSide } from './paired-series';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
@@ -396,6 +396,13 @@ const readSeries = new Map<string, Measured>();
 let medianReceivable: Measured | null = null;
 /** The order the paired receivable reads ran in, one symbol per read (`paired-series.ts`). */
 let pairedReadOrder: PairSide[] = [];
+/**
+ * DR-175: every paired ROUND, in the order measured. Round 1 is the pair the
+ * ceiling case also judges; rounds 2..5 exist only for the ratio's median, and
+ * each is a complete paired round — same 200 samples per side, same warm-up,
+ * same alternation, which is checked per round.
+ */
+let pairedRounds: { readonly fat: Measured; readonly med: Measured; readonly order: PairSide[] }[] = [];
 /** The RLS cost's owner half: the same statements, row security bypassed. Never the budget. */
 let ownerReceivable: Measured | null = null;
 /** The RLS cost's `daftar_app` half: the same statements through the product's own query function, row security applied. */
@@ -1416,6 +1423,23 @@ async function buildFixture(): Promise<void> {
       readSeries.set(path, paired.fat);
       medianReceivable = paired.med;
       pairedReadOrder = paired.order;
+      // DR-175: four MORE complete paired rounds, so the ratio's verdict is
+      // the median of five. The ceiling case keeps judging round 1's series —
+      // nothing it measures changes — and the extra rounds cost 200 reads per
+      // side each on a fixture that is already built.
+      pairedRounds = [paired];
+      for (let round = 2; round <= MEDIAN_ROUNDS; round += 1) {
+        pairedRounds.push(
+          await measurePairedReceivable(
+            `P4-D ${label}, fat-tail customer — DR-175 round ${round} of ${MEDIAN_ROUNDS}`,
+            `P4-D receivable, MEDIAN customer — DR-175 round ${round} of ${MEDIAN_ROUNDS}`,
+            BUDGET.D_BALANCE_P95,
+            () => read200(path),
+            () => read200(READS.receivable(medianCustomerId)),
+            () => pace(route),
+          ),
+        );
+      }
       continue;
     }
     readSeries.set(
@@ -1870,14 +1894,25 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     // from a second, consecutive sample would be a ratio between two phases of
     // the host. The pair's recorded order is judged first, so a run that did
     // not alternate cannot reach the quotient.
-    expect(
-      fingerprintProblems(pairedReadOrder, SHORT_PERCENTILE_ITERATIONS),
-      `P4-AL-72's pair did not alternate; fingerprint: ${fingerprintOf(pairedReadOrder)}`,
-    ).toEqual([]);
+    // DR-175: EVERY round's pair must have alternated. Checking one round and
+    // judging five would be a fingerprint over a sample of the evidence.
+    expect(pairedRounds, `DR-175 declares ${MEDIAN_ROUNDS} paired rounds and the suite recorded none`).not.toHaveLength(0);
+    for (const [index, round] of pairedRounds.entries()) {
+      expect(
+        fingerprintProblems(round.order, SHORT_PERCENTILE_ITERATIONS),
+        `P4-AL-72 round ${index + 1} of ${pairedRounds.length} did not alternate; fingerprint: ${fingerprintOf(round.order)}`,
+      ).toEqual([]);
+    }
     const fat = must(readSeries.get(READS.receivable(dataset.fatCustomerId)), 'the fat-tail receivable series');
     const med = must(medianReceivable, 'the median receivable series');
     const { fatP95, medP95, ratio } = ratioVerdict(fat.samplesMs, med.samplesMs, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
     if (fatP95 === null || medP95 === null) throw new Error('a ratio series is empty: nothing was measured');
+    // THE VERDICT IS THE MEDIAN OF THE ROUNDS (DR-175). Round 1's own ratio is
+    // still computed and printed above it, because it is the reading the
+    // ceiling case shares and the number every earlier run is comparable to.
+    const rounds = pairedRounds.map((r) => ratioVerdict(r.fat.samplesMs, r.med.samplesMs, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max));
+    const verdict = medianRatioVerdict(rounds, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    expect(verdict.problems, 'DR-175: the rounds cannot be judged, which is a FAIL and never a dropped round').toEqual([]);
     diagnose(fat, BUDGET.D_BALANCE_P95);
     diagnose(med, BUDGET.D_BALANCE_P95);
     console.log(
@@ -1889,13 +1924,18 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         fatOpenInvoices: volume.fatOpenInvoices,
         medianOpenInvoices: MEDIAN.invoicesEach,
         pairedOrder: fingerprintOf(pairedReadOrder),
+        dr175Rounds: verdict.ratios.map((r) => (r === null ? null : Number(r.toFixed(3)))),
+        dr175Median: verdict.median === null ? null : Number(verdict.median.toFixed(3)),
       })}\n`,
     );
     expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();
+    expect(verdict.median, 'DR-175: the rounds produced no median, which is a FAIL').not.toBeNull();
     expect(
-      must(ratio),
-      `P4-AL-72's host-independent ratio for this budget is p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median). ` +
-        `Measured ${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}. ` +
+      must(verdict.median),
+      `P4-AL-72's host-independent ratio for this budget is p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median), ` +
+        `judged on the MEDIAN of ${MEDIAN_ROUNDS} complete paired rounds (DR-175). ` +
+        `Rounds: ${JSON.stringify(verdict.ratios.map((r) => (r === null ? null : Number(r.toFixed(3)))))}, median ${must(verdict.median).toFixed(3)}. ` +
+        `Round 1 measured ${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms = ${must(ratio).toFixed(2)}x at ${volume.fatOpenInvoices} invoices against ${MEDIAN.invoicesEach}. ` +
         `A miss here is a statement about the read's GROWTH, not about this host, and it is a FAIL to be diagnosed (P4-AL-76): ` +
         `the ratio may never be raised to obtain a pass (OD-P4-14, tighten-only).\n` +
         `fat-tail series: ${JSON.stringify(distribution(fat.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
