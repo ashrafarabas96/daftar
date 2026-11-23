@@ -18,7 +18,7 @@
  *
  *   APP      = IDENTITY    → REFUSED (the least-privilege APP/PLATFORM clause AND the §31 membership clause, both)
  *   APP      = RESOLVER    → REFUSED (§31 only)
- *   APP      = PROVISIONER → REFUSED (the least-privilege clause only)
+ *   APP      = PROVISIONER → REFUSED (the provisioner's own APP/PLATFORM clause only)
  *   IDENTITY = RESOLVER    → REFUSED (§31 only)
  *   IDENTITY = PROVISIONER → **STARTED**
  *   RESOLVER = PROVISIONER → **STARTED**
@@ -39,7 +39,7 @@
  * among them, which is this branch's whole subject. Three removals and one
  * addition give the four:
  *
- *   `PLATFORM`, `WORKER` → `forbid(...)` in the merchant-api block ("merchant API has no
+ *   `PLATFORM`, `WORKER` → `forbid(...)` in the `mode === 'merchant-api'` block ("merchant API has no
  *                          platform/worker authority"): a merchant API that
  *                          is merely GIVEN either one does not start.
  *   `RECONCILER`         → NOT `forbid`. The §7 converse clause,
@@ -48,8 +48,12 @@
  *                          authority)". A separate clause with a separate
  *                          wording, written for a separate reason (§7 keeps
  *                          the ledger-wide reader out of every other mode).
- *   `PROVISIONER`        → added to the reachable four, because the production `merchant-api`
- *                          REQUIRES it in this mode.
+ *   `PROVISIONER`        → added to the reachable four, because the
+ *                          `all || merchant-api` block that requires
+ *                          RESOLVER and PROVISIONER REQUIRES it in this mode
+ *                          — and the condition alone does not name it, since
+ *                          another block carries the same condition and
+ *                          requires APP_DATABASE_URL.
  *
  * Measured, not read off the source: on blob `d0d0d99b` of `config.ts`, whose
  * lines `242-290` are byte-identical to this branch's blob `e91531d1` (diffed,
@@ -194,7 +198,8 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
   it('RECORDS: an APP-equal provisioner now fails under BOTH clauses at once', () => {
     // Measured, not assumed: `fail()` accumulates into one message rather than
     // throwing at the first defect, so the pre-existing
-    // least-privilege clause and the new membership both appear in the one
+    // provisioner's own APP/PLATFORM clause and the new membership both appear
+    // in the one
     // message. This arm exists so that removing either clause is visible.
     const env = {
       ...MERCHANT_PROD,

@@ -620,8 +620,8 @@ const EnvSchema = z
     // `DB_PRINCIPAL_URL_KEYS`, defined and exported above this function.
     //
     // `PROVISIONER_DATABASE_URL` is a member as of the owner's order of
-    // 2026-11-15 («تشديد أمني لا تخفيف»). It was absent, and the least-privilege clause
-    // compares it only against APP and PLATFORM by hand — so a provisioner
+    // 2026-11-15 («تشديد أمني لا تخفيف»). It was absent, and the provisioner's own
+    // APP/PLATFORM clause compares it only against those two by hand — so a provisioner
     // credential equal to IDENTITY or to RESOLVER started a production
     // merchant-api, measured by loading the config once per pair. The fix is
     // membership and not two more hand comparisons, so that the separation set
