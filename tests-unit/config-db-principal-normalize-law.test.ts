@@ -295,6 +295,74 @@ describe('§31 compares credentials, not strings', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
   });
 
+  /**
+   * AND THE THREE THE THIRD REVIEW MEASURED — each a pair the driver treats as
+   * ONE connection, each of which the key used to split.
+   */
+  it.each([
+    ['another URL scheme entirely', 'mysql://daftar_app:x@db/daftar'],
+    ["SQLAlchemy's spelling of the same URL", 'postgresql+psycopg2://daftar_app:x@db/daftar'],
+    ['the short `pg://`', 'pg://daftar_app:x@db/daftar'],
+  ])('refuses %s against `postgresql://`, because the driver reads no scheme outside `socket:`', (_label, other) => {
+    // Measured through `new ConnectionParameters`: every one of these gives
+    // `["db",5432,"daftar_app","daftar"]`, the same as the `postgresql://`
+    // spelling. `pg-connection-string` takes its fields from `new URL`'s
+    // components and tests `protocol` only for `socket:`.
+    const a = 'postgresql://daftar_app:x@db/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: other })).toThrow(DUP);
+  });
+
+  it('refuses the BARE socket pair against the `socket:` scheme, which the driver parses to the same thing', () => {
+    // `index.js:10-12`: a string beginning with `/` is `"<path> <database>"`.
+    // Measured: both give `["/var/run/daftar-pg",5432,<os user>,"daftar"]`.
+    const a = '/var/run/daftar-pg daftar';
+    const b = 'socket:/var/run/daftar-pg?db=daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('refuses a SPACE in the host against its percent-encoded spelling, because the driver re-encodes before parsing', () => {
+    // `index.js:20-22` applies `encodeURI` when the string holds a space or a
+    // malformed escape, so the driver accepts what `new URL` refuses.
+    // Measured: both give `["d b",5432,"daftar_app","daftar"]`.
+    const a = 'postgresql://daftar_app:x@d b/daftar';
+    const b = 'postgresql://daftar_app:x@d%20b/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('NEGATIVE CONTROL: two DIFFERENT bare socket pairs stay two principals', () => {
+    // The bare form must not collapse: two sockets are two servers.
+    const a = '/var/run/pg-one appdb';
+    const b = '/var/run/pg-two platdb';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('NEGATIVE CONTROL: a socket form and a URL form are NOT one credential, which is the only scheme distinction left', () => {
+    // Dropping the scheme must not go so far as to merge the two branches the
+    // driver really has: `socket:` reads the host from the path and the
+    // database from `?db`, a URL reads them from the authority and the path.
+    const a = 'socket:/daftar?db=daftar';
+    const b = 'postgresql://daftar_app:x@db/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('FAILS CLOSED in the OTHER direction too: the sentinel is COARSER than the driver, not finer', () => {
+    // The only «fails closed» arm compared two UNPARSEABLE values, which pins
+    // half the claim. Measured: the driver resolves anything `new URL` refuses
+    // against its own base `postgres://base`, so `not a url at all` becomes
+    // `["base",5432,<os user>,"not a url at all"]` — a credential of its own,
+    // and two such strings are two DATABASES there. The sentinel therefore
+    // MERGES values the driver keeps apart, which is the coarse direction.
+    // (Third review of this branch, finding 4.)
+    const unparseable = 'not a url at all';
+    const parseable = 'postgresql://daftar_app:x@db/daftar';
+    // a sentinel against a real key is NOT a collision, so this pair starts
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: unparseable, IDENTITY_DATABASE_URL: parseable })).not.toThrow();
+    // and two DIFFERENT unparseable values DO collide — the half already
+    // pinned, kept beside it so the pair reads as one statement about the
+    // direction the sentinel errs in
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: unparseable, IDENTITY_DATABASE_URL: 'also not a url' })).toThrow(DUP);
+  });
+
   it('refuses the byte-identical spelling too, which is what held before this law', () => {
     expect(() => loadConfig(withIdentity(APP))).toThrow(DUP);
   });
@@ -331,9 +399,17 @@ describe('§31 compares credentials, not strings', () => {
       what: 'a different role with the same password — the roster this file is about',
     },
     {
-      element: '1 scheme',
-      url: 'mysql://daftar_app:x@db/daftar',
-      what: 'a genuinely different scheme — only `postgres`/`postgresql` are one',
+      // THE ARM THAT USED TO LIVE HERE PINNED THE DEFECT. It asserted that
+      // `mysql://daftar_app:x@db/daftar` STARTS beside the `postgresql://`
+      // spelling of the same credential, under the heading «a genuinely
+      // different scheme». Measured, the driver reads no scheme at all outside
+      // `socket:`: both produce `["db",5432,"daftar_app","daftar"]`, one
+      // connection — so the law was guarding the key being FINER than the
+      // driver. It is now a refusal arm below, and element 1's negative
+      // control is the only distinction the driver actually draws.
+      element: '1 scheme (socket or not)',
+      url: 'socket:/var/run/daftar-pg?db=daftar',
+      what: 'a `socket:` form, which the driver parses by a different branch entirely — host from the path, database from `?db`',
     },
   ];
 

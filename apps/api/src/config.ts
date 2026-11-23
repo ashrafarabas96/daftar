@@ -297,11 +297,26 @@ function decodeUriOnce(part: string): string {
  *     driver connects to. This key reads the pathname alone, so such a pair
  *     can key EQUAL while the driver sees two databases — coarser, so it
  *     refuses rather than accepts.
+ *   · AN EMPTY USER IS THE OS USER, and this key does not represent it.
+ *     `pg` reads `PGUSER || defaults.user`, and `defaults.user` is the
+ *     process owner. MEASURED on this head: `postgresql://:x@db/daftar` and
+ *     `postgresql://<os-user>:x@db/daftar` are ONE connection, so this key is
+ *     FINER than the driver on that pair — the forbidden direction, named
+ *     here rather than left out. It is NOT represented deliberately: the
+ *     default depends on the environment and the process owner, and a key
+ *     that read either would answer differently on two machines for the same
+ *     pair of variables, which is a worse property than this gap. The same
+ *     holds for an empty password. (Third review, finding 3.)
  *   · under the `socket:` scheme the driver takes the database from `?db`
- *     (`:49`) and the host from the path (`:48`). `?db` is not in this key, so
- *     two `socket:` URLs differing only there key equal — coarser again. The
- *     scheme is itself element 1, so a `socket:` URL never collides with a
- *     `postgresql://` one.
+ *     (`:49`) and the host from the path (`:48`), and this key now reads both
+ *     from where the driver reads them. It used to read the PATH into both
+ *     elements and call the missing `?db` «coarser», which it was not: it was
+ *     the wrong field, and it kept the bare socket pair from agreeing with the
+ *     `socket:` spelling of the same socket. The
+ *     first element is `socket` or `url`, which is the ONLY distinction the
+ *     driver draws between schemes, so a socket form never collides with a
+ *     URL form while two URL schemes of one credential now collide as they
+ *     should.
  *
  * Pinned, element by element with a negative control for each, in
  * `tests-unit/config-db-principal-normalize-law.test.ts`.
@@ -325,10 +340,33 @@ function decodeUriOnce(part: string): string {
 const EMPTY_HOST_AUTHORITY = '0db-principal-key-empty-host.invalid';
 
 function dbPrincipalKey(raw: string): string {
+  // THE DRIVER'S FIRST BRANCH, BEFORE ANY URL PARSING: a string beginning with
+  // `/` is a bare socket pair, `"<socket path> <database>"` split on a space
+  // (`pg-connection-string/index.js:10-12`). `new URL` cannot parse it, so this
+  // key used to reach the unparseable sentinel for it. MEASURED:
+  // `/var/run/daftar-pg daftar` and `socket:/var/run/daftar-pg?db=daftar`
+  // produce the SAME effective parameters — one credential — and the key gave
+  // the sentinel to one and a real key to the other, so §31 read one
+  // credential as two and the process STARTED. The two forms now key
+  // IDENTICALLY, with the empty userinfo both of them give the driver.
+  // (Third review of this branch, finding 2a.)
+  if (raw.startsWith('/')) {
+    const [socketPath, socketDatabase] = raw.split(' ');
+    return JSON.stringify(['socket', '', '', socketPath ?? '', '', socketDatabase ?? '']);
+  }
+  // AND THE DRIVER RE-ENCODES BEFORE PARSING, which `new URL` does not do:
+  // `index.js:20-22` applies `encodeURI` (then undoes its own double-encoding
+  // of `%25dd`) whenever the string holds a space or a malformed escape. So the
+  // driver ACCEPTS strings `new URL` refuses. MEASURED: `…@d b/daftar` and
+  // `…@d%20b/daftar` are one connection, `["d b",5432,…]`, and the key gave
+  // the sentinel to the first — the same shape as the `@`-in-password hole,
+  // closed then in its one branch only. The pre-pass is mirrored here rather
+  // than guessed. (Third review, finding 2b.)
+  const encoded = /[ ]|%[^a-f0-9]|%[a-f0-9][^a-f0-9]/i.test(raw) ? encodeURI(raw).replace(/%25(\d\d)/g, '%$1') : raw;
   let url: URL;
   let emptyHost = false;
   try {
-    url = new URL(raw);
+    url = new URL(encoded);
   } catch {
     // Mirror the driver's own retry before giving up, AND MIRROR IT LITERALLY:
     // `pg-connection-string/index.js:30` is `str.replace('@/', '@___DUMMY___/')`
@@ -343,10 +381,10 @@ function dbPrincipalKey(raw: string): string {
     // the first and `unparseable-by-this-key` to the second, so §31 read one
     // credential as two and the process STARTED. An `@` in a password is
     // ordinary. (Seventh review of this branch, finding 1.)
-    const withHost = raw.replace('@/', `@${EMPTY_HOST_AUTHORITY}/`);
+    const withHost = encoded.replace('@/', `@${EMPTY_HOST_AUTHORITY}/`);
     try {
       url = new URL(withHost);
-      emptyHost = withHost !== raw;
+      emptyHost = withHost !== encoded;
     } catch {
       // STILL unparseable. A raw-text comparison would be finer than the
       // driver again, so it is not used: the value is keyed as UNPARSEABLE,
@@ -395,8 +433,22 @@ function dbPrincipalKey(raw: string): string {
     if (fromQuery !== null && fromQuery !== '') return fromQuery;
     return decodeFromUrl ? decodeOnce(fromUrl) : fromUrl;
   };
+  // THE DRIVER DOES NOT READ THE SCHEME AT ALL, except to branch on `socket:`.
+  // `pg-connection-string` takes user, password, host, port and database from
+  // `new URL`'s components and never looks at `protocol` outside the `socket:`
+  // test (`index.js:47`). MEASURED on this head through
+  // `new ConnectionParameters`: `postgresql://`, `postgres://`, `pg://`,
+  // `postgresql+psycopg2://`, `mysql://` and `cockroachdb://` with the same
+  // userinfo, host and path all produce `["db",5432,"daftar_app","daftar"]` —
+  // ONE connection, six spellings. Keying the scheme made this key FINER than
+  // the driver on all of them, and `postgresql+psycopg2://` is not exotic: it
+  // is how SQLAlchemy spells the same URL. Worse, an arm of the law pinned
+  // that as desired behaviour («only postgres/postgresql are one»), so the law
+  // was guarding the defect. (Third review of this branch, finding 1.)
+  //
+  // So the element is the only distinction the driver makes: socket or not.
   const scheme = url.protocol.replace(/:$/, '').toLowerCase();
-  const canonicalScheme = scheme === 'postgres' ? 'postgresql' : scheme;
+  const canonicalScheme = scheme === 'socket' ? 'socket' : 'url';
   const port = effective('port', url.port, false);
   // Percent-DECODED, with the driver's own two functions: it uses
   // `decodeURI` for the path (`:67`) and `decodeURIComponent` for the host
@@ -474,7 +526,17 @@ function dbPrincipalKey(raw: string): string {
   // stated reason, in the dangerous direction — `…@db` and `…@db/daftar_app`
   // are one credential and were keyed as two. (Review of this head, finding 2.)
   const effectiveUser = effective('user', url.username, true);
-  const database = rawDatabase === '' ? `/${effectiveUser}` : rawDatabase;
+  // UNDER `socket:` THE DATABASE IS `?db`, NOT THE PATH. `index.js:48-49`
+  // reads the host from the pathname and the database from `?db`, so keying
+  // the pathname into BOTH elements put the socket path in the database slot
+  // — which is why the bare socket pair and the `socket:` spelling of the same
+  // thing could not be made to agree. An earlier comment called the absence of
+  // `?db` «coarser»; it was not coarseness, it was the wrong field. Two
+  // `socket:` URLs differing only in `?db` ARE two databases at the driver, so
+  // reading it is equality with the driver, not finer than it. (Third review
+  // of this branch, finding 2a, the part my own arm uncovered.)
+  const socketDatabase = query.get('db') ?? '';
+  const database = socketScheme ? socketDatabase : rawDatabase === '' ? `/${effectiveUser}` : rawDatabase;
   // THE PORT IS READ AS A NUMBER, because that is how `pg` reads it:
   // `connection-parameters.js` does `parseInt(val('port'), 10)`. Comparing the
   // TEXT to `'5432'` was enough for the authority form, which `new URL`
