@@ -36,11 +36,15 @@ import { loadConfig } from '../apps/api/src/config';
  * outside CI, since their lanes boot a database (`ensurePostgres`, so `NOT_RUN`
  * on a developer machine, never `PASS`):
  *
- *   AC  `tests/security/p3c-legacy-trust-proxy.test.ts:59` pins the refusal's
- *       own message text
- *   AD  `tests/integration/assertion-key-separation.test.ts:114`
- *   AE  `tests/integration/production-providers.test.ts:212` plants an 8-byte
- *       key and expects `/at least 32 bytes/`
+ *   AC  `tests/security/p3c-legacy-trust-proxy.test.ts` pins the refusal's own
+ *       message text, in its `REFUSED` constant
+ *       (`/TRUST_PROXY: TRUST_PROXY=true is refused in production/`)
+ *   AD  `tests/integration/assertion-key-separation.test.ts`, in the arm that
+ *       expects `/ACCOUNTING_ASSERTION_KEY must not be the same secret as
+ *       PROVISIONING_ASSERTION_KEY/`
+ *   AE  `tests/integration/production-providers.test.ts` plants an 8-byte key
+ *       (`Buffer.alloc(8, 1)` on `PROVISIONING_ASSERTION_KEY`) and expects
+ *       `/at least 32 bytes/`
  *
  * AF is the one with NO law anywhere: `grep` for its message, for "every DB
  * principal", and for the duplicate claim over `tests/**`, `tests-unit/**` and
@@ -157,7 +161,8 @@ describe('§31: two database roles may not be one credential', () => {
   });
 
   // DUP-A. The two pairs §31 holds ALONE. `config.ts` names three role pairs
-  // explicitly (platform vs app `:472`, identity `:494`, provisioner `:522`),
+  // explicitly (platform vs app, identity vs APP/PLATFORM, and provisioner
+  // vs APP/PLATFORM — each its own least-privilege clause),
   // and the resolver appears in none of them — so these two pairs measure §31
   // rather than its neighbours.
   it('REFUSES app=resolver and identity=resolver, by §31 alone', () => {
@@ -170,10 +175,11 @@ describe('§31: two database roles may not be one credential', () => {
   });
 
   // DUP-B. The other two reachable pairs. Each ALSO has a refusal of its own
-  // (`:494`), and `fail` accumulates rather than throwing on the first problem,
+  // (its own least-privilege clause), and `fail()` accumulates rather than
+  // throwing on the first problem,
   // so BOTH clauses appear — measured, not assumed. The point of asserting them
   // here is that §31's clause is present IN ADDITION to the specific one: a §31
-  // that had quietly shrunk to the resolver would still satisfy `:494` and
+  // that had quietly shrunk to the resolver would still satisfy that clause and
   // would leave these two pairs resting on a single comparison.
   it('REFUSES app=identity and platform=identity, with the §31 clause present too', () => {
     const merchantPair = { ...MERCHANT_PROD, IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
