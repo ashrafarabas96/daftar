@@ -38,13 +38,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 const REPO_ROOT = join(__dirname, '..');
-const MIGRATION = join(
-  REPO_ROOT,
-  'infrastructure',
-  'database',
-  'migrations',
-  '0093_c6_transfer_value_conservation.sql',
-);
+const MIGRATION = join(REPO_ROOT, 'infrastructure', 'database', 'migrations', '0093_c6_transfer_value_conservation.sql');
 
 const FUNCTION_NAME = 'inventory_transfer_value_conserved()';
 const CREATE = `CREATE OR REPLACE FUNCTION ${FUNCTION_NAME}`;
@@ -76,7 +70,12 @@ const digestOf = (body: string): string => createHash('sha256').update(body, 'ut
  */
 const PIN = new RegExp(`"${FUNCTION_NAME.replace('()', '\\(\\)')}": "([0-9a-f]{64})"`, 'g');
 
-const pinsIn = (sql: string): string[] => [...sql.matchAll(PIN)].map((m) => m[1]);
+// `matchAll` types every capture group as optional, so mapping `m[1]` yields
+// `(string | undefined)[]`. The lane preflight caught that as TS2322 before it
+// reached CI a second time. Dropping the undefined cases is not a cast: a match
+// without group 1 is not a pin, and the arm above already asserts the count, so
+// a silently dropped match would fail there rather than pass as a string.
+const pinsIn = (sql: string): string[] => [...sql.matchAll(PIN)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
 
 describe('0093 — the pinned digest and the body it pins', () => {
   const sql = readFileSync(MIGRATION, 'utf8');
@@ -86,10 +85,7 @@ describe('0093 — the pinned digest and the body it pins', () => {
     // function or a reformatted pin would turn this whole suite green by
     // matching nothing at all -- which is how a guard dies silently.
     const pins = pinsIn(sql);
-    expect(
-      pins.length,
-      `no pin for ${FUNCTION_NAME} was found -- the anchor is blind, the file is not necessarily wrong`,
-    ).toBe(1);
+    expect(pins.length, `no pin for ${FUNCTION_NAME} was found -- the anchor is blind, the file is not necessarily wrong`).toBe(1);
     expect(pins[0]).toMatch(/^[0-9a-f]{64}$/);
 
     const body = bodyOf(sql);
@@ -110,9 +106,6 @@ describe('0093 — the pinned digest and the body it pins', () => {
     const body = bodyOf(sql);
     const planted = `${body}\n  -- a planted comment, never written to disk\n`;
     expect(planted, 'the plant did not change the body, so this arm proves nothing (DR-55)').not.toBe(body);
-    expect(
-      digestOf(planted),
-      'a changed body still matched the pin, so this guard cannot catch a stale pin and is vacuous',
-    ).not.toBe(pinsIn(sql)[0]);
+    expect(digestOf(planted), 'a changed body still matched the pin, so this guard cannot catch a stale pin and is vacuous').not.toBe(pinsIn(sql)[0]);
   });
 });
