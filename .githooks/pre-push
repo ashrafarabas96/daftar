@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+#
+# DAFTAR — refuse (1) any push that DELETES a remote ref, and (2) any push
+# whose destination is `main`.
+#
+# WHY THIS EXISTS, and what changed on 2026-11-03 (DR-83).
+#
+# The deny list in `.claude/settings.local.json` was measured, rule by rule,
+# with negative controls that could not change anything if they passed. Nine of
+# ten new rules refused as intended. One did not:
+#
+#     git push origin :dr83-nonexistent-branch      ->  NOT refused; it ran
+#
+# A variant naming the remote explicitly, `Bash(git push origin :*)`, also
+# failed to fire. So ANY deny rule carrying `:` in that position is inert — the
+# likely cause is that `:` is read as the `Tool(param:value)` separator and the
+# rule never parses into what it looks like. Three pre-existing rules are in
+# that same class and are therefore very probably inert too:
+#
+#     Bash(git push * :main)
+#     Bash(git push * HEAD:main)
+#     Bash(git push * HEAD:refs/heads/main*)
+#
+# They are deliberately LEFT IN PLACE (the owner's instruction), documented as
+# ineffective. This hook is what actually refuses, because git enforces it on
+# this machine whatever command or agent asked for the push — a hook does not
+# depend on a pattern syntax parsing the way it reads.
+#
+# A CORRECTION TO THIS FILE'S OWN EARLIER COMMENT. The previous version stated
+# that GitHub branch protection was UNAVAILABLE here, because the repository had
+# gone private and the API answered `403 Upgrade to GitHub Pro`. That is no
+# longer true, and it understated the protection. Measured on 2026-11-03:
+#
+#     allow_deletions      = false
+#     allow_force_pushes   = false
+#     enforce_admins       = true
+#     required checks      = 6,  strict = true
+#
+# So `main` cannot be deleted or force-pushed on the server either. The two
+# controls are independent and both are wanted: the server refuses what reaches
+# it, and this hook refuses before anything reaches the network at all — which
+# is what makes a negative control for it safe to run.
+#
+# WHAT IT REFUSES
+#   1. ANY DELETION, of ANY branch: a pre-push line whose LOCAL sha is forty
+#      zeros is a deletion, whatever the ref is called. Branches are cheap to
+#      recreate only when someone still knows the sha; a deletion here is
+#      refused and must be done deliberately.
+#   2. ANY PUSH WHOSE DESTINATION IS `main`, by any spelling — `main`,
+#      `refs/heads/main`, `HEAD:main`, `anything:refs/heads/main` — and
+#      regardless of the remote's name, because a wrong remote is one of the
+#      ways this goes wrong.
+#
+# WHAT IT ALLOWS
+#   Everything else: creating a branch, updating a branch, and the pull-request
+#   merges the owner authorizes, which happen on GitHub's side and never reach
+#   this hook.
+#
+# HOW TO SEE IT WORK (it refuses, and prints why, without touching the network):
+#   git push origin :some-branch
+#   git push origin HEAD:main
+#
+# IT IS NOW TRACKED, AND THAT IS A TRADE, NOT A PURE GAIN (owner's decision
+# DR-180/3, 2026-11-24: «وهذا تشديد»).
+#
+# It used to live in `.git/hooks/`, which is not part of the repository: it did
+# not travel with a clone, it protected one checkout, and — the part that
+# mattered — NO PULL REQUEST COULD EDIT IT. Here, under `.githooks/` and
+# selected by `core.hooksPath`, it travels with every clone and every worktree
+# and its changes are reviewable in a diff. What it loses is immunity: any
+# branch that touches this file changes the guard, and a weakening would arrive
+# through the same door as a strengthening.
+#
+# So the move is only a tightening if the guard is itself guarded, and two
+# things do that:
+#
+#   * `tests-unit/pre-push-hook-law.test.ts` PINS the two refusals by content
+#     AND RUNS THIS FILE end to end against a local bare repository — a push
+#     aimed at `main` is refused, a deletion is refused, and an ordinary branch
+#     push is allowed. The positive control is what makes the other two mean
+#     something: a hook that refused everything would also "pass" the first two.
+#   * `npm run setup:hooks` sets `core.hooksPath` and is idempotent, so a
+#     checkout whose hooks were never wired is a measurable state rather than a
+#     silent one.
+#
+# Nothing in that law touches the network: the remote is a bare repository in a
+# temporary directory, so the refusal is exercised for real with nothing at
+# stake.
+#
+# `git push --no-verify` bypasses it. That is deliberate — a refusal should be
+# overridable on purpose, never by accident — and bypassing it is forbidden by
+# the charter (§7) rather than by this file: NEEDING the flag is a stop
+# condition, and measuring afterwards that nothing was skipped is not
+# permission for it.
+
+set -u
+
+protected='main'
+blocked=0
+zero=$(printf '%040d' 0)
+
+# git feeds pre-push one line per ref on stdin:
+#   <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${remote_ref:-}" ] && continue
+
+  # Normalise `main` and `refs/heads/main` to the same name.
+  short_remote="${remote_ref#refs/heads/}"
+
+  # (1) A deletion of ANY ref — local sha is all zeros.
+  if [ "${local_sha:-}" = "$zero" ]; then
+    blocked=1
+    echo "pre-push: REFUSED — DELETION of the remote ref '$short_remote'." >&2
+    echo "          local ref:  ${local_ref:-<none, this is a delete>}" >&2
+    echo "          remote ref: $remote_ref" >&2
+    echo "          local sha:  $local_sha  (forty zeros = delete)" >&2
+    continue
+  fi
+
+  # (2) Any push whose destination is the protected branch.
+  if [ "$short_remote" = "$protected" ]; then
+    blocked=1
+    echo "pre-push: REFUSED — push to the protected branch '$protected'." >&2
+    echo "          local ref:  ${local_ref:-<none>}" >&2
+    echo "          remote ref: $remote_ref" >&2
+  fi
+done
+
+if [ "$blocked" -ne 0 ]; then
+  cat >&2 <<'MSG'
+
+  Two things this hook refuses, and why:
+
+    * DELETING a remote ref, any ref. Recreating it needs someone to still
+      know the sha. If you mean it, mean it explicitly.
+
+    * PUSHING TO `main`. `main` is changed by merging a pull request, never by
+      pushing to it.
+
+  GitHub also refuses both for `main` (allow_deletions=false,
+  allow_force_pushes=false, enforce_admins=true, 6 required checks). This hook
+  refuses BEFORE the network, so nothing reaches origin to be refused.
+
+  If you genuinely mean to do either, that is an owner decision:
+  `git push --no-verify` bypasses this hook. Say so, rather than letting it
+  happen by accident.
+
+MSG
+  exit 1
+fi
+
+exit 0
