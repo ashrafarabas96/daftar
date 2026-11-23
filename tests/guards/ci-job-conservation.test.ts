@@ -29,7 +29,7 @@
  *   C-4  Every step the register calls SHARED really does appear in two or
  *        more jobs. A register allowed to call a unique step "shared" would
  *        let any assignment be erased by moving its name into that list.
- *   C-5  The four jobs exist and each has steps — the positive control,
+ *   C-5  The eight jobs exist and each has steps — the positive control,
  *        because every count below is a count over them and a typo in a job
  *        name would otherwise make all of C-1..C-4 pass over nothing.
  *
@@ -257,7 +257,17 @@ function conservationProblems(ciText: string, reg: Register): string[] {
   return problems;
 }
 
-const PARTS = ['backend', 'backend-static', 'backend-gates-p2', 'backend-golden'];
+const PARTS = [
+  'backend',
+  'backend-static',
+  'backend-gates-p2',
+  'backend-golden',
+  'backend-ctl-budget-in',
+  'backend-ctl-budget-out',
+  'backend-ctl-ratio-in',
+  'backend-ctl-ratio-out',
+];
+const CTL_JOBS = PARTS.filter((p) => p.startsWith('backend-ctl-'));
 const AGG_JOB = 'backend-required';
 const CHECK_NAME = 'backend';
 
@@ -315,7 +325,7 @@ function aggregateEnv(text: string): Map<string, string> {
 
 /**
  * C-9 / C-10 (DR-147/1, owner condition on #87): the required check named
- * `backend` is a job that only reads the four parts. Text-level shape.
+ * `backend` is a job that only reads the parts. Text-level shape.
  */
 function aggregateProblems(ciText: string): string[] {
   const problems: string[] = [];
@@ -328,7 +338,7 @@ function aggregateProblems(ciText: string): string[] {
     problems.push(`C-9: \`${AGG_JOB}\` has no \`if: always()\` — a skipped part would skip it, and a skipped required check reads as green`);
   }
   const needs =
-    /^ {4}needs: \[(.*)\]$/m
+    /^ {4}needs:\s*\[([^\]]*)\]/m
       .exec(text)?.[1]
       ?.split(',')
       .map((s) => s.trim()) ?? [];
@@ -378,6 +388,51 @@ function aggregateBehaviourProblems(ciText: string): string[] {
   return problems;
 }
 
+/**
+ * C-11 (grade 2 of the CI-speed split). A control job is a copy of the setup of
+ * `backend` plus ONE control step. Its setup is copied, not shared, so nothing
+ * else keeps the copies equal: a copy that drifts (a different migrate, a
+ * missing pg_stat_statements, an extra redis container) would make the control
+ * run on a different database than the step it came from, and its green would
+ * be a statement about another environment. Step-level `#` comments are not
+ * compared; every other line is.
+ */
+function setupCopyProblems(ciText: string, reg: Register): string[] {
+  const problems: string[] = [];
+  const norm = (t: string) =>
+    t
+      .split('\n')
+      .filter((l) => !/^ {6}#/.test(l))
+      .join('\n')
+      .trimEnd();
+  const ref = new Map(stepBlocks(ciText, 'backend').map((b) => [b.name, norm(b.text)] as const));
+  const refShared = [...ref.keys()].filter((n) => reg.shared.includes(n));
+  const service = (job: string) => {
+    const lines = jobText(ciText, job).split('\n');
+    const at = lines.findIndex((l) => l === '      postgres:');
+    if (at < 0) return '';
+    const out = [lines[at] as string];
+    for (let i = at + 1; i < lines.length && /^ {8}/.test(lines[i] ?? ''); i += 1) out.push(lines[i] as string);
+    return out.join('\n');
+  };
+  const runsOn = (job: string) => /^ {4}runs-on:\s*(.+?)\s*$/m.exec(jobText(ciText, job))?.[1];
+  for (const job of CTL_JOBS) {
+    if (runsOn(job) !== runsOn('backend')) problems.push(`C-11: \`${job}\` runs on ${String(runsOn(job))}, \`backend\` on ${String(runsOn('backend'))}`);
+    if (service(job) === '' || service(job) !== service('backend')) problems.push(`C-11: the postgres service of \`${job}\` is not the one of \`backend\``);
+    if (/^ {6}redis:/m.test(jobText(ciText, job))) problems.push(`C-11: \`${job}\` has a redis service — TD-24 allows that container in \`backend\` only`);
+    const own = new Map(stepBlocks(ciText, job).map((b) => [b.name, norm(b.text)] as const));
+    for (const name of refShared) {
+      if (!own.has(name)) problems.push(`C-11: \`${job}\` does not carry the setup step \`${name}\``);
+      else if (own.get(name) !== ref.get(name)) problems.push(`C-11: the setup step \`${name}\` of \`${job}\` is not the text it has in \`backend\``);
+    }
+    const extra = [...own.keys()].filter((n) => !reg.shared.includes(n));
+    if (extra.length !== 1) problems.push(`C-11: \`${job}\` must carry exactly one non-setup step, it has ${extra.length}: ${extra.join(' | ')}`);
+  }
+  if (refShared.length < 12)
+    problems.push(`C-11: only ${refShared.length} setup steps were found in \`backend\`, so the comparison above compared almost nothing`);
+  return problems;
+}
+
 const P2_GATES = [1, 2, 3, 4, 5, 6, 7, 8];
 
 /** The `P2_Sn_TESTS` rosters of the eight Phase 2 gate scripts, read from the files. */
@@ -398,8 +453,8 @@ function p2Overlaps(): Record<string, string[]> {
 }
 
 describe('the job-conservation law (DR-105)', () => {
-  it('C-5: the four jobs of the family exist and have steps', () => {
-    expect(register.jobs).toEqual(['backend', 'backend-static', 'backend-gates-p2', 'backend-golden']);
+  it('C-5: the eight jobs of the family exist and have steps', () => {
+    expect(register.jobs).toEqual(PARTS);
     for (const job of register.jobs) expect(stepsOf(ci, job).length, job).toBeGreaterThan(0);
   });
 
@@ -525,13 +580,13 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED: a part is dropped from `needs`', () => {
-    const planted = ci.replace('needs: [backend, backend-static, backend-gates-p2, backend-golden]', 'needs: [backend, backend-static, backend-gates-p2]');
+    const planted = ci.replace(', backend-ctl-ratio-out]', ']');
     expect(planted, 'the needs line was not found to shorten — update this proof').not.toBe(ci);
-    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-golden`');
+    expect(aggregateProblems(planted).join('\n')).toContain('does not `need` `backend-ctl-ratio-out`');
   });
 
   it('RED: `if: always()` is removed, so a skipped part would skip the aggregate', () => {
-    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n {4}needs: [^\n]*\n) {4}if: always\(\)\n/, '$1');
+    const planted = ci.replace(/(\n {2}backend-required:\n {4}name: backend\n(?: {4}#[^\n]*\n)* {4}needs:[^\]]*\]\n) {4}if: always\(\)\n/, '$1');
     expect(planted, 'the if line was not found to remove — update this proof').not.toBe(ci);
     expect(aggregateProblems(planted).join('\n')).toContain('no `if: always()`');
   });
@@ -578,12 +633,51 @@ describe('the required-check aggregate (DR-147/1)', () => {
   });
 
   it('RED (behaviour): one part is simply not read by the script', () => {
-    const planted = ci.replace(
-      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2 BACKEND_GOLDEN; do',
-      'for part in BACKEND_WORK BACKEND_STATIC BACKEND_GATES_P2; do',
-    );
+    const planted = ci.replace(' BACKEND_CTL_RATIO_IN BACKEND_CTL_RATIO_OUT; do', ' BACKEND_CTL_RATIO_IN; do');
     expect(planted, 'the loop line was not found to shorten — update this proof').not.toBe(ci);
-    expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-golden` finished `failure` and the aggregate still exits 0');
+    expect(aggregateBehaviourProblems(planted).join('\n')).toContain('`backend-ctl-ratio-out` finished `failure` and the aggregate still exits 0');
+  });
+});
+
+describe('the control jobs carry the same setup as `backend` (grade 2)', () => {
+  const plantIn = (job: string, from: string, to: string) => {
+    const slice = jobText(ci, job);
+    const mutated = slice.replace(from, to);
+    expect(mutated, `the text to plant in \`${job}\` was not found — update this proof`).not.toBe(slice);
+    const planted = ci.replace(slice, mutated);
+    expect(planted).not.toBe(ci);
+    return planted;
+  };
+
+  it('the unplanted workflow has no C-11 problem, and the comparison really compared twelve setup steps', () => {
+    expect(setupCopyProblems(ci, register)).toEqual([]);
+    expect(CTL_JOBS).toHaveLength(4);
+  });
+
+  it('RED: one control job migrates differently from `backend`', () => {
+    const planted = plantIn('backend-ctl-ratio-out', 'run: npm run verify:history', 'run: npm run verify:history -- --lenient');
+    expect(setupCopyProblems(planted, register).join('\n')).toContain(
+      '`Migration history verify` of `backend-ctl-ratio-out` is not the text it has in `backend`',
+    );
+  });
+
+  it('RED: one control job loses the pg_stat_statements step', () => {
+    const planted = plantIn(
+      'backend-ctl-budget-in',
+      'name: Enable pg_stat_statements on the postgres service (PERF01 in-database budgets)',
+      'name: Enable something else',
+    );
+    expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-ctl-budget-in` does not carry the setup step `Enable pg_stat_statements');
+  });
+
+  it('RED: one control job gets a redis container', () => {
+    const planted = plantIn('backend-ctl-budget-out', '    steps:\n', '      redis:\n        image: redis:7.2-alpine\n    steps:\n');
+    expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-ctl-budget-out` has a redis service');
+  });
+
+  it('RED: one control job runs on another image', () => {
+    const planted = plantIn('backend-ctl-ratio-in', 'runs-on: ubuntu-26.04', 'runs-on: ubuntu-latest');
+    expect(setupCopyProblems(planted, register).join('\n')).toContain('`backend-ctl-ratio-in` runs on ubuntu-latest');
   });
 });
 
