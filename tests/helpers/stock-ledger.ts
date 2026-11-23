@@ -1637,6 +1637,59 @@ export async function addVariantProduct(
   return { productId, variantIds };
 }
 
+/**
+ * A tracked product PRICED IN A GIVEN CURRENCY, and a sibling of
+ * `addTrackedProduct` rather than a change to it.
+ *
+ * WHY IT EXISTS. `0078:723` reads the sale's currency off `p.price_currency`,
+ * and `:740` REFUSES a sale that mixes products of different currencies -- so
+ * an invoice's currency is its product's pricing currency, and the only way to
+ * reach a second invoice currency is a second product priced in one. The sale
+ * route cannot be told a currency: `sales.ts:220` says it is "resolved by the
+ * server from the catalogue and the business".
+ *
+ * WHY A SIBLING AND NOT A PARAMETER ON `createProduct`. The shared settlement
+ * world calls `addTrackedProduct`, and 22 suites read that world. Touching
+ * either would put a change where nobody asked for one and oblige a
+ * before/after proof over all of them. This function is called only by the
+ * suite that needs it, so the world those 22 suites see is unchanged BY
+ * CONSTRUCTION -- there is nothing to compare.
+ *
+ * The caller passes a code that EXISTS in `currencies`; this does not invent
+ * one, and the FX rate the sale needs is stated through the estate's own rate
+ * mechanism by the caller, not here.
+ */
+export async function addTrackedProductPricedIn(
+  pool: Pool,
+  s: { tenantId: string; businessId: string },
+  priceCurrency: string,
+  unit = 'piece',
+  decimals = 0,
+): Promise<ProductRef> {
+  const productId = randomUUID();
+  const c = await pool.connect();
+  try {
+    await c.query('BEGIN');
+    await c.query(`INSERT INTO products (business_id, id, base_price_minor, price_currency) VALUES ($1, $2, 1000, $3)`, [
+      s.businessId,
+      productId,
+      priceCurrency,
+    ]);
+    await c.query(`INSERT INTO product_translations (business_id, product_id, locale, name) VALUES ($1, $2, 'en', 'Priced-in product')`, [
+      s.businessId,
+      productId,
+    ]);
+    await c.query('COMMIT');
+  } catch (e) {
+    await c.query('ROLLBACK').catch(() => undefined);
+    throw e;
+  } finally {
+    c.release();
+  }
+  const variantId = must(await configureRaw(pool, s, productId, unit, decimals, true), 'base variant of the priced-in product');
+  return { productId, variantId };
+}
+
 export async function addTrackedProduct(pool: Pool, s: { tenantId: string; businessId: string }, unit = 'piece', decimals = 0): Promise<ProductRef> {
   const productId = await createProduct(pool, s.businessId);
   const variantId = must(await configureRaw(pool, s, productId, unit, decimals, true), 'base variant');
