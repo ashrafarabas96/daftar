@@ -229,6 +229,9 @@ const WARMUP = 5;
  */
 const PAIRED_ROUND_SIZE = SHORT_PERCENTILE_ITERATIONS;
 const PAIRED_ITERATIONS = PAIRED_ROUNDS * PAIRED_ROUND_SIZE;
+// The paired lane is declared apart from the shared constant above: see the block above for why.
+// Its count is asserted apart as well (the ceiling case and the census case below).
+//
 
 /**
  * ── DR-98 EXTENDED TO P4-D AND P4-F-TXN: WHAT THESE TWO BUDGETS NOW JUDGE ──
@@ -1866,11 +1869,11 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
           // P4-AL-76: the gate fails when a measurement's sample count is below
           // the declared iterations. Asserted on the series itself, before its
           // percentile is read, so a short series can never be a quiet pass.
-          const declared = path === READS.receivable(dataset.fatCustomerId) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS;
+          const dn = path === READS.receivable(dataset.fatCustomerId) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS;
           expect(
             m.samplesMs.length,
-            `${m.name}: ${m.samplesMs.length} samples were taken and ${declared} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
-          ).toBe(declared);
+            `${m.name}: ${m.samplesMs.length} samples were taken and ${dn} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+          ).toBe(dn);
           // DR-98: the verdict is the IN-DATABASE p95; the wall clock is printed
           // beside it, in the message and on the log, and judges nothing.
           assertInDatabaseWithin(m, BUDGET.D_BALANCE_P95, 'P4-D', tag);
@@ -1925,10 +1928,9 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         `median series:   ${JSON.stringify(distribution(med.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}`,
     ).toBeLessThanOrEqual(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
     // The second statistic (DR-179/1): the whole-run quotient must ALSO be within the limit.
-    expect(
-      must(ratio),
-      `P4-AL-72 judges BOTH statistics (DR-179/1): the whole-run p95(fat-tail)/p95(median) was ${must(ratio).toFixed(3)}x (${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms), limit ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max}x, over ${fat.samplesMs.length} paired samples; the median of the rounds was ${must(rounds.medianRatio).toFixed(3)}x. The limit may never be raised to obtain a pass.`,
-    ).toBeLessThanOrEqual(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    expect(must(ratio), `the whole-run quotient is ${must(ratio).toFixed(3)}x; the limit may never be raised to obtain a pass`).toBeLessThanOrEqual(
+      RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max,
+    );
     expect(both.pass, 'both statistics within the limit').toBe(true);
   });
 
@@ -2341,17 +2343,15 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
     );
     // DR-180: the three PAIRED series (the fat receivable read's wall clock and in-database
     // series, and its median partner) carry `PAIRED_ITERATIONS`; every other series 200.
-    const pairedNames = new Set([
-      `P4-D HTTP ${READS.receivable(dataset.fatCustomerId)}`,
-      `P4-D IN-DATABASE (the verdict) ${READS.receivable(dataset.fatCustomerId)}`,
-      'P4-D median (the ratio denominator)',
-    ]);
-    expect(pairedNames.size, 'the paired series are three and each is named in the census').toBe(3);
-    for (const name of pairedNames) expect(name in lengths, `the paired series ${name} is counted`).toBe(true);
-    const short = Object.entries(lengths).filter(([name, n]) => n !== (pairedNames.has(name) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS));
+    const fr = READS.receivable(dataset.fatCustomerId);
+    const ip = (name: string): boolean =>
+      name === `P4-D HTTP ${fr}` || name === `P4-D IN-DATABASE (the verdict) ${fr}` || name === 'P4-D median (the ratio denominator)';
+    const np = Object.keys(lengths).filter(ip).length;
+    expect(np, 'each of them is counted').toBe(3);
+    const short = Object.entries(lengths).filter(([name, n]) => n !== (ip(name) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS));
     expect(
       short.map(([name, n]) => `${name}: ${n}`),
-      `every measured series must carry exactly its declared samples (${PAIRED_ITERATIONS} for the paired receivable series, ${SHORT_PERCENTILE_ITERATIONS} for the rest) — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+      `every measured series must carry exactly its declared sample count, the pair lane its own — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
     ).toEqual([]);
     // DR-98 raised this total: each fat-tail read now carries a wall-clock AND
     // an in-database series, and each allocation arm carries three. The literal
