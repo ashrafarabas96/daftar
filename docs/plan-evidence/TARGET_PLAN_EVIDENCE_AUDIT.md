@@ -181,7 +181,7 @@ migrated from `0000` to `0079`.
 | # | File | Gate lines | Phase | Target result | Classification |
 |---|------|-----------|-------|---------------|----------------|
 | 1 | `tests/performance/pos-s3-budgets.test.ts` | 507, 508, 560, 561, 572, 634, 645, 646, 668 | P4-S3 | 10/10 pass | **SAME / PASS** |
-| 2 | `tests/performance/accounting-read-plans.test.ts` | 272, 273, 283, 284, 304, 313 | P2-S7 | pass | **SAME / PASS** |
+| 2 | `tests/performance/accounting-read-plans.test.ts` | 321, 322, 332, 333, 353, 362 | P2-S7 | pass | **SAME / PASS** |
 | 3 | `tests/security/journal-lines-rls-policy.test.ts` | 311, 312 | P2-S8 | pass | **SAME / PASS** |
 | 4 | `tests/security/policy-helper-inlining.test.ts` | 226, 227 | P2-S8 | pass | **SAME / PASS** |
 | 5 | `tests/performance/accounting-budgets.test.ts` | 510 | P2-S8 | pass | **SAME / PASS** |
