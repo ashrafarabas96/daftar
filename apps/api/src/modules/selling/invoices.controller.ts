@@ -23,8 +23,11 @@ import { DocumentSequenceQuerySchema, InvoiceListQuerySchema } from './selling.s
  *
  * There is no void route either. P4-AL-24 makes voiding a compound command that
  * reverses the revenue entry exactly once, reverses the inventory entry, returns
- * the stock and issues any refund from the credit-note source only; a direct
- * `UPDATE invoices SET status = 'void'` is refused by a trigger, and a route
+ * the stock and issues any refund from the credit-note source only. A direct
+ * `UPDATE invoices SET status = 'void'` is NOT refused by the transition trigger
+ * (it permits open to void; `invoices_state_ck` only requires the void intent,
+ * voided_by and voided_at), so the compound command is the only path that keeps
+ * the books whole, and a route
  * that did the easy part of that command would be the first half of a split
  * commit.
  *
