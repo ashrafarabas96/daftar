@@ -927,13 +927,29 @@ export class CustomerReadService {
    * implementation of a running balance is a second source of truth for a
    * number the merchant acts on.
    *
-   * THE ORDER IS RESTATED HERE ON PURPOSE. `0092` ends with
-   * `ORDER BY s.entry_date, s.kind_rank, s.entry_id` (`0092:282`), and a
-   * running balance is meaningless in any other order — but the row order of a
-   * set-returning function is not a guarantee an outer query inherits. So this
-   * query names the SAME three keys rather than leaning on the function's
-   * ordering surviving. If the two ever disagree, the explicit one here is the
-   * contract the client was given.
+   * THE ORDER IS RESTATED HERE ON PURPOSE, AND IT IS FOUR KEYS, NOT THREE.
+   * The row order of a set-returning function is not a guarantee an outer
+   * query inherits, so this query names the keys rather than leaning on the
+   * function's ordering surviving.
+   *
+   * The first key is the CURRENCY, and leaving it out was a real defect this
+   * reader shipped with until the review of `c8b1c673` named it. The running
+   * balance is not one series: `0092:200-203` computes it
+   * `OVER (PARTITION BY s.currency_code ORDER BY s.entry_date, s.kind_rank,
+   * s.entry_id)`, and `0092:375` is the migration's own guard that the
+   * partition is there. So there is one independent cumulative series PER
+   * CURRENCY. Ordered by the three date keys alone, a customer holding two
+   * currencies is handed those series INTERLEAVED in one column: every figure
+   * correct on its own row, and the column as a whole a number no merchant can
+   * read. Ordering by `s.currency_code` first makes each series a contiguous
+   * block, which is the shape the window computed and the shape the DTO's
+   * `rows` claims to be.
+   *
+   * For a single-currency customer this changes nothing — which is exactly why
+   * the suites that existed when the defect shipped could not see it, and why
+   * `§2b` below asserts the grouping itself rather than trusting the order.
+   * If the function's order and this one ever disagree, the explicit one here
+   * is the contract the client was given.
    */
   async statement(m: MembershipContext, customerId: string): Promise<CustomerStatementDto> {
     const row = await findCustomer(this.db, this.scope(m), customerId);
@@ -972,8 +988,8 @@ export class CustomerReadService {
               s.credit_remaining_base_minor::text  AS credit_remaining_base_minor,
               s.reference,
               s.running_balance_txn_minor::text    AS running_balance_txn_minor
-         FROM customer_account_statement($1, $2) s
-        ORDER BY s.entry_date, s.kind_rank, s.entry_id`,
+         FROM customer_account_statement($1::uuid, $2::uuid) s
+        ORDER BY s.currency_code, s.entry_date, s.kind_rank, s.entry_id`,
       [m.businessId, customerId],
     );
 
