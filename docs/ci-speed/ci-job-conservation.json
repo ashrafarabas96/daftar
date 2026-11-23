@@ -10,7 +10,8 @@
   "jobs": ["backend", "backend-static", "backend-gates-p2", "backend-golden"],
   "totals": {
     "shared": 11,
-    "assigned": 50
+    "assigned": 50,
+    "added": 0
   },
   "shared": [
     "Build contract, accounting and design-system packages",
@@ -25,6 +26,8 @@
     "actions/setup-node@v4",
     "run:npm ci"
   ],
+  "added": {},
+  "addedSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "assignment": {
     "API build": "backend-static",
     "Budget negative control — a delay INSIDE the database must fail the P4-D and P4-F-TXN budgets": "backend",
