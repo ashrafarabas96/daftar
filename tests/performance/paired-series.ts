@@ -61,13 +61,17 @@
  * `tests/guards/accounting-budget-percentile-semantics.test.ts`), and the
  * pair's alternation — which is now checked for EVERY round, not once.
  *
- * THE WARM-UP IS NOT IN THAT LIST, and it was, wrongly, until the independent
- * review of this branch measured it: `WARMUP` has ZERO hits in `tests-unit/`
- * and in `tests/guards/`, so it is held constant by SHARING ONE CONSTANT in
- * the suite, which is a code property, not by any claim. Listing it beside the
- * limit and the percentile said it was pinned when nothing pinned it — the
- * exact failure this header exists to prevent, committed in this header. It is
- * named here as unasserted rather than quietly dropped.
+ * THE WARM-UP IS UNCHANGED TOO — and it is the one item on that list that NO
+ * LAW ASSERTS, which is why it is named apart rather than beside the others.
+ * `WARMUP` is defined once (`receivables-s4-budgets.test.ts:216`) and every
+ * series takes it from that one constant, so it is held constant by SHARING A
+ * CONSTANT: a code property. It has ZERO hits in `tests-unit/` and in
+ * `tests/guards/`, measured — so listing it beside the limit and the
+ * percentile under «asserted, not promised» claimed a pin that does not
+ * exist, which is the exact failure this header was written to prevent,
+ * committed in this header. The CLAIM is withdrawn; the warm-up itself is
+ * still there, still shared, and still unchanged by DR-175. Dropping the
+ * mention would have traded a false claim for a missing fact.
  *
  * AND WHAT IT DOES CHANGE, said here because a remedy that is quiet about its
  * own cost is the thing this project calls a disguised relaxation: a median of
