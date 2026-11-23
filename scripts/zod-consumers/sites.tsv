@@ -5,8 +5,8 @@ apps/api/src/common/error.filter.ts	3	formatter	safe	HAND	import { ZodError } fr
 apps/api/src/common/error.filter.ts	54	formatter	intended	HAND	if (exception instanceof ZodError) {
 apps/api/src/common/error.filter.ts	56	method	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
 apps/api/src/common/error.filter.ts	56	issues-access	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
-apps/api/src/config.ts	973	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-apps/api/src/config.ts	973	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	1045	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	1045	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 apps/api/src/modules/accounting/accounting-reconciliation.reader.ts	251	find-shift	safe	R-RECEIVER	const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
 apps/api/src/modules/catalog/media.service.ts	132	find-shift	safe	R-RECEIVER	const v = row.variants.find((x) => x.size === size);
 apps/api/src/modules/inventory/inventory-stock-read.ts	98	find-shift	safe	R-RECEIVER	const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);

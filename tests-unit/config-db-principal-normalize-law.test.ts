@@ -229,6 +229,72 @@ describe('§31 compares credentials, not strings', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
   });
 
+  /**
+   * AND THE TWO THE SEVENTH REVIEW MEASURED — both at the layer that actually
+   * connects, `new ConnectionParameters`, not at `parse()` alone, and both the
+   * same forbidden direction: the key FINER than the driver.
+   */
+  it('refuses an `@` inside the password against its percent-encoded spelling, under an empty host', () => {
+    // `pg-connection-string:30` retries with `str.replace('@/', …)` — the FIRST
+    // two characters `@/`, no anchor, no character class. The key's own regex
+    // used `[^/@]*@`, which cannot cross an `@`, so this pair fell to
+    // `unparseable-by-this-key` on one side and a real key on the other.
+    // Measured: `parse()` reports the same five fields for both, and
+    // `new ConnectionParameters` the same `["localhost",5432,"daftar_app","daftar"]`.
+    const a = 'postgresql://daftar_app:p%40ss@/daftar';
+    const b = 'postgresql://daftar_app:p@ss@/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it("refuses an EMPTY host against an explicit `localhost`, because that is `pg`'s default host", () => {
+    // `connection-parameters.js` reads `config.host || PGHOST || defaults.host`
+    // and `defaults.host` is `'localhost'`. Measured with PGHOST unset: both
+    // of these give `["localhost",5432,"daftar_app","daftar"]`, one connection.
+    const a = 'postgresql://daftar_app:x@/daftar';
+    const b = 'postgresql://daftar_app:x@localhost/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('NEGATIVE CONTROL: the default host does not collapse two NAMED hosts', () => {
+    // The fix maps only the EMPTY host onto `localhost`. A deployment with two
+    // genuinely different named hosts must still start, or the remedy would
+    // have bought its coarseness by collapsing everything.
+    const a = 'postgresql://daftar_app:x@db/daftar';
+    const b = 'postgresql://daftar_app:x@localhost/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('NEGATIVE CONTROL: the literal `@/` retry does not make two DIFFERENT passwords one', () => {
+    // Mirroring the driver's literal replacement must not blur the userinfo it
+    // rewrites around: two empty-host URLs differing only in the password are
+    // two credentials and a real deployment can hold both.
+    const a = 'postgresql://daftar_app:p@ss@/daftar';
+    const b = 'postgresql://daftar_app:other@ss@/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('refuses a non-canonical default port in the QUERY form against no port at all', () => {
+    // `pg` reads the port with `parseInt`, so `?port=05432` IS 5432. The key
+    // compared the TEXT to `'5432'`, which `new URL` normalizes in the
+    // authority but `effective` returns verbatim from the query. Measured:
+    // both give `["db",5432,"daftar_app","daftar"]`.
+    const a = 'postgresql://daftar_app:x@db/daftar?port=05432';
+    const b = 'postgresql://daftar_app:x@db/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
+  it('NEGATIVE CONTROL: reading the port as a number does not collapse two DIFFERENT ports', () => {
+    const a = 'postgresql://daftar_app:x@db/daftar?port=05433';
+    const b = 'postgresql://daftar_app:x@db/daftar';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).not.toThrow();
+  });
+
+  it('FAILS CLOSED: two ports that are not numbers collide, because `parseInt` cannot tell them apart either', () => {
+    const a = 'postgresql://daftar_app:x@db/daftar?port=abc';
+    const b = 'postgresql://daftar_app:x@db/daftar?port=zzz';
+    expect(() => loadConfig({ ...MERCHANT_PROD, APP_DATABASE_URL: a, IDENTITY_DATABASE_URL: b })).toThrow(DUP);
+  });
+
   it('refuses the byte-identical spelling too, which is what held before this law', () => {
     expect(() => loadConfig(withIdentity(APP))).toThrow(DUP);
   });

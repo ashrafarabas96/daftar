@@ -182,9 +182,18 @@ function decodeUriOnce(part: string): string {
  *   a trailing slash · `postgres://` for `postgresql://` · `@DB/` in another
  *   case · `%78` for the password `x` · `%61` inside the role name
  *
- * — so the law over §31 pinned TEXTUAL EQUALITY, not one credential. Any of
- * those seven collapses two roles onto one principal while the process starts,
+ * — so the law over §31 pinned TEXTUAL EQUALITY, not one credential. SIX of
+ * those seven collapse two roles onto one principal while the process starts,
  * serves and reports nothing, which is the whole class §31 exists to refuse.
+ *
+ * NOT ALL SEVEN, and the correction is measured rather than hedged: the
+ * TRAILING SLASH is not one of them. `pg-connection-string` reports
+ * `database: 'daftar/'` for `…@db/daftar/` against `'daftar'` for `…@db/daftar`,
+ * and `new ConnectionParameters` keeps that difference, so those two are two
+ * DATABASES at the driver. Stripping the trailing slash here therefore makes
+ * this key COARSER than the driver on that pair — the safe direction, which
+ * refuses a deployment visibly — and calling it a closed hole claimed more
+ * than the measurement showed. (Seventh review, finding 6.)
  *
  * THREE MORE STARTED AGAINST THE FIRST VERSION OF THIS VERY FUNCTION, and
  * they are listed beside the original seven because they are the same class
@@ -234,8 +243,14 @@ function decodeUriOnce(part: string): string {
  *     DNS and will not assume two names are one server
  *   · a non-default port is part of the identity
  *   · two different database names are two principals
- *   · an unparseable value is returned unchanged, so it still compares as text
- *     rather than silently matching everything
+ *   · an unparseable value is keyed as ONE SENTINEL, so every such value
+ *     collides with every other and the pair FAILS CLOSED. This line used to
+ *     say the value «is returned unchanged, so it still compares as text»,
+ *     which was true of the first version and false of this one — a raw-text
+ *     fallback is FINER than the driver, which is the one property this key
+ *     must never have, so it was replaced. An inherited sentence describing
+ *     what no longer happens is the same defect as a count that names no
+ *     tree. (Seventh review, finding 3.)
  *
  * WHAT THIS DOES NOT REACH, named here because the next reader of §31 is
  * looking at this function and would otherwise read it as covering more than
@@ -259,6 +274,18 @@ function decodeUriOnce(part: string): string {
  * inside the SAME file shifts with any edit above it, so a citation by line is
  * stale the moment the file is touched. The wording is greppable and moves
  * with the clause. (Sixth review, finding 3.)
+ *
+ * AND ONE SHAPE IT NOW REFUSES THAT IT USED TO ADMIT, named because the
+ * paragraph below promises to name the gaps with their direction and this is
+ * one: `pg-connection-string` treats a string beginning with `/` as a bare
+ * socket pair, `"<socket path> <database>"` split on a space (`index.js:10-12`).
+ * `new URL` cannot parse such a string at all, so this key reaches the
+ * unparseable sentinel and every one of them collides. Measured:
+ * `/var/run/pg1 appdb` and `/var/run/pg2 platdb` are two different sockets at
+ * the driver and are now REFUSED as one. Coarser, so it refuses visibly rather
+ * than accepting a duplicate — but it is a new refusal of a correct
+ * deployment, and that is said here rather than discovered. (Seventh review,
+ * finding 4.)
  *
  * TWO MORE THINGS THIS KEY DOES NOT REACH, with the DIRECTION of each, since
  * that is what decides whether it matters: a key that is COARSER than the
@@ -303,10 +330,20 @@ function dbPrincipalKey(raw: string): string {
   try {
     url = new URL(raw);
   } catch {
-    // Mirror the driver's own retry before giving up: `scheme://…@/rest`
-    // becomes `scheme://…@<placeholder>/rest`, and the host element is then
-    // forced back to the empty string the driver reports.
-    const withHost = raw.replace(/^([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/@]*@)\//, `$1${EMPTY_HOST_AUTHORITY}/`);
+    // Mirror the driver's own retry before giving up, AND MIRROR IT LITERALLY:
+    // `pg-connection-string/index.js:30` is `str.replace('@/', '@___DUMMY___/')`
+    // — the FIRST occurrence of the two characters `@/`, with no anchor and no
+    // character class. This used to be a regex of my own,
+    // `/^(scheme:\/\/[^/@]*@)\//`, whose `[^/@]*` cannot cross an `@`, so a
+    // password containing one defeated it. Measured on this head:
+    // `…//daftar_app:p%40ss@/daftar` and `…//daftar_app:p@ss@/daftar` give
+    // IDENTICAL fields from `parse()` AND identical effective parameters from
+    // `new ConnectionParameters` (`["localhost",5432,"daftar_app","daftar"]`
+    // for both), so they are ONE credential — and the key gave a real key to
+    // the first and `unparseable-by-this-key` to the second, so §31 read one
+    // credential as two and the process STARTED. An `@` in a password is
+    // ordinary. (Seventh review of this branch, finding 1.)
+    const withHost = raw.replace('@/', `@${EMPTY_HOST_AUTHORITY}/`);
     try {
       url = new URL(withHost);
       emptyHost = withHost !== raw;
@@ -404,7 +441,28 @@ function dbPrincipalKey(raw: string): string {
   // (Seventh review, finding 1.)
   const socketScheme = canonicalScheme === 'socket';
   const host = socketScheme ? decodeUriOnce(url.pathname) : effective('host', emptyHost ? '' : url.hostname, true);
-  const canonicalHost = host.startsWith('/') ? host : host.toLowerCase();
+  // AND AN EMPTY HOST IS `pg`'s DEFAULT HOST, for the same reason the absent
+  // database below is the role's name: `connection-parameters.js` reads
+  // `config.host || PGHOST || defaults.host`, and `defaults.host` is
+  // `'localhost'`, so an empty host is not a host of its own. Measured on this
+  // head with PGHOST unset: `…@/daftar` and `…@localhost/daftar` produce the
+  // SAME effective parameters, `["localhost",5432,"daftar_app","daftar"]`, so
+  // they are one connection — and the key gave `''` against `'localhost'`, so
+  // the process STARTED on one credential spelled twice. Representing `pg`'s
+  // PORT and DATABASE defaults while ignoring its HOST default was the same
+  // difference with no stated reason that finding 2 of the previous review
+  // named. (Seventh review of this branch, finding 2.)
+  //
+  // THE COST, SAID RATHER THAN HIDDEN: where `PGHOST` IS set to something
+  // else, `…@/daftar` really does reach a different server from
+  // `…@localhost/daftar`, and this key now reads them as one — so it REFUSES
+  // a correct deployment instead of accepting a duplicate. That is the
+  // coarser direction, which this function's invariant permits and prefers:
+  // coarser refuses visibly, finer accepts silently. The key cannot read the
+  // environment, and guessing `PGHOST` would be the finer direction again.
+  const PG_DEFAULT_HOST = 'localhost';
+  const effectiveHost = host === '' ? PG_DEFAULT_HOST : host;
+  const canonicalHost = effectiveHost.startsWith('/') ? effectiveHost : effectiveHost.toLowerCase();
   // JSON.stringify, not a NUL-joined string: the parts are percent-DECODED
   // before they are joined, so a `%00` inside a role name used to shift the
   // field boundaries and merge two different secrets into one key — measured in
@@ -417,14 +475,28 @@ function dbPrincipalKey(raw: string): string {
   // are one credential and were keyed as two. (Review of this head, finding 2.)
   const effectiveUser = effective('user', url.username, true);
   const database = rawDatabase === '' ? `/${effectiveUser}` : rawDatabase;
-  return JSON.stringify([
-    canonicalScheme,
-    effectiveUser,
-    effective('password', url.password, true),
-    canonicalHost,
-    port === DEFAULT_POSTGRES_PORT ? '' : port,
-    database,
-  ]);
+  // THE PORT IS READ AS A NUMBER, because that is how `pg` reads it:
+  // `connection-parameters.js` does `parseInt(val('port'), 10)`. Comparing the
+  // TEXT to `'5432'` was enough for the authority form, which `new URL`
+  // normalizes, but NOT for the query form, which `effective` returns verbatim.
+  // Measured on this head: `…/daftar?port=05432` and `…/daftar` give the same
+  // effective parameters, `["db",5432,"daftar_app","daftar"]` — one connection
+  // — and the key gave `'05432'` against `''`. The seventh review filed this
+  // in a non-blocking family; it is the same forbidden direction as the two
+  // blocking ones, so it is closed here rather than recorded.
+  //
+  // A port that is not a number at all collapses to ONE sentinel: `parseInt`
+  // gives `NaN` for every such spelling, so the driver cannot tell them apart
+  // either, and keying them separately would be finer than the driver again.
+  // Colliding them refuses the pair instead, which is the safe direction.
+  const portNumber = Number.parseInt(port, 10);
+  const canonicalPort =
+    port === '' || portNumber === Number.parseInt(DEFAULT_POSTGRES_PORT, 10)
+      ? ''
+      : Number.isNaN(portNumber)
+        ? 'unparseable-port-by-this-key'
+        : String(portNumber);
+  return JSON.stringify([canonicalScheme, effectiveUser, effective('password', url.password, true), canonicalHost, canonicalPort, database]);
 }
 
 const EnvSchema = z
