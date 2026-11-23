@@ -127,8 +127,8 @@ const REFUSED: RoundsVerdict = { roundRatios: [], medianRatio: null, withinMax: 
 /**
  * THE VERDICT OF `P4-AL-72`'s RATIO: the MEDIAN of `rounds` paired rounds.
  *
- * The 200 paired samples of each side are cut into `rounds` CONTIGUOUS equal
- * blocks (40 each at 5 rounds). Each block yields its own p95(fat) / p95(med),
+ * The paired samples of each side (1000 at DR-180) are cut into `rounds` CONTIGUOUS
+ * equal blocks (200 each at 5 rounds). Each block yields its own p95(fat) / p95(med),
  * by the same estimator as everywhere (`quantile`), and the run is judged on
  * the median of those quotients against `max`. One host phase change then
  * moves at most the rounds it covers, and the median ignores a minority of
@@ -136,8 +136,8 @@ const REFUSED: RoundsVerdict = { roundRatios: [], medianRatio: null, withinMax: 
  * and fails. A run whose every round is above `max` fails: nothing is loosened.
  *
  * WHAT IT DOES NOT DO: it does not change `max`, the number of samples, or the
- * estimator; a block of 40 reads its p95 at index 38 (`floor(0.95 * 40)`), the
- * second-worst of the block, which is why one reading is never the verdict.
+ * estimator; a block of 200 reads its p95 at index 190 (`floor(0.95 * 200)`), with ten
+ * samples above it, which is why one reading is never the verdict.
  *
  * A series that is empty, of unequal length, or not divisible into `rounds`
  * equal blocks is REFUSED (fails), never passed as nothing. A round whose
@@ -164,6 +164,30 @@ export function medianOfRoundRatios(fat: readonly number[], med: readonly number
   };
   const medianRatio = sorted.length % 2 === 1 ? at(mid) : (at(mid - 1) + at(mid)) / 2;
   return { roundRatios, medianRatio, withinMax: medianRatio <= max };
+}
+
+export interface BothStatisticsVerdict {
+  /** The whole-run p95/p95 over every paired sample. */
+  readonly whole: RatioVerdict;
+  /** The median of the per-round p95/p95 quotients. */
+  readonly rounds: RoundsVerdict;
+  /** True only when BOTH statistics are within `max`. */
+  readonly pass: boolean;
+}
+
+/**
+ * DR-179/1 (owner 2026-11-23): the ratio passes only when BOTH statistics pass,
+ * the whole-run p95/p95 AND the median of the paired rounds, at the unchanged
+ * limit. The median alone is more tolerant of a host phase that moves a minority
+ * of rounds; the whole-run alone is more tolerant of one round that is bad. Either
+ * one passing while the other fails is a FAIL here, so adding the rounds can never
+ * loosen what the whole-run statistic already refused (DR-180: no change of the
+ * governing statistic, no raise of the limit).
+ */
+export function bothStatisticsVerdict(fat: readonly number[], med: readonly number[], rounds: number, max: number): BothStatisticsVerdict {
+  const whole = ratioVerdict(fat, med, max);
+  const byRounds = medianOfRoundRatios(fat, med, rounds, max);
+  return { whole, rounds: byRounds, pass: whole.withinMax && byRounds.withinMax };
 }
 
 /** Why the ratchet's declaration of the ratio is not the one this arm was accepted under. */

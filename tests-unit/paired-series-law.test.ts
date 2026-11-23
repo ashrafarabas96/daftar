@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { RATIOS } from '../scripts/phase4-budget-ratchet';
 import {
+  bothStatisticsVerdict,
   EXPECTED_RATIO_MAX,
   fingerprintOf,
   fingerprintProblems,
@@ -178,16 +179,60 @@ describe('P4-AL-72 paired measurement', () => {
     });
   });
 
+  describe('(g) BOTH statistics must pass: the whole-run quotient AND the median of the rounds (DR-179/1)', () => {
+    // n = 10 at five rounds is two samples per round: a round's p95 is its max, the whole-run p95 is the overall max.
+    const blocks = (maxes: readonly number[]): number[] => maxes.flatMap((x) => [x, x]);
+    it('positive: both within the limit passes', () => {
+      const v = bothStatisticsVerdict(blocks([2, 2, 2, 2, 2]), blocks([1, 1, 1, 1, 1]), 5, 3);
+      expect(v.whole.withinMax && v.rounds.withinMax && v.pass).toBe(true);
+    });
+    it('negative: the rounds PASS and the whole-run FAILS => red (the median alone must not loosen the whole-run refusal)', () => {
+      const v = bothStatisticsVerdict(blocks([1, 1, 1, 1, 40]), blocks([1, 1, 1, 1, 1]), 5, 3);
+      expect(v.rounds.withinMax).toBe(true);
+      expect(v.whole.withinMax).toBe(false);
+      expect(v.pass).toBe(false);
+    });
+    it('negative: the whole-run PASSES and the rounds FAIL => red (the whole-run alone must not loosen the rounds refusal)', () => {
+      const v = bothStatisticsVerdict(blocks([4, 4, 4, 4, 5]), blocks([1, 1, 1, 1, 10]), 5, 3);
+      expect(v.whole.withinMax).toBe(true);
+      expect(v.rounds.withinMax).toBe(false);
+      expect(v.pass).toBe(false);
+    });
+    it('negative: a refused series (empty, or not divisible into the rounds) is a FAIL, never a pass', () => {
+      expect(bothStatisticsVerdict([], [], 5, 3).pass).toBe(false);
+      expect(bothStatisticsVerdict([2, 2, 2], [1, 1, 1], 5, 3).pass).toBe(false);
+    });
+  });
+
+  describe('(h) the paired loop takes 1000 pairs in five rounds of 200, and the shared 200 constant is untouched (DR-180 1-a; a text law)', () => {
+    const src = readFileSync(join(__dirname, '..', 'tests', 'performance', 'receivables-s4-budgets.test.ts'), 'utf8');
+    it('positive: the paired count is PAIRED_ROUNDS x 200 and the loop uses it', () => {
+      expect(src).toMatch(/const PAIRED_ROUND_SIZE = SHORT_PERCENTILE_ITERATIONS;/);
+      expect(src).toMatch(/const PAIRED_ITERATIONS = PAIRED_ROUNDS \* PAIRED_ROUND_SIZE;/);
+      expect(src).toMatch(/for \(let i = 0; i < PAIRED_ITERATIONS; i \+= 1\) \{\s+for \(const side of pairOrder\(i\)\)/);
+      expect(src).toContain('fingerprintProblems(pairedReadOrder, PAIRED_ITERATIONS)');
+    });
+    it('negative: the shared constant stays 200 and still sizes the write arm pool, so the write arm is not multiplied by five', () => {
+      expect(src).toMatch(/const SHORT_PERCENTILE_ITERATIONS = 200;/);
+      expect(src).toMatch(/allocationPoolSize = \(shape: number\): number => \(WARMUP \+ SHORT_PERCENTILE_ITERATIONS\) \* shape;/);
+      expect(src).not.toMatch(/const PAIRED_ITERATIONS = \d/);
+    });
+    it('positive: the numbers are 1000 and 200, derived', () => {
+      expect(PAIRED_ROUNDS * 200).toBe(1000);
+    });
+  });
+
   describe('the suite is wired to the paired helper (a text law, which proves writing, not behaviour)', () => {
     const src = readFileSync(join(__dirname, '..', 'tests', 'performance', 'receivables-s4-budgets.test.ts'), 'utf8');
     it('positive: the ratio denominator comes from the paired measurement and its fingerprint is asserted', () => {
       expect(src).toContain('measurePairedReceivable(');
       expect(src).toContain('fingerprintProblems(');
-      expect(src).toContain('ratioVerdict(');
-      expect(src).toContain('medianOfRoundRatios(');
+      expect(src).toContain('bothStatisticsVerdict(');
     });
-    it('negative: the gate no longer judges the single whole-run quotient', () => {
-      expect(src).not.toMatch(/must\(ratio\),\s+`P4-AL-72/);
+    it('positive: the gate judges BOTH statistics — the rounds AND the whole-run quotient (DR-179/1)', () => {
+      expect(src).toMatch(/must\(rounds\.medianRatio\)[\s\S]{0,1500}toBeLessThanOrEqual\(RATIOS\.BALANCE_FATTAIL_OVER_MEDIAN\.max\)/);
+      expect(src).toMatch(/must\(ratio\),\s+`P4-AL-72 judges BOTH statistics/);
+      expect(src).toContain('expect(both.pass');
     });
     it('negative: the denominator is no longer a second, consecutive `measure(` series', () => {
       expect(src).not.toMatch(/medianReceivable = await measure\(/);

@@ -152,7 +152,7 @@ import {
 import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput, type PaymentInput } from '../golden-regression/phase4-s4/settlement-path';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
-import { fingerprintOf, fingerprintProblems, medianOfRoundRatios, PAIRED_ROUNDS, pairOrder, ratioVerdict, type PairSide } from './paired-series';
+import { bothStatisticsVerdict, fingerprintOf, fingerprintProblems, PAIRED_ROUNDS, pairOrder, type PairSide } from './paired-series';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
@@ -214,6 +214,21 @@ const BUDGET = {
  */
 const SHORT_PERCENTILE_ITERATIONS = 200;
 const WARMUP = 5;
+
+/**
+ * DR-180 (1-a), owner order 2026-11-24: the PAIRED P4-AL-72 loop takes ONE
+ * thousand pairs, cut by `medianOfRoundRatios` into `PAIRED_ROUNDS` contiguous
+ * rounds of TWO HUNDRED — the sample size of every other series in this file.
+ * "An improvement to the precision of the measurement, not a relaxation": the
+ * limit 3 and the five rounds are unchanged, and no sample is dropped.
+ *
+ * It is a SEPARATE constant and `SHORT_PERCENTILE_ITERATIONS` is untouched, on
+ * purpose: that one feeds `allocationPoolSize = (WARMUP + ITER) × shape`, so
+ * raising it would multiply the write arm's invoice pool by five for nothing.
+ * The read arm consumes no pool. The two are declared apart and asserted apart.
+ */
+const PAIRED_ROUND_SIZE = SHORT_PERCENTILE_ITERATIONS;
+const PAIRED_ITERATIONS = PAIRED_ROUNDS * PAIRED_ROUND_SIZE;
 
 /**
  * ── DR-98 EXTENDED TO P4-D AND P4-F-TXN: WHAT THESE TWO BUDGETS NOW JUDGE ──
@@ -674,7 +689,7 @@ async function measure(
 /**
  * P4-AL-72, PAIRED: the fat-tail and the median `/receivable` reads on the SAME
  * iteration loop, the order inside each pair alternating (`pairOrder`), each
- * side keeping its own 200 samples and its own p95. Two consecutive series let
+ * side keeping its own `PAIRED_ITERATIONS` samples (DR-180) and its own p95. Two consecutive series let
  * a host phase change between them move the quotient; a pair shares the phase.
  *
  * Everything else is what `measure` does for the same reads: warm-up of
@@ -703,7 +718,7 @@ async function measurePairedReceivable(
   const wall: Record<PairSide, number[]> = { F: [], M: [] };
   const inDatabaseMs: number[] = [];
   const order: PairSide[] = [];
-  for (let i = 0; i < SHORT_PERCENTILE_ITERATIONS; i += 1) {
+  for (let i = 0; i < PAIRED_ITERATIONS; i += 1) {
     for (const side of pairOrder(i)) {
       await before();
       const dbBefore = side === 'F' ? await clock.read() : null;
@@ -1851,10 +1866,11 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
           // P4-AL-76: the gate fails when a measurement's sample count is below
           // the declared iterations. Asserted on the series itself, before its
           // percentile is read, so a short series can never be a quiet pass.
+          const declared = path === READS.receivable(dataset.fatCustomerId) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS;
           expect(
             m.samplesMs.length,
-            `${m.name}: ${m.samplesMs.length} samples were taken and ${SHORT_PERCENTILE_ITERATIONS} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
-          ).toBe(SHORT_PERCENTILE_ITERATIONS);
+            `${m.name}: ${m.samplesMs.length} samples were taken and ${declared} were declared — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+          ).toBe(declared);
           // DR-98: the verdict is the IN-DATABASE p95; the wall clock is printed
           // beside it, in the message and on the log, and judges nothing.
           assertInDatabaseWithin(m, BUDGET.D_BALANCE_P95, 'P4-D', tag);
@@ -1871,15 +1887,17 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
     // the host. The pair's recorded order is judged first, so a run that did
     // not alternate cannot reach the quotient.
     expect(
-      fingerprintProblems(pairedReadOrder, SHORT_PERCENTILE_ITERATIONS),
+      fingerprintProblems(pairedReadOrder, PAIRED_ITERATIONS),
       `P4-AL-72's pair did not alternate; fingerprint: ${fingerprintOf(pairedReadOrder)}`,
     ).toEqual([]);
     const fat = must(readSeries.get(READS.receivable(dataset.fatCustomerId)), 'the fat-tail receivable series');
     const med = must(medianReceivable, 'the median receivable series');
-    const { fatP95, medP95, ratio } = ratioVerdict(fat.samplesMs, med.samplesMs, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    // DR-179/1: BOTH statistics must pass — the whole-run quotient AND the median of the paired rounds.
+    const both = bothStatisticsVerdict(fat.samplesMs, med.samplesMs, PAIRED_ROUNDS, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    const { fatP95, medP95, ratio } = both.whole;
     if (fatP95 === null || medP95 === null) throw new Error('a ratio series is empty: nothing was measured');
     // THE VERDICT (owner order 2026-11-22): the median of five paired rounds, not the one whole-run quotient above, which is printed for the record.
-    const rounds = medianOfRoundRatios(fat.samplesMs, med.samplesMs, PAIRED_ROUNDS, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    const rounds = both.rounds;
     diagnose(fat, BUDGET.D_BALANCE_P95);
     diagnose(med, BUDGET.D_BALANCE_P95);
     console.log(
@@ -1906,6 +1924,12 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         `fat-tail series: ${JSON.stringify(distribution(fat.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}\n` +
         `median series:   ${JSON.stringify(distribution(med.samplesMs, BUDGET.D_BALANCE_P95).orderedMs)}`,
     ).toBeLessThanOrEqual(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    // The second statistic (DR-179/1): the whole-run quotient must ALSO be within the limit.
+    expect(
+      must(ratio),
+      `P4-AL-72 judges BOTH statistics (DR-179/1): the whole-run p95(fat-tail)/p95(median) was ${must(ratio).toFixed(3)}x (${fatP95.toFixed(3)} ms over ${medP95.toFixed(3)} ms), limit ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max}x, over ${fat.samplesMs.length} paired samples; the median of the rounds was ${must(rounds.medianRatio).toFixed(3)}x. The limit may never be raised to obtain a pass.`,
+    ).toBeLessThanOrEqual(RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    expect(both.pass, 'both statistics within the limit').toBe(true);
   });
 
   it(`RLS COST (P4-AL-75, OD-P4-14 provisional): the daftar_app figure over the schema-owner figure, <= ${RATIOS.RLS_COST.max}x`, () => {
@@ -2313,12 +2337,21 @@ describe('the measurement environment, recorded rather than described (TL-P4-S3-
     // here rather than held to the budget's sample count.
     const diagnosticSamples = beforeAnalyze === null ? 0 : beforeAnalyze.samplesMs.length;
     console.log(
-      `\nSAMPLE CENSUS — ${JSON.stringify({ declared: SHORT_PERCENTILE_ITERATIONS, warmupDiscarded: WARMUP, lengths, beforeAnalyzeDiagnosticSamples: diagnosticSamples, reauthentications: authReport().reauthentications }, null, 1)}\n`,
+      `\nSAMPLE CENSUS — ${JSON.stringify({ declared: SHORT_PERCENTILE_ITERATIONS, declaredPaired: PAIRED_ITERATIONS, warmupDiscarded: WARMUP, lengths, beforeAnalyzeDiagnosticSamples: diagnosticSamples, reauthentications: authReport().reauthentications }, null, 1)}\n`,
     );
-    const short = Object.entries(lengths).filter(([, n]) => n !== SHORT_PERCENTILE_ITERATIONS);
+    // DR-180: the three PAIRED series (the fat receivable read's wall clock and in-database
+    // series, and its median partner) carry `PAIRED_ITERATIONS`; every other series 200.
+    const pairedNames = new Set([
+      `P4-D HTTP ${READS.receivable(dataset.fatCustomerId)}`,
+      `P4-D IN-DATABASE (the verdict) ${READS.receivable(dataset.fatCustomerId)}`,
+      'P4-D median (the ratio denominator)',
+    ]);
+    expect(pairedNames.size, 'the paired series are three and each is named in the census').toBe(3);
+    for (const name of pairedNames) expect(name in lengths, `the paired series ${name} is counted`).toBe(true);
+    const short = Object.entries(lengths).filter(([name, n]) => n !== (pairedNames.has(name) ? PAIRED_ITERATIONS : SHORT_PERCENTILE_ITERATIONS));
     expect(
       short.map(([name, n]) => `${name}: ${n}`),
-      `every measured series must carry exactly ${SHORT_PERCENTILE_ITERATIONS} samples — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
+      `every measured series must carry exactly its declared samples (${PAIRED_ITERATIONS} for the paired receivable series, ${SHORT_PERCENTILE_ITERATIONS} for the rest) — a percentile over fewer samples than claimed is not the claimed percentile (P4-AL-76)`,
     ).toEqual([]);
     // DR-98 raised this total: each fat-tail read now carries a wall-clock AND
     // an in-database series, and each allocation arm carries three. The literal
