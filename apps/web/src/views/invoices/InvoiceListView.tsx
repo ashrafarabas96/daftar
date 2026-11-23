@@ -26,14 +26,12 @@
  *
  * ── THREE THINGS THIS ROW DELIBERATELY DOES NOT DO ───────────────────────
  *
- * **It does not open.** The row is not clickable and there is no `onOpen`: the
- * invoice DETAIL screen is not in this tree, because an `InvoiceDto` fixture
- * must name `customerSnapshot` and T-12 (`test/od03.test.ts:216`, `:235`)
- * refuses that vocabulary in every file of `apps/web`. A row that pushed
- * `/invoices/:id` today would land the merchant on a 404 — which is the defect
- * `phase4-pos-api.ts`'s header records at scale (six planned endpoints, 36
- * browser-gate failures, every one a 404). So the row stays inert until the
- * screen ships: `.local-context/cards/L8_INVOICE_DETAIL_BLOCKED_BY_T12_AR.md`.
+ * **It opens one invoice.** The detail page ships alongside this screen, so the
+ * row carries `onOpen` and the push has somewhere to land. While that page was
+ * held out of the tree the row was deliberately inert, because a row pushing
+ * `/invoices/:id` with no page behind it is the defect `phase4-pos-api.ts`'s
+ * header records at scale: six planned endpoints, 36 browser-gate failures,
+ * every one a 404.
  *
  * **It does not show a due date.** A due date is legal only on a credit sale
  * with a named customer — `SaleCommitSchema`'s own refinement
@@ -59,6 +57,8 @@ export interface InvoiceListViewProps {
   hasMore: boolean;
   loadingMore: boolean;
   errorKey: string | null;
+  /** Opens one invoice. The detail page ships with this screen's sibling commit. */
+  onOpen: (invoiceId: string) => void;
   onLoadMore: () => void;
   /** An empty list leads somewhere (SIM-12): to the till. */
   onSellSomething: () => void;
@@ -95,6 +95,7 @@ export function InvoiceListView(props: InvoiceListViewProps & ViewBaseProps) {
         <List
           items={props.invoices.map((invoice) => ({
             key: invoice.id,
+            onClick: () => props.onOpen(invoice.id),
             primary: <Code>{invoice.documentNumber}</Code>,
             secondary: rich(t('invoices.list.dated'), { date: <CivilDate iso={invoice.issueDate} locale={locale} /> }),
             trailing: (

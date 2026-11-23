@@ -921,5 +921,22 @@
   "invoices.list.dated": "Dated {date}",
   "invoices.status.draft": "Not issued yet",
   "invoices.status.open": "Issued",
-  "invoices.status.void": "Cancelled"
+  "invoices.status.void": "Cancelled",
+  "invoices.detail.title": "Invoice",
+  "invoices.detail.status": "Status",
+  "invoices.detail.issueDate": "Issue date",
+  "invoices.detail.cancelledOn": "Cancelled on",
+  "invoices.detail.notes": "Notes",
+  "invoices.detail.items": "Items",
+  "invoices.detail.itemLine": "{qty} × {price}",
+  "invoices.detail.subtotal": "Before discount",
+  "invoices.detail.discount": "Discount",
+  "invoices.detail.total": "Total",
+  "invoices.settlement.title": "Collection",
+  "invoices.settlement.state": "Collection status",
+  "invoices.settlement.collected": "Collected",
+  "invoices.settlement.remaining": "Left to collect",
+  "invoices.settlement.unpaid": "Not collected",
+  "invoices.settlement.partial": "Partly collected",
+  "invoices.settlement.paid": "Fully collected"
 }
