@@ -50,11 +50,61 @@ afterAll(async () => {
   await db?.drop();
 });
 
+// HOISTED TO MODULE SCOPE, so the two describes name these triggers from ONE
+// declaration. They were declared inside the ordering describe, and §1b below
+// — added in the same breath as this move — referred to `CONSERVE` from the
+// other block and died with `ReferenceError: CONSERVE is not defined`. The
+// alternative was to write the trigger name again as a literal, which is a
+// second source of truth for an identifier: the thing this suite exists to
+// forbid elsewhere.
+const COMPLETE = 'stock_source_complete_inventory_transfer';
+const CONSERVE = 'transfer_value_conserved_per_line';
+
 describe('C6 — the transfer value arm on a cluster', () => {
   it('§1 the migration set applies, and the guard registry reports NO gap', async () => {
     const gaps = await client.query<{ source_type: string; missing: string }>('SELECT source_type, missing FROM inventory_stock_source_guard_gaps()');
     expect(gaps.rows, 'a gap here names the guard the registry demands and the database does not have').toEqual([]);
   });
+
+  it('§1b THE CONTROL FOR §1: drop the trigger and the registry NAMES the gap, so that zero is sighted', async () => {
+    // §1 asserts an EMPTY gap list, and an empty list cannot tell two very
+    // different worlds apart: "the registry demands this guard and the database
+    // has it" and "the registry never demanded it at all". Delete the registry
+    // row at `0093:317` alone and §1 stays green, §2 stays green (the trigger
+    // is still there with its digest), and the whole behavioural suite stays
+    // green (the law still fires) — so nothing in this branch would have
+    // noticed. The independent review of 94ef0108 named it, and the precedent
+    // is in this repository's own words at `0077:1223`:
+    //   "Before this replacement a sale bridge whose line foreign key pointed
+    //    at the wrong table was reported as no gap at all"
+    // — the same shape, already paid for once.
+    //
+    // So: inside a transaction this case rolls back, drop the guard and require
+    // the registry to name EXACTLY the pair it reserved for it. That is what
+    // makes §1's zero a measurement (RULE-3, charter §5: an absence claim needs
+    // a positive control).
+    await client.query('BEGIN');
+    let named: readonly { source_type: string; missing: string }[] = [];
+    try {
+      await client.query(`DROP TRIGGER ${CONSERVE} ON inventory_transfer_lines`);
+      const gaps = await client.query<{ source_type: string; missing: string }>('SELECT source_type, missing FROM inventory_stock_source_guard_gaps()');
+      named = gaps.rows;
+    } finally {
+      await client.query('ROLLBACK');
+    }
+
+    // Asserted AFTER the rollback so a failure here cannot leave the schema
+    // altered, and named one field at a time: a whole-object compare would also
+    // pass if both fields were wrong together.
+    expect(named.length, 'dropping the guard produced NO gap — the registry does not demand it, and §1 was blind').toBe(1);
+    expect(named[0]?.source_type, 'the gap must be reported for the transfer source').toBe('inventory_transfer');
+    expect(named[0]?.missing, 'the gap must name the reserved guard slot, not some other one').toBe('value_complete');
+
+    // And the live schema is back: the same query §1 runs must be empty again,
+    // or this control has damaged the subject it was measuring.
+    const after = await client.query<{ source_type: string; missing: string }>('SELECT source_type, missing FROM inventory_stock_source_guard_gaps()');
+    expect(after.rows, 'the rollback took the drop with it').toEqual([]);
+  }, 300_000);
 
   it('§2 the new trigger exists with the shape the registry recorded, and its body digest matches', async () => {
     const r = await client.query<{
@@ -140,9 +190,6 @@ describe('C6 — the transfer value arm on a cluster', () => {
  * immediate trigger and a deferred one.
  */
 describe('C6 — the firing order the repair rests on', () => {
-  const COMPLETE = 'stock_source_complete_inventory_transfer';
-  const CONSERVE = 'transfer_value_conserved_per_line';
-
   interface TrigRow {
     readonly tgname: string;
     readonly tgtype: number;
