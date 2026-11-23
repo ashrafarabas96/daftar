@@ -152,6 +152,7 @@ import {
 import { R10, allocationFigures, collectPayment, rateToR10, type AllocationInput, type PaymentInput } from '../golden-regression/phase4-s4/settlement-path';
 import { Database, type Scope } from '../../apps/api/src/infra/database';
 import { distribution, quantile, type Distribution } from './percentile';
+import { fingerprintOf, fingerprintProblems, pairOrder, ratioVerdict, type PairSide } from './paired-series';
 import { ACCEPTED, RATIOS, effectiveCeilingMs } from '../../scripts/phase4-budget-ratchet';
 import { phase4RoutineBodies, phase4Sql } from '../../scripts/phase4-s1-gate';
 import {
@@ -393,6 +394,8 @@ let beforeAnalyze: Measured | null = null;
 const readSeries = new Map<string, Measured>();
 /** The ratio's denominator: the same read on an ordinary customer. */
 let medianReceivable: Measured | null = null;
+/** The order the paired receivable reads ran in, one symbol per read (`paired-series.ts`). */
+let pairedReadOrder: PairSide[] = [];
 /** The RLS cost's owner half: the same statements, row security bypassed. Never the budget. */
 let ownerReceivable: Measured | null = null;
 /** The RLS cost's `daftar_app` half: the same statements through the product's own query function, row security applied. */
@@ -666,6 +669,57 @@ async function measure(
   // The eviction check is per WINDOW now, inside `delta`, where the claim it
   // makes is the claim each figure needs. See `InDatabaseClock.delta`.
   return clock === null ? { name, budgetMs, samplesMs } : { name, budgetMs, samplesMs, inDatabaseMs };
+}
+
+/**
+ * P4-AL-72, PAIRED: the fat-tail and the median `/receivable` reads on the SAME
+ * iteration loop, the order inside each pair alternating (`pairOrder`), each
+ * side keeping its own 200 samples and its own p95. Two consecutive series let
+ * a host phase change between them move the quotient; a pair shares the phase.
+ *
+ * Everything else is what `measure` does for the same reads: warm-up of
+ * `WARMUP` pairs discarded, the pacing wait OUTSIDE the clock before every
+ * read, the control delays at the head of the window, and the in-database
+ * reading (the budget's verdict series) taken around the fat-tail read only.
+ * The median side stays wall-clock only, as before. The order of every
+ * measured read is recorded so a run that did not alternate can be told.
+ */
+async function measurePairedReceivable(
+  fatName: string,
+  medName: string,
+  fatBudgetMs: number,
+  fatOnce: () => Promise<void>,
+  medOnce: () => Promise<void>,
+  before: () => Promise<unknown>,
+): Promise<{ fat: Measured; med: Measured; order: PairSide[] }> {
+  const clock = must(inDatabase, `${fatName}: the in-database instrument`);
+  const reads = { F: fatOnce, M: medOnce } as const;
+  for (let i = 0; i < WARMUP; i += 1) {
+    for (const side of pairOrder(i)) {
+      await before();
+      await reads[side]();
+    }
+  }
+  const wall: Record<PairSide, number[]> = { F: [], M: [] };
+  const inDatabaseMs: number[] = [];
+  const order: PairSide[] = [];
+  for (let i = 0; i < SHORT_PERCENTILE_ITERATIONS; i += 1) {
+    for (const side of pairOrder(i)) {
+      await before();
+      const dbBefore = side === 'F' ? await clock.read() : null;
+      const started = process.hrtime.bigint();
+      await plantControlDelays(null);
+      await reads[side]();
+      wall[side].push(Number(process.hrtime.bigint() - started) / 1e6);
+      if (dbBefore !== null) inDatabaseMs.push(InDatabaseClock.delta(dbBefore, await clock.read()));
+      order.push(side);
+    }
+  }
+  return {
+    fat: { name: fatName, budgetMs: fatBudgetMs, samplesMs: wall.F, inDatabaseMs },
+    med: { name: medName, budgetMs: null, samplesMs: wall.M },
+    order,
+  };
 }
 
 // ───── the read under measurement ─────────────────────────────────────────
@@ -1347,6 +1401,23 @@ async function buildFixture(): Promise<void> {
   // stored series.
   const medianCustomerId = must(dataset.medianCustomerIds[0], 'the first median customer');
   for (const { label, path, route } of readsOf(dataset.fatCustomerId, w.day)) {
+    if (path === READS.receivable(dataset.fatCustomerId)) {
+      // P4-AL-72: the numerator and the denominator are read as a PAIR on one
+      // loop (`measurePairedReceivable`), so the series the ceiling judges and
+      // the one the ratio divides by are one population, not two phases.
+      const paired = await measurePairedReceivable(
+        `P4-D ${label}, fat-tail customer (${FAT_TAIL.invoices} invoices, ${FAT_TAIL.allocations} allocations) — as daftar_app, THE BUDGET`,
+        `P4-D receivable, MEDIAN customer (${MEDIAN.invoicesEach} invoices) — the ratio's denominator`,
+        BUDGET.D_BALANCE_P95,
+        () => read200(path),
+        () => read200(READS.receivable(medianCustomerId)),
+        () => pace(route),
+      );
+      readSeries.set(path, paired.fat);
+      medianReceivable = paired.med;
+      pairedReadOrder = paired.order;
+      continue;
+    }
     readSeries.set(
       path,
       await measure(
@@ -1363,13 +1434,6 @@ async function buildFixture(): Promise<void> {
       ),
     );
   }
-  medianReceivable = await measure(
-    `P4-D receivable, MEDIAN customer (${MEDIAN.invoicesEach} invoices) — the ratio's denominator`,
-    null,
-    () => read200(READS.receivable(medianCustomerId)),
-    SHORT_PERCENTILE_ITERATIONS,
-    () => pace(ROUTE.receivable),
-  );
   // The RLS cost's two halves, like against like: the SAME captured
   // statements on the SAME rows, as `daftar_app` through the product's own
   // query function with row security applied, and as the schema owner with
@@ -1801,14 +1865,19 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
 
   it(`RATIO (host-independent, P4-AL-72): p95(fat-tail) <= ${RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max} x p95(median)`, () => {
     requireFixture();
-    // The SAME series the ceiling case judged, and the median series taken in
-    // the same run on the same host: a ratio computed from a second sample
-    // would be a ratio between two populations.
+    // The SAME series the ceiling case judged, and the median series read on
+    // the SAME loop as a PAIR (`measurePairedReceivable`): a ratio computed
+    // from a second, consecutive sample would be a ratio between two phases of
+    // the host. The pair's recorded order is judged first, so a run that did
+    // not alternate cannot reach the quotient.
+    expect(
+      fingerprintProblems(pairedReadOrder, SHORT_PERCENTILE_ITERATIONS),
+      `P4-AL-72's pair did not alternate; fingerprint: ${fingerprintOf(pairedReadOrder)}`,
+    ).toEqual([]);
     const fat = must(readSeries.get(READS.receivable(dataset.fatCustomerId)), 'the fat-tail receivable series');
     const med = must(medianReceivable, 'the median receivable series');
-    const fatP95 = quantile(fat.samplesMs, 0.95);
-    const medP95 = quantile(med.samplesMs, 0.95);
-    const ratio = medP95 === 0 ? null : fatP95 / medP95;
+    const { fatP95, medP95, ratio } = ratioVerdict(fat.samplesMs, med.samplesMs, RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max);
+    if (fatP95 === null || medP95 === null) throw new Error('a ratio series is empty: nothing was measured');
     diagnose(fat, BUDGET.D_BALANCE_P95);
     diagnose(med, BUDGET.D_BALANCE_P95);
     console.log(
@@ -1819,6 +1888,7 @@ describe(`P4-D — the customer receivable read (scale ${SCALE}, ${SCALE === 1 ?
         max: RATIOS.BALANCE_FATTAIL_OVER_MEDIAN.max,
         fatOpenInvoices: volume.fatOpenInvoices,
         medianOpenInvoices: MEDIAN.invoicesEach,
+        pairedOrder: fingerprintOf(pairedReadOrder),
       })}\n`,
     );
     expect(ratio, 'the median read measured zero, so the ratio has no denominator').not.toBeNull();

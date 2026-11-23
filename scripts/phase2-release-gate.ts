@@ -8,8 +8,8 @@
  *
  * The one command that decides whether the Phase 2 release candidate may be
  * handed to a Tech Lead. It COMPOSES what already exists rather than
- * restating it: the Phase 1 release gate, the permanent P2-S8 gate (which
- * composes P2-S7 … P2-S1 and the Phase 1 machine gate in turn), the
+ * restating it: the Phase 1 release gate, the permanent P2-S7 gate (which
+ * composes P2-S6 … P2-S1 and the Phase 1 machine gate in turn) and the P2-S8 gate, the
  * deployment-authority matrix, and the closure checks that belong to P2-S9
  * itself. There is no monolith here and no second copy of any assertion: if a
  * claim is already proved somewhere, this file runs that thing and records
@@ -418,10 +418,14 @@ function main(): void {
         return existsSync(join(ROOT, 'apps/api/dist')) ? ['apps/api/dist is still present after being removed'] : [];
       }),
 
-    // The Phase 2 slice gates, composed: P2-S8 runs P2-S7 … P2-S1 and the
-    // Phase 1 machine gate in turn, and adds the Tier 1 budgets, failure
-    // injection, the reconciliation authority and the RLS contract.
-    () => runStep('Phase 2 slice gate — P2-S8 (composes S7…S1 and Phase 1)', npm, ['run', '-s', 'gate:phase2:s8']),
+    // The Phase 2 slice gates, composed. The P2-S8 gate no longer runs P2-S7 inside
+    // itself (DR-170: required CI runs P2-S1 … P2-S7 as their own steps, and the nested
+    // call ran them twice more). A release has no such CI job, so this gate runs P2-S7,
+    // which composes P2-S6 … P2-S1 and the Phase 1 machine gate, itself and first.
+    () => runStep('Phase 2 slice gate — P2-S7 (composes S6…S1 and Phase 1)', npm, ['run', '-s', 'gate:phase2:s7']),
+    // P2-S8 adds the Tier 1 budgets, failure injection, the reconciliation authority and
+    // the RLS contract.
+    () => runStep('Phase 2 slice gate — P2-S8', npm, ['run', '-s', 'gate:phase2:s8']),
 
     // The release blocker P2-S9 exists to close.
     () => runStep('deployment authority — the six-case matrix as the production principal', npm, ['run', '-s', 'check:deployment-authority']),
