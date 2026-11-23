@@ -676,6 +676,17 @@ describe('Phase 3 secret history range scan', () => {
       mergeBase: PHASE3_BASE,
       commitsInRange: 401,
       commitsWithPatch: 401,
+      // `patchlessCommits` is part of what the SCANNER writes — both
+      // constructors of `ScanResult` set it (`phase3-secret-scan.ts:559` in
+      // range mode, and the tree-mode record with `[]`), and
+      // `phase3-s9-evidence.ts` reads that artefact whole — so a record
+      // without it is not a record this script can produce. It was missing
+      // here, and this hand-built fixture is EXACTLY the shape card L4-q9-01
+      // named as the hole: a validator satisfied by a line written by hand.
+      // With the identity in place the fixture is refused, correctly, and the
+      // fix is to make it a real record rather than to relax the check. 401
+      // carry a patch, none are patchless, and the range holds 401.
+      patchlessCommits: [],
       commitsScanned: 401,
       findings: 3,
       remaining: [],
