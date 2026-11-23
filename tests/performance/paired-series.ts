@@ -36,11 +36,38 @@
  * change was a dependency audit. So the ratio is now read FIVE times, each
  * read a complete paired round, and the gate judges the MEDIAN of the five.
  *
+ * AND A CLAIM THIS FILE USED TO CARRY IS WITHDRAWN, not reworded. «The cart
+ * that missed by 0.8% now passes» was never measured: the median of five has
+ * never been read on `fe9f78e8`, that cart's own head. What IS measured is two
+ * passing readings on OTHER heads — `[2.72, 2.586, 2.771, 2.816, 3.122]` with
+ * median `2.771` (run `45068342721`) and `[2.728, 2.789, 2.815, 2.775, 2.814]`
+ * with median `2.789` (run `45174469563`) — and those show the gate passing on
+ * a real runner, not that it rescues that cart.
+ *
+ * WORSE, AND SAID HERE BECAUSE IT CUTS AGAINST THIS CHANGE: the ratio DRIFTS
+ * UPWARD as a measurement proceeds. A different five-round implementation, on
+ * `50ff72bb`, splits ONE pair of series into five ordered blocks and printed
+ * `[1.824, 2.334, 3.028, 3.297, 3.523]` — a monotone ramp inside a single
+ * measurement, which is a property of the workload and not of that
+ * implementation. Rounds 2..5 here are measured LATER than round 1, so this
+ * median is biased UPWARD relative to a single early round: the gate becomes
+ * STRICTER, not looser. That is the opposite of a disguised relaxation, and it
+ * is also the reason the withdrawn claim cannot be assumed.
+ *
  * WHAT DR-175 DOES NOT CHANGE, and each of these is asserted, not promised:
  * the limit (3, `EXPECTED_RATIO_MAX`, and `ratioLimitProblems` reddens if the
- * ratchet ever disagrees), the samples per side per round (200), the warm-up,
- * the percentile, and the pair's alternation — which is now checked for EVERY
- * round, not once.
+ * ratchet ever disagrees), the samples per side per round (200), the
+ * percentile (`p95(200)` is index 190, pinned in
+ * `tests/guards/accounting-budget-percentile-semantics.test.ts`), and the
+ * pair's alternation — which is now checked for EVERY round, not once.
+ *
+ * THE WARM-UP IS NOT IN THAT LIST, and it was, wrongly, until the independent
+ * review of this branch measured it: `WARMUP` has ZERO hits in `tests-unit/`
+ * and in `tests/guards/`, so it is held constant by SHARING ONE CONSTANT in
+ * the suite, which is a code property, not by any claim. Listing it beside the
+ * limit and the percentile said it was pinned when nothing pinned it — the
+ * exact failure this header exists to prevent, committed in this header. It is
+ * named here as unasserted rather than quietly dropped.
  *
  * AND WHAT IT DOES CHANGE, said here because a remedy that is quiet about its
  * own cost is the thing this project calls a disguised relaxation: a median of
@@ -151,7 +178,19 @@ export interface MedianRatioVerdict {
  * that happened to work would be exactly the quiet relaxation this file
  * refuses.
  */
-export function medianRatioVerdict(rounds: readonly RatioVerdict[], max: number, expectedRounds = MEDIAN_ROUNDS): MedianRatioVerdict {
+/**
+ * The declared round count is `MEDIAN_ROUNDS` and NOTHING a caller passes can
+ * change it. It used to be a third parameter defaulting to `MEDIAN_ROUNDS`,
+ * and the independent review of this branch named what that bought: a call of
+ * `medianRatioVerdict(rounds, max, rounds.length)` keeps every arm green,
+ * removes the count check entirely, and leaves the printed message still
+ * saying «the MEDIAN of 5 … rounds» — headroom widened at the same printed
+ * number, which is the one shape this gate exists to refuse. The parameter is
+ * gone, and an arm passes a third argument through a loosened type to prove
+ * that no argument can buy the pass.
+ */
+export function medianRatioVerdict(rounds: readonly RatioVerdict[], max: number): MedianRatioVerdict {
+  const expectedRounds = MEDIAN_ROUNDS;
   const ratios = rounds.map((r) => r.ratio);
   const problems: string[] = [];
   if (rounds.length !== expectedRounds) {

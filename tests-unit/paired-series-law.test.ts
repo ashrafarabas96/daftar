@@ -24,6 +24,8 @@ import {
   type PairSide,
   MEDIAN_ROUNDS,
   medianRatioVerdict,
+  type RatioVerdict,
+  type MedianRatioVerdict,
 } from '../tests/performance/paired-series';
 
 const N = 200;
@@ -156,9 +158,25 @@ describe('P4-AL-72 paired measurement', () => {
       expect(r.median).toBeNull();
       expect(r.withinMax).toBe(false);
       expect(r.problems.join(' ')).toMatch(/no ratio/);
-      // and the surviving four would have had a median of 2, which is exactly
-      // the pass this must not give.
-      expect(medianRatioVerdict([v(2), v(2), v(2), v(2)], 3, 4).withinMax).toBe(true);
+      // and the surviving four are four 2s, so dropping the null round would
+      // have produced a median of 2 and PASSED. That is the pass this must not
+      // give, and it is pinned by the arm below: four rounds are refused
+      // whatever a caller passes, so the drop cannot be bought.
+    });
+
+    it('NO argument can loosen the declared round count — the hole the review named', () => {
+      // `medianRatioVerdict(rounds, max, rounds.length)` used to keep every arm
+      // green, remove the count check and still print «the MEDIAN of 5», which
+      // is headroom widened at the same printed number. The third parameter is
+      // gone; this arm forces one through a loosened type and proves four
+      // rounds are STILL refused.
+      const loose = medianRatioVerdict as unknown as (r: readonly RatioVerdict[], max: number, n?: number) => MedianRatioVerdict;
+      const four = [v(2), v(2), v(2), v(2)];
+      expect(loose(four, 3, 4).problems.length).toBeGreaterThan(0);
+      expect(loose(four, 3, 4).withinMax).toBe(false);
+      // and the message still names FIVE as the declared count, so the number
+      // the reader sees is the number the function enforces.
+      expect(loose(four, 3, 4).problems.join(' ')).toMatch(/4 paired rounds were measured and 5 were declared/);
     });
 
     it('fails CLOSED on the wrong number of rounds, in both directions', () => {
