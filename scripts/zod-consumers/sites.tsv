@@ -550,7 +550,8 @@ tests/security/settlement-s6-grants.test.ts	297	find-shift	safe	R-RECEIVER	expec
 tests/security/settlement-s6-guard-gaps.test.ts	142	find-shift	safe	R-RECEIVER	const note = must(r.rows.find((x) => x.f === 'supplier_credit_note_guard()'));
 tests/security/settlement-s6-scope.test.ts	198	find-shift	safe	R-RECEIVER	const item = must((list.body as { items: Record<string, unknown>[] }).items.find((m) => m.paymentMethodId === method));
 tests/security/stock-ledger-authority.test.ts	989	find-shift	safe	R-RECEIVER	const migratorOwner = must(r.rows.find((x) => x.tg === 'stock_levels_retain')).owner;
-tests/security/t10-upgrade-lock-contract.test.ts	102	find-shift	safe	HAND	const floor = FLOORS.find(([n]) => n === name)?.[1] ?? (name === 'zod' ? '4.6.7' : undefined);
+tests/security/t10-upgrade-lock-contract.test.ts	76	find-shift	safe	HAND	const nextFloor = FLOORS.find(([name]) => name === 'next')?.[1];
+tests/security/t10-upgrade-lock-contract.test.ts	111	find-shift	safe	HAND	const floor = FLOORS.find(([n]) => n === name)?.[1] ?? (name === 'zod' ? '4.6.7' : undefined);
 tests/security/t10-zod-error-contract.test.ts	11	index	safe	R-PROSE	*   3. the FIELD NAME                       — `issues[].path`,
 tests/security/t10-zod-error-contract.test.ts	37	formatter	safe	HAND	import { ZodError, z } from 'zod';
 tests/security/t10-zod-error-contract.test.ts	69	formatter	safe	R-PROSE	/** A real refusal from a real schema — never a hand-built `ZodError`, which would prove nothing about the product. */
