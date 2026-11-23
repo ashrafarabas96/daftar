@@ -151,6 +151,37 @@ const PLATFORM_PROD: NodeJS.ProcessEnv = {
 
 const DUP = /duplicates .* — every DB principal must use distinct credentials/;
 
+/**
+ * Read a §31 refusal by the PAIR it names, in EITHER direction, selecting the
+ * clause by the `'; '` the loader joins problems with.
+ *
+ * `fail()` is called on the key the loop reaches LATER, naming the one it saw
+ * EARLIER, so the direction is decided by the ORDER of
+ * `DB_PRINCIPAL_URL_KEYS`. Matching one direction made these arms positional:
+ * MEASURED, swapping two members of that list — membership identical, refusal
+ * working perfectly — reddened an arm here whose name is about §31's REACH and
+ * says nothing about order. The order is pinned by the arm that names the list,
+ * in the provisioner law; these read the pair. (Third review of this cart,
+ * finding 2 — and the same defect as #111's note, committed again by me while
+ * closing it.)
+ */
+function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void {
+  let message = '';
+  try {
+    loadConfig(env);
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
+  const clause = message
+    .split('; ')
+    .filter((l) => l.includes('every DB principal must use distinct credentials'))
+    .join(' | ');
+  expect(clause, 'no §31 duplicate clause in the refusal at all').not.toBe('');
+  expect(clause).toContain(a);
+  expect(clause).toContain(b);
+}
+
 describe('§31: two database roles may not be one credential', () => {
   // DUP-0. The positive controls come first, and they are not a formality:
   // without them every refusal below could be a fixture failing for a reason
@@ -166,12 +197,8 @@ describe('§31: two database roles may not be one credential', () => {
   // and the resolver appears in none of them — so these two pairs measure §31
   // rather than its neighbours.
   it('REFUSES app=resolver and identity=resolver, by §31 alone', () => {
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(
-      /RESOLVER_DATABASE_URL: duplicates APP_DATABASE_URL/,
-    );
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL })).toThrow(
-      /RESOLVER_DATABASE_URL: duplicates IDENTITY_DATABASE_URL/,
-    );
+    expectDuplicatePair({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL }, 'RESOLVER_DATABASE_URL', 'APP_DATABASE_URL');
+    expectDuplicatePair({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL }, 'RESOLVER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
   });
 
   // DUP-B. The other two reachable pairs. Each ALSO has a refusal of its own
@@ -184,11 +211,11 @@ describe('§31: two database roles may not be one credential', () => {
   it('REFUSES app=identity and platform=identity, with the §31 clause present too', () => {
     const merchantPair = { ...MERCHANT_PROD, IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
     expect(() => loadConfig(merchantPair)).toThrow(/must be distinct from APP_DATABASE_URL/);
-    expect(() => loadConfig(merchantPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates APP_DATABASE_URL/);
+    expectDuplicatePair(merchantPair, 'IDENTITY_DATABASE_URL', 'APP_DATABASE_URL');
 
     const platformPair = { ...PLATFORM_PROD, IDENTITY_DATABASE_URL: PLATFORM_PROD.PLATFORM_DATABASE_URL };
     expect(() => loadConfig(platformPair)).toThrow(/must be distinct from APP_DATABASE_URL and PLATFORM_DATABASE_URL/);
-    expect(() => loadConfig(platformPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates PLATFORM_DATABASE_URL/);
+    expectDuplicatePair(platformPair, 'IDENTITY_DATABASE_URL', 'PLATFORM_DATABASE_URL');
   });
 
   // DUP-C. The refusal names the SECOND variable and reports the first, which
@@ -237,7 +264,7 @@ describe('§31: two database roles may not be one credential', () => {
       expect(() => loadConfig(env)).toThrow(mode);
       // And the §31 clause, which is this file's subject: it is what proves
       // the name is still a member of the separation set.
-      expect(() => loadConfig(env)).toThrow(new RegExp(`${name}: duplicates APP_DATABASE_URL — every DB principal must use distinct credentials`));
+      expectDuplicatePair(env, name, 'APP_DATABASE_URL');
     });
   }
 });

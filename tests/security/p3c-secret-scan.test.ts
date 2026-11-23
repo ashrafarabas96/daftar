@@ -677,7 +677,7 @@ describe('Phase 3 secret history range scan', () => {
       commitsInRange: 401,
       commitsWithPatch: 401,
       // `patchlessCommits` is part of what the SCANNER writes — both
-      // constructors of `ScanResult` set it (`phase3-secret-scan.ts:559` in
+      // constructors of `ScanResult` set it (the range-mode record in
       // range mode, and the tree-mode record with `[]`), and
       // `phase3-s9-evidence.ts` reads that artefact whole — so a record
       // without it is not a record this script can produce. It was missing

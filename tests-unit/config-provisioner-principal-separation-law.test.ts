@@ -145,10 +145,18 @@ function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void
     message = e instanceof Error ? e.message : String(e);
   }
   expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
+  // SPLIT ON `'; '`, NOT ON A NEWLINE: `config.ts` joins every problem with
+  // `.join('; ')`, so the refusal is ONE line — measured, nine clauses in one
+  // line on an incomplete fixture. Splitting on `'\n'` returned the WHOLE
+  // message, so «the clause names no third principal» was being asserted of
+  // every clause at once: true today only because a complete fixture leaves
+  // one clause, and it would redden the moment any unrelated production
+  // refusal mentioned another `*_DATABASE_URL`. The arm passed for a reason
+  // other than the one it names. (Third review of this cart, finding 1.)
   const clause = message
-    .split('\n')
+    .split('; ')
     .filter((l) => l.includes('every DB principal must use distinct credentials'))
-    .join('\n');
+    .join(' | ');
   expect(clause, 'no §31 duplicate clause in the refusal at all').not.toBe('');
   expect(clause).toContain(a);
   expect(clause).toContain(b);
@@ -211,6 +219,28 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
 
   // ── #111's REMAINING NOTES, BOTH ONE DEFECT: THE SET AND ITS ORDER WERE
   //    PINNED BY NOTHING BUT THIS FILE'S PROSE ──────────────────────────────
+  it('selects the §31 clause ALONE out of a refusal that carries several, which is what makes «names no third principal» mean anything', () => {
+    // A refusal with TWO clauses: the §31 duplicate, and a missing
+    // `RESOLVER_DATABASE_URL` whose own clause names that key. `config.ts`
+    // joins problems with `'; '`, so the message is one line — selecting on
+    // `'\n'` returns the WHOLE message and the third-principal check then sees
+    // `RESOLVER_DATABASE_URL` and fails. This arm is what made the clause
+    // selection provable instead of merely correct.
+    const env = { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL, RESOLVER_DATABASE_URL: undefined };
+    let message = '';
+    try {
+      loadConfig(env);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    // the refusal really does carry both clauses, so the arm has a subject
+    expect(message).toMatch(/RESOLVER_DATABASE_URL: production requires/);
+    expect(message).toMatch(/every DB principal must use distinct credentials/);
+    expect(message.split('\n')).toHaveLength(1); // one line, joined with '; '
+    // and the pair reading still holds, because it selects the clause
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
+  });
+
   it('pins the separation set the gate CONSUMES, by name and in order', () => {
     // The members used to be a local `const urls` literal inside the refusal,
     // which no test could reach: the claim that a seventh credential had been
@@ -257,6 +287,13 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
       .split('\n')
       .filter((l) => l.includes('every DB principal must use distinct credentials'))
       .join('\n');
-    expect(duplicateClause).not.toMatch(/RESOLVER_DATABASE_URL|WORKER_DATABASE_URL|RECONCILER_DATABASE_URL|PLATFORM_DATABASE_URL/);
+    // EVERY other member, from the exported set, not a hand-written list that
+    // happened to omit `APP_DATABASE_URL` — which made this arm's control
+    // WEAKER than the one `expectDuplicatePair` applies. (Third review of this
+    // cart, finding 3.)
+    for (const other of DB_PRINCIPAL_URL_KEYS) {
+      if (other === 'PROVISIONER_DATABASE_URL' || other === 'IDENTITY_DATABASE_URL') continue;
+      expect(duplicateClause, `the duplicate clause also names ${other}`).not.toContain(other);
+    }
   });
 });

@@ -230,8 +230,18 @@ export function patchlessCommits(repo: string, base: string, head: string): read
   // `--diff-merges=first-parent` is the SAME flag gitleaks walks the range
   // with, so a merge's first-parent diff is what decides here too; `--name-only`
   // makes a commit's block empty exactly when it carries no patch; and a ROOT
-  // commit's block lists its whole tree, so it stays counted as patch-bearing
-  // without a separate parent probe. `%x00` starts each block with a NUL, which
+  // commit's block lists its whole tree, so a root commit with content stays
+  // counted as patch-bearing without a separate parent probe.
+  //
+  // AND THE ONE SHAPE WHERE THE TWO ALGORITHMS DIFFER, measured rather than
+  // assumed: an EMPTY root commit (`commit --allow-empty` as the first commit).
+  // The per-commit version SKIPPED every parentless commit, so it called that
+  // one patch-bearing; this one sees an empty block and calls it patchless.
+  // The new reading is the right one for the identity the evidence check
+  // rests on — an empty root carries no bytes for gitleaks to scan, exactly
+  // like any other empty commit — so the behaviour is kept and the claim is
+  // narrowed rather than the code bent back. There is no such commit in
+  // `PHASE3_BASE..main`, measured. (Third review of this cart, finding 4.) `%x00` starts each block with a NUL, which
   // no path can contain, so the blocks cannot be confused with file names —
   // a newline-delimited format would be ambiguous for a path containing one.
   const out: string[] = [];
@@ -242,7 +252,23 @@ export function patchlessCommits(repo: string, base: string, head: string): read
     const commit = (nl === -1 ? block : block.slice(0, nl)).trim();
     if (commit === '') continue;
     const body = nl === -1 ? '' : block.slice(nl + 1);
-    if (body.trim() === '') out.push(commit);
+    // EXACT, not trimmed: a path whose name is only whitespace would make a
+    // trimmed block look empty and the commit look patchless — finer than the
+    // driver's own reading of the same log. `git log --name-only` ends a
+    // non-empty block with a newline, which is why the block is compared after
+    // stripping ONE trailing newline rather than being trimmed.
+    //
+    // AND THIS LINE IS NOT PINNED BY AN ARM, which is said here rather than
+    // left to be discovered: putting `.trim()` back reddens NOTHING in the
+    // unit lane, measured. The arm would need a commit whose only change is a
+    // path made of whitespace, and `git` on this platform refuses to create
+    // one — `error: unable to index file ' '`, measured — so it cannot be
+    // built here. The comparison is kept because it cannot be worse than the
+    // trimmed one and is the driver's own reading of the same output, but by
+    // this project's own rule an element that reddens nothing is a line and
+    // not a remedy, so it is recorded as a line. An arm belongs in a lane that
+    // runs on Linux. (Third review of this cart, finding 4.)
+    if (body.replace(/\n$/, '') === '') out.push(commit);
   }
   return out;
 }
@@ -919,9 +945,18 @@ export function secretScanEvidenceProblems(e: Partial<ScanResult> | null, expect
   // a single line written by hand, satisfied the whole check while the range
   // held any number of commits the scan never accounted for. `patchlessCommits`
   // was carried in the artefact, printed, and never read here at all. The
-  // identity below is what makes the real count computable rather than
-  // asserted: a commit in the range either carries a patch or is named in
+  // identity below is what makes the two halves ACCOUNT FOR THE WHOLE RANGE:
+  // a commit in the range either carries a patch or is named in
   // `patchlessCommits`, and no third thing. (Card L4-q9-01, item 1.)
+  //
+  // WHAT IT DOES NOT DO, said because the first wording of this comment said
+  // «makes the real count computable rather than asserted», which claimed more
+  // than the check performs: nothing here verifies that the listed shas are
+  // distinct, well-formed, or members of the range, so N invented entries
+  // still satisfy the sum. It closes «the two halves do not add up», not «the
+  // list is true». Verifying membership needs the repository, which the
+  // validator does not have — it reads an artefact. (Third review of this
+  // cart, finding 5.)
   if (!Array.isArray(e.patchlessCommits)) p.push(`the secret scan evidence does not list the commits that carry no patch (${String(e.patchlessCommits)})`);
   else if (
     typeof e.commitsWithPatch === 'number' &&

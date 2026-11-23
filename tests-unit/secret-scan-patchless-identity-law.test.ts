@@ -15,6 +15,9 @@
  * observable:
  *
  *   a ROOT commit        — no parent at all, whole tree scanned ⇒ NOT patchless
+ *                          (an EMPTY root is patchless, and that is the one
+ *                          shape where this algorithm differs from the
+ *                          per-commit one it replaced — see the scanner)
  *   a patch-bearing one  — ordinary ⇒ NOT patchless
  *   an EMPTY one         — `commit --allow-empty` ⇒ PATCHLESS, the subject
  *   a MERGE              — scanned by its FIRST-PARENT diff ⇒ NOT patchless
@@ -22,7 +25,12 @@
  * The merge is the shape a naive rewrite gets wrong: `git log` without
  * `--diff-merges=first-parent` prints NO file names for a merge, so every
  * merge would be reported patchless and the evidence identity would then
- * refuse an honest release. The arm below is what makes that mistake red.
+ * refuse an honest release. The arm below reddens on that mistake — and it is
+ * NOT the only guard: `tests-unit/rel11-patchless-commit-identity-law.test.ts`
+ * already holds `REL11-P4`, «A MERGE IS NOT PATCHLESS, because the walk is
+ * first-parent». Calling this arm the thing that makes the mistake red claimed
+ * a guard that already had a sibling; what is genuinely new here is the ROOT
+ * commit arm. (Third review of this cart, finding 6.)
  *
  * NOTE ON THE OTHER CONTROL, the one this file cannot hold: the one-pass set
  * was also compared against the per-commit set on the real range, and on
