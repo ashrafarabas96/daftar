@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DB_PRINCIPAL_URL_KEYS, loadConfig } from '../apps/api/src/config';
+import { loadConfig } from '../apps/api/src/config';
 
 /**
  * §31 of `apps/api/src/config.ts`: ACTUAL PRINCIPALS MUST DIFFER — two database

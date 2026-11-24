@@ -256,10 +256,10 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
     expect(detached).toEqual([]);
     // AND THE CONTROL that this is not vacuous: the FILE header really is
     // followed by another block, so the slice(1) is doing work.
-    expect(
-      text.slice(blocks[0]!.index + blocks[0]![0].length).startsWith('/**'),
-      'the module header is not followed by another block, so the exemption is untested',
-    ).toBe(true);
+    const header = blocks[0];
+    expect(header, 'no doc block at all, so the exemption cannot be tested').toBeDefined();
+    const afterHeader = header === undefined ? '' : text.slice(header.index + header[0].length);
+    expect(afterHeader.startsWith('/**'), 'the module header is not followed by another block, so the exemption is untested').toBe(true);
   });
 
   it("the pair reader REFUSES a cross-pair here too — this file's copy of the helper was pinned by nothing", () => {
