@@ -358,6 +358,67 @@ export const S1_SUITES: readonly (SuiteEntry | Pending)[] = [
       'and the aging then spreads the figure ACROSS the schedule instead of one band',
     ],
   },
+  // ── THE P4-S1 CUSTOMER WRITE COMMAND PAIR (owner decision DR-142) ──────
+  //
+  // `0091` adds `customer_create` and `customer_update` as definer command
+  // routines, and this is the suite that measures them. It is rostered here
+  // and not deferred for the reason the P4-S7 rows above give: a Phase 4 suite
+  // on disk is listed and run, or this gate is red, and narrowing the scan to
+  // hide one is the move the gate exists to forbid. Its basename `p4s1-…`
+  // matches `PHASE4_SUITE_SLICED` and no foreign roster claims it, so
+  // `unrosteredElsewhere` demands exactly this row.
+  //
+  // The floor is EQUAL to the executable count in the tree, so it becomes a
+  // floor as the suite grows — and it has now been wrong TWICE in the same
+  // way. It said 13 while the suite ran 15, and after that correction it said
+  // 15 while the suite ran 16, with zero `.skip` either time: the case the
+  // second gap exempted was `(h)`, the one case that proves the write routes
+  // refuse a member without `customers.manage`, so the permission control
+  // could have been deleted with this gate still green. Measured on this
+  // head, by this gate's own instrument: 16 runnable `it(`, 0 `.skip`, 0
+  // `it.each`. A floor below the tree is how a count stops being a guard, and
+  // a correction that is not re-measured against the tree is how it happens
+  // again.
+  //
+  // What a count cannot see is SUBSTITUTION, so the row also pins BY NAME
+  // every case the suite runs, all sixteen rather than a chosen ten: creation
+  // at revision 1 with its replay, the SAME id carrying a different statement
+  // refused as `customer.idempotency_conflict`, the update that states the
+  // whole customer and leaves `status` alone, the stale revision, a statement
+  // naming `contacts` refused rather than silently stored, the direct write
+  // refused for the role the API runs as, the EXECUTE matrix, BOTH halves of
+  // merchant isolation (B cannot reach A's row, and a member of A cannot act
+  // in B by presenting B's business id — the second half was the one the prose
+  // promised and the pin omitted), the revision guard, the 0075 guards still
+  // triggered, the worker refused 42501 with its claim proved able to fail,
+  // the head-migration predicate, the migration applying upward both on a
+  // clean database and on one that already holds rows, and the permission bit
+  // itself being load-bearing on both write routes.
+  {
+    id: 'S1-CW-01',
+    area: 'customer-write',
+    runner: 'root',
+    file: 'tests/integration/p4s1-customer-write-commands.test.ts',
+    cases: 16,
+    titles: [
+      'creates at revision 1, active, with 201; and replays the same statement as 200',
+      'refuses the same id carrying a different statement with customer.idempotency_conflict',
+      'updates the whole statement at the revision read: revision 2, an omitted optional field CLEARED, status untouched',
+      'refuses a stale revision with customer.revision_changed, and leaves the row alone',
+      'refuses a statement that names contacts, rather than accepting it and storing none',
+      'refuses INSERT, UPDATE, DELETE and TRUNCATE with 42501, while SELECT through the same connection succeeds',
+      'grants the two routines to daftar_app and to nobody else, and no DML with them',
+      'business B can neither read nor write business A customer, and A still sees it unchanged',
+      'a member of A cannot act in B by presenting B business id',
+      'refuses a jumped revision, a rewritten identity and a DELETE, while a one-step change is admitted',
+      'both 0075 guards are still triggered on the table after 0091',
+      'applies from zero on a clean database, and leaves the asserted end state',
+      'applies on a database already holding rows, and changes no table but the registry it writes',
+      'daftar_worker is refused 42501 by both routines, and the claim is proved able to fail',
+      'headMigration() is the migrations directory own highest file, and a short build fails the predicate',
+      'refuses POST /v1/customers and PUT /v1/customers/:id for a member holding every permission but customers.manage, while the same member still reads',
+    ],
+  },
 ];
 
 /** The permanent core, run as commands after the predecessor gate. */
