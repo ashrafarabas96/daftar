@@ -232,7 +232,15 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
     expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
   });
 
-  it('every doc block in `config.ts` touches its subject — an argument detached from its declaration is a claim that names nothing', () => {
+  it('no doc block in `config.ts` is followed by ANOTHER doc block — the one orphaning shape this cart actually produced', () => {
+    // THE NAME IS THE MECHANISM, narrowed by review on the previous head: it
+    // used to read «every doc block touches its subject», and that claim is
+    // wider than anything this check can carry. Inserting a DECLARATION
+    // between a block and the function it documents leaves this arm GREEN —
+    // the defect the old name promised to catch. Which declaration a block is
+    // ABOUT is not decidable from text, so what is claimed here is the shape
+    // that was actually built and measured: a block orphaned by another block.
+    //
     // THE DEFECT THIS PINS, found by review on the previous head of this cart:
     // exporting `DB_PRINCIPAL_URL_KEYS` put its declaration BETWEEN
     // `isLocalHost`'s doc block and `isLocalHost`. The loopback block — which

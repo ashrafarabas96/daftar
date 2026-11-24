@@ -49,7 +49,15 @@ const good: ScanResult = {
   result: 'PASS',
 };
 
-describe('L4-q9-01: the scan evidence must account for EVERY commit in the range, not just for the ones it read', () => {
+describe('L4-q9-01: a HAND-WRITTEN scan record must account for every commit in the range, not just for the ones it read', () => {
+  // «HAND-WRITTEN» IS THE WHOLE SUBJECT, narrowed by review on the previous
+  // head. The scanner derives `commitsWithPatch` from `commitsInRange` and the
+  // patchless list, so the identity cannot fail for any record IT writes —
+  // claiming the invariant over «the scan evidence» read wider than what is
+  // checked. What this refuses is a record assembled by hand, which is exactly
+  // the hole the card names: a single line that satisfied the validator. It
+  // still cannot tell whether the listed shas are real, as the validator's own
+  // comment says.
   it('accepts the record every other check accepts, so each arm below changes one thing', () => {
     expect(secretScanEvidenceProblems(good, HEAD)).toEqual([]);
   });

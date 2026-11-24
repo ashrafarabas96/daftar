@@ -114,6 +114,50 @@ describe('L4-q9-01 item 3: one pass over the range names exactly the commits tha
     expect(out).not.toContain(sha['side']);
   });
 
+  it('counts an EMPTY ROOT commit as PATCHLESS — the one shape where this algorithm differs from the one it replaced', () => {
+    // THE CONTRACT THIS CART DECLARED AND DID NOT PIN. The per-commit version
+    // skipped every parentless commit, so it called an empty root
+    // patch-bearing; this one sees an empty block and calls it patchless. Both
+    // the scanner's comment and this file's header state that the new reading
+    // is the right one for the identity — an empty root carries no bytes for
+    // gitleaks to scan — and review measured that restoring the OLD behaviour
+    // left the entire unit lane green. A decision no arm holds is prose.
+    //
+    // Its own repository, because `main`'s root here has content: a second
+    // temp repo whose FIRST commit is `--allow-empty`.
+    const other = mkdtempSync(join(tmpdir(), 'emptyroot-'));
+    try {
+      execFileSync('git', ['init', '-q', '-b', 'main', other]);
+      const g = (...args: readonly string[]): string => execFileSync('git', ['-C', other, ...args], { encoding: 'utf8' }).trim();
+      g('config', 'user.email', 'law@example.invalid');
+      g('config', 'user.name', 'patchless law');
+      g('config', 'commit.gpgsign', 'false');
+      g('commit', '-q', '--allow-empty', '-m', 'an EMPTY root');
+      const emptyRoot = g('rev-parse', 'HEAD');
+      writeFileSync(join(other, 'a.txt'), 'a\n');
+      g('add', '-A');
+      g('commit', '-q', '-m', 'carries a patch');
+      const withPatch = g('rev-parse', 'HEAD');
+
+      // the range must contain the root, so the base is an UNRELATED root
+      g('checkout', '-q', '--orphan', 'elsewhere');
+      g('rm', '-rq', '--cached', '.');
+      writeFileSync(join(other, 'elsewhere.txt'), 'x\n');
+      g('add', 'elsewhere.txt');
+      g('commit', '-q', '-m', 'an unrelated root');
+      const base = g('rev-parse', 'HEAD');
+      g('checkout', '-q', '-f', 'main');
+
+      const all = g('rev-list', `${base}..HEAD`).split('\n');
+      expect(all, 'the range does not hold the empty root, so this arm measures nothing').toContain(emptyRoot);
+      const out = patchlessCommits(other, base, 'HEAD');
+      expect(out).toContain(emptyRoot);
+      expect(out).not.toContain(withPatch);
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
   it('counts a ROOT commit as patch-bearing, since its whole tree is scanned', () => {
     // A range cannot exclude its own base, so the root is reached by taking the
     // base from an UNRELATED root: `orphan..HEAD` contains every commit on main

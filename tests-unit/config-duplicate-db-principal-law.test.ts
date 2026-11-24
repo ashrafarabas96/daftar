@@ -241,19 +241,32 @@ describe('§31: two database roles may not be one credential', () => {
     expectDuplicatePair(platformPair, 'IDENTITY_DATABASE_URL', 'PLATFORM_DATABASE_URL');
   });
 
-  // DUP-C. The refusal names the SECOND variable and reports the first, which
-  // is what makes the message actionable in a deployment: the operator learns
-  // which line of their environment to change, not merely that something
+  // DUP-C. WHAT MAKES THE REFUSAL ACTIONABLE, and nothing more: one name is the
+  // SUBJECT of the clause (`X: duplicates Y`), so the operator learns which
+  // line of their environment to change rather than merely that something
   // collides.
-  it('the refusal names the colliding variable and the one it duplicates', () => {
+  //
+  // AND IT READS THE PAIR, NOT THE DIRECTION, narrowed by review on the
+  // previous head: WHICH of the two becomes the subject follows the order of
+  // `DB_PRINCIPAL_URL_KEYS`, so asserting «RESOLVER duplicates APP» literally
+  // would redden on a pure REORDER of that frozen list — a change that alters
+  // no refusal, since the pair is refused whichever member is read first. The
+  // pair itself is read by `expectDuplicatePair`, which is the reader the rest
+  // of this file uses; what is added here is the subject FORM, in either
+  // direction.
+  it('the refusal carries the pair with one of them as the SUBJECT of the clause, in either direction', () => {
+    const env = { ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
+    expectDuplicatePair(env, 'RESOLVER_DATABASE_URL', 'APP_DATABASE_URL');
     let message = '';
     try {
-      loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL });
+      loadConfig(env);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    expect(message).toContain('RESOLVER_DATABASE_URL');
-    expect(message).toContain('duplicates APP_DATABASE_URL');
+    expect(
+      message.includes('RESOLVER_DATABASE_URL: duplicates APP_DATABASE_URL') || message.includes('APP_DATABASE_URL: duplicates RESOLVER_DATABASE_URL'),
+      `neither name is the subject of a «duplicates» clause; the refusal reads:\n${message}`,
+    ).toBe(true);
     expect(message).toMatch(DUP);
   });
 

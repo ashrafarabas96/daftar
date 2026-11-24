@@ -150,7 +150,6 @@ export const DB_PRINCIPAL_URL_KEYS = Object.freeze([
  * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
  * the IPv6 forms, whose `hostname` keeps the brackets.
  */
-
 function isLocalHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
