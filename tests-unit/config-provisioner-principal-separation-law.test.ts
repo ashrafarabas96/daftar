@@ -291,6 +291,16 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
     // which no test could reach: the claim that a seventh credential had been
     // ADDED TO THE SET rested on reading the source. The gate now loops this
     // exported object, so this arm pins what decides.
+    //
+    // AND IT CALLS NO ADJUDICATOR, BY SUBJECT AND NOT BY OMISSION. The probe
+    // this cart's fourth review produced asks of every arm, per arm and with
+    // comment lines stripped: does it call the adjudicator it claims to guard,
+    // or only compute on its own inputs? This arm answers that its subject IS
+    // the adjudicator's input — the frozen exported object the §31 loop reads —
+    // so there is nothing to call. The arms around it drive `loadConfig` and
+    // measure the refusal; this one pins what that refusal is computed FROM.
+    // Written here because a justification that lives in a report is a memory,
+    // not a warrant.
     expect([...DB_PRINCIPAL_URL_KEYS]).toEqual([
       'APP_DATABASE_URL',
       'PLATFORM_DATABASE_URL',
