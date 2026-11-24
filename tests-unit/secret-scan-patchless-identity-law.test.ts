@@ -44,7 +44,45 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { patchlessCommits } from '../scripts/phase3-secret-scan';
+import {
+  GITLEAKS_BINARY_SHA256,
+  GITLEAKS_VERSION,
+  PHASE3_BASE,
+  patchlessCommits,
+  secretScanEvidenceProblems,
+  type ScanResult,
+} from '../scripts/phase3-secret-scan';
+
+/**
+ * A record every OTHER check in the validator accepts, so the arm below changes
+ * only the four fields that carry the partition. Same shape as the one in
+ * `secret-scan-evidence-invariant-law.test.ts`, deliberately: these two files
+ * read the same validator from two directions — that one from hand-written
+ * records, this one from a partition measured on a real repository.
+ */
+const HEAD = 'b'.repeat(40);
+const good: ScanResult = {
+  produced: 'scripts/phase3-secret-scan.ts',
+  tool: { name: 'gitleaks', version: GITLEAKS_VERSION, binarySha256: GITLEAKS_BINARY_SHA256 },
+  mode: 'phase3-base',
+  base: PHASE3_BASE,
+  head: HEAD,
+  mainRef: 'origin/main',
+  mergeBase: PHASE3_BASE,
+  logOpts: `--diff-merges=first-parent ${PHASE3_BASE}..${HEAD}`,
+  commitsInRange: 400,
+  mergesInRange: 14,
+  commitsWithPatch: 400,
+  patchlessCommits: [],
+  commitsScanned: 400,
+  findings: 3,
+  allowlisted: [],
+  remaining: [],
+  filesScanned: null,
+  ignoreFile: { present: true, sha256: null, entries: 3, unused: 0 },
+  problems: [],
+  result: 'PASS',
+};
 
 let repo = '';
 const sha: Record<string, string> = {};
@@ -169,18 +207,42 @@ describe('L4-q9-01 item 3: one pass over the range names exactly the commits tha
     expect(out).toEqual([sha['empty']]); // still exactly one, over the wider range
   });
 
-  it('the identity the evidence check rests on holds here, with both terms NON-ZERO', () => {
+  it('the VALIDATOR accepts the partition this function measures, and refuses it when one term is bent', () => {
+    // THE FOURTH REVIEW'S BLOCKING FINDING, and it was right in the worst way:
+    // this arm used to assert
+    //   `all.length - patchless.length + patchless.length === all.length`
+    // which is an arithmetic identity, true of any two numbers, and so could
+    // never redden — a claim TRUE BY CONSTRUCTION in the one file whose whole
+    // creed is that such claims are worthless. It also never called
+    // `secretScanEvidenceProblems`, while its title said «the identity the
+    // evidence check rests on».
+    //
+    // So the measured partition is now fed TO the validator, which is the only
+    // thing that can make the claim a reading rather than a restatement, and
+    // the same record is then bent to prove the validator is looking.
     const all = run('rev-list', `${sha['root'] as string}..HEAD`)
       .split('\n')
       .filter((l) => l.trim() !== '');
     const patchless = patchlessCommits(repo, sha['root'] as string, 'HEAD');
-    // `commitsWithPatch + patchlessCommits.length === commitsInRange` is what
-    // `secretScanEvidenceProblems` now asserts of a release artefact. Here both
-    // terms are non-zero, so the identity is being read over a real partition
-    // and not over an empty half.
     expect(patchless).toHaveLength(1);
-    expect(all.length - patchless.length).toBeGreaterThan(0);
-    expect(all.length - patchless.length + patchless.length).toBe(all.length);
+    const withPatch = all.length - patchless.length;
+    expect(withPatch, 'the patch-bearing half is empty, so the identity is read over half a partition').toBeGreaterThan(0);
+
+    const measured: ScanResult = {
+      ...good,
+      commitsInRange: all.length,
+      commitsWithPatch: withPatch,
+      commitsScanned: withPatch,
+      patchlessCommits: patchless,
+    };
+    expect(secretScanEvidenceProblems(measured, HEAD), 'the validator refuses the partition this function actually measures').toEqual([]);
+
+    // AND IT IS LOOKING: drop the patchless commit from the list and the sum no
+    // longer accounts for the range. One term bent, nothing else.
+    expect(secretScanEvidenceProblems({ ...measured, patchlessCommits: [] }, HEAD)).not.toEqual([]);
+    // and the mirror: claim one more patch-bearing commit than the range holds
+    expect(secretScanEvidenceProblems({ ...measured, commitsWithPatch: all.length, commitsScanned: all.length }, HEAD)).not.toEqual([]);
+
     for (const c of patchless) expect(all).toContain(c);
   });
 });

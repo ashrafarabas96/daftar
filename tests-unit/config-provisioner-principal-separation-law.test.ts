@@ -328,10 +328,23 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
     // AND THE CONTROL that keeps this from being satisfied by any refusal at
     // all: a THIRD key must not appear in the duplicate clause, or "names both
     // keys" would be true of a message that named everything.
-    const duplicateClause = message
-      .split('\n')
-      .filter((l) => l.includes('every DB principal must use distinct credentials'))
-      .join('\n');
+    // SPLIT ON `'; '`, NOT ON NEWLINES — the fourth review of this cart caught
+    // it: `config.ts` joins its problems with `'; '`, so splitting on `'\n'`
+    // selected THE WHOLE MESSAGE and called it «the clause». The arm stayed
+    // green only because every fixture here plants ONE defect; the moment a
+    // second legitimate clause appeared it would have reddened while naming a
+    // scope it never read. This is the same defect the sibling law pins in its
+    // «selects the §31 clause ALONE» arm, and the same separator
+    // `expectDuplicatePair` uses.
+    const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+    // EXACTLY ONE, which is the real guard. My first attempt here asserted the
+    // selection was SHORTER than the whole message and reddened at once —
+    // rightly: this fixture plants one defect, so the refusal has one clause
+    // and the clause legitimately IS the whole message. Length was never the
+    // claim; «one clause, selected by the separator `config.ts` actually uses»
+    // is.
+    expect(clauses, 'the refusal does not hold exactly one §31 duplicate clause, so the control below reads the wrong scope').toHaveLength(1);
+    const duplicateClause = clauses.join('; ');
     // EVERY other member, from the exported set, not a hand-written list that
     // happened to omit `APP_DATABASE_URL` — which made this arm's control
     // WEAKER than the one `expectDuplicatePair` applies. (Third review of this

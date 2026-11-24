@@ -107,9 +107,28 @@ describe('L4-q9-01: a HAND-WRITTEN scan record must account for every commit in 
     // the 30-commit window this release already refused. The identity must
     // stay silent here and the window message must still fire, so the two
     // checks are not one check wearing two messages.
+    // AND IT IS COUNTED, NOT READ. The fourth review of this cart caught the
+    // old form: it asserted `not.toMatch(/accounts for/)` — the identity's
+    // SILENCE pinned by the identity's own wording — so a legitimate rewording
+    // of that message would have made this control pass BLIND, claiming «the
+    // identity is silent here» while measuring nothing. Which is the very class
+    // DUP-C was rewritten to leave in this same push.
+    //
+    // So the two checks are separated by ARITHMETIC on the problem count: a
+    // whole record yields none, each defect alone yields exactly one, and the
+    // two together yield two. No message text is read, so no rewording can
+    // either break this arm or hollow it out.
     const fourteen = Array.from({ length: 14 }, (_, i) => String(i).padStart(40, '0'));
-    const problems = secretScanEvidenceProblems({ ...good, commitsWithPatch: 386, commitsScanned: 30, patchlessCommits: fourteen }, HEAD);
-    expect(problems.join('\n')).toMatch(/read 30 of 386 commits that carry a patch/);
-    expect(problems.join('\n')).not.toMatch(/accounts for/);
+    const thirteen = fourteen.slice(0, 13);
+    expect(secretScanEvidenceProblems(good, HEAD), 'the whole record is already refused, so every count below is off by that').toEqual([]);
+    // the window alone: 386 + 14 = 400, so the identity holds; 30 of 386 read
+    const windowOnly = secretScanEvidenceProblems({ ...good, commitsWithPatch: 386, commitsScanned: 30, patchlessCommits: fourteen }, HEAD);
+    expect(windowOnly, 'the window defect alone does not raise exactly one problem, so the identity is firing with it').toHaveLength(1);
+    // the identity alone: 386 + 13 = 399 ≠ 400, and nothing is left unread
+    const identityOnly = secretScanEvidenceProblems({ ...good, commitsWithPatch: 386, commitsScanned: 386, patchlessCommits: thirteen }, HEAD);
+    expect(identityOnly, 'the identity defect alone does not raise exactly one problem').toHaveLength(1);
+    // and both at once are TWO, which is what «two checks, not one wearing two
+    // messages» actually means
+    expect(secretScanEvidenceProblems({ ...good, commitsWithPatch: 386, commitsScanned: 30, patchlessCommits: thirteen }, HEAD)).toHaveLength(2);
   });
 });
