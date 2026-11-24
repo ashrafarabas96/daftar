@@ -59,7 +59,18 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
   // the allowlist is pinned by an arm to exactly five files, so widening it
   // would have reddened a contract to make my own change pass.
   const git = (...args: readonly string[]): string => {
-    if (existsSync(join(repo, 'DELIVERY_MANIFEST.json'))) return '';
+    // UNREACHABLE BY CONSTRUCTION — the early return below leaves this function
+    // before any git call when `DELIVERY_MANIFEST.json` is present. Review
+    // named that: the branch the portability law reads is dead text, and its
+    // first form RETURNED AN EMPTY STRING, so if it ever did become reachable
+    // `wire` would report `-> '.githooks'` having written nothing. It now
+    // THROWS, so an unreachable guard that becomes reachable fails loudly
+    // instead of lying. It is kept because the law reads the ENCLOSING
+    // FUNCTION of each git call, and because the behaviour and the guard being
+    // in two places is what made both halves provable separately.
+    if (existsSync(join(repo, 'DELIVERY_MANIFEST.json'))) {
+      throw new Error('setup-git-hooks: refusing to run git in a delivered archive (DELIVERY_MANIFEST.json is present)');
+    }
     return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
   };
   const gitSoft = (...args: readonly string[]): string | null => {
@@ -97,6 +108,26 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     const size = statSync(path).size;
     if (size < 512) {
       problems.push(`${HOOKS_DIR}/${hook} is only ${String(size)} bytes — too small to be the hook this repository ships`);
+    }
+    // AND THE EXECUTE BIT IN THE INDEX, which carries the whole verdict: git
+    // looks a hook up with `access(X_OK)` and SILENTLY IGNORES one that is not
+    // executable. So a commit turning `100755` into `100644` removes both
+    // refusals on every Linux and macOS checkout, and that change does not
+    // show up as a line in a diff. Review of this cart named it, and named why
+    // the law did not catch it: the fixture copies the file and chmods it
+    // itself, so the suite stays green whatever the tracked mode is.
+    //
+    // The INDEX mode is read rather than the filesystem's, because NTFS does
+    // not carry the bit at all — `statSync(...).mode` is meaningless here while
+    // `git ls-files -s` says the same thing on every platform. The repository
+    // already pins an execute bit this way in
+    // `tests/integration/embedded-pg-binaries.test.ts`.
+    const entry = gitSoft('ls-files', '-s', '--', `${HOOKS_DIR}/${hook}`);
+    const mode = entry === null ? null : (/^(\d{6})\s/.exec(entry)?.[1] ?? null);
+    if (mode === null) {
+      problems.push(`${HOOKS_DIR}/${hook} is not tracked, so git has no mode for it — the hook would not travel`);
+    } else if (mode !== '100755') {
+      problems.push(`${HOOKS_DIR}/${hook} is tracked as ${mode}, not 100755 — git ignores a hook that is not executable, so both refusals would be off`);
     }
   }
 
@@ -216,6 +247,18 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     return { ok: false, lines };
   }
 
+  // AND `wire` REFUSES A FOREIGN VALUE, as `undo` already did. It used to
+  // overwrite whatever `core.hooksPath` held — an absolute path, another
+  // tool's `.husky/_`, anything — without refusing and without keeping the old
+  // value, and then `undo` unsets rather than restoring it, so the original
+  // was simply lost. Review named the asymmetry: the two modes must not
+  // disagree about whose configuration this is.
+  if (current !== null && current !== HOOKS_DIR) {
+    lines.push('GIT HOOKS: FAIL — nothing written');
+    lines.push(`  - core.hooksPath is '${current}', which this script did not set — it is left alone`);
+    lines.push(`  - unset it yourself if you mean to replace it with '${HOOKS_DIR}'`);
+    return { ok: false, lines };
+  }
   git('config', 'core.hooksPath', HOOKS_DIR);
   const after = gitSoft('config', '--get', 'core.hooksPath');
   if (after !== HOOKS_DIR) {

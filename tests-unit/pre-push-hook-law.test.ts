@@ -61,6 +61,26 @@ const git = (cwd: string, ...args: readonly string[]): { code: number; out: stri
  * The arms that CAN go through `git push` do, because a refusal that only works
  * on synthesized input is not a refusal.
  */
+/**
+ * Install the hook the way a real checkout carries it: copied, TRACKED, and
+ * `100755` in the index.
+ *
+ * WHY TRACKED AND NOT JUST COPIED: `wireHooks` now reads the INDEX mode,
+ * because git ignores a hook that is not executable and a commit changing
+ * `100755` to `100644` would turn both refusals off invisibly. The first
+ * fixtures only copied the file, so they were not repositories in the one
+ * respect the check is about — and four arms went red the moment the check
+ * existed, which is the check earning its place.
+ */
+function installHook(repo: string, dir = HOOKS_DIR): void {
+  mkdirSync(join(repo, dir), { recursive: true });
+  copyFileSync(HOOK, join(repo, dir, 'pre-push'));
+  chmodSync(join(repo, dir, 'pre-push'), 0o755);
+  expect(git(repo, 'add', '--', `${dir}/pre-push`).code).toBe(0);
+  expect(git(repo, 'update-index', '--chmod=+x', '--', `${dir}/pre-push`).code).toBe(0);
+  expect(git(repo, 'ls-files', '-s', '--', `${dir}/pre-push`).out.trim().startsWith('100755'), 'the fixture did not record the hook as executable').toBe(true);
+}
+
 function runHook(stdin: string): { code: number; out: string } {
   try {
     const out = execFileSync('bash', [HOOK, 'origin', 'file:///tmp/none'], { input: stdin, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -87,9 +107,7 @@ beforeAll(() => {
   ] as const) {
     expect(git(clone, 'config', k, v).code).toBe(0);
   }
-  mkdirSync(join(clone, '.githooks'), { recursive: true });
-  copyFileSync(HOOK, join(clone, '.githooks', 'pre-push'));
-  chmodSync(join(clone, '.githooks', 'pre-push'), 0o755);
+  installHook(clone);
 
   writeFileSync(join(clone, 'a.txt'), 'a\n');
   expect(git(clone, 'add', '-A').code).toBe(0);
@@ -197,9 +215,7 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     beforeAll(() => {
       repo = join(work, 'wiring');
       expect(git(work, 'init', '-q', '-b', 'main', repo).code).toBe(0);
-      mkdirSync(join(repo, HOOKS_DIR), { recursive: true });
-      copyFileSync(HOOK, join(repo, HOOKS_DIR, 'pre-push'));
-      chmodSync(join(repo, HOOKS_DIR, 'pre-push'), 0o755);
+      installHook(repo);
     });
 
     it('POSITIVE CONTROL: wiring sets the configuration and the hook then actually governs a push', () => {
@@ -251,8 +267,7 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       // «refused» from «did it and then complained».
       const other = join(work, 'unguarded');
       expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
-      mkdirSync(join(other, HOOKS_DIR), { recursive: true });
-      copyFileSync(HOOK, join(other, HOOKS_DIR, 'pre-push'));
+      installHook(other);
       expect(wireHooks(other, 'wire').ok).toBe(true);
       rmSync(join(other, '.git', 'hooks', 'pre-push'), { force: true });
 
@@ -284,8 +299,7 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       writeFileSync(join(shared, 'c.txt'), 'c\n');
       expect(git(shared, 'add', '-A').code).toBe(0);
       expect(git(shared, 'commit', '-q', '-m', 'first').code).toBe(0);
-      mkdirSync(join(shared, HOOKS_DIR), { recursive: true });
-      copyFileSync(HOOK, join(shared, HOOKS_DIR, 'pre-push'));
+      installHook(shared);
 
       // one worktree: wiring is allowed (the positive control for this arm,
       // without which «refuses» could be «refuses always»)
@@ -323,11 +337,81 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       // skip, so «skips» is not «skips always»
       const real = join(work, 'not-an-archive');
       expect(git(work, 'init', '-q', '-b', 'main', real).code).toBe(0);
-      mkdirSync(join(real, HOOKS_DIR), { recursive: true });
-      copyFileSync(HOOK, join(real, HOOKS_DIR, 'pre-push'));
+      installHook(real);
       const wired = wireHooks(real, 'wire');
       expect(wired.lines.join('\n')).not.toMatch(/SKIPPED/);
       expect(wired.ok).toBe(true);
+    });
+
+    it('REFUSES to wire a hook tracked as NOT EXECUTABLE — the change that would turn both refusals off invisibly', () => {
+      // git looks a hook up with `access(X_OK)` and silently ignores one that
+      // is not executable, so a commit turning `100755` into `100644` removes
+      // both refusals on every Linux and macOS checkout, and that change is
+      // not a line in a diff. The INDEX mode is read, not the filesystem's,
+      // because NTFS does not carry the bit at all.
+      const repo644 = join(work, 'mode644');
+      expect(git(work, 'init', '-q', '-b', 'main', repo644).code).toBe(0);
+      installHook(repo644);
+      expect(git(repo644, 'update-index', '--chmod=-x', '--', `${HOOKS_DIR}/pre-push`).code).toBe(0);
+      expect(git(repo644, 'ls-files', '-s', '--', `${HOOKS_DIR}/pre-push`).out.trim().startsWith('100644')).toBe(true);
+
+      const out = wireHooks(repo644, 'wire');
+      expect(out.ok, 'wiring was allowed with the hook tracked as non-executable').toBe(false);
+      expect(out.lines.join('\n')).toMatch(/tracked as 100644, not 100755/);
+      expect(git(repo644, 'config', '--get', 'core.hooksPath').code, 'the configuration was written despite the refusal').not.toBe(0);
+    });
+
+    it('REFUSES to WIRE over a `core.hooksPath` it did not set, as `undo` already refused to unset one', () => {
+      // `wire` used to overwrite whatever the configuration held — an absolute
+      // path, another tool's directory, anything — without refusing and
+      // without keeping the old value, while `undo` refused to touch a foreign
+      // value and unsets rather than restores it. Review named the asymmetry:
+      // the two modes must not disagree about whose configuration this is.
+      const foreignWire = join(work, 'foreign-wire');
+      expect(git(work, 'init', '-q', '-b', 'main', foreignWire).code).toBe(0);
+      installHook(foreignWire);
+      expect(git(foreignWire, 'config', 'core.hooksPath', 'somebody-elses-hooks').code).toBe(0);
+
+      const out = wireHooks(foreignWire, 'wire');
+      expect(out.ok, 'wiring overwrote a foreign core.hooksPath').toBe(false);
+      expect(out.lines.join('\n')).toMatch(/which this script did not set/);
+      expect(git(foreignWire, 'config', '--get', 'core.hooksPath').out.trim()).toBe('somebody-elses-hooks');
+    });
+
+    it('REFUSES to wire an EMPTY hook — presence is not substance', () => {
+      // The size floor was added because a review observed that `existsSync`
+      // accepts a file whose refusals have been deleted. It was then pinned by
+      // NOTHING: seeding `size < 512` to `size < 0` left the whole suite green.
+      const empty = join(work, 'emptyhook');
+      expect(git(work, 'init', '-q', '-b', 'main', empty).code).toBe(0);
+      mkdirSync(join(empty, HOOKS_DIR), { recursive: true });
+      writeFileSync(join(empty, HOOKS_DIR, 'pre-push'), '');
+      expect(git(empty, 'add', '--', `${HOOKS_DIR}/pre-push`).code).toBe(0);
+      expect(git(empty, 'update-index', '--chmod=+x', '--', `${HOOKS_DIR}/pre-push`).code).toBe(0);
+
+      const out = wireHooks(empty, 'wire');
+      expect(out.ok, 'wiring was allowed with an empty hook').toBe(false);
+      expect(out.lines.join('\n')).toMatch(/is only 0 bytes/);
+    });
+
+    it('REFUSES to wire when the hook is MISSING or is a directory', () => {
+      // The missing/not-a-file check's only red came from an ENOENT inside
+      // `statSync` in an unrelated fixture — a red for a reason other than the
+      // one the check names, which is the same defect as an arm passing for
+      // the wrong reason.
+      const none = join(work, 'nohook');
+      expect(git(work, 'init', '-q', '-b', 'main', none).code).toBe(0);
+      mkdirSync(join(none, HOOKS_DIR), { recursive: true });
+      const missing = wireHooks(none, 'wire');
+      expect(missing.ok).toBe(false);
+      expect(missing.lines.join('\n')).toMatch(/is missing — there is nothing to wire/);
+
+      const dir = join(work, 'dirhook');
+      expect(git(work, 'init', '-q', '-b', 'main', dir).code).toBe(0);
+      mkdirSync(join(dir, HOOKS_DIR, 'pre-push'), { recursive: true });
+      const asDir = wireHooks(dir, 'wire');
+      expect(asDir.ok).toBe(false);
+      expect(asDir.lines.join('\n')).toMatch(/is missing — there is nothing to wire/);
     });
 
     it('`undo` REFUSES to touch a `core.hooksPath` it did not set', () => {
