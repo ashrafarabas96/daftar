@@ -2406,6 +2406,20 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
     title: 'TL-P4-RLS-INT-01 §14 RED PROOF — the completeness law can fail, and names the condition',
     cases: 15,
   },
+  // The summary law beside it (DR-180/3). Two rows: the comparison and the
+  // falsifiability arm. A row naming only the red proof would leave the
+  // comparison itself deletable with the roster count unmoved — the same
+  // reason the sentinels below are recorded by their measuring law.
+  {
+    suite: 'tests/security/p4s4-definer-inventory-summary-closes.test.ts',
+    title: 'TL-P4-RLS-INT-01 §14 SUMMARY §2 — the page states what the live catalogue holds',
+    cases: 2,
+  },
+  {
+    suite: 'tests/security/p4s4-definer-inventory-summary-closes.test.ts',
+    title: 'TL-P4-RLS-INT-01 §14 SUMMARY RED PROOF — the law can fail, on a mutated page and never on the checkout',
+    cases: 3,
+  },
   // The shape and reachability sentinels, recorded by the laws that MEASURE a
   // live catalogue rather than by the record-based arms that prove those laws
   // can say no. A row naming only the falsifiability arm would leave the

@@ -115,19 +115,11 @@ beforeAll(async () => {
     accounting: await one(`SELECT count(*) AS c ${def} AND r.rolname = 'daftar_accounting_internal'`),
     doors: await one(`SELECT count(*) AS c ${def} AND ${hasOtherGrantee}`),
     sealed: await one(`SELECT count(*) AS c ${def} AND NOT ${hasOtherGrantee}`),
-    sealedTriggers: await one(
-      `SELECT count(*) AS c ${def} AND NOT ${hasOtherGrantee} AND p.prorettype = 'pg_catalog.trigger'::regtype`,
-    ),
-    sealedHelpers: await one(
-      `SELECT count(*) AS c ${def} AND NOT ${hasOtherGrantee} AND p.prorettype <> 'pg_catalog.trigger'::regtype`,
-    ),
+    sealedTriggers: await one(`SELECT count(*) AS c ${def} AND NOT ${hasOtherGrantee} AND p.prorettype = 'pg_catalog.trigger'::regtype`),
+    sealedHelpers: await one(`SELECT count(*) AS c ${def} AND NOT ${hasOtherGrantee} AND p.prorettype <> 'pg_catalog.trigger'::regtype`),
     appDoors: await one(`${doorRows} SELECT count(*) AS c FROM (SELECT oid FROM d WHERE grantee = 'daftar_app' GROUP BY oid) x`),
-    otherLoginDoors: await one(
-      `${doorRows} SELECT count(*) AS c FROM (SELECT oid FROM d WHERE rolcanlogin AND grantee <> 'daftar_app' GROUP BY oid) x`,
-    ),
-    nologinOnlyDoors: await one(
-      `${doorRows} SELECT count(*) AS c FROM (SELECT oid FROM d GROUP BY oid HAVING bool_and(NOT rolcanlogin)) x`,
-    ),
+    otherLoginDoors: await one(`${doorRows} SELECT count(*) AS c FROM (SELECT oid FROM d WHERE rolcanlogin AND grantee <> 'daftar_app' GROUP BY oid) x`),
+    nologinOnlyDoors: await one(`${doorRows} SELECT count(*) AS c FROM (SELECT oid FROM d GROUP BY oid HAVING bool_and(NOT rolcanlogin)) x`),
     publicExecutable: await one(
       `SELECT count(*) AS c ${def} AND EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')`,
     ),
@@ -143,7 +135,7 @@ afterAll(() => {
   c?.release();
 });
 
-describe('§1 the arithmetic closes over the measured sets, before any page is read', () => {
+describe('TL-P4-RLS-INT-01 §14 SUMMARY §1 — the arithmetic closes over the measured sets, before any page is read', () => {
   it('four identities hold, and the sets they partition are not empty', () => {
     // NO SUBJECT: every identity below is satisfied by all-zeros, which is what
     // a probe against the wrong database or an unmigrated one returns.
@@ -165,48 +157,144 @@ describe('§1 the arithmetic closes over the measured sets, before any page is r
   });
 });
 
-describe('§2 and the page states what the catalogue holds', () => {
-  it('every summary row is found and carries the measured number', () => {
-    // Each row is (what it is, the pattern that finds it, the measured value).
-    // The pattern captures the number; it is never written here.
-    const rows: readonly { readonly what: string; readonly re: RegExp; readonly want: readonly number[] }[] = [
-      { what: 'routines owned by the two internal principals', re: /\| routines owned by the two internal principals \| (\d+) \|/, want: [m.owned] },
-      {
-        what: 'SECURITY DEFINER, with its owner split',
-        re: /\| of those, `SECURITY DEFINER` \| \*\*(\d+)\*\* \((\d+) inventory, (\d+) accounting\) \|/,
-        want: [m.definers, m.inventory, m.accounting],
-      },
-      { what: 'INVOKER', re: /\| of those, `INVOKER` \| (\d+) /, want: [m.invokers] },
-      { what: 'the doors', re: /\(\*\*the doors\*\*\) \| \*\*(\d+)\*\* \|/, want: [m.doors] },
-      {
-        what: 'sealed definers, with the trigger/helper split',
-        re: /no caller at all \| \*\*(\d+)\*\* \((\d+) trigger functions, (\d+) helpers\) \|/,
-        want: [m.sealed, m.sealedTriggers, m.sealedHelpers],
-      },
-      { what: 'definers executable by PUBLIC', re: /\| definers executable by `PUBLIC` \| \*\*(\d+)\*\* \|/, want: [m.publicExecutable] },
-      { what: 'definers whose proacl is null', re: /never revoked\) \| \*\*(\d+)\*\* \|/, want: [m.nullAcl] },
-      { what: 'definers not pinning search_path', re: /not pinning `search_path[^|]*\| \*\*(\d+)\*\* \|/, want: [m.unpinnedSearchPath] },
-      { what: 'doors granted to daftar_app', re: /the ordinary runtime credential \| \*\*(\d+)\*\* \|/, want: [m.appDoors] },
-      // The NUMBER only. That all of them are signed is the neighbouring
-      // suite's result, and claiming it here would be claiming its work.
-      { what: 'of those N, gated by a signed decision', re: /\| of those (\d+), gated by a signed server decision \| \*\*(\d+) — all of them\*\* \|/, want: [m.appDoors, m.appDoors] },
-      { what: 'doors granted to any other login principal', re: /\| doors granted to any other login principal \| \*\*(\d+)\*\* /, want: [m.otherLoginDoors] },
-      { what: 'doors granted only to a NOLOGIN internal principal', re: /only to a NOLOGIN internal principal \| \*\*(\d+)\*\* \|/, want: [m.nologinOnlyDoors] },
-    ];
+/**
+ * The comparison itself, as a FUNCTION of (page text, measurement), so the red
+ * proofs below can run it against a mutated page without touching the
+ * checkout. A law whose comparison is inline in its own assertion cannot be
+ * shown to refuse anything.
+ */
+interface SummaryRow {
+  readonly what: string;
+  readonly re: RegExp;
+  readonly want: readonly number[];
+}
 
-    const missing = rows.filter((r) => r.re.exec(page) === null).map((r) => r.what);
-    // THE PARSER'S POSITIVE CONTROL. A row this suite cannot find is the way
-    // the whole law goes quiet: reword the page and every comparison below
-    // simply never runs. So an unfound row is a failure, not a skip.
-    expect(missing, `${INVENTORY_DOC} — these summary rows were not found, so their numbers were never compared`).toEqual([]);
+const summaryRows = (x: Measured): readonly SummaryRow[] => [
+  { what: 'routines owned by the two internal principals', re: /\| routines owned by the two internal principals \| (\d+) \|/, want: [x.owned] },
+  {
+    what: 'SECURITY DEFINER, with its owner split',
+    re: /\| of those, `SECURITY DEFINER` \| \*\*(\d+)\*\* \((\d+) inventory, (\d+) accounting\) \|/,
+    want: [x.definers, x.inventory, x.accounting],
+  },
+  { what: 'INVOKER', re: /\| of those, `INVOKER` \| (\d+) /, want: [x.invokers] },
+  { what: 'the doors', re: /\(\*\*the doors\*\*\) \| \*\*(\d+)\*\* \|/, want: [x.doors] },
+  {
+    what: 'sealed definers, with the trigger/helper split',
+    re: /no caller at all \| \*\*(\d+)\*\* \((\d+) trigger functions, (\d+) helpers\) \|/,
+    want: [x.sealed, x.sealedTriggers, x.sealedHelpers],
+  },
+  { what: 'definers executable by PUBLIC', re: /\| definers executable by `PUBLIC` \| \*\*(\d+)\*\* \|/, want: [x.publicExecutable] },
+  { what: 'definers whose proacl is null', re: /never revoked\) \| \*\*(\d+)\*\* \|/, want: [x.nullAcl] },
+  { what: 'definers not pinning search_path', re: /not pinning `search_path[^|]*\| \*\*(\d+)\*\* \|/, want: [x.unpinnedSearchPath] },
+  { what: 'doors granted to daftar_app', re: /the ordinary runtime credential \| \*\*(\d+)\*\* \|/, want: [x.appDoors] },
+  // The NUMBER only. That all of them are signed is the neighbouring suite's
+  // result, and claiming it here would be claiming its work.
+  {
+    what: 'of those N, gated by a signed decision',
+    re: /\| of those (\d+), gated by a signed server decision \| \*\*(\d+) — all of them\*\* \|/,
+    want: [x.appDoors, x.appDoors],
+  },
+  { what: 'doors granted to any other login principal', re: /\| doors granted to any other login principal \| \*\*(\d+)\*\* /, want: [x.otherLoginDoors] },
+  { what: 'doors granted only to a NOLOGIN internal principal', re: /only to a NOLOGIN internal principal \| \*\*(\d+)\*\* \|/, want: [x.nologinOnlyDoors] },
+];
 
-    for (const r of rows) {
-      const found = r.re.exec(page);
-      if (found === null) continue; // already reported above
-      const got = found.slice(1, r.want.length + 1).map(Number);
-      expect(got, `${INVENTORY_DOC} — the row "${r.what}" states ${JSON.stringify(got)} and the live catalogue holds ${JSON.stringify(r.want)}`).toEqual(
-        [...r.want],
-      );
+/** Every way the page can disagree with the catalogue, named. Empty is a pass. */
+const summaryProblems = (pageText: string, x: Measured): readonly string[] => {
+  const problems: string[] = [];
+  for (const r of summaryRows(x)) {
+    const found = r.re.exec(pageText);
+    if (found === null) {
+      // A row the law cannot find is a FAILURE, not a skip: a reworded page is
+      // how such a law goes quiet.
+      problems.push(`${r.what}: the row was not found, so its numbers were never compared`);
+      continue;
     }
+    const got = found.slice(1, r.want.length + 1).map(Number);
+    if (JSON.stringify(got) !== JSON.stringify([...r.want])) {
+      problems.push(`${r.what}: the page states ${JSON.stringify(got)} and the live catalogue holds ${JSON.stringify([...r.want])}`);
+    }
+  }
+  return problems;
+};
+
+/**
+ * The data rows of the page's own summary table, counted from the page.
+ *
+ * The law above compares the twelve rows it KNOWS. A thirteenth added to the
+ * table would be unchecked and nothing would say so, which is the same quiet
+ * failure as a reworded row seen from the other side. So the table's own row
+ * count is pinned to the number of rows the law carries.
+ */
+const summaryTableRows = (pageText: string): readonly string[] => {
+  const start = pageText.indexOf('## What was measured');
+  if (start < 0) return [];
+  const rest = pageText.slice(start);
+  const end = rest.indexOf('\n## ', 3);
+  const section = end < 0 ? rest : rest.slice(0, end);
+  return section
+    .split('\n')
+    .filter((l) => l.startsWith('| '))
+    .filter((l) => !/^\| fact \| value \|/.test(l) && !/^\|\s*-+\s*\|/.test(l));
+};
+
+describe('TL-P4-RLS-INT-01 §14 SUMMARY §2 — the page states what the live catalogue holds', () => {
+  it('every summary row is found and carries the measured number', () => {
+    expect(summaryProblems(page, m), `${INVENTORY_DOC} — the summary disagrees with the catalogue of this tree`).toEqual([]);
+  });
+
+  it('and the law compares EVERY row the table has, so a row added to the page cannot go unchecked', () => {
+    const inThePage = summaryTableRows(page);
+    // The parser's own control: a section it cannot find reads as "no rows",
+    // which would make the equality below satisfiable by an empty page.
+    expect(inThePage.length, `NO SUBJECT — no summary row was parsed out of ${INVENTORY_DOC}`).toBeGreaterThan(0);
+    expect(
+      inThePage.length,
+      `${INVENTORY_DOC} — the table has ${inThePage.length} data row(s) and this law carries ${summaryRows(m).length}: ` +
+        `a row on the page that no pattern here claims is a row nothing checks. The unmatched row(s): ` +
+        `${JSON.stringify(inThePage.filter((l) => !summaryRows(m).some((r) => r.re.test(l))).map((l) => l.slice(0, 70)))}`,
+    ).toBe(summaryRows(m).length);
+  });
+});
+
+describe('TL-P4-RLS-INT-01 §14 SUMMARY RED PROOF — the law can fail, on a mutated page and never on the checkout', () => {
+  // Every plant below mutates a STRING. The page on disk is never written, so
+  // no plant can leave the checkout changed if an assertion throws.
+  it('red: a stale count is refused, and the refusal names both numbers', () => {
+    const stale = page.replace(
+      `| of those, \`SECURITY DEFINER\` | **${m.definers}** (${m.inventory} inventory, ${m.accounting} accounting) |`,
+      `| of those, \`SECURITY DEFINER\` | **${m.definers - 1}** (${m.inventory} inventory, ${m.accounting - 1} accounting) |`,
+    );
+    // RULE-27 — the plant is proved APPLIED before its effect is read. A
+    // replacement that matched nothing would leave the page intact and the
+    // assertion below would then be reporting a pass as a red proof.
+    expect(stale, 'the plant changed the page text').not.toEqual(page);
+    const found = summaryProblems(stale, m);
+    expect(found.length, `a stale count went unreported: ${JSON.stringify(found)}`).toBeGreaterThan(0);
+    expect(
+      found.some((x) => x.includes('SECURITY DEFINER') && x.includes(String(m.definers - 1)) && x.includes(String(m.definers))),
+      `the refusal names the page's number and the catalogue's: ${JSON.stringify(found)}`,
+    ).toBe(true);
+    // And this is the exact staleness that survived BOTH sides of a merge: one
+    // side said 223 definers, the other 222, the catalogue 224.
+    expect(summaryProblems(page, m), 'the unmutated page is still a pass, so the red above is the plant and not the page').toEqual([]);
+  });
+
+  it('red: a reworded row is refused as NOT FOUND, because a quiet law is the failure mode', () => {
+    const reworded = page.replace('| definers executable by `PUBLIC` |', '| definers that PUBLIC may execute |');
+    expect(reworded, 'the plant changed the page text').not.toEqual(page);
+    const found = summaryProblems(reworded, m);
+    expect(
+      found.some((x) => x.includes('definers executable by PUBLIC') && x.includes('not found')),
+      `a reworded row was not reported as unfound: ${JSON.stringify(found)}`,
+    ).toBe(true);
+  });
+
+  it('red: a page with no summary table at all is refused on every row, not silently', () => {
+    const found = summaryProblems('', m);
+    expect(found.length, 'an empty page must fail every row').toBe(summaryRows(m).length);
+    expect(
+      found.every((x) => x.includes('not found')),
+      `every finding on an empty page is a not-found: ${JSON.stringify(found)}`,
+    ).toBe(true);
   });
 });
