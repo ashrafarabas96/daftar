@@ -5,8 +5,8 @@ apps/api/src/common/error.filter.ts	3	formatter	safe	HAND	import { ZodError } fr
 apps/api/src/common/error.filter.ts	54	formatter	intended	HAND	if (exception instanceof ZodError) {
 apps/api/src/common/error.filter.ts	56	method	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
 apps/api/src/common/error.filter.ts	56	issues-access	intended	HAND	issues: exception.issues.map((i) => ({ path: i.path.join('.'), code: i.code })),
-apps/api/src/config.ts	673	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
-apps/api/src/config.ts	673	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	702	method	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
+apps/api/src/config.ts	702	issues-access	safe	HAND	const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
 apps/api/src/modules/accounting/accounting-reconciliation.reader.ts	251	find-shift	safe	R-RECEIVER	const definition = ALL_RECONCILIATION_CHECKS.find((d) => d.id === checkId);
 apps/api/src/modules/catalog/media.service.ts	132	find-shift	safe	R-RECEIVER	const v = row.variants.find((x) => x.size === size);
 apps/api/src/modules/inventory/inventory-stock-read.ts	98	find-shift	safe	R-RECEIVER	const row = wanted === null ? variants.find((r) => r.is_base) : variants.find((r) => r.variant_id === wanted && !r.is_base);
@@ -201,9 +201,9 @@ scripts/phase3-review-index.ts	126	find-shift	safe	R-RECEIVER	return GROUP_RULES
 scripts/phase3-review-index.ts	433	find-shift	safe	R-RECEIVER	const h1 = lines.find((l) => /^#\s+\S/.test(l));
 scripts/phase3-review-index.ts	643	find-shift	safe	R-RECEIVER	const windowOf = (i: number): (typeof bounds)[number] | null => bounds.find((b) => i <= b.at) ?? null;
 scripts/phase3-s9-evidence.ts	75	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
-scripts/phase3-secret-scan.ts	502	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
-scripts/phase3-secret-scan.ts	611	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
-scripts/phase3-secret-scan.ts	925	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
+scripts/phase3-secret-scan.ts	541	find-shift	safe	R-RECEIVER	return candidates.find((ref) => gitOk(repo, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`])) ?? null;
+scripts/phase3-secret-scan.ts	650	find-shift	safe	R-RECEIVER	.find((ids) => ids[2] === sealed);
+scripts/phase3-secret-scan.ts	991	find-shift	safe	R-RECEIVER	const hit = argv.find((a) => a.startsWith(`--${name}=`));
 scripts/phase4-gate.ts	342	find-shift	safe	R-RECEIVER	const w = present.find((x) => x.name === n);
 scripts/phase4-gate.ts	822	find-shift	safe	R-RECEIVER	const r = results.find((x) => x.id === st.id);
 scripts/phase4-gate.ts	843	find-shift	safe	R-RECEIVER	const hit = found.find((r) => needle.test(r));

@@ -16,9 +16,9 @@
  * that control STARTED, so a refusal below is the pair's doing and not the
  * fixture's:
  *
- *   APP      = IDENTITY    → REFUSED (:494 clause AND §31 clause, both)
+ *   APP      = IDENTITY    → REFUSED (the least-privilege APP/PLATFORM clause AND the §31 membership clause, both)
  *   APP      = RESOLVER    → REFUSED (§31 only)
- *   APP      = PROVISIONER → REFUSED (:522 clause only)
+ *   APP      = PROVISIONER → REFUSED (the provisioner's own APP/PLATFORM clause only)
  *   IDENTITY = RESOLVER    → REFUSED (§31 only)
  *   IDENTITY = PROVISIONER → **STARTED**
  *   RESOLVER = PROVISIONER → **STARTED**
@@ -39,17 +39,21 @@
  * among them, which is this branch's whole subject. Three removals and one
  * addition give the four:
  *
- *   `PLATFORM`, `WORKER` → `forbid(...)` at `:437-438` ("merchant API has no
+ *   `PLATFORM`, `WORKER` → `forbid(...)` in the `mode === 'merchant-api'` block ("merchant API has no
  *                          platform/worker authority"): a merchant API that
  *                          is merely GIVEN either one does not start.
- *   `RECONCILER`         → NOT `forbid`. The §7 converse at `:284-288`,
+ *   `RECONCILER`         → NOT `forbid`. The §7 converse clause,
  *                          "must NOT be set in PROCESS_MODE=merchant-api
  *                          (only the reconciler process holds reconciliation
  *                          authority)". A separate clause with a separate
  *                          wording, written for a separate reason (§7 keeps
  *                          the ledger-wide reader out of every other mode).
- *   `PROVISIONER`        → added to the reachable four, because `:518-522`
- *                          REQUIRES it in this mode.
+ *   `PROVISIONER`        → added to the reachable four, because the
+ *                          `all || merchant-api` block that requires
+ *                          RESOLVER and PROVISIONER REQUIRES it in this mode
+ *                          — and the condition alone does not name it, since
+ *                          another block carries the same condition and
+ *                          requires APP_DATABASE_URL.
  *
  * Measured, not read off the source: on blob `d0d0d99b` of `config.ts`, whose
  * lines `242-290` are byte-identical to this branch's blob `e91531d1` (diffed,
@@ -57,27 +61,28 @@
  * control STARTED:
  *
  *   fixture alone                      → STARTED
- *   + RECONCILER, distinct credential  → REFUSED, `:284-288` wording only
- *   + RECONCILER = APP                 → REFUSED, `:284-288` AND §31, both in
+ *   + RECONCILER, distinct credential  → REFUSED, the §7 converse wording only
+ *   + RECONCILER = APP                 → REFUSED, the §7 converse AND §31, both in
  *                                        the one message (`fail` accumulates)
  *
  * That last line is why `RECONCILER` cannot be called "excluded from the
  * separation set": it is IN the map and §31 does compare it. It is excluded
  * from the REACHABLE set, by a mode clause, which is a different statement.
- * If `:284-288` were ever relaxed, this file's "four" would become five and
+ * If the §7 converse were ever relaxed, this file's "four" would become five and
  * the enumeration above would be measuring the wrong set — so the clause is
  * named here by line and by wording rather than left to be inferred.
  *
  * ── WHY THE FIX IS A MEMBERSHIP AND NOT A THIRD COMPARISON ──────────────────
  *
- * `:521-522` already compares the provisioner against APP and PLATFORM by
+ * the least-privilege clause already compares the provisioner against APP and PLATFORM by
  * hand. Adding `=== IDENTITY` and `=== RESOLVER` beside it would close these
  * two pairs and leave the next credential to be added exposed again. §31
  * exists precisely so that the separation set has ONE definition, so the fix
- * is to make `PROVISIONER_DATABASE_URL` a member of it. `:521-522` stays as
+ * is to make `PROVISIONER_DATABASE_URL` a member of it. That clause stays as
  * it is: it carries its own least-privilege wording, and in production both
  * clauses now accumulate for `APP = PROVISIONER` (`fail` collects and does not
- * throw at the first defect, `:494`), which the last arm here records.
+ * throw at the first defect: `fail()` accumulates into one message), which
+ * the last arm here records.
  *
  * ── WHO MOVES THIS ─────────────────────────────────────────────────────────
  *
@@ -86,8 +91,10 @@
  * while this file still names it reddens here, which is the point: a principal
  * does not leave the separation set silently.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../apps/api/src/config';
+import { DB_PRINCIPAL_URL_KEYS, loadConfig } from '../apps/api/src/config';
 
 /**
  * A production `merchant-api` that is otherwise complete and correct.
@@ -121,6 +128,37 @@ const MERCHANT_PROD: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://app.example.com',
 };
 
+/**
+ * Read a §31 refusal by the PAIR it names, in EITHER direction.
+ *
+ * `fail()` is called on the key the loop reaches LATER, naming the one it saw
+ * EARLIER, so «A duplicates B» or «B duplicates A» is decided by the order of
+ * `DB_PRINCIPAL_URL_KEYS` and not by the misconfiguration. Matching one
+ * spelling made these arms pass BY POSITION: measured, swapping two members of
+ * that list — membership identical — reddened all three of them although the
+ * refusal still worked perfectly. The order is pinned in ONE place, by the arm
+ * that names the list; these read the pair.
+ */
+function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void {
+  let message = '';
+  try {
+    loadConfig(env);
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
+  // THE ONE CLAUSE THAT NAMES BOTH, not the join of every §31 clause. Joining
+  // them let a CROSS-pair pass when two real pairs were planted (measured),
+  // and my first attempt at the fix — a «no third principal» check over the
+  // join — was worse than weak: it made a CORRECT pair fail as soon as another
+  // correct pair existed, also measured. Exactly one clause must name both
+  // keys, which is what «the refusal names this pair» actually means.
+  const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+  expect(clauses.length, 'no §31 duplicate clause in the refusal at all').toBeGreaterThan(0);
+  const naming = clauses.filter((l) => l.includes(a) && l.includes(b));
+  expect(naming, `no single §31 clause names both ${a} and ${b}; the clauses are:\n${clauses.join('\n')}`).toHaveLength(1);
+}
+
 describe('THE LAW: the provisioning credential is a principal in the separation set', () => {
   it('POSITIVE CONTROL: four distinct credentials start the process', () => {
     // Without this arm every refusal below could be the fixture's own doing.
@@ -128,21 +166,19 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
   });
 
   it('refuses a provisioner credential equal to IDENTITY, naming both fields', () => {
-    expect(() =>
-      loadConfig({
-        ...MERCHANT_PROD,
-        PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL,
-      }),
-    ).toThrow(/PROVISIONER_DATABASE_URL: duplicates IDENTITY_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(
+      { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL },
+      'PROVISIONER_DATABASE_URL',
+      'IDENTITY_DATABASE_URL',
+    );
   });
 
   it('refuses a provisioner credential equal to RESOLVER, naming both fields', () => {
-    expect(() =>
-      loadConfig({
-        ...MERCHANT_PROD,
-        PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
-      }),
-    ).toThrow(/PROVISIONER_DATABASE_URL: duplicates RESOLVER_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(
+      { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL },
+      'PROVISIONER_DATABASE_URL',
+      'RESOLVER_DATABASE_URL',
+    );
   });
 
   it('NEGATIVE CONTROL: the same ROLE with a different CREDENTIAL still starts', () => {
@@ -159,14 +195,173 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
   });
 
   it('RECORDS: an APP-equal provisioner now fails under BOTH clauses at once', () => {
-    // Measured, not assumed: `fail` accumulates (`:494`), so the pre-existing
-    // least-privilege clause and the new membership both appear in the one
+    // Measured, not assumed: `fail()` accumulates into one message rather than
+    // throwing at the first defect, so the pre-existing
+    // provisioner's own APP/PLATFORM clause and the new membership both appear
+    // in the one
     // message. This arm exists so that removing either clause is visible.
     const env = {
       ...MERCHANT_PROD,
       PROVISIONER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL,
     };
     expect(() => loadConfig(env)).toThrow(/PROVISIONER_DATABASE_URL: must be a distinct role from APP\/PLATFORM \(least-privilege provisioning boundary\)/);
-    expect(() => loadConfig(env)).toThrow(/PROVISIONER_DATABASE_URL: duplicates APP_DATABASE_URL — every DB principal must use distinct credentials/);
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'APP_DATABASE_URL');
+  });
+
+  // ── #111's REMAINING NOTES, BOTH ONE DEFECT: THE SET AND ITS ORDER WERE
+  //    PINNED BY NOTHING BUT THIS FILE'S PROSE ──────────────────────────────
+  it('selects the §31 clause ALONE out of a refusal that carries several, which is what makes «names no third principal» mean anything', () => {
+    // A refusal with TWO clauses: the §31 duplicate, and a missing
+    // `RESOLVER_DATABASE_URL` whose own clause names that key. `config.ts`
+    // joins problems with `'; '`, so the message is one line — selecting on
+    // `'\n'` returns the WHOLE message and the third-principal check then sees
+    // `RESOLVER_DATABASE_URL` and fails. This arm is what made the clause
+    // selection provable instead of merely correct.
+    const env = { ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL, RESOLVER_DATABASE_URL: undefined };
+    let message = '';
+    try {
+      loadConfig(env);
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    // the refusal really does carry both clauses, so the arm has a subject
+    expect(message).toMatch(/RESOLVER_DATABASE_URL: production requires/);
+    expect(message).toMatch(/every DB principal must use distinct credentials/);
+    expect(message.split('\n')).toHaveLength(1); // one line, joined with '; '
+    // and the pair reading still holds, because it selects the clause
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
+  });
+
+  it('no doc block in `config.ts` is followed by ANOTHER doc block — the one orphaning shape this cart actually produced', () => {
+    // THE NAME IS THE MECHANISM, narrowed by review on the previous head: it
+    // used to read «every doc block touches its subject», and that claim is
+    // wider than anything this check can carry. Inserting a DECLARATION
+    // between a block and the function it documents leaves this arm GREEN —
+    // the defect the old name promised to catch. Which declaration a block is
+    // ABOUT is not decidable from text, so what is claimed here is the shape
+    // that was actually built and measured: a block orphaned by another block.
+    //
+    // THE DEFECT THIS PINS, found by review on the previous head of this cart:
+    // exporting `DB_PRINCIPAL_URL_KEYS` put its declaration BETWEEN
+    // `isLocalHost`'s doc block and `isLocalHost`. The loopback block — which
+    // carries measured evidence about `127.0.0.0/8`, `0.0.0.0` and `[::]` —
+    // then sat above an unrelated constant, and the function it was written
+    // for had no adjacent documentation at all. A reader, and any tool that
+    // reads TSDoc, attributes a security argument to the wrong subject. That
+    // is the same class as a count that names no tree, in prose.
+    //
+    // THE FIRST BLOCK IS EXEMPT BY POSITION, not by content: it documents the
+    // FILE (`Central validated config (§34)`) and is legitimately followed by
+    // the first declaration's own block. Exempting it by position keeps the
+    // law from being a law about one sentence.
+    const text = readFileSync(join(__dirname, '..', 'apps', 'api', 'src', 'config.ts'), 'utf8');
+    const blocks = [...text.matchAll(/\/\*\*[\s\S]*?\*\/\s*/g)];
+    expect(blocks.length, 'no doc blocks found at all, so this arm measures nothing').toBeGreaterThan(5);
+    const detached = blocks
+      .slice(1)
+      .filter((m) => text.slice(m.index + m[0].length).startsWith('/**'))
+      .map((m) => `line ${text.slice(0, m.index).split('\n').length}: ${(m[0].split('\n')[1] ?? '').trim().slice(0, 60)}`);
+    expect(detached).toEqual([]);
+    // AND THE CONTROL that this is not vacuous: the FILE header really is
+    // followed by another block, so the slice(1) is doing work.
+    const header = blocks[0];
+    expect(header, 'no doc block at all, so the exemption cannot be tested').toBeDefined();
+    const afterHeader = header === undefined ? '' : text.slice(header.index + header[0].length);
+    expect(afterHeader.startsWith('/**'), 'the module header is not followed by another block, so the exemption is untested').toBe(true);
+  });
+
+  it("the pair reader REFUSES a cross-pair here too — this file's copy of the helper was pinned by nothing", () => {
+    // MEASURED: restoring the «join every §31 clause» form in THIS file
+    // reddened nothing, because every fixture here plants a single pair. The
+    // duplicate law had an arm for it and this one did not, so the same helper
+    // was guarded in one place and unguarded in the other. Two pairs are
+    // planted and the CROSS-pair must be refused by the reader itself.
+    const env = {
+      ...MERCHANT_PROD,
+      PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL,
+      WORKER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
+    };
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
+    expectDuplicatePair(env, 'WORKER_DATABASE_URL', 'RESOLVER_DATABASE_URL');
+    expect(() => expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'RESOLVER_DATABASE_URL')).toThrow();
+  });
+
+  it('pins the separation set the gate CONSUMES, by name and in order', () => {
+    // The members used to be a local `const urls` literal inside the refusal,
+    // which no test could reach: the claim that a seventh credential had been
+    // ADDED TO THE SET rested on reading the source. The gate now loops this
+    // exported object, so this arm pins what decides.
+    //
+    // AND IT CALLS NO ADJUDICATOR, BY SUBJECT AND NOT BY OMISSION. The probe
+    // this cart's fourth review produced asks of every arm, per arm and with
+    // comment lines stripped: does it call the adjudicator it claims to guard,
+    // or only compute on its own inputs? This arm answers that its subject IS
+    // the adjudicator's input — the frozen exported object the §31 loop reads —
+    // so there is nothing to call. The arms around it drive `loadConfig` and
+    // measure the refusal; this one pins what that refusal is computed FROM.
+    // Written here because a justification that lives in a report is a memory,
+    // not a warrant.
+    expect([...DB_PRINCIPAL_URL_KEYS]).toEqual([
+      'APP_DATABASE_URL',
+      'PLATFORM_DATABASE_URL',
+      'IDENTITY_DATABASE_URL',
+      'RESOLVER_DATABASE_URL',
+      'WORKER_DATABASE_URL',
+      'RECONCILER_DATABASE_URL',
+      'PROVISIONER_DATABASE_URL',
+    ]);
+    // AN ORDERED SET BY NAME, not a length: `toHaveLength(7)` passes when one
+    // key is swapped for another, and the whole point here is WHICH keys.
+    expect(Object.isFrozen(DB_PRINCIPAL_URL_KEYS)).toBe(true);
+  });
+
+  it('reads the refusal by the PAIR it names, not by which key the loop reached last', () => {
+    // The direction of the message is a consequence of the loop ORDER:
+    // `fail()` is called on the key reached later, naming the one seen
+    // earlier. Every arm above matches `PROVISIONER … duplicates IDENTITY …`
+    // only because `PROVISIONER_DATABASE_URL` is LAST in the set — insert a
+    // key after it and those arms redden although the refusal still works
+    // perfectly. That is the positional trap. This arm accepts EITHER
+    // direction and requires both names, so it survives a reorder, and the
+    // arm above is what makes a reorder visible in ONE place with a named
+    // cause.
+    let message = '';
+    try {
+      loadConfig({ ...MERCHANT_PROD, PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL });
+    } catch (e) {
+      message = e instanceof Error ? e.message : String(e);
+    }
+    expect(message).not.toBe('');
+    expect(message).toMatch(/every DB principal must use distinct credentials/);
+    expect(message).toMatch(/PROVISIONER_DATABASE_URL/);
+    expect(message).toMatch(/IDENTITY_DATABASE_URL/);
+    // AND THE CONTROL that keeps this from being satisfied by any refusal at
+    // all: a THIRD key must not appear in the duplicate clause, or "names both
+    // keys" would be true of a message that named everything.
+    // SPLIT ON `'; '`, NOT ON NEWLINES — the fourth review of this cart caught
+    // it: `config.ts` joins its problems with `'; '`, so splitting on `'\n'`
+    // selected THE WHOLE MESSAGE and called it «the clause». The arm stayed
+    // green only because every fixture here plants ONE defect; the moment a
+    // second legitimate clause appeared it would have reddened while naming a
+    // scope it never read. This is the same defect the sibling law pins in its
+    // «selects the §31 clause ALONE» arm, and the same separator
+    // `expectDuplicatePair` uses.
+    const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+    // EXACTLY ONE, which is the real guard. My first attempt here asserted the
+    // selection was SHORTER than the whole message and reddened at once —
+    // rightly: this fixture plants one defect, so the refusal has one clause
+    // and the clause legitimately IS the whole message. Length was never the
+    // claim; «one clause, selected by the separator `config.ts` actually uses»
+    // is.
+    expect(clauses, 'the refusal does not hold exactly one §31 duplicate clause, so the control below reads the wrong scope').toHaveLength(1);
+    const duplicateClause = clauses.join('; ');
+    // EVERY other member, from the exported set, not a hand-written list that
+    // happened to omit `APP_DATABASE_URL` — which made this arm's control
+    // WEAKER than the one `expectDuplicatePair` applies. (Third review of this
+    // cart, finding 3.)
+    for (const other of DB_PRINCIPAL_URL_KEYS) {
+      if (other === 'PROVISIONER_DATABASE_URL' || other === 'IDENTITY_DATABASE_URL') continue;
+      expect(duplicateClause, `the duplicate clause also names ${other}`).not.toContain(other);
+    }
   });
 });

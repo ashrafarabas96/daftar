@@ -36,11 +36,15 @@ import { loadConfig } from '../apps/api/src/config';
  * outside CI, since their lanes boot a database (`ensurePostgres`, so `NOT_RUN`
  * on a developer machine, never `PASS`):
  *
- *   AC  `tests/security/p3c-legacy-trust-proxy.test.ts:59` pins the refusal's
- *       own message text
- *   AD  `tests/integration/assertion-key-separation.test.ts:114`
- *   AE  `tests/integration/production-providers.test.ts:212` plants an 8-byte
- *       key and expects `/at least 32 bytes/`
+ *   AC  `tests/security/p3c-legacy-trust-proxy.test.ts` pins the refusal's own
+ *       message text, in its `REFUSED` constant
+ *       (`/TRUST_PROXY: TRUST_PROXY=true is refused in production/`)
+ *   AD  `tests/integration/assertion-key-separation.test.ts`, in the arm that
+ *       expects `/ACCOUNTING_ASSERTION_KEY must not be the same secret as
+ *       PROVISIONING_ASSERTION_KEY/`
+ *   AE  `tests/integration/production-providers.test.ts` plants an 8-byte key
+ *       (`Buffer.alloc(8, 1)` on `PROVISIONING_ASSERTION_KEY`) and expects
+ *       `/at least 32 bytes/`
  *
  * AF is the one with NO law anywhere: `grep` for its message, for "every DB
  * principal", and for the duplicate claim over `tests/**`, `tests-unit/**` and
@@ -145,7 +149,46 @@ const PLATFORM_PROD: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://admin.example.com',
 };
 
-const DUP = /duplicates .* — every DB principal must use distinct credentials/;
+// `DUP` USED TO LIVE HERE: /duplicates .* — every DB principal must use
+// distinct credentials/. It had exactly one consumer, the DUP-C arm below, and
+// it named the refusal's VERB. A pure reword of `fail`'s message would have
+// reddened that arm through it although §31 refuses the same pairs — measured
+// with a control, which is how this was found. What identifies a §31 clause is
+// its contract TAIL, and `expectDuplicatePair` reads that.
+
+/**
+ * Read a §31 refusal by the PAIR it names, in EITHER direction, selecting the
+ * clause by the `'; '` the loader joins problems with.
+ *
+ * `fail()` is called on the key the loop reaches LATER, naming the one it saw
+ * EARLIER, so the direction is decided by the ORDER of
+ * `DB_PRINCIPAL_URL_KEYS`. Matching one direction made these arms positional:
+ * MEASURED, swapping two members of that list — membership identical, refusal
+ * working perfectly — reddened an arm here whose name is about §31's REACH and
+ * says nothing about order. The order is pinned by the arm that names the list,
+ * in the provisioner law; these read the pair. (Third review of this cart,
+ * finding 2 — and the same defect as #111's note, committed again by me while
+ * closing it.)
+ */
+function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void {
+  let message = '';
+  try {
+    loadConfig(env);
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
+  // THE ONE CLAUSE THAT NAMES BOTH, not the join of every §31 clause. Joining
+  // them let a CROSS-pair pass when two real pairs were planted (measured),
+  // and my first attempt at the fix — a «no third principal» check over the
+  // join — was worse than weak: it made a CORRECT pair fail as soon as another
+  // correct pair existed, also measured. Exactly one clause must name both
+  // keys, which is what «the refusal names this pair» actually means.
+  const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+  expect(clauses.length, 'no §31 duplicate clause in the refusal at all').toBeGreaterThan(0);
+  const naming = clauses.filter((l) => l.includes(a) && l.includes(b));
+  expect(naming, `no single §31 clause names both ${a} and ${b}; the clauses are:\n${clauses.join('\n')}`).toHaveLength(1);
+}
 
 describe('§31: two database roles may not be one credential', () => {
   // DUP-0. The positive controls come first, and they are not a formality:
@@ -156,49 +199,96 @@ describe('§31: two database roles may not be one credential', () => {
     expect(() => loadConfig({ ...PLATFORM_PROD })).not.toThrow();
   });
 
+  it('the pair reader REFUSES a cross-pair, so «names both» cannot be satisfied by a refusal that names everything', () => {
+    // THE HELPER'S OWN STRICTNESS, pinned. With TWO pairs planted the refusal
+    // carries TWO §31 clauses — «IDENTITY duplicates APP» and «PROVISIONER
+    // duplicates RESOLVER» — and joining them would let a CROSS-pair
+    // (IDENTITY with PROVISIONER) pass although it was never refused as a
+    // pair. Review of the previous head measured exactly that, and dropping
+    // the «no third principal» loop reddened NOTHING, because every other
+    // fixture plants a single pair. This arm is what makes that loop live.
+    const env = {
+      ...MERCHANT_PROD,
+      IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL,
+      PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
+    };
+    // both real pairs read correctly
+    expectDuplicatePair(env, 'IDENTITY_DATABASE_URL', 'APP_DATABASE_URL');
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'RESOLVER_DATABASE_URL');
+    // and the cross-pair is REFUSED by the reader itself
+    expect(() => expectDuplicatePair(env, 'IDENTITY_DATABASE_URL', 'PROVISIONER_DATABASE_URL')).toThrow();
+  });
+
   // DUP-A. The two pairs §31 holds ALONE. `config.ts` names three role pairs
-  // explicitly (platform vs app `:472`, identity `:494`, provisioner `:522`),
+  // explicitly (platform vs app, identity vs APP/PLATFORM, and provisioner
+  // vs APP/PLATFORM — each its own least-privilege clause),
   // and the resolver appears in none of them — so these two pairs measure §31
   // rather than its neighbours.
   it('REFUSES app=resolver and identity=resolver, by §31 alone', () => {
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL })).toThrow(
-      /RESOLVER_DATABASE_URL: duplicates APP_DATABASE_URL/,
-    );
-    expect(() => loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL })).toThrow(
-      /RESOLVER_DATABASE_URL: duplicates IDENTITY_DATABASE_URL/,
-    );
+    expectDuplicatePair({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL }, 'RESOLVER_DATABASE_URL', 'APP_DATABASE_URL');
+    expectDuplicatePair({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL }, 'RESOLVER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
   });
 
   // DUP-B. The other two reachable pairs. Each ALSO has a refusal of its own
-  // (`:494`), and `fail` accumulates rather than throwing on the first problem,
+  // (its own least-privilege clause), and `fail()` accumulates rather than
+  // throwing on the first problem,
   // so BOTH clauses appear — measured, not assumed. The point of asserting them
   // here is that §31's clause is present IN ADDITION to the specific one: a §31
-  // that had quietly shrunk to the resolver would still satisfy `:494` and
+  // that had quietly shrunk to the resolver would still satisfy that clause and
   // would leave these two pairs resting on a single comparison.
   it('REFUSES app=identity and platform=identity, with the §31 clause present too', () => {
     const merchantPair = { ...MERCHANT_PROD, IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
     expect(() => loadConfig(merchantPair)).toThrow(/must be distinct from APP_DATABASE_URL/);
-    expect(() => loadConfig(merchantPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates APP_DATABASE_URL/);
+    expectDuplicatePair(merchantPair, 'IDENTITY_DATABASE_URL', 'APP_DATABASE_URL');
 
     const platformPair = { ...PLATFORM_PROD, IDENTITY_DATABASE_URL: PLATFORM_PROD.PLATFORM_DATABASE_URL };
     expect(() => loadConfig(platformPair)).toThrow(/must be distinct from APP_DATABASE_URL and PLATFORM_DATABASE_URL/);
-    expect(() => loadConfig(platformPair)).toThrow(/IDENTITY_DATABASE_URL: duplicates PLATFORM_DATABASE_URL/);
+    expectDuplicatePair(platformPair, 'IDENTITY_DATABASE_URL', 'PLATFORM_DATABASE_URL');
   });
 
-  // DUP-C. The refusal names the SECOND variable and reports the first, which
-  // is what makes the message actionable in a deployment: the operator learns
-  // which line of their environment to change, not merely that something
+  // DUP-C. WHAT MAKES THE REFUSAL ACTIONABLE, and nothing more: one name is the
+  // SUBJECT of the clause (`X: duplicates Y`), so the operator learns which
+  // line of their environment to change rather than merely that something
   // collides.
-  it('the refusal names the colliding variable and the one it duplicates', () => {
+  //
+  // AND IT READS THE PAIR, NOT THE DIRECTION, narrowed by review on the
+  // previous head: WHICH of the two becomes the subject follows the order of
+  // `DB_PRINCIPAL_URL_KEYS`, so asserting «RESOLVER duplicates APP» literally
+  // would redden on a pure REORDER of that frozen list — a change that alters
+  // no refusal, since the pair is refused whichever member is read first. The
+  // pair itself is read by `expectDuplicatePair`, which is the reader the rest
+  // of this file uses; what is added here is the subject MARKER, in either
+  // direction.
+  //
+  // AND IT ASSERTS THE REQUIRED ELEMENTS, NOT THE SENTENCE. My first form of
+  // this arm matched the refusal's text literally (`X: duplicates Y`), which
+  // makes a legitimate REWORDING of `fail`'s message a false red tomorrow —
+  // the same class as a hardcoded count. So the two elements are read apart:
+  // the clause names both keys (the reader above), and one of them is its
+  // SUBJECT, which in this project's refusals is the name followed by `: `.
+  // The verb is not read at all.
+  it('one of the colliding pair is the SUBJECT of the §31 clause, in either direction', () => {
+    const env = { ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
+    expectDuplicatePair(env, 'RESOLVER_DATABASE_URL', 'APP_DATABASE_URL');
     let message = '';
     try {
-      loadConfig({ ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL });
+      loadConfig(env);
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    expect(message).toContain('RESOLVER_DATABASE_URL');
-    expect(message).toContain('duplicates APP_DATABASE_URL');
-    expect(message).toMatch(DUP);
+    const clause = message.split('; ').find((l) => l.includes('RESOLVER_DATABASE_URL') && l.includes('APP_DATABASE_URL'));
+    expect(clause, `no single clause names both keys; the refusal reads:\n${message}`).toBeDefined();
+    // NOT `startsWith`: the FIRST clause carries the refusal's own header
+    // («Invalid configuration (fails fast at startup): …»), measured — so the
+    // marker is read with a word boundary instead of at the start of the
+    // clause, which is also why the key names are matched with one.
+    const subject = /(^|[^A-Z_])(RESOLVER_DATABASE_URL|APP_DATABASE_URL): /.test(clause ?? '');
+    expect(subject, `neither key is the subject of the clause, so the operator is not told which line to change: ${clause ?? ''}`).toBe(true);
+    // AND NO `toMatch(DUP)` HERE ANY MORE, measured: that regex names the VERB
+    // («duplicates …»), so with it this arm still reddened on a pure reword of
+    // `fail`'s message — the control I ran for exactly that reason failed. The
+    // clause's identity is its contract TAIL, which `expectDuplicatePair`
+    // above reads. `DUP` had this one consumer and is gone with it.
   });
 
   // DUP-D. THE OTHER FACE OF THE BOUNDARY (`DR-145`): a change §31 is NOT about
@@ -231,7 +321,7 @@ describe('§31: two database roles may not be one credential', () => {
       expect(() => loadConfig(env)).toThrow(mode);
       // And the §31 clause, which is this file's subject: it is what proves
       // the name is still a member of the separation set.
-      expect(() => loadConfig(env)).toThrow(new RegExp(`${name}: duplicates APP_DATABASE_URL — every DB principal must use distinct credentials`));
+      expectDuplicatePair(env, name, 'APP_DATABASE_URL');
     });
   }
 });
