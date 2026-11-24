@@ -119,15 +119,25 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     //
     // The INDEX mode is read rather than the filesystem's, because NTFS does
     // not carry the bit at all — `statSync(...).mode` is meaningless here while
-    // `git ls-files -s` says the same thing on every platform. The repository
-    // already pins an execute bit this way in
-    // `tests/integration/embedded-pg-binaries.test.ts`.
+    // `git ls-files -s` says the same thing on every platform.
+    //
+    // AND THE CITATION THAT USED TO SIT HERE WAS WRONG, which the third review
+    // of this cart named: it pointed at
+    // `tests/integration/embedded-pg-binaries.test.ts:25-33` as a precedent for
+    // reading the mode «this way», and that file asserts
+    // `statSync(...).mode & 0o111` — the FILESYSTEM bit, the very instrument
+    // this comment says is meaningless here. So the precedent was for the
+    // platform-DEPENDENT machine. There is no precedent in this repository for
+    // the index read; this is the first, and it is argued on its own.
     const entry = gitSoft('ls-files', '-s', '--', `${HOOKS_DIR}/${hook}`);
-    const mode = entry === null ? null : (/^(\d{6})\s/.exec(entry)?.[1] ?? null);
-    if (mode === null) {
+    // NOT `mode`: that is this function's own parameter, read far below. The
+    // shadowing was harmless by block scope and is still a trap for the next
+    // check added inside this loop (third review, finding 8).
+    const indexMode = entry === null ? null : (/^(\d{6})\s/.exec(entry)?.[1] ?? null);
+    if (indexMode === null) {
       problems.push(`${HOOKS_DIR}/${hook} is not tracked, so git has no mode for it — the hook would not travel`);
-    } else if (mode !== '100755') {
-      problems.push(`${HOOKS_DIR}/${hook} is tracked as ${mode}, not 100755 — git ignores a hook that is not executable, so both refusals would be off`);
+    } else if (indexMode !== '100755') {
+      problems.push(`${HOOKS_DIR}/${hook} is tracked as ${indexMode}, not 100755 — git ignores a hook that is not executable, so both refusals would be off`);
     }
   }
 
@@ -155,6 +165,24 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     .filter((l) => l.startsWith('worktree '))
     .map((l) => l.slice('worktree '.length).trim())
     .filter((l) => l !== '');
+  // AND AN EMPTY LIST IS A FAILURE, NOT A CLEAN BILL. `gitSoft(...) ?? ''`
+  // yields zero worktrees when the enumeration fails for ANY reason, and zero
+  // worktrees means zero disarmed, which used to let the wiring through with a
+  // message reading «0 of 0» — the check failing OPEN, in the one place whose
+  // whole purpose is to refuse (third review, finding 4). Every repository has
+  // at least one worktree, so an empty list means the measurement did not
+  // happen, and a measurement that did not happen may not be read as a pass.
+  //
+  // AND THIS REFUSAL IS NOT PINNED BY AN ARM, said here rather than left to be
+  // found: reaching it needs `git worktree list` to fail inside a directory
+  // that is already a repository — every earlier check has returned by then —
+  // and I could not build that state. By this project's rule an element that
+  // reddens nothing is a line and not a remedy, so it is recorded as a line:
+  // it is kept because a check that fails open is worse than one that is
+  // merely unpinned, and the two readings are not symmetric.
+  if (worktrees.length === 0) {
+    problems.push('`git worktree list` named no worktree at all — the sibling check could not be measured, and an unmeasured check is not a passed one');
+  }
   // EVERY required hook, not `REQUIRED_HOOKS[0]`: a second hook added to the
   // contract would otherwise never be checked across the siblings at all.
   const disarmed = worktrees.filter((w) => REQUIRED_HOOKS.some((hook) => !existsSync(join(w, HOOKS_DIR, hook))));
@@ -208,13 +236,26 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     // not remove one itself.
     const common = gitSoft('rev-parse', '--git-common-dir');
     const fallbacks = REQUIRED_HOOKS.map((hook) => (common === null ? null : resolve(repo, common, 'hooks', hook)));
+    // AND `existsSync` ALONE WAS THE WRONG FLOOR, which the third review of
+    // this cart named: an EMPTY or truncated `.git/hooks/pre-push` satisfies it,
+    // so the fallback could be a hollow file — the configuration would be unset,
+    // the checkout left with a hook that refuses nothing, and the report would
+    // read PASS with `in force now: …`. That is the same «presence is not
+    // substance» hole this script refuses in `wire` sixty lines above, left open
+    // in the one path whose job is restoration. The SAME floor applies here, for
+    // the same reason and with the same number.
+    const hollow: string[] = [];
     const missing = REQUIRED_HOOKS.filter((_hook, i) => {
       const path = fallbacks[i];
-      return path === null || path === undefined || !existsSync(path);
+      if (path === null || path === undefined || !existsSync(path)) return true;
+      const size = statSync(path).size;
+      if (size < 512) hollow.push(`  - ${path} is only ${String(size)} bytes — present, but too small to be a hook that refuses anything`);
+      return false;
     });
-    if (missing.length > 0) {
+    if (missing.length > 0 || hollow.length > 0) {
       lines.push('GIT HOOKS: FAIL — nothing written, because undoing would leave this checkout with no refusal');
       for (const hook of missing) lines.push(`  - there is no ${hook} in the git hooks directory to fall back to`);
+      for (const line of hollow) lines.push(line);
       lines.push('  put the untracked copy back under `.git/hooks/` first, then undo');
       return { ok: false, lines };
     }

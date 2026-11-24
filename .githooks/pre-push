@@ -36,6 +36,12 @@
 #     enforce_admins       = true
 #     required checks      = 6,  strict = true
 #
+# AND THAT COUNT IS AS OF THAT DATE, not a current reading: the cart carrying
+# this file runs TEN jobs, so «6» describes 2026-11-03 and nothing else. It is
+# kept here because a dated measurement is evidence; it was REMOVED from the
+# refusal message below, where it read as present tense and was measured by
+# nothing (third review of this cart, finding 7).
+#
 # So `main` cannot be deleted or force-pushed on the server either. The two
 # controls are independent and both are wanted: the server refuses what reaches
 # it, and this hook refuses before anything reaches the network at all — which
@@ -155,8 +161,9 @@ if [ "$blocked" -ne 0 ]; then
       pushing to it.
 
   GitHub also refuses both for `main` (allow_deletions=false,
-  allow_force_pushes=false, enforce_admins=true, 6 required checks). This hook
-  refuses BEFORE the network, so nothing reaches origin to be refused.
+  allow_force_pushes=false, enforce_admins=true, and a set of required checks
+  this message does not count). This hook refuses BEFORE the network, so
+  nothing reaches origin to be refused.
 
   If you genuinely mean to do either, that is an owner decision:
   `git push --no-verify` bypasses this hook. Say so, rather than letting it

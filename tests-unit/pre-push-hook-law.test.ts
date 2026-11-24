@@ -279,6 +279,87 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       expect(git(other, 'config', '--get', 'core.hooksPath').out.trim(), 'the configuration was changed despite the refusal').toBe(HOOKS_DIR);
     });
 
+    it('`undo` WRITES NOTHING when the fallback is PRESENT BUT HOLLOW — `existsSync` was the wrong floor', () => {
+      // THE HOLE THE THIRD REVIEW FOUND, and it is the same class as the one
+      // the arm above closed: the fallback was accepted by `existsSync` alone,
+      // so an EMPTY `.git/hooks/pre-push` passed, the configuration was unset,
+      // and the report read PASS with `in force now: …` — while the checkout
+      // was left with a hook that refuses nothing. `wire` refuses exactly this
+      // file sixty lines earlier («presence is not substance»); the restoration
+      // path did not, which made the one path built to prevent a guard being
+      // removed the one path that removed one.
+      const other = join(work, 'hollow-fallback');
+      expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
+      installHook(other);
+      expect(wireHooks(other, 'wire').ok).toBe(true);
+      // present, and hollow
+      writeFileSync(join(other, '.git', 'hooks', 'pre-push'), '#!/bin/sh\nexit 0\n');
+      expect(existsSync(join(other, '.git', 'hooks', 'pre-push')), 'the fallback is not present, so this arm measures the missing case instead').toBe(true);
+
+      const undone = wireHooks(other, 'undo');
+      expect(undone.ok, 'undo reported success while the fallback refuses nothing').toBe(false);
+      expect(undone.lines.join('\n')).toMatch(/nothing written/);
+      expect(undone.lines.join('\n')).toMatch(/present, but too small/);
+      expect(git(other, 'config', '--get', 'core.hooksPath').out.trim(), 'the configuration was changed despite the refusal').toBe(HOOKS_DIR);
+    });
+
+    it('`--check` WRITES NOTHING — the mode whose whole promise is that it only reports', () => {
+      // UNPINNED UNTIL THE THIRD REVIEW: `check` is documented as «report
+      // without writing», and the only arm that drove it asserted the MESSAGE,
+      // so it would have stayed green had `check` fallen through to writing
+      // `core.hooksPath`. In a repository where one write to the shared
+      // configuration took the guard off 151 worktrees, a read-only promise
+      // needs an arm that reads the configuration back.
+      //
+      // BOTH STATES, because the write could appear in either: unset before
+      // (where a write would create the value) and already wired (where a
+      // write would be invisible in the value and visible only as a change).
+      const other = join(work, 'check-writes-nothing');
+      expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
+      installHook(other);
+
+      expect(git(other, 'config', '--get', 'core.hooksPath').code, 'the fixture already has the value, so the unset case is untested').not.toBe(0);
+      const unwired = wireHooks(other, 'check');
+      expect(unwired.ok, 'check passed on an unwired checkout, so this arm is reading the wrong state').toBe(false);
+      expect(git(other, 'config', '--get', 'core.hooksPath').code, '`--check` WROTE core.hooksPath on an unwired checkout').not.toBe(0);
+
+      expect(wireHooks(other, 'wire').ok).toBe(true);
+      const before = git(other, 'config', '--get', 'core.hooksPath').out.trim();
+      expect(wireHooks(other, 'check').ok, 'check failed on a correctly wired checkout').toBe(true);
+      expect(git(other, 'config', '--get', 'core.hooksPath').out.trim(), '`--check` changed the configuration it only reports on').toBe(before);
+    });
+
+    it('REFUSES to wire a hook present on disk but UNTRACKED — git has no mode for it, so it would not travel', () => {
+      // THE `indexMode === null` BRANCH, which the third review found pinned by
+      // nothing: the missing-file arm returns before reaching it, so removing
+      // the branch reddened nothing. An untracked hook is the shape this whole
+      // cart is about — a file that works here and does not exist for anybody
+      // who clones.
+      const other = join(work, 'untracked-hook');
+      expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
+      for (const [k, v] of [
+        ['user.email', 'law@example.invalid'],
+        ['user.name', 'prepush law'],
+        ['commit.gpgsign', 'false'],
+      ] as const) {
+        expect(git(other, 'config', k, v).code).toBe(0);
+      }
+      writeFileSync(join(other, 'a.txt'), 'a\n');
+      expect(git(other, 'add', '-A').code).toBe(0);
+      expect(git(other, 'commit', '-q', '-m', 'first').code).toBe(0);
+      // the hook, on disk, with substance, and NOT added to the index
+      mkdirSync(join(other, HOOKS_DIR), { recursive: true });
+      copyFileSync(HOOK, join(other, HOOKS_DIR, 'pre-push'));
+      expect(git(other, 'ls-files', '-s', '--', `${HOOKS_DIR}/pre-push`).out.trim(), 'the fixture tracked the hook, so the untracked branch is untested').toBe(
+        '',
+      );
+
+      const refused = wireHooks(other, 'wire');
+      expect(refused.ok, 'wiring was allowed with an untracked hook').toBe(false);
+      expect(refused.lines.join('\n')).toMatch(/is not tracked, so git has no mode for it/);
+      expect(git(other, 'config', '--get', 'core.hooksPath').code, 'the configuration was written despite the refusal').not.toBe(0);
+    });
+
     it('REFUSES to wire while any SIBLING WORKTREE lacks the directory — the check the original mistake needed', () => {
       // THE HEART OF THIS CART, and it would otherwise be pinned by nothing:
       // every arm above uses a repository with ONE worktree, which passes the
@@ -423,6 +504,38 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       expect(undone.lines.join('\n')).toMatch(/which this script did not set — it is left alone/);
       expect(git(foreign, 'config', '--get', 'core.hooksPath').out.trim()).toBe('somebody-elses-hooks');
     });
+  });
+
+  it('THE SHIPPED HOOK of THIS repository is tracked `100755` and has substance — the one check that was only ever run on fixtures', () => {
+    // THE BLOCKING FINDING OF THE THIRD REVIEW, and it is the very class this
+    // cart announced it had closed. `wireHooks` does read the index mode — but
+    // every arm that exercised it ran on a FIXTURE whose mode `installHook`
+    // sets itself, and `npm run check:hooks` is wired into no CI job (measured:
+    // it appears nowhere outside `package.json`). So after this lands, a commit
+    // turning `.githooks/pre-push` from `100755` into `100644` would turn both
+    // refusals off on every Linux and macOS checkout — invisibly, since a mode
+    // change is not a line in a diff — and REDDEN NOTHING.
+    //
+    // This arm reads THE REPOSITORY, in the unit lane, which `backend-static`
+    // runs. It is the first assertion in this cart about the artefact that
+    // actually travels rather than about a copy of it.
+    const entry = git(ROOT, 'ls-files', '-s', '--', `${HOOKS_DIR}/pre-push`).out.trim();
+    expect(entry, `${HOOKS_DIR}/pre-push is not tracked in this repository at all`).not.toBe('');
+    expect(
+      entry.startsWith('100755'),
+      `the shipped hook is tracked as '${entry.slice(0, 6)}', not 100755 — git ignores a hook that is not executable, so both refusals would be OFF on every Linux and macOS checkout`,
+    ).toBe(true);
+    // AND THE SUBSTANCE FLOOR on the shipped file too, for the same reason: the
+    // floor in `setup-git-hooks.ts` also only ever ran on fixtures.
+    expect(readFileSync(HOOK, 'utf8').length, 'the shipped hook is too small to be a hook that refuses anything').toBeGreaterThan(512);
+    // AND THE NEGATIVE CONTROL, in this same repository, so the reader is not
+    // a function that says 100755 about everything: an ordinary tracked file
+    // must NOT read as executable.
+    const ordinary = git(ROOT, 'ls-files', '-s', '--', 'package.json').out.trim();
+    expect(ordinary, 'package.json is not tracked, so the control measures nothing').not.toBe('');
+    expect(ordinary.startsWith('100755'), 'an ordinary tracked file reads as 100755, so this reader cannot tell an executable entry from a plain one').toBe(
+      false,
+    );
   });
 
   it('pins the TWO refusals in the file by their mechanism, so a silent edit cannot pass review as a formatting change', () => {
