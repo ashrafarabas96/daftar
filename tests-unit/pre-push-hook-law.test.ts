@@ -97,6 +97,55 @@ function installHook(repo: string, dir = HOOKS_DIR): void {
   expect(git(repo, 'ls-files', '-s', '--', `${dir}/pre-push`).out.trim().startsWith('100755'), 'the fixture did not record the hook as executable').toBe(true);
 }
 
+const UNIT_CONFIG = 'vitest.unit.config.ts';
+
+/** The root `package.json`'s scripts, as the repository declares them. */
+function rootScripts(): Readonly<Record<string, string>> {
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
+  return pkg.scripts ?? {};
+}
+
+/**
+ * Every link in the path from a REQUIRED CI JOB to the file you are reading,
+ * as problems — empty means whole.
+ *
+ * A PURE FUNCTION over text, so each link gets a negative control from a
+ * doctored input rather than from a seed in `package.json` or `ci.yml`, which
+ * this lane does not own.
+ */
+function reachabilityProblems(ci: string, scripts: Readonly<Record<string, string>>, unitConfig: string): string[] {
+  const problems: string[] = [];
+  const lines = ci.split('\n');
+  const jobAt = (index: number): string => {
+    for (let i = index; i >= 0; i -= 1) {
+      const m = /^ {2}([a-z][a-z0-9-]*):$/.exec(lines[i] ?? '');
+      if (m?.[1] !== undefined) return m[1];
+    }
+    return '';
+  };
+  // THE REQUIRED JOBS, named and not counted — the roster this project judges
+  // a head by. `npm test` must be run by one of them; a step in a job nobody
+  // requires composes nothing.
+  const REQUIRED = [
+    'workspaces',
+    'web-admin',
+    'android',
+    'browser',
+    'hygiene',
+    'backend-work',
+    'backend-static',
+    'backend-gates-p2',
+    'backend-golden',
+    'backend',
+  ];
+  const composing = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.trim() === 'run: npm test');
+  if (!composing.some(({ i }) => REQUIRED.includes(jobAt(i)))) problems.push('no required job runs `npm test`: the lane is composed by nothing in ci.yml');
+  if (!(scripts['test'] ?? '').includes('test:unit')) problems.push('the root `test` script does not compose `test:unit`, so this lane runs nowhere in CI');
+  if (!(scripts['test:unit'] ?? '').includes(UNIT_CONFIG)) problems.push(`\`test:unit\` does not name ${UNIT_CONFIG}`);
+  if (!unitConfig.includes("include: ['tests-unit/**/*.test.ts']")) problems.push(`${UNIT_CONFIG} does not include tests-unit/`);
+  return problems;
+}
+
 function runHook(stdin: string): { code: number; out: string } {
   try {
     const out = execFileSync('bash', [HOOK, 'origin', 'file:///tmp/none'], { input: stdin, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
@@ -552,6 +601,65 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     expect(ordinary.startsWith('100755'), 'an ordinary tracked file reads as 100755, so this reader cannot tell an executable entry from a plain one').toBe(
       false,
     );
+  });
+
+  it('THE PATH FROM THE REQUIRED JOB TO THIS FILE is whole — and names the one link no arm in this lane can hold', () => {
+    // THE INSTRUMENT OF THIS CART TURNED ON THIS CART'S OWN REMEDY. The arm
+    // above guards the shipped hook's mode, and its answer to «which required
+    // job runs it» is `backend-static`. That answer hangs on a CHAIN:
+    //
+    //   ci.yml `backend-static` → `run: npm test` → … && `npm run test:unit`
+    //   → `vitest.unit.config.ts` → include `tests-unit/**` → this file
+    //
+    // Every link is read here. MEASURED, and it is why this arm exists: there
+    // is NO OTHER path from `ci.yml` to this lane — `test:unit` and
+    // `vitest.unit` appear nowhere else in that workflow but in a comment — so
+    // the whole lane, every law in it, hangs on the last link of one `&&`.
+    //
+    // AND THE LINK THIS ARM CANNOT HOLD, said plainly because it is the point:
+    // REMOVING `&& npm run test:unit` from the chain. Then this arm does not
+    // run at all, and `backend-static` stays green — an arm inside a lane
+    // cannot witness its own lane being unplugged. `tests-unit/test-lane-roster
+    // .test.ts:250` already asserts the composition and has the same hole, and
+    // `vitest.unit.config.ts` claims in prose that «the wiring cannot quietly
+    // come undone», which is true for a REWRITE and false for a REMOVAL. The
+    // complete guard needs one foot outside this lane — an arm in a suite the
+    // `backend` job runs, or in a workspace suite EARLIER in the chain — and
+    // those files are not this lane's to write. Raised to the coordinator
+    // rather than reached for.
+    // AND THE READER IS A PURE FUNCTION, deliberately: `package.json` and
+    // `ci.yml` are NOT this lane's files, so seeding them to prove this arm
+    // red-first would be touching what I do not own. Feeding the same reader
+    // doctored TEXT instead gives every link its own negative control without
+    // one keystroke in a foreign file — and the positive reading below is the
+    // real repository, read by that same function.
+    const real = reachabilityProblems(
+      readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'),
+      rootScripts(),
+      readFileSync(join(ROOT, UNIT_CONFIG), 'utf8'),
+    );
+    expect(real, 'the path from the required job to this lane is broken').toEqual([]);
+
+    // ONE DOCTORED INPUT PER LINK, each naming only its own problem.
+    const goodCi = 'jobs:\n  backend-static:\n    steps:\n      - name: the unit lane\n        run: npm test\n';
+    const goodScripts = { test: 'npm run test -w @daftar/web && npm run test:unit', 'test:unit': `vitest run --config ${UNIT_CONFIG}` };
+    const goodConfig = "include: ['tests-unit/**/*.test.ts'],";
+    expect(reachabilityProblems(goodCi, goodScripts, goodConfig), 'the control inputs are themselves broken, so the arms below measure nothing').toEqual([]);
+    // A JOB THAT IS NOT IN THE ROSTER, with a WELL-FORMED step: the first
+    // version of this control named `hygiene` — which IS required — and read
+    // as a pass only because its step line was malformed, so it was green for
+    // a reason other than the one it claims. The only difference from `goodCi`
+    // is the job's name.
+    expect(reachabilityProblems(goodCi.replace('backend-static:', 'some-optional-job:'), goodScripts, goodConfig)).toEqual([
+      'no required job runs `npm test`: the lane is composed by nothing in ci.yml',
+    ]);
+    expect(reachabilityProblems(goodCi, { ...goodScripts, test: 'npm run test -w @daftar/web' }, goodConfig)).toEqual([
+      'the root `test` script does not compose `test:unit`, so this lane runs nowhere in CI',
+    ]);
+    expect(reachabilityProblems(goodCi, { ...goodScripts, 'test:unit': 'vitest run --config vitest.other.config.ts' }, goodConfig)).toEqual([
+      `\`test:unit\` does not name ${UNIT_CONFIG}`,
+    ]);
+    expect(reachabilityProblems(goodCi, goodScripts, "include: ['tests/**/*.test.ts'],")).toEqual([`${UNIT_CONFIG} does not include tests-unit/`]);
   });
 
   it('pins the TWO refusals in the file by their mechanism, so a silent edit cannot pass review as a formatting change', () => {
