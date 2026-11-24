@@ -1846,22 +1846,6 @@ export interface OwnerTransferLeg {
   readonly cache: { readonly onHand: string; readonly valuation: string; readonly avg: string | null };
 }
 
-/**
- * H-1, for a TRANSFER: as the schema owner, write a COMPLETE transfer — header,
- * one line, and both legs with their bindings, bridge rows, cache rows and
- * movements — with the GIVEN stored values.
- *
- * It exists because `0093`'s value law speaks only about a complete document
- * (as many movements as two per line, which is what a `value_complete` arm
- * means), so the only way to see that law refuse anything is to write a
- * complete pair whose values do NOT cancel. No routine can produce that: the
- * primitive computes the value from the cost, which is exactly why this is
- * owner-written here instead.
- *
- * It does NOT touch `seedOwnerMovement`: that one writes a `fixture_line`
- * chain, and a transfer needs its own header, line and bridge. One method per
- * shape, in one place, rather than a second copy of either.
- */
 /** One line of a multi-line owner transfer: its own variant, quantity and two legs. */
 export interface OwnerTransferLineSpec {
   readonly variantId: string;
@@ -1977,6 +1961,26 @@ export async function seedOwnerTransferLines(
   return { transferId, lineIds, movementIds };
 }
 
+/**
+ * H-1, for a TRANSFER: as the schema owner, write a COMPLETE transfer — header,
+ * one line, and both legs with their bindings, bridge rows, cache rows and
+ * movements — with the GIVEN stored values.
+ *
+ * It exists because `0093`'s value law speaks only about a complete document
+ * (as many movements as two per line, which is what a `value_complete` arm
+ * means), so the only way to see that law refuse anything is to write a
+ * complete pair whose values do NOT cancel. No routine can produce that: the
+ * primitive computes the value from the cost, which is exactly why this is
+ * owner-written here instead.
+ *
+ * It does NOT touch `seedOwnerMovement`: that one writes a `fixture_line`
+ * chain, and a transfer needs its own header, line and bridge. One method per
+ * shape, in one place, rather than a second copy of either.
+ *
+ * MOVED HERE, and it was wrong where it stood: it sat above
+ * `OwnerTransferLineSpec`, which carries its own line, so it documented nothing
+ * and this function — the thing it describes — had no comment at all.
+ */
 export async function seedOwnerTransfer(
   c: Queryable,
   s: Scope,

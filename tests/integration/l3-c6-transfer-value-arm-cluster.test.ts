@@ -211,6 +211,17 @@ describe('C6 — the firing order the repair rests on', () => {
     return r.rows;
   }
 
+  // WHY SORTING BY NAME IS NOT A TAUTOLOGY HERE, and what it still does not do.
+  // `ORDER BY g.tgname` trivially returns name order; the CLAIM is that
+  // completeness's name sorts before conservation's, and for row-level triggers
+  // on the SAME relation, event and timing PostgreSQL fires in name order — so
+  // the order asserted below IS the firing order, which is why the arm also
+  // pins `tgtype` and the relation rather than the names alone. What it does
+  // NOT do is observe a firing sequence directly, and it says nothing about a
+  // third trigger added later in a different timing or deferral class: that
+  // would be outside the pair this arm is about. The behaviour itself
+  // ("completeness speaks first") is measured by `inventory-s3-transfer.test.ts`
+  // T-05, which this branch does not reproduce.
   it('§4 completeness sorts BEFORE conservation, on one relation, one event and one deferral class', async () => {
     const rows = await pairOrderedByName([COMPLETE, CONSERVE]);
     expect(rows.length, 'both triggers must exist on inventory_transfer_lines before their order can mean anything').toBe(2);
