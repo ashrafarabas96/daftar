@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { loadConfig } from '../apps/api/src/config';
+import { DB_PRINCIPAL_URL_KEYS, loadConfig } from '../apps/api/src/config';
 
 /**
  * §31 of `apps/api/src/config.ts`: ACTUAL PRINCIPALS MUST DIFFER — two database
@@ -173,13 +173,16 @@ function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void
     message = e instanceof Error ? e.message : String(e);
   }
   expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
-  const clause = message
-    .split('; ')
-    .filter((l) => l.includes('every DB principal must use distinct credentials'))
-    .join(' | ');
-  expect(clause, 'no §31 duplicate clause in the refusal at all').not.toBe('');
-  expect(clause).toContain(a);
-  expect(clause).toContain(b);
+  // THE ONE CLAUSE THAT NAMES BOTH, not the join of every §31 clause. Joining
+  // them let a CROSS-pair pass when two real pairs were planted (measured),
+  // and my first attempt at the fix — a «no third principal» check over the
+  // join — was worse than weak: it made a CORRECT pair fail as soon as another
+  // correct pair existed, also measured. Exactly one clause must name both
+  // keys, which is what «the refusal names this pair» actually means.
+  const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+  expect(clauses.length, 'no §31 duplicate clause in the refusal at all').toBeGreaterThan(0);
+  const naming = clauses.filter((l) => l.includes(a) && l.includes(b));
+  expect(naming, `no single §31 clause names both ${a} and ${b}; the clauses are:\n${clauses.join('\n')}`).toHaveLength(1);
 }
 
 describe('§31: two database roles may not be one credential', () => {
@@ -189,6 +192,26 @@ describe('§31: two database roles may not be one credential', () => {
   it('POSITIVE CONTROL: both fixtures start, with distinct principals', () => {
     expect(() => loadConfig({ ...MERCHANT_PROD })).not.toThrow();
     expect(() => loadConfig({ ...PLATFORM_PROD })).not.toThrow();
+  });
+
+  it('the pair reader REFUSES a cross-pair, so «names both» cannot be satisfied by a refusal that names everything', () => {
+    // THE HELPER'S OWN STRICTNESS, pinned. With TWO pairs planted the refusal
+    // carries TWO §31 clauses — «IDENTITY duplicates APP» and «PROVISIONER
+    // duplicates RESOLVER» — and joining them would let a CROSS-pair
+    // (IDENTITY with PROVISIONER) pass although it was never refused as a
+    // pair. Review of the previous head measured exactly that, and dropping
+    // the «no third principal» loop reddened NOTHING, because every other
+    // fixture plants a single pair. This arm is what makes that loop live.
+    const env = {
+      ...MERCHANT_PROD,
+      IDENTITY_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL,
+      PROVISIONER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
+    };
+    // both real pairs read correctly
+    expectDuplicatePair(env, 'IDENTITY_DATABASE_URL', 'APP_DATABASE_URL');
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'RESOLVER_DATABASE_URL');
+    // and the cross-pair is REFUSED by the reader itself
+    expect(() => expectDuplicatePair(env, 'IDENTITY_DATABASE_URL', 'PROVISIONER_DATABASE_URL')).toThrow();
   });
 
   // DUP-A. The two pairs §31 holds ALONE. `config.ts` names three role pairs

@@ -101,23 +101,6 @@ function productionCorsOriginProblem(origin: string): string | null {
 }
 
 /**
- * Does `hostname` — as the URL parser normalised it — name only this machine?
- *
- * REL-10 review, finding 3. The first form of this check listed four spellings
- * (`localhost`, `*.localhost`, `127.0.0.1`, `::1`) and so READ as "no loopback
- * in production" while MEANING "not those four". Measured as passing before
- * this: `https://127.0.0.2` (the rest of 127.0.0.0/8), `https://0.0.0.0` and
- * `https://[::]` (every interface, which includes the loopback one), and
- * `https://[::ffff:7f00:1]`. A rule that reads wider than it acts is the kind
- * that gets trusted for what it says.
- *
- * It matches the PARSED host, not the operator's text, because the parser folds
- * the short and numeric spellings first (measured: `https://127.1` and
- * `https://2130706433` both normalise to `127.0.0.1`, and
- * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
- * the IPv6 forms, whose `hostname` keeps the brackets.
- */
-/**
  * §31's SEPARATION SET: every environment key that carries a database
  * principal's credential, in the ORDER the refusal walks them.
  *
@@ -149,6 +132,24 @@ export const DB_PRINCIPAL_URL_KEYS = Object.freeze([
   'RECONCILER_DATABASE_URL',
   'PROVISIONER_DATABASE_URL',
 ] as const);
+
+/**
+ * Does `hostname` — as the URL parser normalised it — name only this machine?
+ *
+ * REL-10 review, finding 3. The first form of this check listed four spellings
+ * (`localhost`, `*.localhost`, `127.0.0.1`, `::1`) and so READ as "no loopback
+ * in production" while MEANING "not those four". Measured as passing before
+ * this: `https://127.0.0.2` (the rest of 127.0.0.0/8), `https://0.0.0.0` and
+ * `https://[::]` (every interface, which includes the loopback one), and
+ * `https://[::ffff:7f00:1]`. A rule that reads wider than it acts is the kind
+ * that gets trusted for what it says.
+ *
+ * It matches the PARSED host, not the operator's text, because the parser folds
+ * the short and numeric spellings first (measured: `https://127.1` and
+ * `https://2130706433` both normalise to `127.0.0.1`, and
+ * `https://[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`). The bracket strip is for
+ * the IPv6 forms, whose `hostname` keeps the brackets.
+ */
 
 function isLocalHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/^\[/, '').replace(/\]$/, '');

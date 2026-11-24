@@ -91,6 +91,8 @@
  * while this file still names it reddens here, which is the point: a principal
  * does not leave the separation set silently.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { DB_PRINCIPAL_URL_KEYS, loadConfig } from '../apps/api/src/config';
 
@@ -145,27 +147,16 @@ function expectDuplicatePair(env: NodeJS.ProcessEnv, a: string, b: string): void
     message = e instanceof Error ? e.message : String(e);
   }
   expect(message, 'the configuration started, so there is no refusal to read').not.toBe('');
-  // SPLIT ON `'; '`, NOT ON A NEWLINE: `config.ts` joins every problem with
-  // `.join('; ')`, so the refusal is ONE line — measured, nine clauses in one
-  // line on an incomplete fixture. Splitting on `'\n'` returned the WHOLE
-  // message, so «the clause names no third principal» was being asserted of
-  // every clause at once: true today only because a complete fixture leaves
-  // one clause, and it would redden the moment any unrelated production
-  // refusal mentioned another `*_DATABASE_URL`. The arm passed for a reason
-  // other than the one it names. (Third review of this cart, finding 1.)
-  const clause = message
-    .split('; ')
-    .filter((l) => l.includes('every DB principal must use distinct credentials'))
-    .join(' | ');
-  expect(clause, 'no §31 duplicate clause in the refusal at all').not.toBe('');
-  expect(clause).toContain(a);
-  expect(clause).toContain(b);
-  // AND the clause names THESE TWO and no third principal, so «names both» is
-  // not satisfied by a message that names everything.
-  for (const other of DB_PRINCIPAL_URL_KEYS) {
-    if (other === a || other === b) continue;
-    expect(clause, `the duplicate clause also names ${other}`).not.toContain(other);
-  }
+  // THE ONE CLAUSE THAT NAMES BOTH, not the join of every §31 clause. Joining
+  // them let a CROSS-pair pass when two real pairs were planted (measured),
+  // and my first attempt at the fix — a «no third principal» check over the
+  // join — was worse than weak: it made a CORRECT pair fail as soon as another
+  // correct pair existed, also measured. Exactly one clause must name both
+  // keys, which is what «the refusal names this pair» actually means.
+  const clauses = message.split('; ').filter((l) => l.includes('every DB principal must use distinct credentials'));
+  expect(clauses.length, 'no §31 duplicate clause in the refusal at all').toBeGreaterThan(0);
+  const naming = clauses.filter((l) => l.includes(a) && l.includes(b));
+  expect(naming, `no single §31 clause names both ${a} and ${b}; the clauses are:\n${clauses.join('\n')}`).toHaveLength(1);
 }
 
 describe('THE LAW: the provisioning credential is a principal in the separation set', () => {
@@ -239,6 +230,52 @@ describe('THE LAW: the provisioning credential is a principal in the separation 
     expect(message.split('\n')).toHaveLength(1); // one line, joined with '; '
     // and the pair reading still holds, because it selects the clause
     expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
+  });
+
+  it('every doc block in `config.ts` touches its subject — an argument detached from its declaration is a claim that names nothing', () => {
+    // THE DEFECT THIS PINS, found by review on the previous head of this cart:
+    // exporting `DB_PRINCIPAL_URL_KEYS` put its declaration BETWEEN
+    // `isLocalHost`'s doc block and `isLocalHost`. The loopback block — which
+    // carries measured evidence about `127.0.0.0/8`, `0.0.0.0` and `[::]` —
+    // then sat above an unrelated constant, and the function it was written
+    // for had no adjacent documentation at all. A reader, and any tool that
+    // reads TSDoc, attributes a security argument to the wrong subject. That
+    // is the same class as a count that names no tree, in prose.
+    //
+    // THE FIRST BLOCK IS EXEMPT BY POSITION, not by content: it documents the
+    // FILE (`Central validated config (§34)`) and is legitimately followed by
+    // the first declaration's own block. Exempting it by position keeps the
+    // law from being a law about one sentence.
+    const text = readFileSync(join(__dirname, '..', 'apps', 'api', 'src', 'config.ts'), 'utf8');
+    const blocks = [...text.matchAll(/\/\*\*[\s\S]*?\*\/\s*/g)];
+    expect(blocks.length, 'no doc blocks found at all, so this arm measures nothing').toBeGreaterThan(5);
+    const detached = blocks
+      .slice(1)
+      .filter((m) => text.slice(m.index + m[0].length).startsWith('/**'))
+      .map((m) => `line ${text.slice(0, m.index).split('\n').length}: ${(m[0].split('\n')[1] ?? '').trim().slice(0, 60)}`);
+    expect(detached).toEqual([]);
+    // AND THE CONTROL that this is not vacuous: the FILE header really is
+    // followed by another block, so the slice(1) is doing work.
+    expect(
+      text.slice(blocks[0]!.index + blocks[0]![0].length).startsWith('/**'),
+      'the module header is not followed by another block, so the exemption is untested',
+    ).toBe(true);
+  });
+
+  it("the pair reader REFUSES a cross-pair here too — this file's copy of the helper was pinned by nothing", () => {
+    // MEASURED: restoring the «join every §31 clause» form in THIS file
+    // reddened nothing, because every fixture here plants a single pair. The
+    // duplicate law had an arm for it and this one did not, so the same helper
+    // was guarded in one place and unguarded in the other. Two pairs are
+    // planted and the CROSS-pair must be refused by the reader itself.
+    const env = {
+      ...MERCHANT_PROD,
+      PROVISIONER_DATABASE_URL: MERCHANT_PROD.IDENTITY_DATABASE_URL,
+      WORKER_DATABASE_URL: MERCHANT_PROD.RESOLVER_DATABASE_URL,
+    };
+    expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'IDENTITY_DATABASE_URL');
+    expectDuplicatePair(env, 'WORKER_DATABASE_URL', 'RESOLVER_DATABASE_URL');
+    expect(() => expectDuplicatePair(env, 'PROVISIONER_DATABASE_URL', 'RESOLVER_DATABASE_URL')).toThrow();
   });
 
   it('pins the separation set the gate CONSUMES, by name and in order', () => {
