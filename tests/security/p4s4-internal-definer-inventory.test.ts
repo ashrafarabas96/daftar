@@ -1125,6 +1125,7 @@ const SEALED: readonly (readonly [string, Owner, 'trigger' | 'helper', 'r' | 'w'
   ['accounting_validate_entry()', 'accounting', 'trigger', '-'],
   ['accounts_posting_stability()', 'accounting', 'trigger', '-'],
   ['businesses_base_currency_lock()', 'accounting', 'trigger', 'r'],
+  ['inventory_transfer_value_conserved()', 'inventory', 'trigger', 'r'],
   ['invoices_walkin_no_ar()', 'accounting', 'trigger', 'r'],
   ['sales_cogs_owed()', 'accounting', 'trigger', 'r'],
   ['sales_walkin_no_ar()', 'accounting', 'trigger', 'r'],

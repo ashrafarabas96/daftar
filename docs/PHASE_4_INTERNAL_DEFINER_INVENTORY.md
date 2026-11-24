@@ -33,11 +33,11 @@ and the failure message names the §17 condition and the ruling id.
 
 | fact | value |
 | ---- | ----- |
-| routines owned by the two internal principals | 240 |
-| of those, `SECURITY DEFINER` | **222** (163 inventory, 59 accounting) |
+| routines owned by the two internal principals | 242 |
+| of those, `SECURITY DEFINER` | **223** (164 inventory, 59 accounting) |
 | of those, `INVOKER` | 19 — **out of scope**, see "T-05's scope" below |
 | definers with an `EXECUTE` grantee other than their owner (**the doors**) | **57** |
-| definers with an explicit, empty ACL and therefore no caller at all | **165** (123 trigger functions, 42 helpers) |
+| definers with an explicit, empty ACL and therefore no caller at all | **166** (124 trigger functions, 42 helpers) |
 | definers executable by `PUBLIC` | **0** |
 | definers whose `proacl` is null (default PUBLIC `EXECUTE` never revoked) | **0** |
 | definers not pinning `search_path = pg_catalog, public, pg_temp` | **0** |
@@ -141,7 +141,7 @@ The three gaps this page and its law close:
    that a later phase's design grant would not redden an accepted contract.
    That leaves §17 condition 1 to a shape test: a Phase 4 migration could grant
    `daftar_app` `EXECUTE` on a cross-tenant reader and nothing would say so.
-   This page restores the equality, per signature, over all 222.
+   This page restores the equality, per signature, over all 223.
 3. **The authority proof as a property of the set** — §17 condition 2.
    `accounting-posting-authority` proves `accounting_post_entry` needs its
    assertion. Nothing said that *every* door a login credential can open needs
@@ -230,7 +230,7 @@ boundary, and that is §17 condition 1. The red proof grants one of them to
 
 Every `SECURITY DEFINER` routine of either internal principal that any
 principal other than its owner may `EXECUTE`. `DEFINER`, `search_path` and
-PUBLIC `EXECUTE` are uniform across all 222 and are asserted as set-wide
+PUBLIC `EXECUTE` are uniform across all 223 and are asserted as set-wide
 clauses by the law, so a row that drifts is red even though the column reads
 the same everywhere.
 
@@ -294,7 +294,7 @@ the same everywhere.
 | 56 | `supplier_receive_refund(uuid,uuid,uuid,uuid,date,character,bigint,bigint,bigint,bigint,character,bigint,uuid,numeric,text,timestamp with time zone,bigint,bigint,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.receive_refund')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 | 57 | `supplier_update(uuid,integer,text,text,text,text,text)` | `daftar_inventory_internal` | yes | `pg_catalog, public, pg_temp` | `daftar_app` | none | command / payables | signed claim | signed claim | `inventory_assertion_consume('supplier.update')` | signed server decision (the assertion’s operation claim) | bound by the signed payload digest (component 7) | none | yes | yes |
 
-## Part B — the 165 sealed definers
+## Part B — the 166 sealed definers
 
 Every other `SECURITY DEFINER` routine of either principal. Each has an
 **explicit, empty ACL** — `proacl` is not null, so the default PUBLIC `EXECUTE`
@@ -376,103 +376,104 @@ anybody is reported as §17 condition 1.
 | 66 | `inventory_source_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
 | 67 | `inventory_stock_fold(uuid,uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
 | 68 | `inventory_stock_verify(uuid,uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
-| 69 | `invoice_items_no_mutation()` | `daftar_inventory_internal` | trigger | no | no |
-| 70 | `invoice_sequences_key_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 71 | `invoice_settlement_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
-| 72 | `invoices_lifecycle_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 73 | `invoices_no_delete()` | `daftar_inventory_internal` | trigger | no | no |
-| 74 | `negative_deficit_coverage_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
-| 75 | `negative_inventory_deficits_coverage_consistent()` | `daftar_inventory_internal` | trigger | yes | no |
-| 76 | `negative_inventory_deficits_coverage_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 77 | `payment_allocation_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 78 | `payment_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 79 | `payment_closure_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
-| 80 | `payment_complete()` | `daftar_inventory_internal` | trigger | no | no |
-| 81 | `payment_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 82 | `payment_method_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 83 | `payment_method_name_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 84 | `payment_method_named()` | `daftar_inventory_internal` | trigger | yes | no |
-| 85 | `pos_cart_line_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 86 | `pos_till_session_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 87 | `product_variants_20_stock_identity_lock()` | `daftar_inventory_internal` | trigger | yes | no |
-| 88 | `product_variants_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
-| 89 | `products_20_unit_history_lock()` | `daftar_inventory_internal` | trigger | yes | no |
-| 90 | `products_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
-| 91 | `purchase_allocations_consistent()` | `daftar_inventory_internal` | trigger | yes | no |
-| 92 | `purchase_bridge_credit_note(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 93 | `purchase_bridge_receipt(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 94 | `purchase_bridge_return(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 95 | `purchase_bridge_reversal(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 96 | `purchase_cover_deficits(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 97 | `purchase_header_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 98 | `purchase_landed_cost_freeze()` | `daftar_inventory_internal` | trigger | yes | no |
-| 99 | `purchase_lock_receipt_targets(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
-| 100 | `purchase_lock_stock_keys(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
-| 101 | `purchase_residue_write_off_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 102 | `purchase_residue_write_off_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 103 | `purchase_reversal_detail_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
-| 104 | `purchase_reversal_unsettled()` | `daftar_inventory_internal` | trigger | yes | no |
-| 105 | `purchase_reversal_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 106 | `purchase_settlement_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
-| 107 | `purchase_source_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 108 | `sale_bridge_commit(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
-| 109 | `sale_document_number(text,text,bigint)` | `daftar_inventory_internal` | helper | no | no |
-| 110 | `sale_header_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 111 | `sale_lock_commit_targets(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
-| 112 | `stock_binding_requires_inventory_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
-| 113 | `stock_binding_requires_inventory_opening()` | `daftar_inventory_internal` | trigger | yes | no |
-| 114 | `stock_binding_requires_inventory_transfer()` | `daftar_inventory_internal` | trigger | yes | no |
-| 115 | `stock_binding_requires_negative_inventory_cost_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
-| 116 | `stock_binding_requires_purchase_reversal()` | `daftar_inventory_internal` | trigger | yes | no |
-| 117 | `stock_binding_requires_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
-| 118 | `stock_binding_requires_sale()` | `daftar_inventory_internal` | trigger | yes | no |
-| 119 | `stock_binding_requires_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
-| 120 | `stock_binding_requires_supplier_return()` | `daftar_inventory_internal` | trigger | yes | no |
-| 121 | `stock_levels_zero_on_hand_zero_value()` | `daftar_inventory_internal` | trigger | yes | no |
-| 122 | `stock_movements_account_domain_lock()` | `daftar_inventory_internal` | trigger | no | no |
-| 123 | `stock_source_complete_inventory_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
-| 124 | `stock_source_complete_inventory_opening()` | `daftar_inventory_internal` | trigger | yes | no |
-| 125 | `stock_source_complete_inventory_transfer()` | `daftar_inventory_internal` | trigger | yes | no |
-| 126 | `stock_source_complete_negative_inventory_cost_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
-| 127 | `stock_source_complete_purchase_header()` | `daftar_inventory_internal` | trigger | yes | no |
-| 128 | `stock_source_complete_purchase_reversal_header()` | `daftar_inventory_internal` | trigger | yes | no |
-| 129 | `stock_source_complete_purchase_reversal()` | `daftar_inventory_internal` | trigger | yes | no |
-| 130 | `stock_source_complete_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
-| 131 | `stock_source_complete_sale_header()` | `daftar_inventory_internal` | trigger | yes | no |
-| 132 | `stock_source_complete_sale()` | `daftar_inventory_internal` | trigger | yes | no |
-| 133 | `stock_source_complete_stocktake_header()` | `daftar_inventory_internal` | trigger | yes | no |
-| 134 | `stock_source_complete_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
-| 135 | `stock_source_complete_supplier_return_header()` | `daftar_inventory_internal` | trigger | yes | no |
-| 136 | `stock_source_complete_supplier_return()` | `daftar_inventory_internal` | trigger | yes | no |
-| 137 | `stock_source_freeze_inventory_adjustment()` | `daftar_inventory_internal` | trigger | no | no |
-| 138 | `stock_source_freeze_inventory_opening()` | `daftar_inventory_internal` | trigger | no | no |
-| 139 | `stock_source_freeze_inventory_transfer()` | `daftar_inventory_internal` | trigger | no | no |
-| 140 | `stock_source_freeze_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
-| 141 | `stock_source_freeze_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
-| 142 | `supplier_ap_release(bigint,bigint,bigint,bigint)` | `daftar_inventory_internal` | helper | no | no |
-| 143 | `supplier_convert_base(bigint,numeric,integer,integer)` | `daftar_inventory_internal` | helper | no | no |
-| 144 | `supplier_credit_allocation_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 145 | `supplier_credit_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 146 | `supplier_credit_note_consume(uuid,bigint,bigint)` | `daftar_inventory_internal` | helper | yes | yes |
-| 147 | `supplier_credit_note_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 148 | `supplier_credit_note_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
-| 149 | `supplier_credit_remaining_carrying(bigint,bigint,bigint)` | `daftar_inventory_internal` | helper | no | no |
-| 150 | `supplier_payment_allocation_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 151 | `supplier_payment_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 152 | `supplier_payment_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 153 | `supplier_payment_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 154 | `supplier_refund_guard()` | `daftar_inventory_internal` | trigger | yes | no |
-| 155 | `supplier_refund_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 156 | `supplier_return_detail_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
-| 157 | `supplier_return_quantity_bound()` | `daftar_inventory_internal` | trigger | yes | no |
-| 158 | `supplier_return_residue_bound()` | `daftar_inventory_internal` | trigger | yes | no |
-| 159 | `supplier_return_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
-| 160 | `supplier_return_value_settled()` | `daftar_inventory_internal` | trigger | yes | no |
-| 161 | `suppliers_no_delete()` | `daftar_inventory_internal` | trigger | no | no |
-| 162 | `suppliers_revision_guard()` | `daftar_inventory_internal` | trigger | no | no |
-| 163 | `warehouses_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
-| 164 | `warehouses_home_branch_maintain()` | `daftar_inventory_internal` | trigger | no | yes |
-| 165 | `warehouses_require_home_branch()` | `daftar_inventory_internal` | trigger | yes | no |
+| 69 | `inventory_transfer_value_conserved()` | `daftar_inventory_internal` | trigger | yes | no |
+| 70 | `invoice_items_no_mutation()` | `daftar_inventory_internal` | trigger | no | no |
+| 71 | `invoice_sequences_key_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 72 | `invoice_settlement_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
+| 73 | `invoices_lifecycle_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 74 | `invoices_no_delete()` | `daftar_inventory_internal` | trigger | no | no |
+| 75 | `negative_deficit_coverage_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
+| 76 | `negative_inventory_deficits_coverage_consistent()` | `daftar_inventory_internal` | trigger | yes | no |
+| 77 | `negative_inventory_deficits_coverage_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 78 | `payment_allocation_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 79 | `payment_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 80 | `payment_closure_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
+| 81 | `payment_complete()` | `daftar_inventory_internal` | trigger | no | no |
+| 82 | `payment_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 83 | `payment_method_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 84 | `payment_method_name_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 85 | `payment_method_named()` | `daftar_inventory_internal` | trigger | yes | no |
+| 86 | `pos_cart_line_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 87 | `pos_till_session_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 88 | `product_variants_20_stock_identity_lock()` | `daftar_inventory_internal` | trigger | yes | no |
+| 89 | `product_variants_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
+| 90 | `products_20_unit_history_lock()` | `daftar_inventory_internal` | trigger | yes | no |
+| 91 | `products_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
+| 92 | `purchase_allocations_consistent()` | `daftar_inventory_internal` | trigger | yes | no |
+| 93 | `purchase_bridge_credit_note(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 94 | `purchase_bridge_receipt(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 95 | `purchase_bridge_return(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 96 | `purchase_bridge_reversal(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 97 | `purchase_cover_deficits(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 98 | `purchase_header_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 99 | `purchase_landed_cost_freeze()` | `daftar_inventory_internal` | trigger | yes | no |
+| 100 | `purchase_lock_receipt_targets(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
+| 101 | `purchase_lock_stock_keys(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
+| 102 | `purchase_residue_write_off_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 103 | `purchase_residue_write_off_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 104 | `purchase_reversal_detail_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
+| 105 | `purchase_reversal_unsettled()` | `daftar_inventory_internal` | trigger | yes | no |
+| 106 | `purchase_reversal_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 107 | `purchase_settlement_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
+| 108 | `purchase_source_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 109 | `sale_bridge_commit(uuid)` | `daftar_inventory_internal` | helper | yes | yes |
+| 110 | `sale_document_number(text,text,bigint)` | `daftar_inventory_internal` | helper | no | no |
+| 111 | `sale_header_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 112 | `sale_lock_commit_targets(uuid,uuid[])` | `daftar_inventory_internal` | helper | yes | no |
+| 113 | `stock_binding_requires_inventory_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
+| 114 | `stock_binding_requires_inventory_opening()` | `daftar_inventory_internal` | trigger | yes | no |
+| 115 | `stock_binding_requires_inventory_transfer()` | `daftar_inventory_internal` | trigger | yes | no |
+| 116 | `stock_binding_requires_negative_inventory_cost_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
+| 117 | `stock_binding_requires_purchase_reversal()` | `daftar_inventory_internal` | trigger | yes | no |
+| 118 | `stock_binding_requires_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
+| 119 | `stock_binding_requires_sale()` | `daftar_inventory_internal` | trigger | yes | no |
+| 120 | `stock_binding_requires_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
+| 121 | `stock_binding_requires_supplier_return()` | `daftar_inventory_internal` | trigger | yes | no |
+| 122 | `stock_levels_zero_on_hand_zero_value()` | `daftar_inventory_internal` | trigger | yes | no |
+| 123 | `stock_movements_account_domain_lock()` | `daftar_inventory_internal` | trigger | no | no |
+| 124 | `stock_source_complete_inventory_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
+| 125 | `stock_source_complete_inventory_opening()` | `daftar_inventory_internal` | trigger | yes | no |
+| 126 | `stock_source_complete_inventory_transfer()` | `daftar_inventory_internal` | trigger | yes | no |
+| 127 | `stock_source_complete_negative_inventory_cost_adjustment()` | `daftar_inventory_internal` | trigger | yes | no |
+| 128 | `stock_source_complete_purchase_header()` | `daftar_inventory_internal` | trigger | yes | no |
+| 129 | `stock_source_complete_purchase_reversal_header()` | `daftar_inventory_internal` | trigger | yes | no |
+| 130 | `stock_source_complete_purchase_reversal()` | `daftar_inventory_internal` | trigger | yes | no |
+| 131 | `stock_source_complete_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
+| 132 | `stock_source_complete_sale_header()` | `daftar_inventory_internal` | trigger | yes | no |
+| 133 | `stock_source_complete_sale()` | `daftar_inventory_internal` | trigger | yes | no |
+| 134 | `stock_source_complete_stocktake_header()` | `daftar_inventory_internal` | trigger | yes | no |
+| 135 | `stock_source_complete_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
+| 136 | `stock_source_complete_supplier_return_header()` | `daftar_inventory_internal` | trigger | yes | no |
+| 137 | `stock_source_complete_supplier_return()` | `daftar_inventory_internal` | trigger | yes | no |
+| 138 | `stock_source_freeze_inventory_adjustment()` | `daftar_inventory_internal` | trigger | no | no |
+| 139 | `stock_source_freeze_inventory_opening()` | `daftar_inventory_internal` | trigger | no | no |
+| 140 | `stock_source_freeze_inventory_transfer()` | `daftar_inventory_internal` | trigger | no | no |
+| 141 | `stock_source_freeze_purchase()` | `daftar_inventory_internal` | trigger | yes | no |
+| 142 | `stock_source_freeze_stocktake()` | `daftar_inventory_internal` | trigger | yes | no |
+| 143 | `supplier_ap_release(bigint,bigint,bigint,bigint)` | `daftar_inventory_internal` | helper | no | no |
+| 144 | `supplier_convert_base(bigint,numeric,integer,integer)` | `daftar_inventory_internal` | helper | no | no |
+| 145 | `supplier_credit_allocation_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 146 | `supplier_credit_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 147 | `supplier_credit_note_consume(uuid,bigint,bigint)` | `daftar_inventory_internal` | helper | yes | yes |
+| 148 | `supplier_credit_note_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 149 | `supplier_credit_note_verify(uuid,uuid)` | `daftar_inventory_internal` | helper | yes | no |
+| 150 | `supplier_credit_remaining_carrying(bigint,bigint,bigint)` | `daftar_inventory_internal` | helper | no | no |
+| 151 | `supplier_payment_allocation_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 152 | `supplier_payment_allocation_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 153 | `supplier_payment_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 154 | `supplier_payment_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 155 | `supplier_refund_guard()` | `daftar_inventory_internal` | trigger | yes | no |
+| 156 | `supplier_refund_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 157 | `supplier_return_detail_same_transaction()` | `daftar_inventory_internal` | trigger | yes | no |
+| 158 | `supplier_return_quantity_bound()` | `daftar_inventory_internal` | trigger | yes | no |
+| 159 | `supplier_return_residue_bound()` | `daftar_inventory_internal` | trigger | yes | no |
+| 160 | `supplier_return_value_complete()` | `daftar_inventory_internal` | trigger | yes | no |
+| 161 | `supplier_return_value_settled()` | `daftar_inventory_internal` | trigger | yes | no |
+| 162 | `suppliers_no_delete()` | `daftar_inventory_internal` | trigger | no | no |
+| 163 | `suppliers_revision_guard()` | `daftar_inventory_internal` | trigger | no | no |
+| 164 | `warehouses_30_archive_requires_zero_stock()` | `daftar_inventory_internal` | trigger | yes | no |
+| 165 | `warehouses_home_branch_maintain()` | `daftar_inventory_internal` | trigger | no | yes |
+| 166 | `warehouses_require_home_branch()` | `daftar_inventory_internal` | trigger | yes | no |
 
 ## The red proof
 

@@ -628,7 +628,7 @@ const EnvSchema = z
  * against the shipped migration set by a test, so this cannot quietly fall
  * behind the DDL the code was written against.
  */
-export const REQUIRED_SCHEMA_MIGRATION = '0090_mvp03_ar_source_document_guard.sql';
+export const REQUIRED_SCHEMA_MIGRATION = '0093_c6_transfer_value_conservation.sql';
 
 /**
  * The ordinal of a migration file name — `0084_…sql` → `84`.
