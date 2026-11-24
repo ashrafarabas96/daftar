@@ -622,11 +622,17 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     // cannot witness its own lane being unplugged. `tests-unit/test-lane-roster
     // .test.ts:250` already asserts the composition and has the same hole, and
     // `vitest.unit.config.ts` claims in prose that «the wiring cannot quietly
-    // come undone», which is true for a REWRITE and false for a REMOVAL. The
-    // complete guard needs one foot outside this lane — an arm in a suite the
-    // `backend` job runs, or in a workspace suite EARLIER in the chain — and
-    // those files are not this lane's to write. Raised to the coordinator
-    // rather than reached for.
+    // come undone», which is true for a REWRITE and false for a REMOVAL.
+    //
+    // AND THE FOOT OUTSIDE NOW EXISTS:
+    // `tests/security/unit-lane-reachability.test.ts` asserts the same links
+    // under `npm run test:integration` (`ci.yml:532`) in the `backend` job —
+    // required, and not `backend-static` — so it keeps running exactly when
+    // this chain is cut, and it carries its own copy of the reader rather than
+    // importing this one, because a guard coupled to the lane it guards dies
+    // with it. What remains above that is `ci.yml` itself and the roster of
+    // required jobs: another lane's file and a setting only the owner changes.
+    // One foot outside is where the regress stops.
     // AND THE READER IS A PURE FUNCTION, deliberately: `package.json` and
     // `ci.yml` are NOT this lane's files, so seeding them to prove this arm
     // red-first would be touching what I do not own. Feeding the same reader

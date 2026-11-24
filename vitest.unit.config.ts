@@ -37,10 +37,13 @@ import { defineConfig } from 'vitest/config';
  * different config, a different include) is caught; a REMOVAL is not.
  *
  * `tests-unit/pre-push-hook-law.test.ts` reads every link of that path and
- * names this hole at its site. Closing it needs one arm OUTSIDE this lane —
- * in a suite the `backend` job runs, or in a workspace suite earlier in the
- * chain — and those files belong to other lanes, so it is raised rather than
- * reached for.
+ * names this hole at its site. AND IT IS NOW CLOSED FROM OUTSIDE:
+ * `tests/security/unit-lane-reachability.test.ts` asserts the same links while
+ * running under `npm run test:integration` (`ci.yml:532`) inside the `backend`
+ * job — required, and NOT `backend-static` — so it keeps running exactly when
+ * this chain is cut. ONE foot outside the lane is enough; cutting that arm's
+ * own path means editing `ci.yml` and the roster of required jobs, which are
+ * another lane's file and a repository setting the owner alone changes.
  */
 export default defineConfig({
   test: {
