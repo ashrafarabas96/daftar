@@ -48,10 +48,24 @@ const CI = join(ROOT, '.github', 'workflows', 'ci.yml');
 const UNIT_CONFIG = 'vitest.unit.config.ts';
 
 /**
- * The ten required jobs, NAMED and not counted — the roster this project judges
- * a head by. A step in a job nobody requires composes nothing.
+ * The ten required CHECKS, NAMED and not counted — the roster this project
+ * judges a head by, measured from `branches/main/protection`. A step in a job
+ * nobody requires composes nothing.
+ *
+ * AND A CHECK NAME IS NOT A JOB KEY, which is the blocking finding of this
+ * cart's confirmation round and the reason `checkNameOf` exists below. This
+ * roster was being compared against the YAML KEY of the job holding a step, and
+ * the two spaces are not the same: measured on this file's own head, the key
+ * `backend` carries `name: backend-work`, while the required check named
+ * `backend` is produced by the key `backend-required` — which runs no tests at
+ * all. So `backend` matched as a COINCIDENCE (another job's check name),
+ * `backend-work` could never match any key, and `backend-required` was absent.
+ * The arm's conclusion was true and its mechanism could not reach it.
+ *
+ * Adjusting this list alone would have left that defect with better data, so
+ * the key→name map is resolved explicitly instead.
  */
-const REQUIRED_JOBS = [
+const REQUIRED_CHECKS = [
   'workspaces',
   'web-admin',
   'android',
@@ -63,6 +77,34 @@ const REQUIRED_JOBS = [
   'backend-golden',
   'backend',
 ] as const;
+
+/**
+ * The CHECK NAME of the job containing line `index`: the job's own `name:` when
+ * it declares one, else its YAML key — which is exactly how GitHub names a
+ * check. This is the map the confirmation round demanded be made explicit; a
+ * membership test against one list cannot express it, because the key space and
+ * the check-name space overlap without being equal.
+ */
+function checkNameOf(lines: readonly string[], index: number): string {
+  let keyLine = -1;
+  let key = '';
+  for (let i = index; i >= 0; i -= 1) {
+    const m = /^ {2}([a-z][a-z0-9-]*):$/.exec(lines[i] ?? '');
+    if (m?.[1] !== undefined) {
+      keyLine = i;
+      key = m[1];
+      break;
+    }
+  }
+  if (keyLine === -1) return '';
+  // forward to the next job key, looking for this job's own `name:`
+  for (let i = keyLine + 1; i < lines.length; i += 1) {
+    if (/^ {2}[a-z][a-z0-9-]*:$/.test(lines[i] ?? '')) break;
+    const n = /^ {4}name: (\S.*)$/.exec(lines[i] ?? '');
+    if (n?.[1] !== undefined) return n[1].trim();
+  }
+  return key;
+}
 
 /**
  * Every broken link between a required CI job and the unit lane; empty means
@@ -80,15 +122,8 @@ const REQUIRED_JOBS = [
 function reachabilityProblems(ci: string, scripts: Readonly<Record<string, string>>, unitConfig: string): string[] {
   const problems: string[] = [];
   const lines = ci.split('\n');
-  const jobAt = (index: number): string => {
-    for (let i = index; i >= 0; i -= 1) {
-      const m = /^ {2}([a-z][a-z0-9-]*):$/.exec(lines[i] ?? '');
-      if (m?.[1] !== undefined) return m[1];
-    }
-    return '';
-  };
   const composing = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.trim() === 'run: npm test');
-  if (!composing.some(({ i }) => REQUIRED_JOBS.includes(jobAt(i) as (typeof REQUIRED_JOBS)[number]))) {
+  if (!composing.some(({ i }) => REQUIRED_CHECKS.includes(checkNameOf(lines, i) as (typeof REQUIRED_CHECKS)[number]))) {
     problems.push('no required job runs `npm test`: the unit lane is composed by nothing in ci.yml');
   }
   if (!(scripts['test'] ?? '').includes('test:unit')) {
@@ -145,6 +180,26 @@ describe('DR-180/7: the unit lane is reachable from a required job, measured fro
       `\`test:unit\` does not name ${UNIT_CONFIG}`,
     ]);
     expect(reachabilityProblems(goodCi, goodScripts, "include: ['tests/**/*.test.ts'],")).toEqual([`${UNIT_CONFIG} does not include tests-unit/`]);
+
+    // AND THE KEY/NAME DISTINCTION ITSELF, which is what the confirmation round
+    // found missing. Two doctored inputs, each differing from a whole one in
+    // that ONE respect, because a roster compared against the wrong space
+    // cannot be tested by data that happens to agree:
+    //
+    //   a REQUIRED key whose `name:` is NOT a required check → refused
+    const renamed = 'jobs:\n  backend-static:\n    name: some-optional-check\n    steps:\n      - name: the unit lane\n        run: npm test\n';
+    expect(
+      reachabilityProblems(renamed, goodScripts, goodConfig),
+      'a job keyed like a required one but NAMED otherwise was accepted — the key is being read as the check',
+    ).toEqual(['no required job runs `npm test`: the unit lane is composed by nothing in ci.yml']);
+    //   a key that is NOT a required check whose `name:` IS one → accepted.
+    //   This is the real shape in this repository: the key `backend` carries
+    //   `name: backend-work`.
+    const aliased = 'jobs:\n  not-a-required-key:\n    name: backend-work\n    steps:\n      - name: the unit lane\n        run: npm test\n';
+    expect(
+      reachabilityProblems(aliased, goodScripts, goodConfig),
+      'a job whose declared NAME is a required check was refused — the name is not being read',
+    ).toEqual([]);
   });
 
   it('and THIS file is itself reached by a job that is NOT the one it vouches for', () => {
@@ -152,23 +207,29 @@ describe('DR-180/7: the unit lane is reachable from a required job, measured fro
     // reason to believe the claim is being CHECKED: this file must be composed
     // by a required job OTHER than `backend-static`, or it would die with the
     // chain it describes and prove nothing.
+    // AND IT READS THE CHECK NAME, NOT THE KEY. The first form of this arm
+    // compared keys against the roster of check names and PASSED on a
+    // coincidence: the key running this suite is `backend`, and `backend` is in
+    // the roster as the check name of a DIFFERENT job (`backend-required`,
+    // which runs no tests). Measured on this head, the only two jobs declaring
+    // their own name are `backend` → `backend-work` and `backend-required` →
+    // `backend`, so the two spaces overlap without being equal — and that
+    // overlap was the whole of the old arm's evidence.
     if (!existsSync(CI)) return;
     const ci = readFileSync(CI, 'utf8');
     const lines = ci.split('\n');
-    const jobAt = (index: number): string => {
-      for (let i = index; i >= 0; i -= 1) {
-        const m = /^ {2}([a-z][a-z0-9-]*):$/.exec(lines[i] ?? '');
-        if (m?.[1] !== undefined) return m[1];
-      }
-      return '';
-    };
     const runners = lines
       .map((l, i) => ({ l: l.trim(), i }))
       .filter(({ l }) => l === 'run: npm run test:integration')
-      .map(({ i }) => jobAt(i));
+      .map(({ i }) => checkNameOf(lines, i));
     expect(runners, '`npm run test:integration` is run by no job in ci.yml, so this file runs nowhere').not.toEqual([]);
-    const outside = runners.filter((j) => REQUIRED_JOBS.includes(j as (typeof REQUIRED_JOBS)[number]) && j !== 'backend-static');
-    expect(outside, 'this file is composed by no required job other than `backend-static`, so it has no foot outside the lane it vouches for').not.toEqual([]);
+    // THE MAP, ASSERTED AS A MAP: this suite's job declares the check name
+    // `backend-work`, and that name is in the required roster.
+    expect(runners, 'the job composing this suite no longer declares the check name this arm was written against').toContain('backend-work');
+    const outside = runners.filter((j) => REQUIRED_CHECKS.includes(j as (typeof REQUIRED_CHECKS)[number]) && j !== 'backend-static');
+    expect(outside, 'this file is composed by no required CHECK other than `backend-static`, so it has no foot outside the lane it vouches for').not.toEqual(
+      [],
+    );
     const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { scripts?: Record<string, string> };
     expect(
       pkg.scripts?.['test:integration'] ?? '',

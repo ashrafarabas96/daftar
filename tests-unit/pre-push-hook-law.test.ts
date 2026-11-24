@@ -116,14 +116,32 @@ function rootScripts(): Readonly<Record<string, string>> {
 function reachabilityProblems(ci: string, scripts: Readonly<Record<string, string>>, unitConfig: string): string[] {
   const problems: string[] = [];
   const lines = ci.split('\n');
-  const jobAt = (index: number): string => {
+  // THE CHECK NAME, NOT THE YAML KEY: a job's own `name:` when it declares one,
+  // else its key, which is how GitHub names the check. The confirmation round of
+  // this cart found the first form comparing the roster BELOW against the KEY,
+  // and the two spaces overlap without being equal — measured on this head, the
+  // key `backend` declares `name: backend-work` while the required check named
+  // `backend` comes from the key `backend-required`, which runs no tests.
+  const checkNameOf = (index: number): string => {
+    let keyLine = -1;
+    let key = '';
     for (let i = index; i >= 0; i -= 1) {
       const m = /^ {2}([a-z][a-z0-9-]*):$/.exec(lines[i] ?? '');
-      if (m?.[1] !== undefined) return m[1];
+      if (m?.[1] !== undefined) {
+        keyLine = i;
+        key = m[1];
+        break;
+      }
     }
-    return '';
+    if (keyLine === -1) return '';
+    for (let i = keyLine + 1; i < lines.length; i += 1) {
+      if (/^ {2}[a-z][a-z0-9-]*:$/.test(lines[i] ?? '')) break;
+      const n = /^ {4}name: (\S.*)$/.exec(lines[i] ?? '');
+      if (n?.[1] !== undefined) return n[1].trim();
+    }
+    return key;
   };
-  // THE REQUIRED JOBS, named and not counted — the roster this project judges
+  // THE REQUIRED CHECKS, named and not counted — the roster this project judges
   // a head by. `npm test` must be run by one of them; a step in a job nobody
   // requires composes nothing.
   const REQUIRED = [
@@ -139,7 +157,8 @@ function reachabilityProblems(ci: string, scripts: Readonly<Record<string, strin
     'backend',
   ];
   const composing = lines.map((l, i) => ({ l, i })).filter(({ l }) => l.trim() === 'run: npm test');
-  if (!composing.some(({ i }) => REQUIRED.includes(jobAt(i)))) problems.push('no required job runs `npm test`: the lane is composed by nothing in ci.yml');
+  if (!composing.some(({ i }) => REQUIRED.includes(checkNameOf(i))))
+    problems.push('no required job runs `npm test`: the lane is composed by nothing in ci.yml');
   if (!(scripts['test'] ?? '').includes('test:unit')) problems.push('the root `test` script does not compose `test:unit`, so this lane runs nowhere in CI');
   if (!(scripts['test:unit'] ?? '').includes(UNIT_CONFIG)) problems.push(`\`test:unit\` does not name ${UNIT_CONFIG}`);
   if (!unitConfig.includes("include: ['tests-unit/**/*.test.ts']")) problems.push(`${UNIT_CONFIG} does not include tests-unit/`);
@@ -641,11 +660,18 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     //
     // AND THE FOOT OUTSIDE NOW EXISTS:
     // `tests/security/unit-lane-reachability.test.ts` asserts the same links
-    // under `npm run test:integration` (`ci.yml:532`) in the `backend` job —
-    // required, and not `backend-static` — so it keeps running exactly when
-    // this chain is cut, and it carries its own copy of the reader rather than
-    // importing this one, because a guard coupled to the lane it guards dies
-    // with it.
+    // under `npm run test:integration` (`ci.yml:532`), in the job whose YAML
+    // key is `backend` and whose declared CHECK NAME is `backend-work` — a
+    // required check, and not `backend-static` — so it keeps running exactly
+    // when this chain is cut, and it carries its own copy of the reader rather
+    // than importing this one, because a guard coupled to the lane it guards
+    // dies with it.
+    //
+    // THE KEY AND THE CHECK NAME ARE SPELLED OUT SEPARATELY because conflating
+    // them is this cart's confirmation-round finding: the required check named
+    // `backend` is produced by the key `backend-required`, which runs no tests
+    // at all, so «the `backend` job» names two different things depending on
+    // which space you are in.
     //
     // AND THE END OF THE CHAIN, measured rather than gestured at: on 2026-11-24
     // `branches/main/protection` lists TEN required checks by name, including
@@ -680,6 +706,27 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     expect(reachabilityProblems(goodCi.replace('backend-static:', 'some-optional-job:'), goodScripts, goodConfig)).toEqual([
       'no required job runs `npm test`: the lane is composed by nothing in ci.yml',
     ]);
+    // AND THE KEY/NAME DISTINCTION, in both directions — the finding itself:
+    // a required KEY renamed to a non-required check must be refused, and a
+    // non-required key whose declared NAME is a required check must be
+    // accepted. Neither can be tested by data that happens to agree, which is
+    // why the old form passed on a coincidence.
+    expect(
+      reachabilityProblems(
+        'jobs:\n  backend-static:\n    name: some-optional-check\n    steps:\n      - name: the unit lane\n        run: npm test\n',
+        goodScripts,
+        goodConfig,
+      ),
+      'a job keyed like a required one but NAMED otherwise was accepted — the key is being read as the check',
+    ).toEqual(['no required job runs `npm test`: the lane is composed by nothing in ci.yml']);
+    expect(
+      reachabilityProblems(
+        'jobs:\n  not-a-required-key:\n    name: backend-work\n    steps:\n      - name: the unit lane\n        run: npm test\n',
+        goodScripts,
+        goodConfig,
+      ),
+      'a job whose declared NAME is a required check was refused — the name is not being read',
+    ).toEqual([]);
     expect(reachabilityProblems(goodCi, { ...goodScripts, test: 'npm run test -w @daftar/web' }, goodConfig)).toEqual([
       'the root `test` script does not compose `test:unit`, so this lane runs nowhere in CI',
     ]);
