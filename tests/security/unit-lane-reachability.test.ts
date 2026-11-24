@@ -14,9 +14,17 @@
  * not run either. `tests-unit/pre-push-hook-law.test.ts` reads every link of
  * that path and says so at its site; `tests-unit/test-lane-roster.test.ts:250`
  * asserts the composition and has the same hole. This file is the foot OUTSIDE:
- * it runs under `npm run test:integration` (`ci.yml:532`) inside the `backend`
- * job, which is a required job and is NOT `backend-static` — so it keeps
- * running precisely when the chain it describes is cut.
+ * it runs under `npm run test:integration` (`ci.yml:532`), in the job whose YAML
+ * KEY is `backend` and whose declared CHECK NAME is `backend-work` — a required
+ * check, and not `backend-static`, which is where the unit lane runs
+ * (`ci.yml:2103`) — so it keeps running precisely when the chain it describes
+ * is cut.
+ *
+ * THE KEY AND THE CHECK NAME ARE SPELLED OUT SEPARATELY, because saying «the
+ * `backend` job» names two different things here: the required check called
+ * `backend` is produced by the key `backend-required`, which runs no tests at
+ * all. Conflating them is this cart's confirmation-round finding, and it was in
+ * this header too.
  *
  * WHERE THE REGRESS STOPS, with the number rather than a gesture at it. Measured
  * on 2026-11-24 from `repos/ashrafarabas96/daftar/branches/main/protection`:

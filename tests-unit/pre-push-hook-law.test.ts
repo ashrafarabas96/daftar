@@ -255,9 +255,16 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     // AND THIS ARM CALLS NO ADJUDICATOR, BY SUBJECT AND NOT BY OMISSION. The
     // probe the third and fourth reviews produced asks, per arm and with
     // comment lines stripped, whether an arm calls what it claims to guard.
-    // Here the subject IS the exported constant every other check in this file
-    // loops, so there is nothing to call. Written at the site, because a
-    // justification that lives in a report is a memory and not a warrant.
+    // Here the subject IS the exported constant that the WIRING SCRIPT loops —
+    // `scripts/setup-git-hooks.ts`, in its substance floor, its sibling sweep
+    // and its undo fallback check — so there is nothing for this arm to call.
+    //
+    // THE FIRST FORM OF THIS SENTENCE SAID «every other check in this file»,
+    // and the confirmation round measured that no check in THIS file loops
+    // `REQUIRED_HOOKS` at all: the justification was sound in substance and
+    // wrong in its reference. A warrant that names the wrong place is the same
+    // defect as a count that names no tree — which is why it is corrected here
+    // rather than in a report.
     expect([...REQUIRED_HOOKS]).toEqual(['pre-push']);
   });
 
@@ -410,9 +417,20 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       // configuration took the guard off 151 worktrees, a read-only promise
       // needs an arm that reads the configuration back.
       //
-      // BOTH STATES, because the write could appear in either: unset before
-      // (where a write would create the value) and already wired (where a
-      // write would be invisible in the value and visible only as a change).
+      // AND THE UNSET HALF IS WHAT PROVES IT, which the confirmation round of
+      // this cart made me measure rather than assert. This comment used to say
+      // «both states», and that was false: when `core.hooksPath` is ALREADY
+      // this directory, `wireHooks` returns PASS from an early branch
+      // (`setup-git-hooks.ts`, «already .githooks») before any mode is read, so
+      // `check` and `wire` take the same path and writing the same value would
+      // change no value to compare. Only the UNSET half can distinguish
+      // «reported» from «wrote».
+      //
+      // The wired half is kept and made worth keeping: it compares the raw TEXT
+      // of `.git/config`, not the value — so a duplicated or reordered entry
+      // would show, which a value read cannot see. It still cannot catch a
+      // write of the identical value, and that is said here rather than
+      // implied.
       const other = join(work, 'check-writes-nothing');
       expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
       installHook(other);
@@ -423,9 +441,11 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       expect(git(other, 'config', '--get', 'core.hooksPath').code, '`--check` WROTE core.hooksPath on an unwired checkout').not.toBe(0);
 
       expect(wireHooks(other, 'wire').ok).toBe(true);
-      const before = git(other, 'config', '--get', 'core.hooksPath').out.trim();
+      const configPath = join(other, '.git', 'config');
+      const before = readFileSync(configPath, 'utf8');
+      expect(before, 'the fixture is not wired, so the wired half reads the wrong state').toContain(HOOKS_DIR);
       expect(wireHooks(other, 'check').ok, 'check failed on a correctly wired checkout').toBe(true);
-      expect(git(other, 'config', '--get', 'core.hooksPath').out.trim(), '`--check` changed the configuration it only reports on').toBe(before);
+      expect(readFileSync(configPath, 'utf8'), '`--check` edited .git/config, which it only reports on').toBe(before);
     });
 
     it('REFUSES to wire a hook present on disk but UNTRACKED — git has no mode for it, so it would not travel', () => {
