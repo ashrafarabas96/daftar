@@ -29,7 +29,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HOOKS_DIR, wireHooks } from '../scripts/setup-git-hooks';
+import { HOOKS_DIR, REQUIRED_HOOKS, wireHooks } from '../scripts/setup-git-hooks';
 
 const ROOT = resolve(__dirname, '..');
 const HOOK = join(ROOT, '.githooks', 'pre-push');
@@ -50,6 +50,26 @@ function run(cwd: string, cmd: string, ...args: readonly string[]): { code: numb
 }
 
 const git = (cwd: string, ...args: readonly string[]): { code: number; out: string } => run(cwd, 'git', ...args);
+
+/**
+ * Drive the hook on its own stdin protocol: one line per ref,
+ * `<local ref> <local sha> <remote ref> <remote sha>`.
+ *
+ * WHY NOT ALWAYS THROUGH `git push`: the cases below are about the hook's
+ * COMPARISONS — a 64-zero null id, a tag named `main`, several refs at once —
+ * and some of them cannot be produced by a push in a sha1 repository at all.
+ * The arms that CAN go through `git push` do, because a refusal that only works
+ * on synthesized input is not a refusal.
+ */
+function runHook(stdin: string): { code: number; out: string } {
+  try {
+    const out = execFileSync('bash', [HOOK, 'origin', 'file:///tmp/none'], { input: stdin, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+    return { code: 0, out };
+  } catch (e) {
+    const err = e as { status?: number; stdout?: string; stderr?: string };
+    return { code: err.status ?? 1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
+  }
+}
 
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), 'prepush-'));
@@ -110,6 +130,52 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     expect(r.out).toMatch(/pre-push: REFUSED — DELETION of the remote ref 'feature\/ordinary'/);
     // the branch is still there, which is the point of refusing
     expect(git(bare, 'rev-parse', '--verify', 'refs/heads/feature/ordinary').code).toBe(0);
+  });
+
+  it('TRIPWIRE: `REQUIRED_HOOKS` holds exactly one hook today, and the sibling sweep is UNPINNED while it does', () => {
+    // MEASURED, and said rather than claimed: the sibling-worktree sweep was
+    // generalised from the first element to «every required hook», and seeding
+    // it back reddens NOTHING — with one element the two forms are the same
+    // function. By this project's own rule that is a LINE, not a remedy, so it
+    // is recorded as one. This arm is a tripwire, not a proof: the single entry
+    // is the contract today, and when a second hook joins the list, the sweep,
+    // the undo fallback check and the size floor must each be re-read for
+    // whether they actually cover it.
+    expect([...REQUIRED_HOOKS]).toEqual(['pre-push']);
+  });
+
+  it('REFUSES a 64-zero deletion too, so the sentinel is read as «all zeros» and not as a width', () => {
+    // The null object id's width is the repository's hash width. This drives
+    // the hook directly on its stdin protocol, because a sha256 repository
+    // cannot be made here and the point is the COMPARISON, not git's plumbing.
+    const line = `refs/heads/gone ${'0'.repeat(64)} refs/heads/gone ${'1'.repeat(64)}\n`;
+    const r = runHook(line);
+    expect(r.code, 'a 64-zero deletion was allowed').not.toBe(0);
+    expect(r.out).toMatch(/REFUSED — DELETION of the remote ref 'gone'/);
+  });
+
+  it('ALLOWS a tag named `main`, and a branch named `main` under a namespace — the protection is the branch, not the word', () => {
+    // Measured by review and held by nothing: `refs/tags/main` and
+    // `refs/heads/ns/main` are not the protected branch, and a refusal that
+    // matched the word would refuse correct pushes.
+    for (const ref of ['refs/tags/main', 'refs/heads/ns/main']) {
+      const r = runHook(`refs/heads/x ${'a'.repeat(40)} ${ref} ${'b'.repeat(40)}\n`);
+      expect(r.out, ref).not.toMatch(/pre-push: REFUSED/);
+      expect(r.code, ref).toBe(0);
+    }
+  });
+
+  it('REFUSES the WHOLE push when several refs are sent and only one is `main`', () => {
+    // git feeds every ref on one stdin, and the hook's exit code governs the
+    // whole push. Measured by review, pinned here: one forbidden ref among
+    // allowed ones must stop all of it, or the refusal is advisory.
+    const lines =
+      `refs/heads/a ${'a'.repeat(40)} refs/heads/a ${'b'.repeat(40)}\n` +
+      `refs/heads/b ${'c'.repeat(40)} refs/heads/main ${'d'.repeat(40)}\n` +
+      `refs/heads/c ${'e'.repeat(40)} refs/heads/c ${'f'.repeat(40)}\n`;
+    const r = runHook(lines);
+    expect(r.code, 'a batch containing main was allowed').not.toBe(0);
+    expect(r.out).toMatch(/REFUSED — push to the protected branch 'main'/);
   });
 
   it('NEGATIVE CONTROL: a branch whose name merely CONTAINS `main` is not the protected branch', () => {
@@ -175,9 +241,14 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       expect(push.out).toMatch(/pre-push: REFUSED/);
     });
 
-    it('`undo` FAILS, rather than reporting success, when nothing would guard the checkout afterwards', () => {
-      // This is the case that made the original mistake invisible: a command
-      // that prints success while the checkout is left with no refusal at all.
+    it('`undo` WRITES NOTHING when undoing would leave the checkout with no refusal', () => {
+      // THE ARM'S NAME USED TO BE «FAILS, rather than reporting success …» and
+      // it asserted only the exit code and the message — while the checkout
+      // really WAS left unguarded, because the first form of `undo` unset the
+      // configuration before looking for a fallback. Review caught both: the
+      // defect, and that this arm's name was wider than what it pinned. It now
+      // reads `core.hooksPath` BACK, which is the only thing that distinguishes
+      // «refused» from «did it and then complained».
       const other = join(work, 'unguarded');
       expect(git(work, 'init', '-q', '-b', 'main', other).code).toBe(0);
       mkdirSync(join(other, HOOKS_DIR), { recursive: true });
@@ -187,7 +258,10 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
 
       const undone = wireHooks(other, 'undo');
       expect(undone.ok, 'undo reported success while leaving the checkout unguarded').toBe(false);
-      expect(undone.lines.join('\n')).toMatch(/NO pre-push refusal/);
+      expect(undone.lines.join('\n')).toMatch(/nothing written/);
+      // THE CONFIGURATION IS UNCHANGED — the hook under `.githooks/` still
+      // governs, so the checkout is still guarded.
+      expect(git(other, 'config', '--get', 'core.hooksPath').out.trim(), 'the configuration was changed despite the refusal').toBe(HOOKS_DIR);
     });
 
     it('REFUSES to wire while any SIBLING WORKTREE lacks the directory — the check the original mistake needed', () => {
@@ -269,9 +343,12 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
 
   it('pins the TWO refusals in the file by their mechanism, so a silent edit cannot pass review as a formatting change', () => {
     const text = readFileSync(HOOK, 'utf8');
-    // the deletion test is «the local sha is forty zeros», not a ref name
-    expect(text).toContain("zero=$(printf '%040d' 0)");
-    expect(text).toMatch(/if \[ "\$\{local_sha:-\}" = "\$zero" \]/);
+    // the deletion test is «the local sha is ALL zeros», of any width, not a
+    // ref name and not a fixed forty — the null object id is 40 hex zeros under
+    // SHA-1 and 64 under SHA-256, and review measured a 64-zero delete being
+    // ALLOWED by the previous fixed-width comparison
+    expect(text).toMatch(/case "\$\{local_sha:-\}" in/);
+    expect(text).toMatch(/'' \| \*\[!0\]\*\)/);
     // the protected branch is `main`, compared after stripping `refs/heads/`
     expect(text).toContain("protected='main'");
     expect(text).toContain('short_remote="${remote_ref#refs/heads/}"');

@@ -66,8 +66,13 @@
 # It used to live in `.git/hooks/`, which is not part of the repository: it did
 # not travel with a clone, it protected one checkout, and — the part that
 # mattered — NO PULL REQUEST COULD EDIT IT. Here, under `.githooks/` and
-# selected by `core.hooksPath`, it travels with every clone and every worktree
-# and its changes are reviewable in a diff. What it loses is immunity: any
+# selected by `core.hooksPath`, the FILE travels with every clone and every
+# worktree and its changes are reviewable in a diff — but the SELECTION does
+# not travel: `core.hooksPath` is local configuration that every clone must set
+# for itself (`npm run setup:hooks`). The first wording of this paragraph said
+# the arrangement travels, which is the half that is false, and the setup
+# script's own header said the true thing three lines away. Review of this cart
+# named the contradiction. What it loses is immunity: any
 # branch that touches this file changes the guard, and a weakening would arrive
 # through the same door as a strengthening.
 #
@@ -97,7 +102,15 @@ set -u
 
 protected='main'
 blocked=0
-zero=$(printf '%040d' 0)
+# THE DELETION SENTINEL IS THE NULL OBJECT ID, AND ITS WIDTH IS THE
+# REPOSITORY'S. git sends all-zeros as the local sha of a delete: 40 hex zeros
+# under SHA-1, 64 under SHA-256 (`git rev-parse --show-object-format`).
+# Measured on review of this cart: a deletion line carrying 64 zeros was
+# ALLOWED, because the test compared against a literal forty. This repository
+# is sha1 today so nothing was exposed — but the header above claims «ANY
+# DELETION, of ANY branch», and a claim that wide must not rest on a width.
+# The test is now «all zeros, at least one of them», which holds for every
+# hash git may use.
 
 # git feeds pre-push one line per ref on stdin:
 #   <local ref> <local sha> <remote ref> <remote sha>
@@ -107,15 +120,19 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   # Normalise `main` and `refs/heads/main` to the same name.
   short_remote="${remote_ref#refs/heads/}"
 
-  # (1) A deletion of ANY ref — local sha is all zeros.
-  if [ "${local_sha:-}" = "$zero" ]; then
-    blocked=1
-    echo "pre-push: REFUSED — DELETION of the remote ref '$short_remote'." >&2
-    echo "          local ref:  ${local_ref:-<none, this is a delete>}" >&2
-    echo "          remote ref: $remote_ref" >&2
-    echo "          local sha:  $local_sha  (forty zeros = delete)" >&2
-    continue
-  fi
+  # (1) A deletion of ANY ref — the local sha is the null object id, i.e. all
+  #     zeros, whatever the repository's hash width.
+  case "${local_sha:-}" in
+    '' | *[!0]*) ;;
+    *)
+      blocked=1
+      echo "pre-push: REFUSED — DELETION of the remote ref '$short_remote'." >&2
+      echo "          local ref:  ${local_ref:-<none, this is a delete>}" >&2
+      echo "          remote ref: $remote_ref" >&2
+      echo "          local sha:  $local_sha  (the null object id = delete)" >&2
+      continue
+      ;;
+  esac
 
   # (2) Any push whose destination is the protected branch.
   if [ "$short_remote" = "$protected" ]; then

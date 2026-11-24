@@ -86,6 +86,17 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
     const path = join(ROOT, HOOKS_DIR, hook);
     if (!existsSync(path) || !statSync(path).isFile()) {
       problems.push(`${HOOKS_DIR}/${hook} is missing — there is nothing to wire`);
+      continue;
+    }
+    // PRESENCE IS NOT SUBSTANCE. An empty or truncated hook satisfies
+    // `existsSync` and refuses nothing — review named it: the check passed on
+    // a file whose refusals could have been deleted. This is a FLOOR, not a
+    // law; the law is `tests-unit/pre-push-hook-law.test.ts`, which RUNS the
+    // hook against a bare repository. But a floor that a blank file clears is
+    // not a floor.
+    const size = statSync(path).size;
+    if (size < 512) {
+      problems.push(`${HOOKS_DIR}/${hook} is only ${String(size)} bytes — too small to be the hook this repository ships`);
     }
   }
 
@@ -98,15 +109,24 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
   //    had NO pre-push hook at all — git looks only in the configured
   //    directory, and theirs was empty. That is not «one copy swapped for
   //    another», it is the guard removed from them. The setting was reverted
-  //    within the minute and this check is why it cannot happen again:
-  //    disarming a checkout that never asked is worse than leaving it on the
-  //    untracked copy.
+  //    within the minute, and this check closes the WIRING moment: it refuses
+  //    while any sibling lacks the directory.
+  //
+  //    IT DOES NOT CLOSE EVERY PATH TO THE SAME STATE, and saying otherwise was
+  //    a claim wider than the code (review of this cart). Once `core.hooksPath`
+  //    is set, a `git switch` in any sibling worktree to a branch that predates
+  //    this cart empties its `.githooks/` — no hook, silently, with no second
+  //    chance to refuse. The limitation is inherent to `core.hooksPath` naming
+  //    a path inside the working tree; what this check buys is that the state
+  //    is never entered BY THIS SCRIPT.
   const worktrees = (gitSoft('worktree', 'list', '--porcelain') ?? '')
     .split('\n')
     .filter((l) => l.startsWith('worktree '))
     .map((l) => l.slice('worktree '.length).trim())
     .filter((l) => l !== '');
-  const disarmed = worktrees.filter((w) => !existsSync(join(w, HOOKS_DIR, REQUIRED_HOOKS[0])));
+  // EVERY required hook, not `REQUIRED_HOOKS[0]`: a second hook added to the
+  // contract would otherwise never be checked across the siblings at all.
+  const disarmed = worktrees.filter((w) => REQUIRED_HOOKS.some((hook) => !existsSync(join(w, HOOKS_DIR, hook))));
   if (disarmed.length > 0) {
     problems.push(
       `${disarmed.length} of ${worktrees.length} worktrees have no ${HOOKS_DIR}/, and core.hooksPath is SHARED between them — setting it would leave those with no hook at all:`,
@@ -136,31 +156,45 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
   if (mode === 'undo') {
     if (current === null) {
       lines.push('GIT HOOKS: PASS — core.hooksPath is already unset, nothing to undo');
-    } else if (current !== HOOKS_DIR) {
+      return { ok: true, lines };
+    }
+    if (current !== HOOKS_DIR) {
       lines.push('GIT HOOKS: FAIL');
       lines.push(`  - core.hooksPath is '${current}', which this script did not set — it is left alone`);
       return { ok: false, lines };
-    } else {
-      git('config', '--unset', 'core.hooksPath');
-      const after = gitSoft('config', '--get', 'core.hooksPath');
-      if (after !== null) {
-        lines.push(`GIT HOOKS: FAIL — core.hooksPath still reads '${after}' after unsetting`);
-        return { ok: false, lines };
-      }
-      lines.push(`GIT HOOKS: core.hooksPath '${current}' -> unset`);
     }
-    // AND SAY WHAT IS IN FORCE NOW, because «undone» is not «guarded»: with
-    // the configuration unset git uses `.git/hooks/`, and if nothing is there
-    // the checkout has no pre-push refusal at all. Reporting success without
-    // this would be the silent failure this whole cart exists to remove.
+    // MEASURE THE FALLBACK AND REFUSE *BEFORE* UNSETTING. «Undone» is not
+    // «guarded»: with the configuration unset git uses `.git/hooks/`, and if
+    // nothing is there the checkout has NO pre-push refusal at all.
+    //
+    // THE FIRST FORM OF THIS BLOCK UNSET FIRST AND LOOKED AFTERWARDS, and
+    // review caught it: on a checkout with no `.git/hooks/pre-push` — which is
+    // ANY FRESH CLONE, and exactly the fixture one of the arms builds — it
+    // removed the only guard and then returned `ok: false`. Everywhere else in
+    // this script `FAIL` means «nothing was written»; that made the restoration
+    // mechanism the one place where it meant «written, and you are now
+    // unguarded». A tool built to stop a guard being removed by accident must
+    // not remove one itself.
     const common = gitSoft('rev-parse', '--git-common-dir');
-    const fallback = common === null ? null : resolve(repo, common, 'hooks', REQUIRED_HOOKS[0]);
-    if (fallback !== null && existsSync(fallback)) {
-      lines.push(`  in force now: ${fallback}`);
-    } else {
-      lines.push(`  WARNING: no ${REQUIRED_HOOKS[0]} in the git hooks directory — this checkout now has NO pre-push refusal`);
+    const fallbacks = REQUIRED_HOOKS.map((hook) => (common === null ? null : resolve(repo, common, 'hooks', hook)));
+    const missing = REQUIRED_HOOKS.filter((_hook, i) => {
+      const path = fallbacks[i];
+      return path === null || path === undefined || !existsSync(path);
+    });
+    if (missing.length > 0) {
+      lines.push('GIT HOOKS: FAIL — nothing written, because undoing would leave this checkout with no refusal');
+      for (const hook of missing) lines.push(`  - there is no ${hook} in the git hooks directory to fall back to`);
+      lines.push('  put the untracked copy back under `.git/hooks/` first, then undo');
       return { ok: false, lines };
     }
+    git('config', '--unset', 'core.hooksPath');
+    const after = gitSoft('config', '--get', 'core.hooksPath');
+    if (after !== null) {
+      lines.push(`GIT HOOKS: FAIL — core.hooksPath still reads '${after}' after unsetting`);
+      return { ok: false, lines };
+    }
+    lines.push(`GIT HOOKS: core.hooksPath '${current}' -> unset`);
+    for (const path of fallbacks) lines.push(`  in force now: ${String(path)}`);
     return { ok: true, lines };
   }
 
