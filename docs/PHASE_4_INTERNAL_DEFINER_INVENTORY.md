@@ -298,13 +298,25 @@ the same everywhere.
 
 `0091` adds the customer write command pair, so Part A now holds 59 doors.
 The two rows are APPENDED rather than inserted at their alphabetical place,
-and the count in the heading above is left exactly as it was, because the lane
-that owns this page granted the addition on the condition that `git diff -U0`
-show `+` lines only: inserting them after `customer_collect_payment` would
-have renumbered rows 21–57, and editing the heading would have modified a
-line. Renumbering and folding these two rows into the list above is the owning
-lane's to do. No law reads the count — the law reads whether the page names
-every recorded signature.
+because inserting them after `customer_collect_payment` would have renumbered
+rows 21–57. Renumbering and folding them into the list above is the owning
+lane's to do.
+
+THE WARRANT THIS PARAGRAPH USED TO GIVE WAS STALE, AND IT IS MEASURED SO. It
+said the heading was left exactly as it was and that the addition was granted
+on the condition that `git diff -U0` show `+` lines only. Neither holds on this
+head: `git diff -U0 <merge-base> HEAD -- <this file>` shows **eight** `-`
+lines, and the headings DID move with the counts, correctly, because the
+summary rows had to be re-measured against the live catalogue. A condition
+that the diff be additive is not a reason to leave a number wrong, and that is
+what it had become.
+
+AND "no law reads the count" is no longer true either — this branch is what
+changed it. `tests/security/p4s4-definer-inventory-summary-closes.test.ts`
+compares every summary row against the live catalogue of the tree under test,
+with no constant in the law, and refuses a row it cannot find. So a count in
+this page is now pinned, and a stale one is a red rather than a sentence
+nobody checks.
 
 `receivables` is the domain the LAW derives, not a claim that customer master
 data is a receivable: the domain comes from the family of the operation code

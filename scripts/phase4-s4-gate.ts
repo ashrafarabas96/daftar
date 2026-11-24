@@ -2410,6 +2410,15 @@ export const ROSTER_RECORDED: readonly RosterRow[] = [
   // falsifiability arm. A row naming only the red proof would leave the
   // comparison itself deletable with the roster count unmoved — the same
   // reason the sentinels below are recorded by their measuring law.
+  // §1 too, and with NO `cases` floor: it holds exactly one case, and the
+  // ratchet refuses a recorded floor of one as "what the title check already
+  // demands". Unrecorded, the arithmetic half was deletable with this gate
+  // green — the bijection runs roster-to-disk and the red-proof law holds only
+  // the blocks that announce a plant, so neither would have named its loss.
+  {
+    suite: 'tests/security/p4s4-definer-inventory-summary-closes.test.ts',
+    title: 'TL-P4-RLS-INT-01 §14 SUMMARY §1 — the arithmetic closes over the measured sets, before any page is read',
+  },
   {
     suite: 'tests/security/p4s4-definer-inventory-summary-closes.test.ts',
     title: 'TL-P4-RLS-INT-01 §14 SUMMARY §2 — the page states what the live catalogue holds',
