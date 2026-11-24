@@ -252,9 +252,17 @@ describe('§31: two database roles may not be one credential', () => {
   // would redden on a pure REORDER of that frozen list — a change that alters
   // no refusal, since the pair is refused whichever member is read first. The
   // pair itself is read by `expectDuplicatePair`, which is the reader the rest
-  // of this file uses; what is added here is the subject FORM, in either
+  // of this file uses; what is added here is the subject MARKER, in either
   // direction.
-  it('the refusal carries the pair with one of them as the SUBJECT of the clause, in either direction', () => {
+  //
+  // AND IT ASSERTS THE REQUIRED ELEMENTS, NOT THE SENTENCE. My first form of
+  // this arm matched the refusal's text literally (`X: duplicates Y`), which
+  // makes a legitimate REWORDING of `fail`'s message a false red tomorrow —
+  // the same class as a hardcoded count. So the two elements are read apart:
+  // the clause names both keys (the reader above), and one of them is its
+  // SUBJECT, which in this project's refusals is the name followed by `: `.
+  // The verb is not read at all.
+  it('one of the colliding pair is the SUBJECT of the §31 clause, in either direction', () => {
     const env = { ...MERCHANT_PROD, RESOLVER_DATABASE_URL: MERCHANT_PROD.APP_DATABASE_URL };
     expectDuplicatePair(env, 'RESOLVER_DATABASE_URL', 'APP_DATABASE_URL');
     let message = '';
@@ -263,10 +271,14 @@ describe('§31: two database roles may not be one credential', () => {
     } catch (err) {
       message = err instanceof Error ? err.message : String(err);
     }
-    expect(
-      message.includes('RESOLVER_DATABASE_URL: duplicates APP_DATABASE_URL') || message.includes('APP_DATABASE_URL: duplicates RESOLVER_DATABASE_URL'),
-      `neither name is the subject of a «duplicates» clause; the refusal reads:\n${message}`,
-    ).toBe(true);
+    const clause = message.split('; ').find((l) => l.includes('RESOLVER_DATABASE_URL') && l.includes('APP_DATABASE_URL'));
+    expect(clause, `no single clause names both keys; the refusal reads:\n${message}`).toBeDefined();
+    // NOT `startsWith`: the FIRST clause carries the refusal's own header
+    // («Invalid configuration (fails fast at startup): …»), measured — so the
+    // marker is read with a word boundary instead of at the start of the
+    // clause, which is also why the key names are matched with one.
+    const subject = /(^|[^A-Z_])(RESOLVER_DATABASE_URL|APP_DATABASE_URL): /.test(clause ?? '');
+    expect(subject, `neither key is the subject of the clause, so the operator is not told which line to change: ${clause ?? ''}`).toBe(true);
     expect(message).toMatch(DUP);
   });
 
