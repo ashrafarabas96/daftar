@@ -149,7 +149,12 @@ const PLATFORM_PROD: NodeJS.ProcessEnv = {
   CORS_ORIGINS: 'https://admin.example.com',
 };
 
-const DUP = /duplicates .* — every DB principal must use distinct credentials/;
+// `DUP` USED TO LIVE HERE: /duplicates .* — every DB principal must use
+// distinct credentials/. It had exactly one consumer, the DUP-C arm below, and
+// it named the refusal's VERB. A pure reword of `fail`'s message would have
+// reddened that arm through it although §31 refuses the same pairs — measured
+// with a control, which is how this was found. What identifies a §31 clause is
+// its contract TAIL, and `expectDuplicatePair` reads that.
 
 /**
  * Read a §31 refusal by the PAIR it names, in EITHER direction, selecting the
@@ -279,7 +284,11 @@ describe('§31: two database roles may not be one credential', () => {
     // clause, which is also why the key names are matched with one.
     const subject = /(^|[^A-Z_])(RESOLVER_DATABASE_URL|APP_DATABASE_URL): /.test(clause ?? '');
     expect(subject, `neither key is the subject of the clause, so the operator is not told which line to change: ${clause ?? ''}`).toBe(true);
-    expect(message).toMatch(DUP);
+    // AND NO `toMatch(DUP)` HERE ANY MORE, measured: that regex names the VERB
+    // («duplicates …»), so with it this arm still reddened on a pure reword of
+    // `fail`'s message — the control I ran for exactly that reason failed. The
+    // clause's identity is its contract TAIL, which `expectDuplicatePair`
+    // above reads. `DUP` had this one consumer and is gone with it.
   });
 
   // DUP-D. THE OTHER FACE OF THE BOUNDARY (`DR-145`): a change §31 is NOT about
