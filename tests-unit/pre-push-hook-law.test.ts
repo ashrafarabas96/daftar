@@ -224,6 +224,21 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     // is the contract today, and when a second hook joins the list, the sweep,
     // the undo fallback check and the size floor must each be re-read for
     // whether they actually cover it.
+    //
+    // AND A SET OF ONE ELEMENT CANNOT WITNESS MEMBERSHIP — the class, named,
+    // because it is the same shape as «an arm needs one foot outside the
+    // branch»: with a single entry, «the first element» and «every element»
+    // are the same function, so no fixture can tell a sweep that generalises
+    // from one that does not. The generalisation is kept because it cannot be
+    // worse, and is recorded as a LINE rather than claimed as a remedy, until
+    // the element becomes two.
+    //
+    // AND THIS ARM CALLS NO ADJUDICATOR, BY SUBJECT AND NOT BY OMISSION. The
+    // probe the third and fourth reviews produced asks, per arm and with
+    // comment lines stripped, whether an arm calls what it claims to guard.
+    // Here the subject IS the exported constant every other check in this file
+    // loops, so there is nothing to call. Written at the site, because a
+    // justification that lives in a report is a memory and not a warrant.
     expect([...REQUIRED_HOOKS]).toEqual(['pre-push']);
   });
 
