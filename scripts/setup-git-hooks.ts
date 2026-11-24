@@ -24,6 +24,15 @@
  *       npm run check:hooks        report without writing
  *       npm run undo:hooks         put `core.hooksPath` back to unset, and say
  *                                  what guards the checkout afterwards
+ *
+ * AND NONE OF THESE IS A GATE. No CI job runs any of them — measured on
+ * `d3245a3d`: `ci.yml` is 2755 lines with 65 `npm run` invocations and ZERO
+ * mention of `check:hooks`, `setup:hooks`, `githooks` or `hooksPath`. They are
+ * CONVENIENCES for a developer's own checkout. What guards the shipped hook is
+ * `tests-unit/pre-push-hook-law.test.ts`, whose arms run in the unit lane
+ * inside `backend-static`, a required job — and calling `check:hooks` «half the
+ * guard», as this cart did, is precisely what let the shipped file's mode stay
+ * unpinned while the class was announced closed.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, statSync } from 'node:fs';

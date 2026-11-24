@@ -5,8 +5,24 @@
  * The two refusals — a push that DELETES a remote ref, and a push whose
  * destination is `main` — moved out of `.git/hooks/`, which no pull request
  * can edit, into `.githooks/`, which any branch touching the file can edit.
- * That trade is only a tightening if the guard is itself guarded, and this
- * file is half of that guard (the other half is `npm run check:hooks`).
+ * That trade is only a tightening if the guard is itself guarded, and THIS FILE
+ * IS THE WHOLE OF THAT GUARD. It used to say «half of it, the other half being
+ * `npm run check:hooks`», and that was false: no CI job runs that script —
+ * measured on `d3245a3d`, where `ci.yml` is 2755 lines with 65 `npm run`
+ * invocations and ZERO mention of `check:hooks`, `setup:hooks`, `githooks` or
+ * `hooksPath`. It is a CONVENIENCE for a developer's checkout, not a gate, and
+ * naming it a guard is what let the shipped hook's mode go unpinned while this
+ * cart claimed that class was closed.
+ *
+ * SO EVERY «X IS GUARDED» CLAIM IN THIS FILE ANSWERS TWO QUESTIONS, which is
+ * the instrument the third review of this cart produced:
+ *   (a) WHICH ARTEFACT does the arm read — the one this repository ships, or a
+ *       fixture the arm builds itself?
+ *   (b) WHICH REQUIRED JOB runs it?
+ * For this file: the arms run in the unit lane, which `npm test` drives inside
+ * `backend-static`, one of the ten required jobs (measured from the jobs of run
+ * 45348243534). The arm named «THE SHIPPED HOOK of THIS repository» reads the
+ * shipped artefact; every other arm here reads a fixture it builds, and says so.
  *
  * IT DOES NOT ONLY READ THE FILE. A law over a shell script's TEXT asserts on
  * a picture of the decider: four spellings of a relaxation can satisfy any
