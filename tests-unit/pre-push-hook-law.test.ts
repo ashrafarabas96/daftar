@@ -630,9 +630,15 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
     // required, and not `backend-static` — so it keeps running exactly when
     // this chain is cut, and it carries its own copy of the reader rather than
     // importing this one, because a guard coupled to the lane it guards dies
-    // with it. What remains above that is `ci.yml` itself and the roster of
-    // required jobs: another lane's file and a setting only the owner changes.
-    // One foot outside is where the regress stops.
+    // with it.
+    //
+    // AND THE END OF THE CHAIN, measured rather than gestured at: on 2026-11-24
+    // `branches/main/protection` lists TEN required checks by name, including
+    // `backend` and `backend-static`, with `strict: true` and
+    // `enforce_admins: true`. Above that roster NO TEST guards anything —
+    // changing a repository setting reddens nothing, because a setting is not a
+    // file any suite reads. What holds there is `enforce_admins` and the
+    // owner's discipline, and that is where a test's custody genuinely ends.
     // AND THE READER IS A PURE FUNCTION, deliberately: `package.json` and
     // `ci.yml` are NOT this lane's files, so seeding them to prove this arm
     // red-first would be touching what I do not own. Feeding the same reader

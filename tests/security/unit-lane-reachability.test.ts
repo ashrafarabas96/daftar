@@ -18,16 +18,26 @@
  * job, which is a required job and is NOT `backend-static` — so it keeps
  * running precisely when the chain it describes is cut.
  *
- * WHERE THE REGRESS STOPS, named so that nobody asks for a guard for the guard:
- * cutting THIS arm's own path means editing `ci.yml` (another lane's file, and
- * serialized), and the roster of required jobs is a repository SETTING that only
- * the owner changes. ONE foot outside the lane is enough; beyond it the
- * protection is the owner's, not a test's.
+ * WHERE THE REGRESS STOPS, with the number rather than a gesture at it. Measured
+ * on 2026-11-24 from `repos/ashrafarabas96/daftar/branches/main/protection`:
+ * the required checks are TEN, by name — `workspaces`, `backend`, `web-admin`,
+ * `android`, `browser`, `hygiene`, `backend-work`, `backend-gates-p2`,
+ * `backend-golden`, `backend-static` — with `strict: true` and
+ * `enforce_admins: true`. So `backend` really is required in the SETTINGS and
+ * not merely defined in the workflow, and the roster written below matches the
+ * live one with zero drift on that date.
+ *
+ * AND ABOVE THAT ROSTER NO TEST GUARDS ANYTHING, which is the honest end of the
+ * chain: changing a repository setting reddens nothing, because a setting is not
+ * a file any suite reads. What holds there is `enforce_admins: true` and the
+ * owner's own discipline. ONE foot outside the lane is where a test's custody
+ * ends; pretending otherwise would be the same «presence is not a seal» mistake
+ * this cart has now made twice.
  *
  * ITS READER IS A PURE FUNCTION over text, and it carries its own copy rather
- * than importing the one in `tests-unit/`: a guard that imported from the lane
- * it guards would be coupled to the thing it is watching. The duplication is
- * deliberate and is the point.
+ * than importing the one in `tests-unit/` — the reason is written at the
+ * function itself, where a reviewer tempted to «simplify» the copy away will
+ * actually read it.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -54,7 +64,19 @@ const REQUIRED_JOBS = [
   'backend',
 ] as const;
 
-/** Every broken link between a required CI job and the unit lane; empty means whole. */
+/**
+ * Every broken link between a required CI job and the unit lane; empty means
+ * whole.
+ *
+ * DO NOT REPLACE THIS WITH AN IMPORT FROM `tests-unit/`. It is a near-copy of
+ * the reader in `tests-unit/pre-push-hook-law.test.ts` and the duplication is
+ * the mechanism, not an oversight: this file exists to keep running when the
+ * unit lane is unplugged, and importing from that lane would couple the guard
+ * to the very thing it is watching — delete or move that file and this one
+ * stops running too, exactly when it is needed. The line is here, at the site,
+ * because a reviewer who found only a note in the header would reasonably
+ * «simplify» the copy away and restore the coupling.
+ */
 function reachabilityProblems(ci: string, scripts: Readonly<Record<string, string>>, unitConfig: string): string[] {
   const problems: string[] = [];
   const lines = ci.split('\n');
