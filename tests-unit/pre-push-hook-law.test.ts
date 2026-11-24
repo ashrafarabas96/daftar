@@ -229,6 +229,33 @@ describe('DR-180/3: the tracked pre-push hook refuses exactly two things, and al
       expect(git(shared, 'config', '--get', 'core.hooksPath').code, 'the configuration was written despite the refusal').not.toBe(0);
     });
 
+    it('SKIPS in a delivered archive, where there is no repository to configure', () => {
+      // `tests/security/archive-portability.test.ts` requires every git
+      // invocation under `scripts/**` to carry a `DELIVERY_MANIFEST.json`
+      // branch, a try/catch fallback, or a place on its five-file allowlist.
+      // CI found this script with none of the three (`backend-work`, step 15,
+      // «Integration + security tests»), and the allowlist is pinned by an arm
+      // to exactly those five — so widening it would have reddened a contract
+      // to make my own change pass. The branch is the sanctioned route and the
+      // right behaviour: a delivered tree carries the manifest and no `.git`.
+      const archive = join(work, 'archive');
+      mkdirSync(archive, { recursive: true });
+      writeFileSync(join(archive, 'DELIVERY_MANIFEST.json'), '{}\n');
+      // no `git init` here at all: if the script shells out, it fails
+      const out = wireHooks(archive, 'wire');
+      expect(out.ok, out.lines.join('\n')).toBe(true);
+      expect(out.lines.join('\n')).toMatch(/SKIPPED — DELIVERY_MANIFEST\.json is present/);
+      // AND THE POSITIVE CONTROL: the same call in a real repository does NOT
+      // skip, so «skips» is not «skips always»
+      const real = join(work, 'not-an-archive');
+      expect(git(work, 'init', '-q', '-b', 'main', real).code).toBe(0);
+      mkdirSync(join(real, HOOKS_DIR), { recursive: true });
+      copyFileSync(HOOK, join(real, HOOKS_DIR, 'pre-push'));
+      const wired = wireHooks(real, 'wire');
+      expect(wired.lines.join('\n')).not.toMatch(/SKIPPED/);
+      expect(wired.ok).toBe(true);
+    });
+
     it('`undo` REFUSES to touch a `core.hooksPath` it did not set', () => {
       const foreign = join(work, 'foreign');
       expect(git(work, 'init', '-q', '-b', 'main', foreign).code).toBe(0);

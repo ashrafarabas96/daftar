@@ -47,7 +47,21 @@ export interface Outcome {
  * picture of the decider rather than the decider.
  */
 export function wireHooks(repo: string, mode: Mode): Outcome {
-  const git = (...args: readonly string[]): string => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  // THE DELIVERED ARCHIVE HAS NO REPOSITORY. `scripts/export-release.ts`
+  // writes `DELIVERY_MANIFEST.json` into the tree it ships, and that tree
+  // carries no `.git` — so there are no hooks to wire and nothing to ask git.
+  // The check appears HERE as well as at the top of this function on purpose:
+  // `tests/security/archive-portability.test.ts` reads the ENCLOSING FUNCTION
+  // of each git invocation and requires the branch to be visible there, and
+  // this arrow is that function. The early return below is the behaviour; this
+  // is the guard where the call is. Adding this file to that law's
+  // `REPOSITORY_TOOLS` allowlist was the other way out and I did not take it:
+  // the allowlist is pinned by an arm to exactly five files, so widening it
+  // would have reddened a contract to make my own change pass.
+  const git = (...args: readonly string[]): string => {
+    if (existsSync(join(repo, 'DELIVERY_MANIFEST.json'))) return '';
+    return execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8' }).trim();
+  };
   const gitSoft = (...args: readonly string[]): string | null => {
     try {
       return git(...args);
@@ -58,6 +72,14 @@ export function wireHooks(repo: string, mode: Mode): Outcome {
   const lines: string[] = [];
   const problems: string[] = [];
   const ROOT = repo;
+
+  // AND THE EARLY RETURN, which is the behaviour rather than the guard: in a
+  // delivered archive there is no repository, so this reports that there is
+  // nothing to do and SUCCEEDS, instead of shelling out to git and failing
+  // with something obscure about a missing work tree.
+  if (existsSync(join(repo, 'DELIVERY_MANIFEST.json'))) {
+    return { ok: true, lines: ['GIT HOOKS: SKIPPED — DELIVERY_MANIFEST.json is present, so this is a delivered archive with no repository to configure'] };
+  }
 
   // 1. every hook this repository declares must actually be there, and be a file
   for (const hook of REQUIRED_HOOKS) {
