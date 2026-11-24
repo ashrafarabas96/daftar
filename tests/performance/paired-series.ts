@@ -80,6 +80,15 @@ export function fingerprintProblems(order: readonly PairSide[], iterationsPerSid
     if (order[i] === 'F') fatFirst += 1;
   }
   if (mixedPairs !== Math.floor(order.length / 2)) problems.push('some iteration did not read both sides exactly once');
+  // The first side must flip EVERY iteration: a balanced count of who goes first would also pass
+  // FM x half then MF x half, two blocks that leave the host's phase drift between the sides.
+  let sameFirstAsPrevious = 0;
+  for (let i = 2; i + 1 < order.length; i += 2) {
+    if (order[i] === order[i - 2]) sameFirstAsPrevious += 1;
+  }
+  if (sameFirstAsPrevious > 0) {
+    problems.push(`the first side did not flip in ${sameFirstAsPrevious} consecutive iterations; a paired alternation flips it every iteration`);
+  }
   if (Math.abs(fatFirst - (order.length / 2 - fatFirst)) > 1) {
     problems.push(`the order inside the pair does not alternate: the fat-tail read was first in ${fatFirst} of ${order.length / 2} iterations`);
   }
@@ -100,6 +109,100 @@ export function ratioVerdict(fat: readonly number[], med: readonly number[], max
   const medP95 = quantile(med, 0.95);
   const ratio = medP95 === 0 ? null : fatP95 / medP95;
   return { fatP95, medP95, ratio, withinMax: ratio !== null && ratio <= max };
+}
+
+/** How many paired rounds the verdict is taken over (owner order 2026-11-22). */
+export const PAIRED_ROUNDS = 5;
+
+/** What one round read on each side. Printed for diagnosis (P4-AL-76); it takes no part in the verdict. */
+export interface RoundDetail {
+  readonly n: number;
+  readonly fatP95: number;
+  readonly medP95: number;
+  readonly fatP50: number;
+  readonly medP50: number;
+}
+
+export interface RoundsVerdict {
+  /** One p95/p95 per round, in run order; `null` where a round's denominator measured zero. */
+  readonly roundRatios: readonly (number | null)[];
+  /** The two sides of every round, in run order, so a drift can be told to the side that moves. */
+  readonly roundDetails: readonly RoundDetail[];
+  /** The median of `roundRatios`, or `null` when any round could not be computed. */
+  readonly medianRatio: number | null;
+  readonly withinMax: boolean;
+}
+
+const REFUSED: RoundsVerdict = { roundRatios: [], roundDetails: [], medianRatio: null, withinMax: false };
+
+/**
+ * THE VERDICT OF `P4-AL-72`'s RATIO: the MEDIAN of `rounds` paired rounds.
+ *
+ * The paired samples of each side (1000 at DR-180) are cut into `rounds` CONTIGUOUS
+ * equal blocks (200 each at 5 rounds). Each block yields its own p95(fat) / p95(med),
+ * by the same estimator as everywhere (`quantile`), and the run is judged on
+ * the median of those quotients against `max`. One host phase change then
+ * moves at most the rounds it covers, and the median ignores a minority of
+ * them; two of five may be outliers, three above the limit is a regression
+ * and fails. A run whose every round is above `max` fails: nothing is loosened.
+ *
+ * WHAT IT DOES NOT DO: it does not change `max`, the number of samples, or the
+ * estimator; a block of 200 reads its p95 at index 190 (`floor(0.95 * 200)`), with ten
+ * samples above it, which is why one reading is never the verdict.
+ *
+ * A series that is empty, of unequal length, or not divisible into `rounds`
+ * equal blocks is REFUSED (fails), never passed as nothing. A round whose
+ * denominator measured zero makes the whole verdict fail.
+ */
+export function medianOfRoundRatios(fat: readonly number[], med: readonly number[], rounds: number, max: number): RoundsVerdict {
+  if (fat.length === 0 || med.length === 0) return REFUSED;
+  if (fat.length !== med.length) return REFUSED;
+  if (!Number.isInteger(rounds) || rounds < 1 || fat.length % rounds !== 0) return REFUSED;
+  const per = fat.length / rounds;
+  const roundRatios: (number | null)[] = [];
+  const roundDetails: RoundDetail[] = [];
+  for (let r = 0; r < rounds; r += 1) {
+    const fatBlock = fat.slice(r * per, (r + 1) * per);
+    const medBlock = med.slice(r * per, (r + 1) * per);
+    const f = quantile(fatBlock, 0.95);
+    const m = quantile(medBlock, 0.95);
+    roundRatios.push(m === 0 ? null : f / m);
+    roundDetails.push({ n: per, fatP95: f, medP95: m, fatP50: quantile(fatBlock, 0.5), medP50: quantile(medBlock, 0.5) });
+  }
+  if (roundRatios.some((x) => x === null)) return { roundRatios, roundDetails, medianRatio: null, withinMax: false };
+  const sorted = (roundRatios as number[]).slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const at = (i: number): number => {
+    const v = sorted[i];
+    if (v === undefined) throw new Error(`medianOfRoundRatios: no round at index ${i} of ${sorted.length}`);
+    return v;
+  };
+  const medianRatio = sorted.length % 2 === 1 ? at(mid) : (at(mid - 1) + at(mid)) / 2;
+  return { roundRatios, roundDetails, medianRatio, withinMax: medianRatio <= max };
+}
+
+export interface BothStatisticsVerdict {
+  /** The whole-run p95/p95 over every paired sample. */
+  readonly whole: RatioVerdict;
+  /** The median of the per-round p95/p95 quotients. */
+  readonly rounds: RoundsVerdict;
+  /** True only when BOTH statistics are within `max`. */
+  readonly pass: boolean;
+}
+
+/**
+ * DR-179/1 (owner 2026-11-23): the ratio passes only when BOTH statistics pass,
+ * the whole-run p95/p95 AND the median of the paired rounds, at the unchanged
+ * limit. The median alone is more tolerant of a host phase that moves a minority
+ * of rounds; the whole-run alone is more tolerant of one round that is bad. Either
+ * one passing while the other fails is a FAIL here, so adding the rounds can never
+ * loosen what the whole-run statistic already refused (DR-180: no change of the
+ * governing statistic, no raise of the limit).
+ */
+export function bothStatisticsVerdict(fat: readonly number[], med: readonly number[], rounds: number, max: number): BothStatisticsVerdict {
+  const whole = ratioVerdict(fat, med, max);
+  const byRounds = medianOfRoundRatios(fat, med, rounds, max);
+  return { whole, rounds: byRounds, pass: whole.withinMax && byRounds.withinMax };
 }
 
 /** Why the ratchet's declaration of the ratio is not the one this arm was accepted under. */
